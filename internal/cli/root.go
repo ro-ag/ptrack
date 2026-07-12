@@ -27,6 +27,7 @@ func newRootCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return RunNoArgs()
 		},
+		Version:      version(),
 		SilenceUsage: true,
 	}
 
@@ -41,6 +42,7 @@ func newRootCmd() *cobra.Command {
 		newStatusCmd(),
 		newProjectsCmd(),
 		newBackupCmd(),
+		newVersionCmd(),
 	)
 	// Let main.go own error reporting; silence cobra's own error/usage prints.
 	silence(root)
