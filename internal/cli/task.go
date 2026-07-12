@@ -3,8 +3,10 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/ro-ag/ptrack/internal/model"
+	"github.com/ro-ag/ptrack/internal/report"
 	"github.com/spf13/cobra"
 )
 
@@ -50,12 +52,20 @@ func newTaskCmd() *cobra.Command {
 	}
 	add.Flags().Uint64("plan", 0, "plan id to add the task to (defaults to the active plan)")
 
+	var (
+		listJSON  bool
+		statusCSV string
+	)
 	list := &cobra.Command{
 		Use:   "list",
-		Short: "List tasks (all, or filtered by --plan)",
+		Short: "List tasks (all, or filtered by --plan and/or --status)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			planID, err := cmd.Flags().GetUint64("plan")
+			if err != nil {
+				return err
+			}
+			wanted, err := parseStatusSet(statusCSV)
 			if err != nil {
 				return err
 			}
@@ -73,6 +83,20 @@ func newTaskCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			tasks = filterByStatus(tasks, wanted)
+			if listJSON {
+				type taskRow struct {
+					ID     uint64 `json:"id"`
+					PlanID uint64 `json:"plan_id"`
+					Title  string `json:"title"`
+					Status string `json:"status"`
+				}
+				rows := make([]taskRow, 0, len(tasks))
+				for _, t := range tasks {
+					rows = append(rows, taskRow{t.ID, t.PlanID, t.Title, string(t.Status)})
+				}
+				return emitJSON(cmd, rows)
+			}
 			out := cmd.OutOrStdout()
 			for _, t := range tasks {
 				fmt.Fprintf(out, "#%d [%s] %s (plan %d)\n", t.ID, t.Status, t.Title, t.PlanID)
@@ -81,6 +105,32 @@ func newTaskCmd() *cobra.Command {
 		},
 	}
 	list.Flags().Uint64("plan", 0, "only list tasks of this plan")
+	list.Flags().StringVar(&statusCSV, "status", "", "filter by status (comma-separated: todo,doing,done,blocked)")
+	jsonFlag(list, &listJSON)
+
+	var showJSON bool
+	show := &cobra.Command{
+		Use:   "show <id>",
+		Short: "Show a task with its plan and notes",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := parseID(args[0])
+			if err != nil {
+				return err
+			}
+			s, err := openProject()
+			if err != nil {
+				return err
+			}
+			defer s.Close()
+			v, err := report.ShowTask(s, id)
+			if err != nil {
+				return err
+			}
+			return emit(cmd, showJSON, v)
+		},
+	}
+	jsonFlag(show, &showJSON)
 
 	start := &cobra.Command{
 		Use:   "start <id>",
@@ -109,8 +159,42 @@ func newTaskCmd() *cobra.Command {
 		},
 	}
 
-	cmd.AddCommand(add, list, start, done, block)
+	cmd.AddCommand(add, list, show, start, done, block)
 	return cmd
+}
+
+// parseStatusSet parses a comma-separated status filter into a set. An empty
+// string means "no filter" (nil set).
+func parseStatusSet(csv string) (map[model.TaskStatus]bool, error) {
+	if strings.TrimSpace(csv) == "" {
+		return nil, nil
+	}
+	valid := map[model.TaskStatus]bool{
+		model.TaskTodo: true, model.TaskDoing: true, model.TaskDone: true, model.TaskBlocked: true,
+	}
+	set := map[model.TaskStatus]bool{}
+	for _, part := range strings.Split(csv, ",") {
+		st := model.TaskStatus(strings.TrimSpace(part))
+		if !valid[st] {
+			return nil, fmt.Errorf("invalid status %q (want todo,doing,done,blocked)", part)
+		}
+		set[st] = true
+	}
+	return set, nil
+}
+
+// filterByStatus keeps only tasks whose status is in the set; a nil set keeps all.
+func filterByStatus(tasks []model.Task, set map[model.TaskStatus]bool) []model.Task {
+	if set == nil {
+		return tasks
+	}
+	out := tasks[:0:0]
+	for _, t := range tasks {
+		if set[t.Status] {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // setTaskStatus opens the project, parses the id, and applies the given status.

@@ -1,104 +1,127 @@
-// Package report builds the ptrack restore digest — the compact project summary
-// a fresh AI agent reads at the start of a new session.
+// Package report builds ptrack's read views — the restore digest a fresh AI
+// agent reads at session start, plus the drill-down views (next, plan/task show,
+// search, board). Every view renders to token-efficient Markdown by default and
+// exposes the same data as JSON for programmatic consumers. Payloads stay
+// bounded: the context digest shows the live edge plus counts and pointers, not
+// full dumps.
 package report
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
+	"github.com/ro-ag/ptrack/internal/model"
 	"github.com/ro-ag/ptrack/internal/store"
 )
 
-// recentNoteCount bounds how many notes the digest includes.
-const recentNoteCount = 10
+// Bounds keep the context digest roughly constant in size regardless of project
+// scale.
+const (
+	contextRecentNotes  = 5
+	contextBlockedShown = 8
+)
 
-// digest is the assembled restore view, shared by the Markdown and JSON renderers.
-type digest struct {
-	Goal       string     `json:"goal"`
-	Summary    string     `json:"summary"`
-	ActivePlan *planView  `json:"active_plan"`
-	Notes      []noteView `json:"recent_notes"`
+// Digest is the bounded cold-start restore view.
+type Digest struct {
+	Goal        string       `json:"goal"`
+	Summary     string       `json:"summary"`
+	ActivePlan  *PlanBrief   `json:"active_plan"`
+	Blocked     []TaskLine   `json:"blocked"`
+	BlockedMore int          `json:"blocked_more"`
+	Notes       []NoteLine   `json:"recent_notes"`
+	Inventory   model.Counts `json:"inventory"`
 }
 
-type planView struct {
+// PlanBrief is a plan plus its open tasks, for the digest.
+type PlanBrief struct {
 	ID    uint64     `json:"id"`
 	Title string     `json:"title"`
-	Tasks []taskView `json:"open_tasks"`
+	Tasks []TaskLine `json:"open_tasks"`
 }
 
-type taskView struct {
+// TaskLine is a compact task reference.
+type TaskLine struct {
 	ID     uint64 `json:"id"`
+	PlanID uint64 `json:"plan_id"`
 	Title  string `json:"title"`
 	Status string `json:"status"`
 }
 
-type noteView struct {
+// NoteLine is a compact note reference.
+type NoteLine struct {
 	ID       uint64 `json:"id"`
 	Target   string `json:"target"`
 	TargetID uint64 `json:"target_id"`
 	Body     string `json:"body"`
 }
 
-func build(s *store.Store) (digest, error) {
+// Context assembles the bounded restore digest.
+func Context(s *store.Store) (Digest, error) {
 	m, err := s.GetMeta()
 	if err != nil {
-		return digest{}, err
+		return Digest{}, err
 	}
-	d := digest{Goal: m.Goal, Summary: m.Summary}
+	d := Digest{Goal: m.Goal, Summary: m.Summary}
 
 	if m.ActivePlan != 0 {
-		p, err := s.GetPlan(m.ActivePlan)
-		if err == nil {
-			pv := &planView{ID: p.ID, Title: p.Title}
+		if p, err := s.GetPlan(m.ActivePlan); err == nil {
+			pb := &PlanBrief{ID: p.ID, Title: p.Title}
 			tasks, err := s.ListTasksByPlan(p.ID)
 			if err != nil {
-				return digest{}, err
+				return Digest{}, err
 			}
 			for _, t := range tasks {
 				if t.Status.Open() {
-					pv.Tasks = append(pv.Tasks, taskView{ID: t.ID, Title: t.Title, Status: string(t.Status)})
+					pb.Tasks = append(pb.Tasks, taskLine(t))
 				}
 			}
-			d.ActivePlan = pv
+			d.ActivePlan = pb
 		} else if err != store.ErrNotFound {
-			return digest{}, err
+			return Digest{}, err
 		}
 	}
 
-	notes, err := s.RecentNotes(recentNoteCount)
+	allTasks, err := s.ListTasks()
 	if err != nil {
-		return digest{}, err
+		return Digest{}, err
+	}
+	for _, t := range allTasks {
+		if t.Status == model.TaskBlocked {
+			if len(d.Blocked) < contextBlockedShown {
+				d.Blocked = append(d.Blocked, taskLine(t))
+			} else {
+				d.BlockedMore++
+			}
+		}
+	}
+
+	notes, err := s.RecentNotes(contextRecentNotes)
+	if err != nil {
+		return Digest{}, err
 	}
 	for _, n := range notes {
-		d.Notes = append(d.Notes, noteView{ID: n.ID, Target: string(n.Target), TargetID: n.TargetID, Body: n.Body})
+		d.Notes = append(d.Notes, noteLine(n))
+	}
+
+	if d.Inventory, err = s.Counts(); err != nil {
+		return Digest{}, err
 	}
 	return d, nil
 }
 
-// Markdown renders the restore digest as compact Markdown for an LLM to read.
-func Markdown(s *store.Store) (string, error) {
-	d, err := build(s)
-	if err != nil {
-		return "", err
-	}
+// Markdown renders the digest as compact Markdown.
+func (d Digest) Markdown() string {
 	var b strings.Builder
 	b.WriteString("# ptrack context\n\n")
 
-	b.WriteString("## Goal\n")
-	b.WriteString(orDash(d.Goal))
-	b.WriteString("\n\n")
-
-	b.WriteString("## Summary\n")
-	b.WriteString(orDash(d.Summary))
-	b.WriteString("\n\n")
+	b.WriteString("## Goal\n" + orDash(d.Goal) + "\n\n")
+	b.WriteString("## Summary\n" + orDash(d.Summary) + "\n\n")
 
 	b.WriteString("## Active plan\n")
 	if d.ActivePlan == nil {
 		b.WriteString("_none_\n\n")
 	} else {
-		fmt.Fprintf(&b, "**#%d %s**\n\n", d.ActivePlan.ID, d.ActivePlan.Title)
-		b.WriteString("### Open tasks\n")
+		fmt.Fprintf(&b, "**#%d %s**\n\n### Open tasks\n", d.ActivePlan.ID, d.ActivePlan.Title)
 		if len(d.ActivePlan.Tasks) == 0 {
 			b.WriteString("_none_\n")
 		} else {
@@ -109,28 +132,49 @@ func Markdown(s *store.Store) (string, error) {
 		b.WriteString("\n")
 	}
 
-	b.WriteString("## Recent notes\n")
+	if len(d.Blocked) > 0 {
+		b.WriteString("## Blocked (project-wide)\n")
+		for _, t := range d.Blocked {
+			fmt.Fprintf(&b, "- #%d %s (plan %d)\n", t.ID, t.Title, t.PlanID)
+		}
+		if d.BlockedMore > 0 {
+			fmt.Fprintf(&b, "- … +%d more (use `ptrack task list --status blocked`)\n", d.BlockedMore)
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString("## Recent decisions\n")
 	if len(d.Notes) == 0 {
 		b.WriteString("_none_\n")
 	} else {
 		for _, n := range d.Notes {
-			if n.TargetID == 0 {
-				fmt.Fprintf(&b, "- (%s) %s\n", n.Target, n.Body)
-			} else {
-				fmt.Fprintf(&b, "- (%s #%d) %s\n", n.Target, n.TargetID, n.Body)
-			}
+			b.WriteString("- " + noteMarkdown(n) + "\n")
 		}
 	}
-	return b.String(), nil
+	b.WriteString("\n")
+
+	b.WriteString("## Inventory\n")
+	c := d.Inventory
+	fmt.Fprintf(&b, "%d plans (%d done) · %d tasks (%d done · %d blocked · %d open) · %d notes\n\n",
+		c.Plans, c.PlansDone, c.Tasks, c.TasksDone, c.TasksBlocked, c.TasksOpen, c.Notes)
+	b.WriteString("Drill deeper: `ptrack next` · `ptrack plan show <id>` · `ptrack task show <id>` · " +
+		"`ptrack task list --status doing,blocked` · `ptrack note list` · `ptrack search <term>` · `ptrack board`\n")
+	return b.String()
 }
 
-// JSON renders the restore digest as indented JSON.
-func JSON(s *store.Store) ([]byte, error) {
-	d, err := build(s)
-	if err != nil {
-		return nil, err
+func taskLine(t model.Task) TaskLine {
+	return TaskLine{ID: t.ID, PlanID: t.PlanID, Title: t.Title, Status: string(t.Status)}
+}
+
+func noteLine(n model.Note) NoteLine {
+	return NoteLine{ID: n.ID, Target: string(n.Target), TargetID: n.TargetID, Body: n.Body}
+}
+
+func noteMarkdown(n NoteLine) string {
+	if n.TargetID == 0 {
+		return fmt.Sprintf("(%s) %s", n.Target, n.Body)
 	}
-	return json.MarshalIndent(d, "", "  ")
+	return fmt.Sprintf("(%s #%d) %s", n.Target, n.TargetID, n.Body)
 }
 
 func orDash(s string) string {

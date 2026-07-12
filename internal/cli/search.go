@@ -5,25 +5,25 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// newContextCmd builds `ptrack context`: the bounded restore digest, Markdown by
-// default or JSON with --json.
-func newContextCmd() *cobra.Command {
+// newSearchCmd builds `ptrack search <term>`: substring match across plan and
+// task titles and note bodies.
+func newSearchCmd() *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
-		Use:   "context",
-		Short: "Print the bounded restore digest (Markdown by default, --json for JSON)",
-		Args:  cobra.NoArgs,
+		Use:   "search <term>",
+		Short: "Search plan/task titles and note bodies",
+		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := openProject()
 			if err != nil {
 				return err
 			}
 			defer s.Close()
-			d, err := report.Context(s)
+			v, err := report.Search(s, joinArgs(args))
 			if err != nil {
 				return err
 			}
-			return emit(cmd, asJSON, d)
+			return emit(cmd, asJSON, v)
 		},
 	}
 	jsonFlag(cmd, &asJSON)

@@ -86,7 +86,7 @@ func TestProjectRoot(t *testing.T) {
 // Ensure the root command wired up every expected subcommand.
 func TestRootHasSubcommands(t *testing.T) {
 	root := newRootCmd()
-	want := []string{"init", "goal", "summary", "plan", "task", "note", "context", "status", "projects", "backup"}
+	want := []string{"init", "goal", "summary", "plan", "task", "note", "context", "next", "search", "board", "status", "projects", "backup", "version"}
 	got := map[string]bool{}
 	for _, c := range root.Commands() {
 		got[c.Name()] = true
