@@ -1,0 +1,17 @@
+# Binaries
+/ptrack
+/dist/
+*.exe
+
+# ptrack local store
+.ptrack/
+
+# Go
+*.test
+*.out
+/vendor/
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
