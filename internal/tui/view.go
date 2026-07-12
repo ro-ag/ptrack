@@ -15,44 +15,57 @@ var (
 	activeStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true)
 	cursorStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true)
 	statusStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	columnStyle  = lipgloss.NewStyle().Padding(0, 2, 0, 0)
+	focusStyle   = lipgloss.NewStyle().Bold(true).Underline(true).Foreground(lipgloss.Color("212"))
+	columnStyle  = lipgloss.NewStyle().Padding(0, 3, 0, 0)
 	headerBorder = lipgloss.NewStyle().Border(lipgloss.NormalBorder(), false, false, true, false).
 			BorderForeground(lipgloss.Color("240"))
 )
 
+// View renders the dashboard: a goal/summary header, side-by-side plans and
+// tasks panes, an optional input line, and a contextual help footer.
 func (d dashboard) View() string {
-	var b strings.Builder
+	var h strings.Builder
+	h.WriteString(titleStyle.Render("ptrack"))
+	h.WriteString("\n")
+	h.WriteString(labelStyle.Render("Goal: ") + orUnset(d.meta.Goal) + "\n")
+	h.WriteString(labelStyle.Render("Summary: ") + orUnset(d.meta.Summary) + "\n")
+	header := headerBorder.Render(h.String())
 
-	// Header: goal + summary.
-	b.WriteString(titleStyle.Render("ptrack"))
-	b.WriteString("\n")
-	b.WriteString(labelStyle.Render("Goal: ") + orUnset(d.meta.Goal) + "\n")
-	b.WriteString(labelStyle.Render("Summary: ") + orUnset(d.meta.Summary) + "\n")
-	header := headerBorder.Render(b.String())
+	body := lipgloss.JoinHorizontal(lipgloss.Top,
+		columnStyle.Render(d.renderPlans()),
+		d.renderTasks(),
+	)
 
-	// Body: plans column + tasks column.
-	plans := d.renderPlans()
-	tasks := d.renderTasks()
-	body := lipgloss.JoinHorizontal(lipgloss.Top, columnStyle.Render(plans), tasks)
-
-	footer := dimStyle.Render("↑/↓ move · b backup · r reload · q quit")
-	if d.status != "" {
-		footer = statusStyle.Render(d.status) + "\n" + footer
+	var footer string
+	if d.purpose != inputNone {
+		footer = d.input.View() + "\n" + dimStyle.Render("enter confirm · esc cancel")
+	} else {
+		footer = d.help()
+		if d.status != "" {
+			footer = statusStyle.Render(d.status) + "\n" + footer
+		}
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, "", body, "", footer)
 }
 
+func (d dashboard) paneTitle(name string, f focus) string {
+	if d.focus == f && d.purpose == inputNone {
+		return focusStyle.Render(name)
+	}
+	return labelStyle.Render(name)
+}
+
 func (d dashboard) renderPlans() string {
 	var b strings.Builder
-	b.WriteString(labelStyle.Render("Plans") + "\n")
+	b.WriteString(d.paneTitle("Plans", focusPlans) + "\n")
 	if len(d.plans) == 0 {
-		b.WriteString(dimStyle.Render("  (none — add one with 'ptrack plan add')"))
+		b.WriteString(dimStyle.Render("  (press 'a' to add one)"))
 		return b.String()
 	}
 	for i, p := range d.plans {
 		marker := "  "
-		if i == d.cursor {
+		if i == d.planCursor && d.focus == focusPlans {
 			marker = cursorStyle.Render("▸ ")
 		}
 		line := fmt.Sprintf("#%d %s", p.ID, p.Title)
@@ -66,20 +79,34 @@ func (d dashboard) renderPlans() string {
 
 func (d dashboard) renderTasks() string {
 	var b strings.Builder
-	b.WriteString(labelStyle.Render("Tasks") + "\n")
-	if len(d.plans) == 0 {
+	b.WriteString(d.paneTitle("Tasks", focusTasks) + "\n")
+	tasks := d.currentTasks()
+	if d.currentPlan() == nil {
 		return b.String()
 	}
-	p := d.plans[d.cursor]
-	ts := d.tasks[p.ID]
-	if len(ts) == 0 {
-		b.WriteString(dimStyle.Render("  (no tasks)"))
+	if len(tasks) == 0 {
+		b.WriteString(dimStyle.Render("  (press 'a' to add a task)"))
 		return b.String()
 	}
-	for _, t := range ts {
-		b.WriteString(fmt.Sprintf("  %s #%d %s\n", statusIcon(t.Status), t.ID, t.Title))
+	for i, t := range tasks {
+		marker := "  "
+		if i == d.taskCursor && d.focus == focusTasks {
+			marker = cursorStyle.Render("▸ ")
+		}
+		b.WriteString(marker + fmt.Sprintf("%s #%d %s\n", statusIcon(t.Status), t.ID, t.Title))
 	}
 	return b.String()
+}
+
+func (d dashboard) help() string {
+	common := "tab pane · ↑/↓ move · a add · n note · g goal · m summary · r reload · B backup · q quit"
+	var ctx string
+	if d.focus == focusPlans {
+		ctx = "u set-active · x done"
+	} else {
+		ctx = "s start · d done · b block"
+	}
+	return dimStyle.Render(ctx + " · " + common)
 }
 
 func statusIcon(s model.TaskStatus) string {
