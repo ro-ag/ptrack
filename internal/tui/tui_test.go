@@ -80,7 +80,7 @@ func TestEditGoalViaKeys(t *testing.T) {
 	d, s := newTestModel(t)
 	d = send(t, d, runes("g"))
 	d = send(t, d, runes("New Goal"))
-	d = send(t, d, tea.KeyMsg{Type: tea.KeyEnter})
+	send(t, d, tea.KeyMsg{Type: tea.KeyEnter})
 
 	m, _ := s.GetMeta()
 	if m.Goal != "New Goal" {
