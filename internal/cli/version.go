@@ -26,6 +26,10 @@ func version() string {
 	return "dev"
 }
 
+// VersionString returns the resolved ptrack version for callers outside this
+// package (e.g. stamping the store's writer version).
+func VersionString() string { return version() }
+
 // newVersionCmd builds `ptrack version`.
 func newVersionCmd() *cobra.Command {
 	return &cobra.Command{
