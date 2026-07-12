@@ -5,6 +5,7 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/ro-ag/ptrack/internal/model"
@@ -13,6 +14,24 @@ import (
 
 // ErrNotFound is returned when a requested plan, task, or note id does not exist.
 var ErrNotFound = errors.New("not found")
+
+// CurrentFormat is the on-disk schema version this build writes and understands.
+const CurrentFormat uint = 1
+
+// WriterVersion is the ptrack semver recorded on writes for diagnostics. main
+// sets it from the resolved CLI version; it defaults to "dev".
+var WriterVersion = "dev"
+
+// ErrFormatTooNew is returned when a database was written by a newer ptrack whose
+// on-disk format this build does not understand. The database is left untouched.
+type ErrFormatTooNew struct {
+	Found     uint
+	Supported uint
+}
+
+func (e ErrFormatTooNew) Error() string {
+	return fmt.Sprintf("database format v%d is newer than this ptrack (supports v%d) — upgrade ptrack", e.Found, e.Supported)
+}
 
 var (
 	bucketMeta  = []byte("meta")
@@ -53,12 +72,42 @@ func (s *Store) init() error {
 			}
 		}
 		mb := tx.Bucket(bucketMeta)
-		if mb.Get(keyMeta) == nil {
+		raw := mb.Get(keyMeta)
+		if raw == nil {
 			now := time.Now()
-			return putGob(mb, keyMeta, model.Meta{CreatedAt: now, UpdatedAt: now})
+			return putGob(mb, keyMeta, model.Meta{
+				CreatedAt:        now,
+				UpdatedAt:        now,
+				FormatVersion:    CurrentFormat,
+				LastWriteVersion: WriterVersion,
+			})
+		}
+		var m model.Meta
+		if err := gobDecode(raw, &m); err != nil {
+			return err
+		}
+		if m.FormatVersion > CurrentFormat {
+			// Reject without writing: rolling back this transaction discards the
+			// bucket creation above, leaving a newer-format DB untouched.
+			return ErrFormatTooNew{Found: m.FormatVersion, Supported: CurrentFormat}
+		}
+		if m.FormatVersion < CurrentFormat {
+			migrateMeta(&m)
+			m.FormatVersion = CurrentFormat
+			m.LastWriteVersion = WriterVersion
+			m.UpdatedAt = time.Now()
+			return putGob(mb, keyMeta, m)
 		}
 		return nil
 	})
+}
+
+// migrateMeta upgrades an older-format meta record in place. FormatVersion 0
+// (pre-versioning, v0.1.0) is simply adopted as the current format; future
+// steps append here, each guarded by the version they upgrade from.
+func migrateMeta(m *model.Meta) {
+	// v0 -> v1: nothing to transform; the record shape is compatible.
+	_ = m
 }
 
 // --- meta ---
@@ -81,6 +130,7 @@ func (s *Store) updateMeta(fn func(*model.Meta)) error {
 		}
 		fn(&m)
 		m.UpdatedAt = time.Now()
+		m.LastWriteVersion = WriterVersion
 		return putGob(mb, keyMeta, m)
 	})
 }
@@ -308,4 +358,71 @@ func (s *Store) RecentNotes(n int) ([]model.Note, error) {
 		out = append(out, all[i])
 	}
 	return out, nil
+}
+
+// NotesByPlan returns notes attached to the given plan, insertion order.
+func (s *Store) NotesByPlan(planID uint64) ([]model.Note, error) {
+	return s.notesForTarget(model.TargetPlan, planID)
+}
+
+// NotesByTask returns notes attached to the given task, insertion order.
+func (s *Store) NotesByTask(taskID uint64) ([]model.Note, error) {
+	return s.notesForTarget(model.TargetTask, taskID)
+}
+
+func (s *Store) notesForTarget(target model.NoteTarget, id uint64) ([]model.Note, error) {
+	all, err := s.ListNotes()
+	if err != nil {
+		return nil, err
+	}
+	var out []model.Note
+	for _, n := range all {
+		if n.Target == target && n.TargetID == id {
+			out = append(out, n)
+		}
+	}
+	return out, nil
+}
+
+// Counts computes a project-wide inventory in a single pass per bucket, for the
+// bounded context footer.
+func (s *Store) Counts() (model.Counts, error) {
+	var c model.Counts
+	err := s.db.View(func(tx *bolt.Tx) error {
+		if err := tx.Bucket(bucketPlans).ForEach(func(_, v []byte) error {
+			var p model.Plan
+			if err := gobDecode(v, &p); err != nil {
+				return err
+			}
+			c.Plans++
+			if p.Status == model.PlanDone {
+				c.PlansDone++
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		if err := tx.Bucket(bucketTasks).ForEach(func(_, v []byte) error {
+			var t model.Task
+			if err := gobDecode(v, &t); err != nil {
+				return err
+			}
+			c.Tasks++
+			switch t.Status {
+			case model.TaskDone:
+				c.TasksDone++
+			case model.TaskBlocked:
+				c.TasksBlocked++
+			}
+			if t.Status.Open() {
+				c.TasksOpen++
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		c.Notes = tx.Bucket(bucketNotes).Stats().KeyN
+		return nil
+	})
+	return c, err
 }

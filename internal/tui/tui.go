@@ -50,6 +50,21 @@ const (
 	focusTasks
 )
 
+// mode selects the dashboard layout: the two-pane list or the kanban board.
+type mode int
+
+const (
+	modeList mode = iota
+	modeBoard
+)
+
+// boardStatuses is the left-to-right column order of the kanban board.
+var boardStatuses = []model.TaskStatus{
+	model.TaskTodo, model.TaskDoing, model.TaskBlocked, model.TaskDone,
+}
+
+var boardTitles = []string{"Todo", "Doing", "Blocked", "Done"}
+
 // inputPurpose records what a pending text-input submission should do.
 type inputPurpose int
 
@@ -71,9 +86,13 @@ type dashboard struct {
 	plans []model.Plan
 	tasks map[uint64][]model.Task
 
+	mode       mode
 	focus      focus
 	planCursor int
 	taskCursor int
+
+	boardCol int
+	boardRow int
 
 	input   textinput.Model
 	purpose inputPurpose
@@ -156,6 +175,65 @@ func (d *dashboard) currentTask() *model.Task {
 	return &ts[d.taskCursor]
 }
 
+// boardColumns groups the current plan's tasks into kanban columns in
+// boardStatuses order.
+func (d *dashboard) boardColumns() [][]model.Task {
+	cols := make([][]model.Task, len(boardStatuses))
+	for _, t := range d.currentTasks() {
+		for i, st := range boardStatuses {
+			if t.Status == st {
+				cols[i] = append(cols[i], t)
+				break
+			}
+		}
+	}
+	return cols
+}
+
+// boardTask returns the card under the board cursor, or nil.
+func (d *dashboard) boardTask() *model.Task {
+	cols := d.boardColumns()
+	if d.boardCol < 0 || d.boardCol >= len(cols) {
+		return nil
+	}
+	col := cols[d.boardCol]
+	if d.boardRow < 0 || d.boardRow >= len(col) {
+		return nil
+	}
+	return &col[d.boardRow]
+}
+
+func (d *dashboard) clampBoardRow() {
+	cols := d.boardColumns()
+	n := 0
+	if d.boardCol >= 0 && d.boardCol < len(cols) {
+		n = len(cols[d.boardCol])
+	}
+	d.boardRow = clamp(d.boardRow, 0, n-1)
+}
+
+// moveCard shifts the selected card one column in dir (-1 left, +1 right),
+// applying the target column's status.
+func (d *dashboard) moveCard(dir int) {
+	t := d.boardTask()
+	if t == nil {
+		d.status = "no card selected"
+		return
+	}
+	nc := d.boardCol + dir
+	if nc < 0 || nc >= len(boardStatuses) {
+		return
+	}
+	if err := d.store.SetTaskStatus(t.ID, boardStatuses[nc]); err != nil {
+		d.status = err.Error()
+		return
+	}
+	_ = d.reload()
+	d.boardCol = nc
+	d.clampBoardRow()
+	d.status = "moved #" + itoa(t.ID) + " → " + string(boardStatuses[nc])
+}
+
 func (d dashboard) Init() tea.Cmd { return nil }
 
 // Update handles messages, dispatching to input-mode or normal-mode key handling.
@@ -168,7 +246,58 @@ func (d dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if d.purpose != inputNone {
 			return d.updateInput(msg)
 		}
+		if d.mode == modeBoard {
+			return d.updateBoard(msg)
+		}
 		return d.updateNormal(msg)
+	}
+	return d, nil
+}
+
+// updateBoard handles keys while the kanban board is shown.
+func (d dashboard) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return d, tea.Quit
+	case "v", "esc":
+		d.mode = modeList
+	case "left", "h":
+		if d.boardCol > 0 {
+			d.boardCol--
+			d.clampBoardRow()
+		}
+	case "right", "l":
+		if d.boardCol < len(boardStatuses)-1 {
+			d.boardCol++
+			d.clampBoardRow()
+		}
+	case "up", "k":
+		if d.boardRow > 0 {
+			d.boardRow--
+		}
+	case "down", "j":
+		d.boardRow++
+		d.clampBoardRow()
+	case "H", "<":
+		d.moveCard(-1)
+	case "L", ">":
+		d.moveCard(1)
+	case "a":
+		if d.currentPlan() == nil {
+			d.status = "add a plan first"
+			return d, nil
+		}
+		return d, d.startInput(inputAddTask, "New task:", "")
+	case "n":
+		if d.boardTask() == nil {
+			d.status = "no card selected"
+			return d, nil
+		}
+		return d, d.startInput(inputAddNote, "Note:", "")
+	case "r":
+		d.applyErr(d.reload(), "reloaded")
+	case "B":
+		d.status = d.backup()
 	}
 	return d, nil
 }
@@ -200,6 +329,13 @@ func (d dashboard) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			d.focus = focusPlans
 		}
+	case "v":
+		if d.currentPlan() == nil {
+			d.status = "add a plan first"
+			return d, nil
+		}
+		d.mode = modeBoard
+		d.boardCol, d.boardRow = 0, 0
 	case "up", "k":
 		d.moveCursor(-1)
 	case "down", "j":
@@ -343,8 +479,15 @@ func (d *dashboard) commitInput() {
 	}
 }
 
-// addNote attaches a note to the selected task (tasks pane) or plan (plans pane).
+// addNote attaches a note to the selected target: the board card in board mode,
+// the selected task in the tasks pane, else the current plan, else the project.
 func (d *dashboard) addNote(body string) {
+	if d.mode == modeBoard {
+		if t := d.boardTask(); t != nil {
+			d.applyErr(mapErr(d.store.AddNote(model.TargetTask, t.ID, body)), "note added")
+			return
+		}
+	}
 	if d.focus == focusTasks {
 		if t := d.currentTask(); t != nil {
 			d.applyErr(mapErr(d.store.AddNote(model.TargetTask, t.ID, body)), "note added")

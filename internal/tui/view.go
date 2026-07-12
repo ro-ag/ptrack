@@ -21,8 +21,8 @@ var (
 			BorderForeground(lipgloss.Color("240"))
 )
 
-// View renders the dashboard: a goal/summary header, side-by-side plans and
-// tasks panes, an optional input line, and a contextual help footer.
+// View renders the dashboard: a goal/summary header, the list or kanban body,
+// an optional input line, and a contextual help footer.
 func (d dashboard) View() string {
 	var h strings.Builder
 	h.WriteString(titleStyle.Render("ptrack"))
@@ -31,10 +31,15 @@ func (d dashboard) View() string {
 	h.WriteString(labelStyle.Render("Summary: ") + orUnset(d.meta.Summary) + "\n")
 	header := headerBorder.Render(h.String())
 
-	body := lipgloss.JoinHorizontal(lipgloss.Top,
-		columnStyle.Render(d.renderPlans()),
-		d.renderTasks(),
-	)
+	var body string
+	if d.mode == modeBoard {
+		body = d.renderBoard()
+	} else {
+		body = lipgloss.JoinHorizontal(lipgloss.Top,
+			columnStyle.Render(d.renderPlans()),
+			d.renderTasks(),
+		)
+	}
 
 	var footer string
 	if d.purpose != inputNone {
@@ -47,6 +52,82 @@ func (d dashboard) View() string {
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, "", body, "", footer)
+}
+
+// columnAccent maps each board column to an accent color.
+var columnAccent = []lipgloss.Color{
+	lipgloss.Color("245"), // todo — gray
+	lipgloss.Color("214"), // doing — amber
+	lipgloss.Color("196"), // blocked — red
+	lipgloss.Color("42"),  // done — green
+}
+
+// renderBoard draws the kanban board for the current plan: four bordered
+// columns with status-accented headers, cards, and a highlighted selection.
+func (d dashboard) renderBoard() string {
+	p := d.currentPlan()
+	if p == nil {
+		return dimStyle.Render("no plan selected")
+	}
+	cols := d.boardColumns()
+	colW := 22
+	if d.width > 0 {
+		if w := (d.width - 6) / len(boardStatuses); w > colW {
+			colW = w
+		}
+	}
+
+	rendered := make([]string, len(boardStatuses))
+	for i := range boardStatuses {
+		accent := columnAccent[i]
+		head := lipgloss.NewStyle().Bold(true).Foreground(accent).
+			Render(fmt.Sprintf("%s (%d)", boardTitles[i], len(cols[i])))
+
+		var cards strings.Builder
+		cards.WriteString(head + "\n\n")
+		if len(cols[i]) == 0 {
+			cards.WriteString(dimStyle.Render("—"))
+		}
+		for row, t := range cols[i] {
+			card := fmt.Sprintf("#%d %s", t.ID, t.Title)
+			card = truncate(card, colW-4)
+			cardStyle := lipgloss.NewStyle().Foreground(accent)
+			if i == d.boardCol && row == d.boardRow {
+				cardStyle = lipgloss.NewStyle().Bold(true).
+					Foreground(lipgloss.Color("231")).Background(accent).Padding(0, 1)
+			}
+			cards.WriteString(cardStyle.Render(card) + "\n")
+		}
+
+		border := lipgloss.RoundedBorder()
+		box := lipgloss.NewStyle().
+			Border(border).
+			BorderForeground(accent).
+			Width(colW).
+			Padding(0, 1).
+			MarginRight(1)
+		if i == d.boardCol {
+			box = box.BorderForeground(lipgloss.Color("212"))
+		}
+		rendered[i] = box.Render(cards.String())
+	}
+	title := labelStyle.Render(fmt.Sprintf("Board — #%d %s", p.ID, p.Title))
+	return title + "\n\n" + lipgloss.JoinHorizontal(lipgloss.Top, rendered...)
+}
+
+// truncate shortens s to n runes, appending an ellipsis when cut.
+func truncate(s string, n int) string {
+	if n < 1 {
+		n = 1
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	if n <= 1 {
+		return string(r[:n])
+	}
+	return string(r[:n-1]) + "…"
 }
 
 func (d dashboard) paneTitle(name string, f focus) string {
@@ -99,7 +180,10 @@ func (d dashboard) renderTasks() string {
 }
 
 func (d dashboard) help() string {
-	common := "tab pane · ↑/↓ move · a add · n note · g goal · m summary · r reload · B backup · q quit"
+	if d.mode == modeBoard {
+		return dimStyle.Render("←/→ column · ↑/↓ card · H/L move card · a add · n note · v list · r reload · B backup · q quit")
+	}
+	common := "tab pane · ↑/↓ move · v board · a add · n note · g goal · m summary · r reload · B backup · q quit"
 	var ctx string
 	if d.focus == focusPlans {
 		ctx = "u set-active · x done"

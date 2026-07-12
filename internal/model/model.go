@@ -47,6 +47,13 @@ type Meta struct {
 	ActivePlan uint64
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
+	// FormatVersion is the on-disk schema version, used to gate migrations and
+	// reject databases written by a newer ptrack. Zero means a pre-versioning
+	// (v0.1.0) database, adopted as version 1 on first open.
+	FormatVersion uint
+	// LastWriteVersion is the ptrack semver that last wrote the database,
+	// recorded for diagnostics only (never gates behavior).
+	LastWriteVersion string
 }
 
 // Plan is an ordered unit of work within a project.
@@ -85,6 +92,18 @@ type ProjectRef struct {
 	Name     string
 	Path     string
 	LastSeen time.Time
+}
+
+// Counts is a project-wide inventory summary used for the bounded context
+// footer: totals plus the breakdowns an agent needs to decide what to query.
+type Counts struct {
+	Plans        int
+	PlansDone    int
+	Tasks        int
+	TasksDone    int
+	TasksBlocked int
+	TasksOpen    int // not done (todo/doing/blocked)
+	Notes        int
 }
 
 // Open reports whether a task status counts as "open" (not done) for the

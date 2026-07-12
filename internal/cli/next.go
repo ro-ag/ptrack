@@ -5,13 +5,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// newContextCmd builds `ptrack context`: the bounded restore digest, Markdown by
-// default or JSON with --json.
-func newContextCmd() *cobra.Command {
+// newNextCmd builds `ptrack next`: the single most-actionable task.
+func newNextCmd() *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
-		Use:   "context",
-		Short: "Print the bounded restore digest (Markdown by default, --json for JSON)",
+		Use:   "next",
+		Short: "Print the single most-actionable task (active plan: doing, else todo)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := openProject()
@@ -19,11 +18,11 @@ func newContextCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
-			d, err := report.Context(s)
+			v, err := report.Next(s)
 			if err != nil {
 				return err
 			}
-			return emit(cmd, asJSON, d)
+			return emit(cmd, asJSON, v)
 		},
 	}
 	jsonFlag(cmd, &asJSON)

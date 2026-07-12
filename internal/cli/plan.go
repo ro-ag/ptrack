@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/ro-ag/ptrack/internal/model"
+	"github.com/ro-ag/ptrack/internal/report"
 	"github.com/spf13/cobra"
 )
 
@@ -34,6 +35,7 @@ func newPlanCmd() *cobra.Command {
 		},
 	}
 
+	var listJSON bool
 	list := &cobra.Command{
 		Use:   "list",
 		Short: "List plans",
@@ -52,6 +54,19 @@ func newPlanCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if listJSON {
+				type planRow struct {
+					ID     uint64 `json:"id"`
+					Title  string `json:"title"`
+					Status string `json:"status"`
+					Active bool   `json:"active"`
+				}
+				rows := make([]planRow, 0, len(plans))
+				for _, p := range plans {
+					rows = append(rows, planRow{p.ID, p.Title, string(p.Status), p.ID == m.ActivePlan})
+				}
+				return emitJSON(cmd, rows)
+			}
 			out := cmd.OutOrStdout()
 			for _, p := range plans {
 				mark := ' '
@@ -63,6 +78,31 @@ func newPlanCmd() *cobra.Command {
 			return nil
 		},
 	}
+	jsonFlag(list, &listJSON)
+
+	var showJSON bool
+	show := &cobra.Command{
+		Use:   "show <id>",
+		Short: "Show a plan with its tasks and notes",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := parseID(args[0])
+			if err != nil {
+				return err
+			}
+			s, err := openProject()
+			if err != nil {
+				return err
+			}
+			defer s.Close()
+			v, err := report.ShowPlan(s, id)
+			if err != nil {
+				return err
+			}
+			return emit(cmd, showJSON, v)
+		},
+	}
+	jsonFlag(show, &showJSON)
 
 	done := &cobra.Command{
 		Use:   "done <id>",
@@ -100,7 +140,7 @@ func newPlanCmd() *cobra.Command {
 		},
 	}
 
-	cmd.AddCommand(add, list, done, use)
+	cmd.AddCommand(add, list, show, done, use)
 	return cmd
 }
 

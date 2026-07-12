@@ -99,6 +99,38 @@ func TestSetActivePlanViaKeys(t *testing.T) {
 	}
 }
 
+func TestBoardModeMoveCard(t *testing.T) {
+	d, s := newTestModel(t)
+	p, _ := s.AddPlan("P")
+	tk, _ := s.AddTask(p.ID, "card") // todo
+	_ = d.reload()
+
+	d = send(t, d, runes("v")) // enter board
+	if d.mode != modeBoard {
+		t.Fatal("v did not enter board mode")
+	}
+	// card is in the todo column (col 0); move it right to doing.
+	d = send(t, d, runes("L"))
+	got, _ := s.GetTask(tk.ID)
+	if got.Status != model.TaskDoing {
+		t.Fatalf("after move-right status = %q want doing", got.Status)
+	}
+	if d.boardCol != 1 {
+		t.Errorf("boardCol = %d want 1", d.boardCol)
+	}
+	// move right again -> blocked.
+	d = send(t, d, runes("L"))
+	got, _ = s.GetTask(tk.ID)
+	if got.Status != model.TaskBlocked {
+		t.Errorf("status = %q want blocked", got.Status)
+	}
+	// back to list.
+	d = send(t, d, runes("v"))
+	if d.mode != modeList {
+		t.Errorf("v did not return to list mode")
+	}
+}
+
 func TestCancelInput(t *testing.T) {
 	d, _ := newTestModel(t)
 	d = send(t, d, runes("a"))

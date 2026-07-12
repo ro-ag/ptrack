@@ -10,6 +10,7 @@ import (
 // newProjectsCmd builds `ptrack projects`: lists every registered project as
 // tab-separated name, path, and last-seen timestamp.
 func newProjectsCmd() *cobra.Command {
+	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "projects",
 		Short: "List registered projects",
@@ -24,6 +25,9 @@ func newProjectsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if asJSON {
+				return emitJSON(cmd, refs)
+			}
 			out := cmd.OutOrStdout()
 			for _, r := range refs {
 				fmt.Fprintf(out, "%s\t%s\t%s\n", r.Name, r.Path, r.LastSeen.Format("2006-01-02 15:04:05"))
@@ -31,5 +35,6 @@ func newProjectsCmd() *cobra.Command {
 			return nil
 		},
 	}
+	jsonFlag(cmd, &asJSON)
 	return cmd
 }
