@@ -41,25 +41,42 @@ ptrack context            # fresh agent reads this (add --json for machines)
 
 ## Commands
 
+Every read command supports `--json` (Markdown is the default — fewer tokens for
+an LLM to read).
+
 | Command | Purpose |
 |---|---|
-| `ptrack init [--goal S]` | Create `.ptrack/` in the project root, set the goal |
+| `ptrack init [--goal S] [--root D] [--force]` | Create `.ptrack/` (refuses to nest unless `--force`) |
 | `ptrack goal [show\|set S]` | Show or set the north-star goal |
 | `ptrack summary [show\|set S]` | Show or set the rolling context summary |
-| `ptrack plan add\|list\|done <id>\|use <id>` | Manage plans; `use` sets the active plan |
-| `ptrack task add\|list\|start\|done\|block` | Manage tasks (default to the active plan) |
-| `ptrack note add S [--task N\|--plan N]` | Attach a note to the project, a plan, or a task |
-| `ptrack context [--json]` | Print the restore digest (Markdown, or JSON) |
-| `ptrack status` | Quick overview: goal, active plan, task counts |
-| `ptrack projects` | List projects in the global registry |
+| `ptrack plan add\|list\|show <id>\|done <id>\|use <id>` | Manage plans; `show` includes tasks + notes |
+| `ptrack task add\|list [--status …]\|show <id>\|start\|done\|block` | Manage tasks; `list --status todo,doing,…` filters |
+| `ptrack note add S [--task N\|--plan N]` / `note list [--plan\|--task\|--limit]` | Attach or list notes |
+| `ptrack context [--json]` | Bounded restore digest: goal, summary, active plan, blockers, recent notes, inventory |
+| `ptrack next [--json]` | The single most-actionable task (active plan: doing, else todo) |
+| `ptrack board [--plan N] [--json]` | Kanban view of a plan's tasks by status |
+| `ptrack search <term> [--json]` | Substring match across plan/task titles and note bodies |
+| `ptrack status [--json]` | Quick overview: goal, active plan, task counts |
+| `ptrack projects [--json]` | List projects in the global registry |
 | `ptrack backup` | Copy the project DB into the global backups directory |
 | `ptrack version` | Print the version |
 
+### Agent workflow
+
+A fresh agent resuming a large project reads `ptrack context` (bounded — it never
+dumps the whole project, just the live edge plus counts and drill-down commands),
+then pulls detail on demand with `next`, `plan show`, `task show`,
+`task list --status`, `note list`, `search`, and `board`. It records decisions
+with `note add` and updates `summary set` before the session ends.
+
 ## TUI keys
 
-`tab` switch pane · `↑/↓` move · `a` add plan/task · `n` note · `g` edit goal ·
-`m` edit summary · `u` set active plan · `x` mark plan done · `s/d/b`
-start/done/block task · `r` reload · `B` backup · `q` quit.
+**List mode:** `tab` switch pane · `↑/↓` move · `v` board · `a` add plan/task ·
+`n` note · `g` edit goal · `m` edit summary · `u` set active plan · `x` mark plan
+done · `s/d/b` start/done/block task · `r` reload · `B` backup · `q` quit.
+
+**Board mode:** `←/→` column · `↑/↓` card · `H/L` move card across columns
+(changes status) · `a` add · `n` note · `v` back to list · `q` quit.
 
 ## Storage
 
