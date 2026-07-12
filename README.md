@@ -40,3 +40,7 @@ ptrack plan add "Build storage layer"
 ptrack task add "Define bbolt buckets" --plan 1
 ptrack context            # fresh agent reads this
 ```
+
+## License
+
+[Apache License 2.0](LICENSE) © 2026 ro-ag.
