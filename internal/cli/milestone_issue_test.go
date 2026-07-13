@@ -81,3 +81,17 @@ func TestCommitRecordParsesTaskRef(t *testing.T) {
 		t.Errorf("commit not linked to task 2:\n%s", out)
 	}
 }
+
+func TestCommitShowResolvesRef(t *testing.T) {
+	seedProject(t)
+	// record a commit, then resolveCommitRef maps its ptrack id to the SHA.
+	mustRun(t, "commit", "record", "--sha", "cafebabe0001", "--subject", "#1 work")
+	s := openTestStore(t)
+	defer s.Close()
+	if got := resolveCommitRef(s, "1"); got != "cafebabe0001" {
+		t.Errorf("resolveCommitRef(1) = %q want the SHA", got)
+	}
+	if got := resolveCommitRef(s, "HEAD~2"); got != "HEAD~2" {
+		t.Errorf("non-id ref should pass through, got %q", got)
+	}
+}

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ro-ag/ptrack/internal/store"
 )
 
 // seedProject initializes a project with one active plan and three tasks in
@@ -117,4 +119,18 @@ func TestInitRefusesGenuineNesting(t *testing.T) {
 	if _, err := runCmd(t, "init", "--force"); err != nil {
 		t.Fatalf("--force should nest, got: %v", err)
 	}
+}
+
+func openTestStore(t *testing.T) *store.Store {
+	t.Helper()
+	cwd, _ := os.Getwd()
+	db, err := store.FindProjectDB(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
 }
