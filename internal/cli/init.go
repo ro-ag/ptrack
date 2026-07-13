@@ -62,7 +62,11 @@ func newInitCmd() *cobra.Command {
 			fmt.Fprintln(out, dbPath)
 
 			if !noGuide {
-				written, err := guide.Install(projectRoot(dbPath), guide.DefaultFiles)
+				extra, err := globalGuideExtra()
+				if err != nil {
+					return err
+				}
+				written, err := guide.Install(projectRoot(dbPath), guide.DefaultFiles, extra)
 				if err != nil {
 					return err
 				}

@@ -3,11 +3,30 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/ro-ag/ptrack/internal/guide"
 	"github.com/ro-ag/ptrack/internal/store"
 	"github.com/spf13/cobra"
 )
+
+// globalGuideExtra returns the contents of the user's global guide template
+// (<global home>/guide.md), or "" when it does not exist. These are appended to
+// the installed guide as the user's own working agreements.
+func globalGuideExtra() (string, error) {
+	home, err := store.GlobalHome()
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(filepath.Join(home, guide.TemplateName))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return string(data), nil
+}
 
 // newGuideCmd builds `ptrack guide`: install or refresh the ptrack agent guide
 // in the project's AGENTS.md/CLAUDE.md, or print it with --print.
@@ -19,8 +38,12 @@ func newGuideCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			out := cmd.OutOrStdout()
+			extra, err := globalGuideExtra()
+			if err != nil {
+				return err
+			}
 			if printOnly {
-				fmt.Fprint(out, guide.Body())
+				fmt.Fprint(out, guide.Rendered(extra))
 				return nil
 			}
 			cwd, err := os.Getwd()
@@ -31,7 +54,7 @@ func newGuideCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			written, err := guide.Install(projectRoot(dbPath), guide.DefaultFiles)
+			written, err := guide.Install(projectRoot(dbPath), guide.DefaultFiles, extra)
 			if err != nil {
 				return err
 			}
