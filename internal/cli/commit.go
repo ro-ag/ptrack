@@ -2,6 +2,8 @@ package cli
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"regexp"
 	"strconv"
 
@@ -142,8 +144,57 @@ func newCommitCmd() *cobra.Command {
 	list.Flags().Uint64Var(&listPlan, "plan", 0, "only commits linked to this plan")
 	jsonFlag(list, &listJSON)
 
-	cmd.AddCommand(add, record, list)
+	var showStat bool
+	show := &cobra.Command{
+		Use:   "show <id|sha>",
+		Short: "Show a tracked commit's diff (via git show)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			dbPath, err := store.FindProjectDB(cwd)
+			if err != nil {
+				return err
+			}
+			s, err := store.Open(dbPath)
+			if err != nil {
+				return err
+			}
+			ref := resolveCommitRef(s, args[0])
+			s.Close()
+
+			gitArgs := []string{"-C", projectRoot(dbPath), "show"}
+			if showStat {
+				gitArgs = append(gitArgs, "--stat")
+			}
+			gitArgs = append(gitArgs, ref)
+			git := exec.Command("git", gitArgs...)
+			git.Stdout = cmd.OutOrStdout()
+			git.Stderr = os.Stderr
+			return git.Run()
+		},
+	}
+	show.Flags().BoolVar(&showStat, "stat", false, "show only the diffstat (changed files)")
+
+	cmd.AddCommand(add, record, list, show)
 	return cmd
+}
+
+// resolveCommitRef maps a ptrack commit id to its SHA when arg is a known id;
+// otherwise it returns arg unchanged (treated as a git ref).
+func resolveCommitRef(s *store.Store, arg string) string {
+	if id, err := strconv.ParseUint(arg, 10, 64); err == nil {
+		if commits, err := s.ListCommits(); err == nil {
+			for _, c := range commits {
+				if c.ID == id {
+					return c.SHA
+				}
+			}
+		}
+	}
+	return arg
 }
 
 // resolveCommitLink picks the plan/task link for a manual commit add.

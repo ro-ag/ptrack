@@ -55,7 +55,7 @@ an LLM to read).
 | `ptrack task add\|list [--status …]\|show\|start\|done\|block\|rename` | Manage tasks; `list --status todo,doing,…` filters |
 | `ptrack issue add [--severity S] [--task N]\|list\|show\|close\|open\|severity\|rename` | Track issues/bugs |
 | `ptrack note add S [--task N\|--plan N]` / `note list [--plan\|--task\|--limit]` | Attach or list notes (your audit trail) |
-| `ptrack commit add\|list\|record` · `ptrack hook install` | Track git commits; `hook install` auto-records each commit (links via `#<id>`) |
+| `ptrack commit add\|list\|show\|record` · `ptrack hook install` | Track git commits; `commit show <id>` prints the diff; `hook install` auto-records (links via `#<id>`) |
 | `ptrack context [--json]` | Bounded restore digest: goal, summary, active plan, blockers, open issues, recent notes, inventory |
 | `ptrack next [--json]` | The single most-actionable task (active plan: doing, else todo) |
 | `ptrack board [--plan N] [--json]` | Kanban view of a plan's tasks by status |
