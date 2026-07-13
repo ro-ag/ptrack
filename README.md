@@ -99,8 +99,12 @@ carries them — without changing what ptrack ships to others.
 Bare `ptrack` opens a tabbed dashboard: **Overview · Board · Milestones ·
 Issues**, with an inventory header and bordered panels.
 
-**Global:** `tab`/`shift+tab` switch tabs · `1`–`4` jump · `g` edit goal ·
-`m` edit summary · `r` reload · `B` backup · `q` quit.
+Press `enter` on any selected item to open a **detail panel** — its full fields,
+linked entities, and attached notes (the agent's decisions/explanations),
+scrollable; `esc` closes.
+
+**Global:** `enter` details · `tab`/`shift+tab` switch tabs · `1`–`4` jump ·
+`g` edit goal · `m` edit summary · `r` reload · `B` backup · `q` quit.
 
 - **Overview** — `←/→` switch pane (plans/tasks) · `↑/↓` move · `a` add ·
   `u` set active plan · `x` plan done · `s/d/b` start/done/block task · `n` note.

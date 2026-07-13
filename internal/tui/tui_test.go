@@ -177,3 +177,40 @@ func TestRenamePlanViaKeys(t *testing.T) {
 		t.Errorf("title = %q want reducer", got.Title)
 	}
 }
+
+func TestDetailShowsNotes(t *testing.T) {
+	d, s := newTestModel(t)
+	p, _ := s.AddPlan("plan")
+	tk, _ := s.AddTask(p.ID, "task")
+	s.AddNote(model.TargetTask, tk.ID, "agent decided to use X")
+	_ = d.reload()
+	// overview, tasks pane, open detail
+	d = send(t, d, runes("l")) // focus tasks
+	d = send(t, d, key(tea.KeyEnter))
+	if !d.showDetail {
+		t.Fatal("enter did not open detail")
+	}
+	joined := ""
+	for _, l := range d.detailLines {
+		joined += l + "\n"
+	}
+	if !contains(joined, "agent decided to use X") {
+		t.Errorf("detail missing note:\n%s", joined)
+	}
+	// esc closes
+	d = send(t, d, key(tea.KeyEsc))
+	if d.showDetail {
+		t.Error("esc did not close detail")
+	}
+}
+
+func contains(s, sub string) bool {
+	return len(s) >= len(sub) && (func() bool {
+		for i := 0; i+len(sub) <= len(s); i++ {
+			if s[i:i+len(sub)] == sub {
+				return true
+			}
+		}
+		return false
+	})()
+}
