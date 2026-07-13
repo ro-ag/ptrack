@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-07-12
+
+### Added
+- **Commit tracking.** A first-class `Commit` record (SHA, subject, task/plan
+  link). `ptrack commit add|list|record`, and `ptrack hook install` writes a
+  git post-commit hook that auto-records every commit — linked to a task when
+  the message contains `#<id>`, otherwise to the active plan. Commits appear in
+  the TUI detail view for tasks and plans and in the `context` inventory.
+- The agent guide now frames notes as the **human audit trail** ("record
+  decisions, not narration") and documents commit linking via `#<id>`.
+
+### Changed
+- Database schema is now **format v3** (adds the commits bucket). Existing v1/v2
+  databases migrate automatically on open.
+
 ## [0.8.0] - 2026-07-12
 
 ### Added
@@ -136,6 +151,7 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
+[0.9.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.9.0
 [0.8.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.8.0
 [0.7.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.7.0
 [0.6.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.6.0

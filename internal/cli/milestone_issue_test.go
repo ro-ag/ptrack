@@ -72,3 +72,12 @@ func TestRenameCommands(t *testing.T) {
 		t.Errorf("renamed title missing:\n%s", out)
 	}
 }
+
+func TestCommitRecordParsesTaskRef(t *testing.T) {
+	seedProject(t) // plan #1 active, tasks #1-3
+	mustRun(t, "commit", "record", "--sha", "deadbeef1234", "--subject", "#2 wire the reducer")
+	out := mustRun(t, "commit", "list", "--task", "2")
+	if !strings.Contains(out, "deadbeef") || !strings.Contains(out, "wire the reducer") {
+		t.Errorf("commit not linked to task 2:\n%s", out)
+	}
+}

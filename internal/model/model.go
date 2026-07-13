@@ -105,6 +105,17 @@ type Plan struct {
 	UpdatedAt   time.Time
 }
 
+// Commit records a git commit in the project's audit trail, linked to a task
+// (parsed from a #<id> reference) or a plan.
+type Commit struct {
+	ID        uint64
+	SHA       string
+	Subject   string
+	PlanID    uint64
+	TaskID    uint64
+	CreatedAt time.Time
+}
+
 // Issue is a tracked problem or bug, optionally linked to a task.
 type Issue struct {
 	ID        uint64
@@ -158,6 +169,7 @@ type Counts struct {
 	TasksOpen      int // not done (todo/doing/blocked)
 	Issues         int
 	IssuesOpen     int
+	Commits        int
 	Notes          int
 }
 

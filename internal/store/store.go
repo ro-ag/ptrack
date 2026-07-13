@@ -16,8 +16,9 @@ import (
 var ErrNotFound = errors.New("not found")
 
 // CurrentFormat is the on-disk schema version this build writes and understands.
-// v2 adds the milestones and issues buckets and Plan.MilestoneID.
-const CurrentFormat uint = 2
+// v2 adds the milestones and issues buckets and Plan.MilestoneID; v3 adds the
+// commits bucket.
+const CurrentFormat uint = 3
 
 // WriterVersion is the ptrack semver recorded on writes for diagnostics. main
 // sets it from the resolved CLI version; it defaults to "dev".
@@ -41,6 +42,7 @@ var (
 	bucketNotes      = []byte("notes")
 	bucketMilestones = []byte("milestones")
 	bucketIssues     = []byte("issues")
+	bucketCommits    = []byte("commits")
 	keyMeta          = []byte("meta")
 )
 
@@ -69,7 +71,7 @@ func (s *Store) Close() error { return s.db.Close() }
 
 func (s *Store) init() error {
 	return s.db.Update(func(tx *bolt.Tx) error {
-		for _, b := range [][]byte{bucketMeta, bucketPlans, bucketTasks, bucketNotes, bucketMilestones, bucketIssues} {
+		for _, b := range [][]byte{bucketMeta, bucketPlans, bucketTasks, bucketNotes, bucketMilestones, bucketIssues, bucketCommits} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
@@ -112,6 +114,7 @@ func migrateMeta(m *model.Meta) {
 	// v0 -> v1: adopt pre-versioning databases as v1.
 	// v1 -> v2: milestones/issues buckets are created by init; Plan.MilestoneID
 	//           defaults to 0. Nothing to transform.
+	// v2 -> v3: commits bucket is created by init. Nothing to transform.
 	_ = m
 }
 
@@ -470,6 +473,7 @@ func (s *Store) Counts() (model.Counts, error) {
 		}); err != nil {
 			return err
 		}
+		c.Commits = tx.Bucket(bucketCommits).Stats().KeyN
 		c.Notes = tx.Bucket(bucketNotes).Stats().KeyN
 		return nil
 	})
