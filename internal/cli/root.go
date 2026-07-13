@@ -39,6 +39,7 @@ func newRootCmd() *cobra.Command {
 		newTaskCmd(),
 		newNoteCmd(),
 		newContextCmd(),
+		newGuideCmd(),
 		newNextCmd(),
 		newSearchCmd(),
 		newBoardCmd(),

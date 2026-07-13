@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/ro-ag/ptrack/internal/guide"
 	"github.com/ro-ag/ptrack/internal/store"
 	"github.com/spf13/cobra"
 )
@@ -15,9 +16,10 @@ import (
 // project when one already exists up the directory tree unless --force is given.
 func newInitCmd() *cobra.Command {
 	var (
-		goal  string
-		root  string
-		force bool
+		goal    string
+		root    string
+		force   bool
+		noGuide bool
 	)
 	cmd := &cobra.Command{
 		Use:   "init",
@@ -56,12 +58,24 @@ func newInitCmd() *cobra.Command {
 				}
 			}
 			registerProjectBestEffort(projectRoot(dbPath))
-			fmt.Fprintln(cmd.OutOrStdout(), dbPath)
+			out := cmd.OutOrStdout()
+			fmt.Fprintln(out, dbPath)
+
+			if !noGuide {
+				written, err := guide.Install(projectRoot(dbPath), guide.DefaultFiles)
+				if err != nil {
+					return err
+				}
+				for _, f := range written {
+					fmt.Fprintf(out, "wrote agent guide to %s\n", f)
+				}
+			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&goal, "goal", "", "initial north-star goal text")
 	cmd.Flags().StringVar(&root, "root", "", "explicit project directory (default: git root, else cwd)")
 	cmd.Flags().BoolVar(&force, "force", false, "create even if a project already exists above")
+	cmd.Flags().BoolVar(&noGuide, "no-guide", false, "do not write the ptrack agent guide into AGENTS.md/CLAUDE.md")
 	return cmd
 }
