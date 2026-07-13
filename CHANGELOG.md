@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.2] - 2026-07-12
+
+### Fixed
+- The TUI no longer holds the bbolt database open for its whole session. It
+  reads a snapshot and closes, re-opening only briefly for edits and refreshes,
+  so an AI agent (or the CLI) can read and write the same project concurrently
+  while the dashboard is open — previously the viewer's exclusive lock could
+  block or time out a concurrent write.
+
 ## [0.9.1] - 2026-07-12
 
 ### Added
@@ -158,6 +167,7 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
+[0.9.2]: https://github.com/ro-ag/ptrack/releases/tag/v0.9.2
 [0.9.1]: https://github.com/ro-ag/ptrack/releases/tag/v0.9.1
 [0.9.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.9.0
 [0.8.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.8.0
