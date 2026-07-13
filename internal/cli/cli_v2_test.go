@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -80,12 +81,40 @@ func TestNoteListCommand(t *testing.T) {
 	}
 }
 
-func TestInitNestedRefused(t *testing.T) {
+func TestInitSyncsSameProject(t *testing.T) {
 	seedProject(t)
-	// From the same project dir, a second init must refuse.
-	if _, err := runCmd(t, "init"); err == nil {
-		t.Fatal("expected init to refuse inside an existing project")
+	// Re-running init in the same project refreshes rather than erroring.
+	out, err := runCmd(t, "init")
+	if err != nil {
+		t.Fatalf("re-init should sync, got error: %v\n%s", err, out)
 	}
-	// With --force it should proceed (creates .ptrack in cwd; already exists here
-	// though, so this specific dir errors on already-exists — use a subdir).
+	if !strings.Contains(out, "already initialized") {
+		t.Errorf("expected sync message:\n%s", out)
+	}
+}
+
+func TestInitRefusesGenuineNesting(t *testing.T) {
+	t.Setenv("PTRACK_HOME", filepath.Join(t.TempDir(), "home"))
+	root := chdirTemp(t)
+	mustRun(t, "init") // project at root
+
+	sub := filepath.Join(root, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prev, _ := os.Getwd()
+	if err := os.Chdir(sub); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prev) })
+
+	// In a subdir (no git boundary), init would target sub — a different root
+	// than the existing project at root — so it must refuse without --force.
+	if _, err := runCmd(t, "init"); err == nil {
+		t.Fatal("expected nesting refusal in subdir")
+	}
+	// With --force it proceeds.
+	if _, err := runCmd(t, "init", "--force"); err != nil {
+		t.Fatalf("--force should nest, got: %v", err)
+	}
 }

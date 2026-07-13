@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2] - 2026-07-12
+
+### Changed
+- `ptrack init` run inside an **already-initialized** project now refreshes it
+  (updates the goal if given and re-installs the agent guide) instead of erroring.
+  It refuses only when creating a genuinely *nested* new project — a different
+  root under an existing one — which still needs `--force`. This makes
+  `ptrack init` a safe sync command for existing projects (e.g. ones created
+  before the guide feature that have no AGENTS.md/CLAUDE.md yet).
+
 ## [0.4.1] - 2026-07-12
 
 ### Fixed
@@ -77,6 +87,7 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
+[0.4.2]: https://github.com/ro-ag/ptrack/releases/tag/v0.4.2
 [0.4.1]: https://github.com/ro-ag/ptrack/releases/tag/v0.4.1
 [0.4.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.4.0
 [0.3.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.3.0

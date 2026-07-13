@@ -43,10 +43,10 @@ func FindProjectDB(start string) (string, error) {
 	}
 }
 
-// InitProject creates <dir>/.ptrack/ptrack.db and returns its path. If dir is
-// empty, it defaults to the enclosing git root (if any) or the current working
-// directory. It is an error if a project DB already exists at the chosen dir.
-func InitProject(dir string) (string, error) {
+// ResolveProjectDir reports the absolute directory where InitProject(dir) would
+// create a project: dir itself, or (when dir is empty) the enclosing git root,
+// else the current working directory.
+func ResolveProjectDir(dir string) (string, error) {
 	if dir == "" {
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -54,7 +54,14 @@ func InitProject(dir string) (string, error) {
 		}
 		dir = gitRootOr(cwd)
 	}
-	abs, err := filepath.Abs(dir)
+	return filepath.Abs(dir)
+}
+
+// InitProject creates <dir>/.ptrack/ptrack.db and returns its path. If dir is
+// empty, it defaults to the enclosing git root (if any) or the current working
+// directory. It is an error if a project DB already exists at the chosen dir.
+func InitProject(dir string) (string, error) {
+	abs, err := ResolveProjectDir(dir)
 	if err != nil {
 		return "", err
 	}
