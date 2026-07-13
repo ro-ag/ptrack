@@ -20,10 +20,12 @@ func newTestModel(t *testing.T) (dashboard, *store.Store) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	d.width, d.height = 120, 40
 	return d, s
 }
 
-func runes(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
+func runes(s string) tea.KeyMsg    { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
+func key(t tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: t} }
 
 func send(t *testing.T, d dashboard, msg tea.Msg) dashboard {
 	t.Helper()
@@ -31,111 +33,128 @@ func send(t *testing.T, d dashboard, msg tea.Msg) dashboard {
 	return m.(dashboard)
 }
 
-func TestAddPlanViaKeys(t *testing.T) {
-	d, s := newTestModel(t)
-	d = send(t, d, runes("a")) // focusPlans -> add plan
-	if d.purpose != inputAddPlan {
-		t.Fatalf("purpose = %v want inputAddPlan", d.purpose)
-	}
-	d = send(t, d, runes("Alpha"))
-	d = send(t, d, tea.KeyMsg{Type: tea.KeyEnter})
+func typeAndEnter(t *testing.T, d dashboard, text string) dashboard {
+	d = send(t, d, runes(text))
+	return send(t, d, key(tea.KeyEnter))
+}
 
-	plans, _ := s.ListPlans()
-	if len(plans) != 1 || plans[0].Title != "Alpha" {
-		t.Fatalf("plans = %+v want one 'Alpha'", plans)
+func TestTabSwitching(t *testing.T) {
+	d, _ := newTestModel(t)
+	if d.tab != tabOverview {
+		t.Fatal("default tab should be overview")
+	}
+	d = send(t, d, runes("3"))
+	if d.tab != tabMilestones {
+		t.Errorf("'3' should jump to milestones, got %v", d.tab)
+	}
+	d = send(t, d, key(tea.KeyTab))
+	if d.tab != tabIssues {
+		t.Errorf("tab should advance to issues, got %v", d.tab)
+	}
+	d = send(t, d, key(tea.KeyTab))
+	if d.tab != tabOverview {
+		t.Errorf("tab should wrap to overview, got %v", d.tab)
 	}
 }
 
-func TestAddTaskAndStatusViaKeys(t *testing.T) {
+func TestAddPlanAndTask(t *testing.T) {
 	d, s := newTestModel(t)
-	p, _ := s.AddPlan("P")
-	_ = d.reload()
-
-	d = send(t, d, tea.KeyMsg{Type: tea.KeyTab}) // focus tasks
+	d = send(t, d, runes("a")) // overview/plans focus -> add plan
+	d = typeAndEnter(t, d, "Storage")
+	plans, _ := s.ListPlans()
+	if len(plans) != 1 || plans[0].Title != "Storage" {
+		t.Fatalf("plans = %+v", plans)
+	}
+	// switch to tasks pane, add a task
+	d = send(t, d, runes("l")) // toggle pane
 	if d.focus != focusTasks {
-		t.Fatal("tab did not switch focus to tasks")
+		t.Fatal("expected tasks focus")
 	}
-	d = send(t, d, runes("a")) // add task
-	d = send(t, d, runes("build it"))
-	d = send(t, d, tea.KeyMsg{Type: tea.KeyEnter})
-
-	tasks, _ := s.ListTasksByPlan(p.ID)
-	if len(tasks) != 1 || tasks[0].Title != "build it" {
-		t.Fatalf("tasks = %+v want one 'build it'", tasks)
+	d = send(t, d, runes("a"))
+	d = typeAndEnter(t, d, "buckets")
+	tasks, _ := s.ListTasksByPlan(plans[0].ID)
+	if len(tasks) != 1 || tasks[0].Title != "buckets" {
+		t.Fatalf("tasks = %+v", tasks)
 	}
-
-	d = send(t, d, runes("s")) // start -> doing
+	// status change
+	d = send(t, d, runes("s"))
 	got, _ := s.GetTask(tasks[0].ID)
 	if got.Status != model.TaskDoing {
 		t.Errorf("status = %q want doing", got.Status)
 	}
-	d = send(t, d, runes("d")) // done
-	got, _ = s.GetTask(tasks[0].ID)
-	if got.Status != model.TaskDone {
+}
+
+func TestAddMilestone(t *testing.T) {
+	d, s := newTestModel(t)
+	d = send(t, d, runes("3")) // milestones tab
+	d = send(t, d, runes("a"))
+	d = typeAndEnter(t, d, "v1.0")
+	ms, _ := s.ListMilestones()
+	if len(ms) != 1 || ms[0].Title != "v1.0" {
+		t.Fatalf("milestones = %+v", ms)
+	}
+	send(t, d, runes("x")) // mark done
+	got, _ := s.GetMilestone(ms[0].ID)
+	if got.Status != model.MilestoneDone {
 		t.Errorf("status = %q want done", got.Status)
 	}
 }
 
-func TestEditGoalViaKeys(t *testing.T) {
+func TestAddIssueAndClose(t *testing.T) {
 	d, s := newTestModel(t)
-	d = send(t, d, runes("g"))
-	d = send(t, d, runes("New Goal"))
-	send(t, d, tea.KeyMsg{Type: tea.KeyEnter})
-
-	m, _ := s.GetMeta()
-	if m.Goal != "New Goal" {
-		t.Errorf("goal = %q want 'New Goal'", m.Goal)
+	d = send(t, d, runes("4")) // issues tab
+	d = send(t, d, runes("a"))
+	d = typeAndEnter(t, d, "crash")
+	issues, _ := s.ListIssues()
+	if len(issues) != 1 || issues[0].Title != "crash" {
+		t.Fatalf("issues = %+v", issues)
+	}
+	send(t, d, runes("c")) // close
+	got, _ := s.GetIssue(issues[0].ID)
+	if got.Status != model.IssueClosed {
+		t.Errorf("status = %q want closed", got.Status)
 	}
 }
 
-func TestSetActivePlanViaKeys(t *testing.T) {
-	d, s := newTestModel(t)
-	p, _ := s.AddPlan("P")
-	_ = d.reload()
-	d = send(t, d, runes("u")) // set active
-	m, _ := s.GetMeta()
-	if m.ActivePlan != p.ID {
-		t.Errorf("active plan = %d want %d", m.ActivePlan, p.ID)
-	}
-}
-
-func TestBoardModeMoveCard(t *testing.T) {
+func TestBoardMoveCard(t *testing.T) {
 	d, s := newTestModel(t)
 	p, _ := s.AddPlan("P")
 	tk, _ := s.AddTask(p.ID, "card") // todo
 	_ = d.reload()
 
-	d = send(t, d, runes("v")) // enter board
-	if d.mode != modeBoard {
-		t.Fatal("v did not enter board mode")
-	}
-	// card is in the todo column (col 0); move it right to doing.
-	d = send(t, d, runes("L"))
+	d = send(t, d, runes("2")) // board tab
+	d = send(t, d, runes("L")) // move right todo->doing
 	got, _ := s.GetTask(tk.ID)
 	if got.Status != model.TaskDoing {
-		t.Fatalf("after move-right status = %q want doing", got.Status)
+		t.Fatalf("status = %q want doing", got.Status)
 	}
 	if d.boardCol != 1 {
 		t.Errorf("boardCol = %d want 1", d.boardCol)
 	}
-	// move right again -> blocked.
-	d = send(t, d, runes("L"))
-	got, _ = s.GetTask(tk.ID)
-	if got.Status != model.TaskBlocked {
-		t.Errorf("status = %q want blocked", got.Status)
-	}
-	// back to list.
-	d = send(t, d, runes("v"))
-	if d.mode != modeList {
-		t.Errorf("v did not return to list mode")
+}
+
+func TestEditGoal(t *testing.T) {
+	d, s := newTestModel(t)
+	d = send(t, d, runes("g"))
+	typeAndEnter(t, d, "New Goal")
+	m, _ := s.GetMeta()
+	if m.Goal != "New Goal" {
+		t.Errorf("goal = %q", m.Goal)
 	}
 }
 
-func TestCancelInput(t *testing.T) {
-	d, _ := newTestModel(t)
-	d = send(t, d, runes("a"))
-	d = send(t, d, tea.KeyMsg{Type: tea.KeyEsc})
-	if d.purpose != inputNone {
-		t.Errorf("purpose = %v want inputNone after esc", d.purpose)
+func TestViewRendersWithoutPanic(t *testing.T) {
+	d, s := newTestModel(t)
+	m, _ := s.AddMilestone("v1")
+	p, _ := s.AddPlan("plan")
+	s.SetPlanMilestone(p.ID, m.ID)
+	s.AddTask(p.ID, "t1")
+	s.AddIssue("bug", "", model.SeverityHigh, 0)
+	_ = d.reload()
+	for _, tb := range []tab{tabOverview, tabBoard, tabMilestones, tabIssues} {
+		d.tab = tb
+		if got := d.View(); got == "" {
+			t.Errorf("empty view for tab %v", tb)
+		}
 	}
 }
