@@ -92,6 +92,59 @@ func TestInstallPreservesSurroundingContent(t *testing.T) {
 	}
 }
 
+func TestUpsertOrphanedBeginMarker(t *testing.T) {
+	// A begin marker with no end must not spawn a second block, and must keep
+	// the surrounding human text.
+	content := "# Doc\nintro\n\n" + beginMarker + "\nhalf-written note\n"
+	updated, changed := upsert(content, Block(""))
+	if !changed {
+		t.Fatal("expected change")
+	}
+	if strings.Count(updated, beginMarker) != 1 {
+		t.Errorf("want exactly one begin marker, got %d:\n%s", strings.Count(updated, beginMarker), updated)
+	}
+	if strings.Count(updated, endMarker) != 1 {
+		t.Errorf("want exactly one end marker:\n%s", updated)
+	}
+	if !strings.Contains(updated, "half-written note") {
+		t.Errorf("human text lost:\n%s", updated)
+	}
+	if !strings.Contains(updated, "intro") {
+		t.Errorf("intro lost:\n%s", updated)
+	}
+}
+
+func TestUpsertDuplicateBlocks(t *testing.T) {
+	one := beginMarker + "\nOLD A\n" + endMarker + "\n"
+	two := beginMarker + "\nOLD B\n" + endMarker + "\n"
+	content := "top\n\n" + one + "\nmiddle\n\n" + two + "\nbottom\n"
+	updated, changed := upsert(content, Block(""))
+	if !changed {
+		t.Fatal("expected change")
+	}
+	if strings.Count(updated, beginMarker) != 1 {
+		t.Errorf("want exactly one block, got %d:\n%s", strings.Count(updated, beginMarker), updated)
+	}
+	for _, w := range []string{"top", "middle", "bottom"} {
+		if !strings.Contains(updated, w) {
+			t.Errorf("human text %q lost:\n%s", w, updated)
+		}
+	}
+	if strings.Contains(updated, "OLD A") || strings.Contains(updated, "OLD B") {
+		t.Errorf("stale block content retained:\n%s", updated)
+	}
+}
+
+func TestUpsertNormalizedOutputIsIdempotent(t *testing.T) {
+	// After normalizing a messy file, a second upsert is a no-op.
+	messy := "doc\n\n" + beginMarker + "\norphan\n"
+	once, _ := upsert(messy, Block(""))
+	twice, changed := upsert(once, Block(""))
+	if changed {
+		t.Errorf("second upsert changed a normalized file:\n%s", twice)
+	}
+}
+
 func TestUpsertReplacesInPlace(t *testing.T) {
 	// A file with an existing (stale) block gets exactly one block after upsert.
 	content := "intro\n\n" + beginMarker + "\nOLD\n" + endMarker + "\n\noutro\n"

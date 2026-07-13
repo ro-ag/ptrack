@@ -8,6 +8,7 @@ package guide
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -15,6 +16,10 @@ const (
 	beginMarker = "<!-- ptrack:begin -->"
 	endMarker   = "<!-- ptrack:end -->"
 )
+
+// blockRe matches a complete marker-delimited block (and a trailing newline),
+// non-greedily so multiple blocks are matched individually.
+var blockRe = regexp.MustCompile(`(?s)` + regexp.QuoteMeta(beginMarker) + `.*?` + regexp.QuoteMeta(endMarker) + `\n?`)
 
 // DefaultFiles are the agent-instruction files ptrack writes its guide into.
 var DefaultFiles = []string{"AGENTS.md", "CLAUDE.md"}
@@ -105,34 +110,41 @@ func upsertFile(path, block string) (bool, error) {
 }
 
 // upsert returns content with the given guide block inserted or replaced, and
-// whether the result differs from the input.
+// whether the result differs from the input. It is robust to malformed marker
+// state: a single well-formed block is replaced in place (preserving its
+// position and surrounding docs); any duplicate blocks or orphaned markers are
+// normalized away so the result always contains exactly one block, and no
+// non-marker text is ever removed.
 func upsert(content, block string) (string, bool) {
 	begin := strings.Index(content, beginMarker)
 	end := strings.Index(content, endMarker)
 
+	// Fast path — exactly one well-formed block and no stray markers elsewhere:
+	// replace in place to keep the block where the author put it.
 	if begin >= 0 && end > begin {
-		// Replace the existing block, including its markers. `block` already
-		// ends with a newline, so drop a single leading newline from the tail to
-		// avoid a blank-line gap.
-		before := content[:begin]
-		after := strings.TrimPrefix(content[end+len(endMarker):], "\n")
-		newContent := before + block + after
-		if newContent == content {
-			return content, false
+		before, after := content[:begin], content[end+len(endMarker):]
+		if !hasMarker(before) && !hasMarker(after) {
+			after = strings.TrimPrefix(after, "\n")
+			newContent := before + block + after
+			return newContent, newContent != content
 		}
-		return newContent, true
 	}
 
-	// No block yet: append it, ensuring a blank line before.
-	var b strings.Builder
-	b.WriteString(content)
-	if content != "" && !strings.HasSuffix(content, "\n\n") {
-		if strings.HasSuffix(content, "\n") {
-			b.WriteString("\n")
-		} else {
-			b.WriteString("\n\n")
-		}
+	// Malformed (orphaned or duplicate markers) or absent: strip every complete
+	// block and any leftover orphan marker lines, then append one clean block.
+	stripped := blockRe.ReplaceAllString(content, "")
+	stripped = strings.ReplaceAll(stripped, beginMarker, "")
+	stripped = strings.ReplaceAll(stripped, endMarker, "")
+	base := strings.TrimRight(stripped, " \t\n")
+
+	newContent := block
+	if base != "" {
+		newContent = base + "\n\n" + block
 	}
-	b.WriteString(block)
-	return b.String(), true
+	return newContent, newContent != content
+}
+
+// hasMarker reports whether s contains either guide marker.
+func hasMarker(s string) bool {
+	return strings.Contains(s, beginMarker) || strings.Contains(s, endMarker)
 }
