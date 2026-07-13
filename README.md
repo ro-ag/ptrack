@@ -46,7 +46,8 @@ an LLM to read).
 
 | Command | Purpose |
 |---|---|
-| `ptrack init [--goal S] [--root D] [--force]` | Create `.ptrack/` (refuses to nest unless `--force`) |
+| `ptrack init [--goal S] [--root D] [--force] [--no-guide]` | Create `.ptrack/` (refuses to nest unless `--force`) and write the agent guide |
+| `ptrack guide [--print]` | Install/refresh the agent guide in AGENTS.md/CLAUDE.md, or print it |
 | `ptrack goal [show\|set S]` | Show or set the north-star goal |
 | `ptrack summary [show\|set S]` | Show or set the rolling context summary |
 | `ptrack plan add\|list\|show <id>\|done <id>\|use <id>` | Manage plans; `show` includes tasks + notes |
@@ -68,6 +69,15 @@ dumps the whole project, just the live edge plus counts and drill-down commands)
 then pulls detail on demand with `next`, `plan show`, `task show`,
 `task list --status`, `note list`, `search`, and `board`. It records decisions
 with `note add` and updates `summary set` before the session ends.
+
+### Agent guide (onboarding)
+
+`ptrack init` writes a short, marker-delimited **ptrack section** into the
+project's `AGENTS.md` and `CLAUDE.md` (creating them if absent, preserving any
+existing content), teaching any AI agent this workflow. Refresh it anytime with
+`ptrack guide`; print it with `ptrack guide --print`. Skip it at init with
+`--no-guide`. The block is idempotent — re-running only rewrites when the guide
+changes.
 
 ## TUI keys
 

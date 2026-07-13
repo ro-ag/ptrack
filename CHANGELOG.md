@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-07-12
+
+### Added
+- **Agent guide onboarding.** `ptrack init` now writes a marker-delimited ptrack
+  section into the project's `AGENTS.md` and `CLAUDE.md` (creating them if
+  absent, preserving existing content), teaching any AI agent the ptrack
+  workflow — read `context` at session start, log decisions with `note add`,
+  update `summary set` before ending, and drill with `next`/`board`/`show`/
+  `search`. Skip with `--no-guide`.
+- **`ptrack guide`** installs/refreshes that section idempotently;
+  `ptrack guide --print` writes it to stdout.
+
 ## [0.2.1] - 2026-07-12
 
 ### Fixed
@@ -47,6 +59,7 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
+[0.3.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.3.0
 [0.2.1]: https://github.com/ro-ag/ptrack/releases/tag/v0.2.1
 [0.2.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.1.0
