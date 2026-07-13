@@ -295,13 +295,13 @@ func (d dashboard) footer(w int) string {
 	var keys string
 	switch d.tab {
 	case tabOverview:
-		keys = "←/→ pane · ↑/↓ move · a add · u active · x done · s/d/b task · n note"
+		keys = "←/→ pane · ↑/↓ move · a add · e rename · u active · x done · s/d/b task · n note"
 	case tabBoard:
-		keys = "←/→ col · ↑/↓ card · H/L move card · a add · n note"
+		keys = "←/→ col · ↑/↓ card · H/L move card · a add · e rename · n note"
 	case tabMilestones:
-		keys = "↑/↓ move · a add · x done · o reopen"
+		keys = "↑/↓ move · a add · e rename · x done · o reopen"
 	case tabIssues:
-		keys = "↑/↓ move · a add · c close · o reopen"
+		keys = "↑/↓ move · a add · e rename · c close · o reopen"
 	}
 	global := dimStyle.Render("tab switch · 1-4 jump · g goal · m summary · r reload · B backup · q quit")
 	help := dimStyle.Render(keys)

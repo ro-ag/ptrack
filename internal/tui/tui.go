@@ -74,6 +74,7 @@ const (
 	inputAddNote
 	inputEditGoal
 	inputEditSummary
+	inputRename
 )
 
 var boardStatuses = []model.TaskStatus{
@@ -285,6 +286,12 @@ func (d dashboard) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return d, d.startInput(inputEditGoal, "Goal:", d.meta.Goal)
 	case "m":
 		return d, d.startInput(inputEditSummary, "Summary:", d.meta.Summary)
+	case "e":
+		if _, _, title, ok := d.renameTarget(); ok {
+			return d, d.startInput(inputRename, "Rename:", title)
+		}
+		d.status = "nothing to rename"
+		return d, nil
 	case "r":
 		d.applyErr(d.reload(), "reloaded")
 		return d, nil
@@ -506,6 +513,8 @@ func (d *dashboard) commitInput() {
 			return
 		}
 		d.addNote(val)
+	case inputRename:
+		d.rename(val)
 	}
 }
 
@@ -521,6 +530,55 @@ func (d *dashboard) addNamed(val string, create func() (uint64, error), kind str
 	}
 	_ = d.reload()
 	d.status = "added " + kind + " #" + strconv.FormatUint(id, 10)
+}
+
+// renameTarget resolves the entity the rename action applies to, based on the
+// current tab and selection.
+func (d *dashboard) renameTarget() (kind string, id uint64, title string, ok bool) {
+	switch d.tab {
+	case tabIssues:
+		if is := d.currentIssue(); is != nil {
+			return "issue", is.ID, is.Title, true
+		}
+	case tabMilestones:
+		if m := d.currentMilestone(); m != nil {
+			return "milestone", m.ID, m.Title, true
+		}
+	case tabBoard:
+		if t := d.boardTask(); t != nil {
+			return "task", t.ID, t.Title, true
+		}
+	case tabOverview:
+		if d.focus == focusTasks {
+			if t := d.currentTask(); t != nil {
+				return "task", t.ID, t.Title, true
+			}
+		}
+		if p := d.currentPlan(); p != nil {
+			return "plan", p.ID, p.Title, true
+		}
+	}
+	return "", 0, "", false
+}
+
+func (d *dashboard) rename(val string) {
+	kind, id, _, ok := d.renameTarget()
+	if !ok || val == "" {
+		d.status = "nothing to rename"
+		return
+	}
+	var err error
+	switch kind {
+	case "plan":
+		err = d.store.SetPlanTitle(id, val)
+	case "task":
+		err = d.store.SetTaskTitle(id, val)
+	case "milestone":
+		err = d.store.SetMilestoneTitle(id, val)
+	case "issue":
+		err = d.store.SetIssueTitle(id, val)
+	}
+	d.applyErr(err, "renamed")
 }
 
 func (d *dashboard) addNote(body string) {

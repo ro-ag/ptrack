@@ -147,7 +147,25 @@ func newMilestoneCmd() *cobra.Command {
 		},
 	}
 
-	cmd.AddCommand(add, list, show, done, open, due)
+	rename := &cobra.Command{
+		Use:   "rename <id> <title...>",
+		Short: "Rename a milestone",
+		Args:  cobra.MinimumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := parseID(args[0])
+			if err != nil {
+				return err
+			}
+			s, err := openProject()
+			if err != nil {
+				return err
+			}
+			defer s.Close()
+			return s.SetMilestoneTitle(id, joinArgs(args[1:]))
+		},
+	}
+
+	cmd.AddCommand(add, list, show, done, open, due, rename)
 	return cmd
 }
 

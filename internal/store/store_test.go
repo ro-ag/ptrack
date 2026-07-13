@@ -134,3 +134,23 @@ func TestNotes(t *testing.T) {
 		t.Errorf("RecentNotes(0) = %d want all 3", len(got))
 	}
 }
+
+func TestRenameSetters(t *testing.T) {
+	s := openTemp(t)
+	p, _ := s.AddPlan("old plan")
+	tk, _ := s.AddTask(p.ID, "old task")
+	if err := s.SetPlanTitle(p.ID, "new plan"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetTaskTitle(tk.ID, "new task"); err != nil {
+		t.Fatal(err)
+	}
+	gp, _ := s.GetPlan(p.ID)
+	gt, _ := s.GetTask(tk.ID)
+	if gp.Title != "new plan" || gt.Title != "new task" {
+		t.Errorf("rename failed: %q / %q", gp.Title, gt.Title)
+	}
+	if err := s.SetPlanTitle(999, "x"); err != ErrNotFound {
+		t.Errorf("rename missing plan want ErrNotFound, got %v", err)
+	}
+}

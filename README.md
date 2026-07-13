@@ -50,10 +50,10 @@ an LLM to read).
 | `ptrack guide [--print]` | Install/refresh the agent guide in AGENTS.md/CLAUDE.md, or print it |
 | `ptrack goal [show\|set S]` | Show or set the north-star goal |
 | `ptrack summary [show\|set S]` | Show or set the rolling context summary |
-| `ptrack milestone add\|list\|show <id>\|done\|open\|due` | Milestones (checkpoints grouping plans); `add --due YYYY-MM-DD` |
-| `ptrack plan add [--milestone N]\|list\|show\|done\|use` | Manage plans; `show` includes tasks + notes |
-| `ptrack task add\|list [--status …]\|show <id>\|start\|done\|block` | Manage tasks; `list --status todo,doing,…` filters |
-| `ptrack issue add [--severity S] [--task N]\|list [--status]\|show\|close\|open\|severity` | Track issues/bugs |
+| `ptrack milestone add\|list\|show\|done\|open\|due\|rename` | Milestones (checkpoints grouping plans); `add --due YYYY-MM-DD` |
+| `ptrack plan add [--milestone N]\|list\|show\|done\|use\|rename` | Manage plans; `show` includes tasks + notes |
+| `ptrack task add\|list [--status …]\|show\|start\|done\|block\|rename` | Manage tasks; `list --status todo,doing,…` filters |
+| `ptrack issue add [--severity S] [--task N]\|list\|show\|close\|open\|severity\|rename` | Track issues/bugs |
 | `ptrack note add S [--task N\|--plan N]` / `note list [--plan\|--task\|--limit]` | Attach or list notes |
 | `ptrack context [--json]` | Bounded restore digest: goal, summary, active plan, blockers, open issues, recent notes, inventory |
 | `ptrack next [--json]` | The single most-actionable task (active plan: doing, else todo) |
