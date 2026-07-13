@@ -16,7 +16,8 @@ import (
 var ErrNotFound = errors.New("not found")
 
 // CurrentFormat is the on-disk schema version this build writes and understands.
-const CurrentFormat uint = 1
+// v2 adds the milestones and issues buckets and Plan.MilestoneID.
+const CurrentFormat uint = 2
 
 // WriterVersion is the ptrack semver recorded on writes for diagnostics. main
 // sets it from the resolved CLI version; it defaults to "dev".
@@ -34,11 +35,13 @@ func (e ErrFormatTooNew) Error() string {
 }
 
 var (
-	bucketMeta  = []byte("meta")
-	bucketPlans = []byte("plans")
-	bucketTasks = []byte("tasks")
-	bucketNotes = []byte("notes")
-	keyMeta     = []byte("meta")
+	bucketMeta       = []byte("meta")
+	bucketPlans      = []byte("plans")
+	bucketTasks      = []byte("tasks")
+	bucketNotes      = []byte("notes")
+	bucketMilestones = []byte("milestones")
+	bucketIssues     = []byte("issues")
+	keyMeta          = []byte("meta")
 )
 
 // Store is a handle to one project's bbolt database.
@@ -66,7 +69,7 @@ func (s *Store) Close() error { return s.db.Close() }
 
 func (s *Store) init() error {
 	return s.db.Update(func(tx *bolt.Tx) error {
-		for _, b := range [][]byte{bucketMeta, bucketPlans, bucketTasks, bucketNotes} {
+		for _, b := range [][]byte{bucketMeta, bucketPlans, bucketTasks, bucketNotes, bucketMilestones, bucketIssues} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
@@ -102,11 +105,13 @@ func (s *Store) init() error {
 	})
 }
 
-// migrateMeta upgrades an older-format meta record in place. FormatVersion 0
-// (pre-versioning, v0.1.0) is simply adopted as the current format; future
-// steps append here, each guarded by the version they upgrade from.
+// migrateMeta upgrades an older-format meta record in place. Migrations are
+// data-shape only; new buckets are created by init and new struct fields decode
+// to their zero value, so no per-version transform is needed yet.
 func migrateMeta(m *model.Meta) {
-	// v0 -> v1: nothing to transform; the record shape is compatible.
+	// v0 -> v1: adopt pre-versioning databases as v1.
+	// v1 -> v2: milestones/issues buckets are created by init; Plan.MilestoneID
+	//           defaults to 0. Nothing to transform.
 	_ = m
 }
 
@@ -416,6 +421,32 @@ func (s *Store) Counts() (model.Counts, error) {
 			}
 			if t.Status.Open() {
 				c.TasksOpen++
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		if err := tx.Bucket(bucketMilestones).ForEach(func(_, v []byte) error {
+			var m model.Milestone
+			if err := gobDecode(v, &m); err != nil {
+				return err
+			}
+			c.Milestones++
+			if m.Status == model.MilestoneDone {
+				c.MilestonesDone++
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		if err := tx.Bucket(bucketIssues).ForEach(func(_, v []byte) error {
+			var is model.Issue
+			if err := gobDecode(v, &is); err != nil {
+				return err
+			}
+			c.Issues++
+			if is.Status == model.IssueOpen {
+				c.IssuesOpen++
 			}
 			return nil
 		}); err != nil {

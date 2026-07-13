@@ -4,6 +4,25 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-07-12
+
+### Added
+- **Milestones** — a first-class tier grouping plans toward a checkpoint, with an
+  optional due date. `ptrack milestone add|list|show|done|open|due`, and
+  `ptrack plan add --milestone N` to assign a plan.
+- **Issues** — first-class tracked problems/bugs with status (open/closed),
+  severity (low/medium/high/critical), and an optional task link.
+  `ptrack issue add|list|show|close|open|severity`.
+- `context` now surfaces **open issues** (bounded) and reports milestones and
+  issues in the inventory footer; `search` matches milestones and issues too.
+- The agent guide gained an **"if the project is empty, populate it from this
+  repo"** section covering goal → milestones → plans → tasks → issues → notes.
+
+### Changed
+- Database schema is now **format v2** (adds the milestones and issues buckets
+  and `Plan.MilestoneID`). Existing v1 databases are migrated automatically on
+  open; no action needed.
+
 ## [0.4.2] - 2026-07-12
 
 ### Changed
@@ -87,6 +106,7 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
+[0.5.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.5.0
 [0.4.2]: https://github.com/ro-ag/ptrack/releases/tag/v0.4.2
 [0.4.1]: https://github.com/ro-ag/ptrack/releases/tag/v0.4.1
 [0.4.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.4.0

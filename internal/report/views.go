@@ -167,26 +167,46 @@ func (v TaskShow) Markdown() string {
 
 // --- search ---
 
-// SearchView holds substring matches across plans, tasks, and notes.
-type SearchView struct {
-	Term  string     `json:"term"`
-	Plans []PlanRef  `json:"plans"`
-	Tasks []TaskLine `json:"tasks"`
-	Notes []NoteLine `json:"notes"`
+// MilestoneRef is a compact milestone reference.
+type MilestoneRef struct {
+	ID     uint64 `json:"id"`
+	Title  string `json:"title"`
+	Status string `json:"status"`
 }
 
-// Search matches term (case-insensitive substring) against plan and task titles
-// and note bodies.
+// SearchView holds substring matches across milestones, plans, tasks, issues,
+// and notes.
+type SearchView struct {
+	Term       string         `json:"term"`
+	Milestones []MilestoneRef `json:"milestones"`
+	Plans      []PlanRef      `json:"plans"`
+	Tasks      []TaskLine     `json:"tasks"`
+	Issues     []IssueLine    `json:"issues"`
+	Notes      []NoteLine     `json:"notes"`
+}
+
+// Search matches term (case-insensitive substring) against milestone, plan, and
+// task titles, issue titles and bodies, and note bodies.
 func Search(s *store.Store, term string) (SearchView, error) {
 	needle := strings.ToLower(term)
 	v := SearchView{Term: term}
+	has := func(s string) bool { return strings.Contains(strings.ToLower(s), needle) }
 
+	milestones, err := s.ListMilestones()
+	if err != nil {
+		return SearchView{}, err
+	}
+	for _, m := range milestones {
+		if has(m.Title) {
+			v.Milestones = append(v.Milestones, MilestoneRef{ID: m.ID, Title: m.Title, Status: string(m.Status)})
+		}
+	}
 	plans, err := s.ListPlans()
 	if err != nil {
 		return SearchView{}, err
 	}
 	for _, p := range plans {
-		if strings.Contains(strings.ToLower(p.Title), needle) {
+		if has(p.Title) {
 			v.Plans = append(v.Plans, planRef(p))
 		}
 	}
@@ -195,8 +215,17 @@ func Search(s *store.Store, term string) (SearchView, error) {
 		return SearchView{}, err
 	}
 	for _, t := range tasks {
-		if strings.Contains(strings.ToLower(t.Title), needle) {
+		if has(t.Title) {
 			v.Tasks = append(v.Tasks, taskLine(t))
+		}
+	}
+	issues, err := s.ListIssues()
+	if err != nil {
+		return SearchView{}, err
+	}
+	for _, is := range issues {
+		if has(is.Title) || has(is.Body) {
+			v.Issues = append(v.Issues, issueLine(is))
 		}
 	}
 	notes, err := s.ListNotes()
@@ -204,7 +233,7 @@ func Search(s *store.Store, term string) (SearchView, error) {
 		return SearchView{}, err
 	}
 	for _, n := range notes {
-		if strings.Contains(strings.ToLower(n.Body), needle) {
+		if has(n.Body) {
 			v.Notes = append(v.Notes, noteLine(n))
 		}
 	}
@@ -215,9 +244,16 @@ func Search(s *store.Store, term string) (SearchView, error) {
 func (v SearchView) Markdown() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Search: %q\n\n", v.Term)
-	if len(v.Plans) == 0 && len(v.Tasks) == 0 && len(v.Notes) == 0 {
+	if len(v.Milestones) == 0 && len(v.Plans) == 0 && len(v.Tasks) == 0 && len(v.Issues) == 0 && len(v.Notes) == 0 {
 		b.WriteString("_no matches_\n")
 		return b.String()
+	}
+	if len(v.Milestones) > 0 {
+		b.WriteString("## Milestones\n")
+		for _, m := range v.Milestones {
+			fmt.Fprintf(&b, "- #%d %s [%s]\n", m.ID, m.Title, m.Status)
+		}
+		b.WriteString("\n")
 	}
 	if len(v.Plans) > 0 {
 		b.WriteString("## Plans\n")
@@ -233,9 +269,122 @@ func (v SearchView) Markdown() string {
 		}
 		b.WriteString("\n")
 	}
+	if len(v.Issues) > 0 {
+		b.WriteString("## Issues\n")
+		for _, is := range v.Issues {
+			fmt.Fprintf(&b, "- #%d [%s] %s (%s)\n", is.ID, is.Severity, is.Title, is.Status)
+		}
+		b.WriteString("\n")
+	}
 	if len(v.Notes) > 0 {
 		b.WriteString("## Notes\n")
 		b.WriteString(notesMarkdown(v.Notes))
+	}
+	return b.String()
+}
+
+// --- milestone show ---
+
+// MilestoneShow is a milestone with its plans and a task rollup.
+type MilestoneShow struct {
+	ID        uint64    `json:"id"`
+	Title     string    `json:"title"`
+	Status    string    `json:"status"`
+	Due       string    `json:"due,omitempty"`
+	Plans     []PlanRef `json:"plans"`
+	TasksDone int       `json:"tasks_done"`
+	TasksOpen int       `json:"tasks_open"`
+}
+
+// ShowMilestone assembles a full view of one milestone.
+func ShowMilestone(s *store.Store, id uint64) (MilestoneShow, error) {
+	m, err := s.GetMilestone(id)
+	if err != nil {
+		return MilestoneShow{}, err
+	}
+	v := MilestoneShow{ID: m.ID, Title: m.Title, Status: string(m.Status)}
+	if !m.Due.IsZero() {
+		v.Due = m.Due.Format("2006-01-02")
+	}
+	plans, err := s.ListPlansByMilestone(id)
+	if err != nil {
+		return MilestoneShow{}, err
+	}
+	for _, p := range plans {
+		v.Plans = append(v.Plans, planRef(p))
+		tasks, err := s.ListTasksByPlan(p.ID)
+		if err != nil {
+			return MilestoneShow{}, err
+		}
+		for _, t := range tasks {
+			if t.Status == model.TaskDone {
+				v.TasksDone++
+			} else {
+				v.TasksOpen++
+			}
+		}
+	}
+	return v, nil
+}
+
+// Markdown renders a milestone view.
+func (v MilestoneShow) Markdown() string {
+	var b strings.Builder
+	due := ""
+	if v.Due != "" {
+		due = " (due " + v.Due + ")"
+	}
+	fmt.Fprintf(&b, "# Milestone #%d %s [%s]%s\n\n", v.ID, v.Title, v.Status, due)
+	fmt.Fprintf(&b, "Tasks: %d done · %d open\n\n", v.TasksDone, v.TasksOpen)
+	b.WriteString("## Plans\n")
+	if len(v.Plans) == 0 {
+		b.WriteString("_none_\n")
+		return b.String()
+	}
+	for _, p := range v.Plans {
+		fmt.Fprintf(&b, "- #%d %s [%s]\n", p.ID, p.Title, p.Status)
+	}
+	return b.String()
+}
+
+// --- issue show ---
+
+// IssueShow is a single issue with its linked task (if any).
+type IssueShow struct {
+	ID       uint64    `json:"id"`
+	Title    string    `json:"title"`
+	Body     string    `json:"body,omitempty"`
+	Status   string    `json:"status"`
+	Severity string    `json:"severity"`
+	Task     *TaskLine `json:"task"`
+}
+
+// ShowIssue assembles a full view of one issue.
+func ShowIssue(s *store.Store, id uint64) (IssueShow, error) {
+	is, err := s.GetIssue(id)
+	if err != nil {
+		return IssueShow{}, err
+	}
+	v := IssueShow{ID: is.ID, Title: is.Title, Body: is.Body, Status: string(is.Status), Severity: string(is.Severity)}
+	if is.TaskID != 0 {
+		if t, err := s.GetTask(is.TaskID); err == nil {
+			tl := taskLine(t)
+			v.Task = &tl
+		}
+	}
+	return v, nil
+}
+
+// Markdown renders an issue view.
+func (v IssueShow) Markdown() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Issue #%d %s\n\n", v.ID, v.Title)
+	fmt.Fprintf(&b, "Status: %s · Severity: %s\n", v.Status, v.Severity)
+	if v.Task != nil {
+		fmt.Fprintf(&b, "Task: #%d %s\n", v.Task.ID, v.Task.Title)
+	}
+	if strings.TrimSpace(v.Body) != "" {
+		b.WriteString("\n" + v.Body + "\n")
 	}
 	return b.String()
 }

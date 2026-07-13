@@ -16,9 +16,10 @@ func newPlanCmd() *cobra.Command {
 		Short: "Manage plans",
 	}
 
+	var addMilestone uint64
 	add := &cobra.Command{
 		Use:   "add <title...>",
-		Short: "Create a new active plan",
+		Short: "Create a new active plan (optionally under a milestone)",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := openProject()
@@ -30,10 +31,16 @@ func newPlanCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if addMilestone != 0 {
+				if err := s.SetPlanMilestone(p.ID, addMilestone); err != nil {
+					return err
+				}
+			}
 			fmt.Fprintf(cmd.OutOrStdout(), "plan #%d %s\n", p.ID, p.Title)
 			return nil
 		},
 	}
+	add.Flags().Uint64Var(&addMilestone, "milestone", 0, "assign the plan to this milestone")
 
 	var listJSON bool
 	list := &cobra.Command{
