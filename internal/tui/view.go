@@ -31,14 +31,16 @@ func (d dashboard) View() string {
 	}
 
 	var body string
-	switch d.tab {
-	case tabOverview:
+	switch {
+	case d.showDetail:
+		body = d.viewDetail(w, bodyH)
+	case d.tab == tabOverview:
 		body = d.viewOverview(w, bodyH)
-	case tabBoard:
+	case d.tab == tabBoard:
 		body = d.viewBoard(w, bodyH)
-	case tabMilestones:
+	case d.tab == tabMilestones:
 		body = d.viewMilestones(w, bodyH)
-	case tabIssues:
+	case d.tab == tabIssues:
 		body = d.viewIssues(w, bodyH)
 	}
 
@@ -286,22 +288,44 @@ func (d dashboard) viewIssues(w, h int) string {
 	return panelStyle(w-2, h, true).Render(titleLine("Issues", len(d.issues)) + "\n" + il.String())
 }
 
+// viewDetail renders the scrollable detail panel for the selected entity.
+func (d dashboard) viewDetail(w, h int) string {
+	inner := h - 2
+	if inner < 1 {
+		inner = 1
+	}
+	start, end := windowRange(len(d.detailLines), d.detailOffset, inner)
+	var b strings.Builder
+	for i := start; i < end; i++ {
+		b.WriteString(d.detailLines[i] + "\n")
+	}
+	scroll := ""
+	if len(d.detailLines) > inner {
+		scroll = dimStyle.Render(fmt.Sprintf("  (%d–%d of %d · ↑/↓ scroll)", start+1, end, len(d.detailLines)))
+	}
+	title := labelStyle.Render(d.detailTitle) + scroll
+	return panelStyle(w-2, h, true).Render(title + "\n\n" + b.String())
+}
+
 // --- footer / helpers ---
 
 func (d dashboard) footer(w int) string {
 	if d.purpose != inputNone {
 		return d.input.View() + "\n" + dimStyle.Render("enter confirm · esc cancel")
 	}
+	if d.showDetail {
+		return dimStyle.Render("↑/↓ scroll · pgup/pgdn page · esc/enter close · r refresh · q quit")
+	}
 	var keys string
 	switch d.tab {
 	case tabOverview:
-		keys = "←/→ pane · ↑/↓ move · a add · e rename · u active · x done · s/d/b task · n note"
+		keys = "enter details · ←/→ pane · ↑/↓ move · a add · e rename · u active · x done · s/d/b task · n note"
 	case tabBoard:
-		keys = "←/→ col · ↑/↓ card · H/L move card · a add · e rename · n note"
+		keys = "enter details · ←/→ col · ↑/↓ card · H/L move card · a add · e rename · n note"
 	case tabMilestones:
-		keys = "↑/↓ move · a add · e rename · x done · o reopen"
+		keys = "enter details · ↑/↓ move · a add · e rename · x done · o reopen"
 	case tabIssues:
-		keys = "↑/↓ move · a add · e rename · c close · o reopen"
+		keys = "enter details · ↑/↓ move · a add · e rename · c close · o reopen"
 	}
 	global := dimStyle.Render("tab switch · 1-4 jump · g goal · m summary · r reload · B backup · q quit")
 	help := dimStyle.Render(keys)

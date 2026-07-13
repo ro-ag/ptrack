@@ -106,6 +106,11 @@ type dashboard struct {
 	input   textinput.Model
 	purpose inputPurpose
 
+	showDetail   bool
+	detailTitle  string
+	detailLines  []string
+	detailOffset int
+
 	status string
 	width  int
 	height int
@@ -239,7 +244,36 @@ func (d dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if d.purpose != inputNone {
 			return d.updateInput(msg)
 		}
+		if d.showDetail {
+			return d.updateDetail(msg)
+		}
 		return d.updateKey(msg)
+	}
+	return d, nil
+}
+
+// updateDetail scrolls or closes the detail panel.
+func (d dashboard) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return d, tea.Quit
+	case "esc", "enter", "backspace":
+		d.showDetail = false
+	case "up", "k":
+		if d.detailOffset > 0 {
+			d.detailOffset--
+		}
+	case "down", "j":
+		if d.detailOffset < len(d.detailLines)-1 {
+			d.detailOffset++
+		}
+	case "pgup":
+		d.detailOffset = clamp(d.detailOffset-10, 0, len(d.detailLines)-1)
+	case "pgdown", " ":
+		d.detailOffset = clamp(d.detailOffset+10, 0, len(d.detailLines)-1)
+	case "r":
+		_ = d.reload()
+		d.openDetail()
 	}
 	return d, nil
 }
@@ -291,6 +325,9 @@ func (d dashboard) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return d, d.startInput(inputRename, "Rename:", title)
 		}
 		d.status = "nothing to rename"
+		return d, nil
+	case "enter":
+		d.openDetail()
 		return d, nil
 	case "r":
 		d.applyErr(d.reload(), "reloaded")
