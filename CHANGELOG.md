@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-07-12
+
+### Fixed
+- Running bare `ptrack` outside any project now prints getting-started guidance
+  (init / --goal / --help) and exits 0, instead of a terse `no ptrack project
+  found` error with a non-zero exit.
+
 ## [0.2.0] - 2026-07-12
 
 ### Added
@@ -40,5 +47,6 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
+[0.2.1]: https://github.com/ro-ag/ptrack/releases/tag/v0.2.1
 [0.2.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.1.0
