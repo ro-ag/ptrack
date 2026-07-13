@@ -72,6 +72,11 @@ func (s *Store) SetMilestoneDue(id uint64, due time.Time) error {
 	return s.mutateMilestone(id, func(m *model.Milestone) { m.Due = due })
 }
 
+// SetMilestoneTitle renames a milestone.
+func (s *Store) SetMilestoneTitle(id uint64, title string) error {
+	return s.mutateMilestone(id, func(m *model.Milestone) { m.Title = title })
+}
+
 func (s *Store) mutateMilestone(id uint64, fn func(*model.Milestone)) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketMilestones)
@@ -190,6 +195,11 @@ func (s *Store) SetIssueStatus(id uint64, st model.IssueStatus) error {
 // SetIssueSeverity updates an issue's severity.
 func (s *Store) SetIssueSeverity(id uint64, sev model.Severity) error {
 	return s.mutateIssue(id, func(is *model.Issue) { is.Severity = sev })
+}
+
+// SetIssueTitle renames an issue.
+func (s *Store) SetIssueTitle(id uint64, title string) error {
+	return s.mutateIssue(id, func(is *model.Issue) { is.Title = title })
 }
 
 func (s *Store) mutateIssue(id uint64, fn func(*model.Issue)) error {

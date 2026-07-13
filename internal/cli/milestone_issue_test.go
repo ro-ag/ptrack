@@ -58,3 +58,17 @@ func TestContextShowsOpenIssues(t *testing.T) {
 		t.Errorf("inventory missing issue counts:\n%s", ctx)
 	}
 }
+
+func TestRenameCommands(t *testing.T) {
+	seedProject(t) // creates plan #1 "Storage"
+	mustRun(t, "plan", "add", "In progress: transport")
+	// the new plan is #2; strip its prefix
+	mustRun(t, "plan", "rename", "2", "transport")
+	out := mustRun(t, "plan", "list")
+	if strings.Contains(out, "In progress:") {
+		t.Errorf("rename did not strip prefix:\n%s", out)
+	}
+	if !strings.Contains(out, "transport") {
+		t.Errorf("renamed title missing:\n%s", out)
+	}
+}

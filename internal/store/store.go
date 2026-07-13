@@ -216,13 +216,22 @@ func (s *Store) GetPlan(id uint64) (model.Plan, error) {
 
 // SetPlanStatus updates a plan's status.
 func (s *Store) SetPlanStatus(id uint64, st model.PlanStatus) error {
+	return s.mutatePlan(id, func(p *model.Plan) { p.Status = st })
+}
+
+// SetPlanTitle renames a plan.
+func (s *Store) SetPlanTitle(id uint64, title string) error {
+	return s.mutatePlan(id, func(p *model.Plan) { p.Title = title })
+}
+
+func (s *Store) mutatePlan(id uint64, fn func(*model.Plan)) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketPlans)
 		var p model.Plan
 		if err := getGobNF(b, itob(id), &p); err != nil {
 			return err
 		}
-		p.Status = st
+		fn(&p)
 		p.UpdatedAt = time.Now()
 		return putGob(b, itob(id), p)
 	})
@@ -300,13 +309,22 @@ func (s *Store) GetTask(id uint64) (model.Task, error) {
 
 // SetTaskStatus updates a task's status.
 func (s *Store) SetTaskStatus(id uint64, st model.TaskStatus) error {
+	return s.mutateTask(id, func(t *model.Task) { t.Status = st })
+}
+
+// SetTaskTitle renames a task.
+func (s *Store) SetTaskTitle(id uint64, title string) error {
+	return s.mutateTask(id, func(t *model.Task) { t.Title = title })
+}
+
+func (s *Store) mutateTask(id uint64, fn func(*model.Task)) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketTasks)
 		var t model.Task
 		if err := getGobNF(b, itob(id), &t); err != nil {
 			return err
 		}
-		t.Status = st
+		fn(&t)
 		t.UpdatedAt = time.Now()
 		return putGob(b, itob(id), t)
 	})

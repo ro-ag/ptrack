@@ -159,7 +159,25 @@ func newTaskCmd() *cobra.Command {
 		},
 	}
 
-	cmd.AddCommand(add, list, show, start, done, block)
+	rename := &cobra.Command{
+		Use:   "rename <id> <title...>",
+		Short: "Rename a task",
+		Args:  cobra.MinimumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := parseID(args[0])
+			if err != nil {
+				return err
+			}
+			s, err := openProject()
+			if err != nil {
+				return err
+			}
+			defer s.Close()
+			return s.SetTaskTitle(id, joinArgs(args[1:]))
+		},
+	}
+
+	cmd.AddCommand(add, list, show, start, done, block, rename)
 	return cmd
 }
 

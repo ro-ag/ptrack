@@ -48,6 +48,11 @@ log, open issues), then keep it current:
 - Issues (bugs/problems): ` + "`ptrack issue add \"...\" [--severity high] [--task N]`" + `
 - Decisions: ` + "`ptrack note add \"...\" [--task N | --plan N]`" + `
 
+**Titles are names, not status.** Do not prefix titles with "Pending:", "In
+progress:", "Done:", etc. — ptrack tracks status separately. Set it with
+` + "`task start|done|block`" + `, ` + "`plan done|use`" + `, ` + "`milestone done`" + `, ` + "`issue close`" + `. Rename with
+` + "`ptrack <plan|task|milestone|issue> rename <id> \"new title\"`" + `.
+
 **Before ending** — save the narrative for the next agent:
 - ` + "`ptrack summary set \"where we are\"`" + `
 

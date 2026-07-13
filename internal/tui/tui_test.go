@@ -158,3 +158,22 @@ func TestViewRendersWithoutPanic(t *testing.T) {
 		}
 	}
 }
+
+func TestRenamePlanViaKeys(t *testing.T) {
+	d, s := newTestModel(t)
+	p, _ := s.AddPlan("Pending: reducer")
+	_ = d.reload()
+	d = send(t, d, runes("e")) // rename selected plan
+	if d.purpose != inputRename {
+		t.Fatalf("purpose = %v want inputRename", d.purpose)
+	}
+	// clear + type new title
+	for range "Pending: reducer" {
+		d = send(t, d, key(tea.KeyBackspace))
+	}
+	d = typeAndEnter(t, d, "reducer")
+	got, _ := s.GetPlan(p.ID)
+	if got.Title != "reducer" {
+		t.Errorf("title = %q want reducer", got.Title)
+	}
+}
