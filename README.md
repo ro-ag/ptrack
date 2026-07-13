@@ -94,14 +94,21 @@ inside the block, after the built-in guide. Use it for personal conventions
 (branch-first, no AI attribution, release rules, …) so every project you `init`
 carries them — without changing what ptrack ships to others.
 
-## TUI keys
+## TUI
 
-**List mode:** `tab` switch pane · `↑/↓` move · `v` board · `a` add plan/task ·
-`n` note · `g` edit goal · `m` edit summary · `u` set active plan · `x` mark plan
-done · `s/d/b` start/done/block task · `r` reload · `B` backup · `q` quit.
+Bare `ptrack` opens a tabbed dashboard: **Overview · Board · Milestones ·
+Issues**, with an inventory header and bordered panels.
 
-**Board mode:** `←/→` column · `↑/↓` card · `H/L` move card across columns
-(changes status) · `a` add · `n` note · `v` back to list · `q` quit.
+**Global:** `tab`/`shift+tab` switch tabs · `1`–`4` jump · `g` edit goal ·
+`m` edit summary · `r` reload · `B` backup · `q` quit.
+
+- **Overview** — `←/→` switch pane (plans/tasks) · `↑/↓` move · `a` add ·
+  `u` set active plan · `x` plan done · `s/d/b` start/done/block task · `n` note.
+- **Board** — kanban of the selected plan: `←/→` column · `↑/↓` card ·
+  `H/L` move a card across columns (changes status) · `a` add · `n` note.
+- **Milestones** — `↑/↓` select (shows its plans + task rollup) · `a` add ·
+  `x` done · `o` reopen.
+- **Issues** — `↑/↓` select · `a` add · `c` close · `o` reopen.
 
 ## Storage
 

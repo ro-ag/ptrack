@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-07-12
+
+### Changed
+- **Rebuilt the TUI as a polished tabbed dashboard.** Four tabs — Overview,
+  Board, Milestones, Issues — with an inventory header (colored badges),
+  bordered lipgloss panels, status/severity colors, a starred active plan,
+  scrolling lists, and edit actions across every entity (add/status/close/etc.).
+  Navigate tabs with `tab`/`shift+tab` or `1`–`4`. The old two-pane list view is
+  replaced; all previous actions remain, now organized per tab.
+
 ## [0.5.0] - 2026-07-12
 
 ### Added
@@ -106,6 +116,7 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
+[0.6.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.6.0
 [0.5.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.5.0
 [0.4.2]: https://github.com/ro-ag/ptrack/releases/tag/v0.4.2
 [0.4.1]: https://github.com/ro-ag/ptrack/releases/tag/v0.4.1

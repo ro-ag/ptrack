@@ -17,6 +17,8 @@ import (
 	"github.com/ro-ag/ptrack/internal/store"
 )
 
+func trim(s string) string { return strings.TrimSpace(s) }
+
 // Run opens the current project's store and launches the dashboard. It returns
 // store.ErrNoProject (with guidance) when run outside a ptrack project.
 func Run() error {
@@ -42,57 +44,63 @@ func Run() error {
 	return err
 }
 
-// focus identifies which pane currently receives navigation keys.
-type focus int
+type tab int
 
 const (
-	focusPlans focus = iota
+	tabOverview tab = iota
+	tabBoard
+	tabMilestones
+	tabIssues
+	tabCount
+)
+
+var tabNames = []string{"Overview", "Board", "Milestones", "Issues"}
+
+type paneFocus int
+
+const (
+	focusPlans paneFocus = iota
 	focusTasks
 )
 
-// mode selects the dashboard layout: the two-pane list or the kanban board.
-type mode int
-
-const (
-	modeList mode = iota
-	modeBoard
-)
-
-// boardStatuses is the left-to-right column order of the kanban board.
-var boardStatuses = []model.TaskStatus{
-	model.TaskTodo, model.TaskDoing, model.TaskBlocked, model.TaskDone,
-}
-
-var boardTitles = []string{"Todo", "Doing", "Blocked", "Done"}
-
-// inputPurpose records what a pending text-input submission should do.
 type inputPurpose int
 
 const (
 	inputNone inputPurpose = iota
 	inputAddPlan
 	inputAddTask
+	inputAddMilestone
+	inputAddIssue
+	inputAddNote
 	inputEditGoal
 	inputEditSummary
-	inputAddNote
 )
 
-// dashboard is the Bubble Tea model backing the ptrack TUI.
+var boardStatuses = []model.TaskStatus{
+	model.TaskTodo, model.TaskDoing, model.TaskBlocked, model.TaskDone,
+}
+var boardTitles = []string{"Todo", "Doing", "Blocked", "Done"}
+
 type dashboard struct {
 	store  *store.Store
 	dbPath string
 
-	meta  model.Meta
-	plans []model.Plan
-	tasks map[uint64][]model.Task
+	meta        model.Meta
+	milestones  []model.Milestone
+	plans       []model.Plan
+	tasksByPlan map[uint64][]model.Task
+	issues      []model.Issue
+	counts      model.Counts
 
-	mode       mode
-	focus      focus
-	planCursor int
-	taskCursor int
+	tab   tab
+	focus paneFocus
 
-	boardCol int
-	boardRow int
+	planCursor  int
+	taskCursor  int
+	boardCol    int
+	boardRow    int
+	msCursor    int
+	issueCursor int
 
 	input   textinput.Model
 	purpose inputPurpose
@@ -103,7 +111,7 @@ type dashboard struct {
 }
 
 func newModel(s *store.Store, dbPath string) (dashboard, error) {
-	d := dashboard{store: s, dbPath: dbPath, tasks: map[uint64][]model.Task{}}
+	d := dashboard{store: s, dbPath: dbPath, tasksByPlan: map[uint64][]model.Task{}}
 	if err := d.reload(); err != nil {
 		return d, err
 	}
@@ -116,40 +124,45 @@ func newModel(s *store.Store, dbPath string) (dashboard, error) {
 	return d, nil
 }
 
-// reload refreshes the cached snapshot of meta, plans, and tasks from the store.
 func (d *dashboard) reload() error {
-	meta, err := d.store.GetMeta()
-	if err != nil {
+	var err error
+	if d.meta, err = d.store.GetMeta(); err != nil {
 		return err
 	}
-	plans, err := d.store.ListPlans()
-	if err != nil {
+	if d.milestones, err = d.store.ListMilestones(); err != nil {
 		return err
 	}
-	tasks := make(map[uint64][]model.Task, len(plans))
-	for _, p := range plans {
+	if d.plans, err = d.store.ListPlans(); err != nil {
+		return err
+	}
+	d.tasksByPlan = make(map[uint64][]model.Task, len(d.plans))
+	for _, p := range d.plans {
 		ts, err := d.store.ListTasksByPlan(p.ID)
 		if err != nil {
 			return err
 		}
-		tasks[p.ID] = ts
+		d.tasksByPlan[p.ID] = ts
 	}
-	d.meta, d.plans, d.tasks = meta, plans, tasks
+	if d.issues, err = d.store.ListIssues(); err != nil {
+		return err
+	}
+	if d.counts, err = d.store.Counts(); err != nil {
+		return err
+	}
 	d.clampCursors()
 	return nil
 }
 
 func (d *dashboard) clampCursors() {
-	if d.planCursor >= len(d.plans) {
-		d.planCursor = max(0, len(d.plans)-1)
-	}
-	n := len(d.currentTasks())
-	if d.taskCursor >= n {
-		d.taskCursor = max(0, n-1)
-	}
+	d.planCursor = clamp(d.planCursor, 0, len(d.plans)-1)
+	d.taskCursor = clamp(d.taskCursor, 0, len(d.currentTasks())-1)
+	d.msCursor = clamp(d.msCursor, 0, len(d.milestones)-1)
+	d.issueCursor = clamp(d.issueCursor, 0, len(d.issues)-1)
+	d.boardRow = clamp(d.boardRow, 0, len(d.boardColumns()[d.boardCol])-1)
 }
 
-// currentPlan returns the plan under the plan cursor, or nil when there are none.
+// --- selection helpers ---
+
 func (d *dashboard) currentPlan() *model.Plan {
 	if len(d.plans) == 0 {
 		return nil
@@ -157,16 +170,14 @@ func (d *dashboard) currentPlan() *model.Plan {
 	return &d.plans[d.planCursor]
 }
 
-// currentTasks returns the tasks of the plan under the cursor.
 func (d *dashboard) currentTasks() []model.Task {
 	p := d.currentPlan()
 	if p == nil {
 		return nil
 	}
-	return d.tasks[p.ID]
+	return d.tasksByPlan[p.ID]
 }
 
-// currentTask returns the task under the task cursor, or nil.
 func (d *dashboard) currentTask() *model.Task {
 	ts := d.currentTasks()
 	if d.taskCursor < 0 || d.taskCursor >= len(ts) {
@@ -175,8 +186,20 @@ func (d *dashboard) currentTask() *model.Task {
 	return &ts[d.taskCursor]
 }
 
-// boardColumns groups the current plan's tasks into kanban columns in
-// boardStatuses order.
+func (d *dashboard) currentMilestone() *model.Milestone {
+	if len(d.milestones) == 0 {
+		return nil
+	}
+	return &d.milestones[d.msCursor]
+}
+
+func (d *dashboard) currentIssue() *model.Issue {
+	if len(d.issues) == 0 {
+		return nil
+	}
+	return &d.issues[d.issueCursor]
+}
+
 func (d *dashboard) boardColumns() [][]model.Task {
 	cols := make([][]model.Task, len(boardStatuses))
 	for _, t := range d.currentTasks() {
@@ -190,7 +213,6 @@ func (d *dashboard) boardColumns() [][]model.Task {
 	return cols
 }
 
-// boardTask returns the card under the board cursor, or nil.
 func (d *dashboard) boardTask() *model.Task {
 	cols := d.boardColumns()
 	if d.boardCol < 0 || d.boardCol >= len(cols) {
@@ -203,40 +225,10 @@ func (d *dashboard) boardTask() *model.Task {
 	return &col[d.boardRow]
 }
 
-func (d *dashboard) clampBoardRow() {
-	cols := d.boardColumns()
-	n := 0
-	if d.boardCol >= 0 && d.boardCol < len(cols) {
-		n = len(cols[d.boardCol])
-	}
-	d.boardRow = clamp(d.boardRow, 0, n-1)
-}
-
-// moveCard shifts the selected card one column in dir (-1 left, +1 right),
-// applying the target column's status.
-func (d *dashboard) moveCard(dir int) {
-	t := d.boardTask()
-	if t == nil {
-		d.status = "no card selected"
-		return
-	}
-	nc := d.boardCol + dir
-	if nc < 0 || nc >= len(boardStatuses) {
-		return
-	}
-	if err := d.store.SetTaskStatus(t.ID, boardStatuses[nc]); err != nil {
-		d.status = err.Error()
-		return
-	}
-	_ = d.reload()
-	d.boardCol = nc
-	d.clampBoardRow()
-	d.status = "moved #" + itoa(t.ID) + " → " + string(boardStatuses[nc])
-}
+// --- bubbletea ---
 
 func (d dashboard) Init() tea.Cmd { return nil }
 
-// Update handles messages, dispatching to input-mode or normal-mode key handling.
 func (d dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -246,38 +238,151 @@ func (d dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if d.purpose != inputNone {
 			return d.updateInput(msg)
 		}
-		if d.mode == modeBoard {
-			return d.updateBoard(msg)
-		}
-		return d.updateNormal(msg)
+		return d.updateKey(msg)
 	}
 	return d, nil
 }
 
-// updateBoard handles keys while the kanban board is shown.
-func (d dashboard) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (d dashboard) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		d.commitInput()
+		return d, nil
+	case "esc":
+		d.purpose = inputNone
+		d.status = "cancelled"
+		return d, nil
+	}
+	var cmd tea.Cmd
+	d.input, cmd = d.input.Update(msg)
+	return d, cmd
+}
+
+func (d dashboard) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Global keys.
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return d, tea.Quit
-	case "v", "esc":
-		d.mode = modeList
+	case "tab":
+		d.tab = (d.tab + 1) % tabCount
+		return d, nil
+	case "shift+tab":
+		d.tab = (d.tab + tabCount - 1) % tabCount
+		return d, nil
+	case "1":
+		d.tab = tabOverview
+		return d, nil
+	case "2":
+		d.tab = tabBoard
+		return d, nil
+	case "3":
+		d.tab = tabMilestones
+		return d, nil
+	case "4":
+		d.tab = tabIssues
+		return d, nil
+	case "g":
+		return d, d.startInput(inputEditGoal, "Goal:", d.meta.Goal)
+	case "m":
+		return d, d.startInput(inputEditSummary, "Summary:", d.meta.Summary)
+	case "r":
+		d.applyErr(d.reload(), "reloaded")
+		return d, nil
+	case "B":
+		d.status = d.backup()
+		return d, nil
+	}
+
+	switch d.tab {
+	case tabOverview:
+		return d.updateOverview(msg)
+	case tabBoard:
+		return d.updateBoard(msg)
+	case tabMilestones:
+		return d.updateMilestones(msg)
+	case tabIssues:
+		return d.updateIssues(msg)
+	}
+	return d, nil
+}
+
+func (d dashboard) updateOverview(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "left", "h", "right", "l":
+		if d.focus == focusPlans {
+			d.focus = focusTasks
+		} else {
+			d.focus = focusPlans
+		}
+	case "up", "k":
+		d.moveOverview(-1)
+	case "down", "j":
+		d.moveOverview(1)
+	case "a":
+		if d.focus == focusPlans {
+			return d, d.startInput(inputAddPlan, "New plan:", "")
+		}
+		if d.currentPlan() == nil {
+			d.status = "add a plan first"
+			return d, nil
+		}
+		return d, d.startInput(inputAddTask, "New task:", "")
+	case "n":
+		return d, d.startInput(inputAddNote, "Note:", "")
+	case "u":
+		if p := d.currentPlan(); p != nil {
+			d.applyErr(d.store.SetActivePlan(p.ID), "active plan set")
+		}
+	case "x":
+		if p := d.currentPlan(); p != nil {
+			d.applyErr(d.store.SetPlanStatus(p.ID, model.PlanDone), "plan done")
+		}
+	case "s":
+		d.setTask(model.TaskDoing, "task started")
+	case "d":
+		d.setTask(model.TaskDone, "task done")
+	case "b":
+		d.setTask(model.TaskBlocked, "task blocked")
+	}
+	return d, nil
+}
+
+func (d *dashboard) moveOverview(delta int) {
+	if d.focus == focusPlans {
+		d.planCursor = clamp(d.planCursor+delta, 0, len(d.plans)-1)
+		d.taskCursor = 0
+		return
+	}
+	d.taskCursor = clamp(d.taskCursor+delta, 0, len(d.currentTasks())-1)
+}
+
+func (d *dashboard) setTask(st model.TaskStatus, ok string) {
+	t := d.currentTask()
+	if t == nil {
+		d.status = "no task selected"
+		return
+	}
+	d.applyErr(d.store.SetTaskStatus(t.ID, st), ok)
+}
+
+func (d dashboard) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
 	case "left", "h":
 		if d.boardCol > 0 {
 			d.boardCol--
-			d.clampBoardRow()
+			d.boardRow = clamp(d.boardRow, 0, len(d.boardColumns()[d.boardCol])-1)
 		}
 	case "right", "l":
 		if d.boardCol < len(boardStatuses)-1 {
 			d.boardCol++
-			d.clampBoardRow()
+			d.boardRow = clamp(d.boardRow, 0, len(d.boardColumns()[d.boardCol])-1)
 		}
 	case "up", "k":
 		if d.boardRow > 0 {
 			d.boardRow--
 		}
 	case "down", "j":
-		d.boardRow++
-		d.clampBoardRow()
+		d.boardRow = clamp(d.boardRow+1, 0, len(d.boardColumns()[d.boardCol])-1)
 	case "H", "<":
 		d.moveCard(-1)
 	case "L", ">":
@@ -294,132 +399,72 @@ func (d dashboard) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return d, nil
 		}
 		return d, d.startInput(inputAddNote, "Note:", "")
-	case "r":
-		d.applyErr(d.reload(), "reloaded")
-	case "B":
-		d.status = d.backup()
 	}
 	return d, nil
 }
 
-// updateInput routes keys to the text input while a value is being entered.
-func (d dashboard) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "enter":
-		d.commitInput()
-		return d, nil
-	case "esc":
-		d.purpose = inputNone
-		d.status = "cancelled"
-		return d, nil
-	}
-	var cmd tea.Cmd
-	d.input, cmd = d.input.Update(msg)
-	return d, cmd
-}
-
-// updateNormal handles navigation and action keys in the default mode.
-func (d dashboard) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "q", "ctrl+c", "esc":
-		return d, tea.Quit
-	case "tab":
-		if d.focus == focusPlans {
-			d.focus = focusTasks
-		} else {
-			d.focus = focusPlans
-		}
-	case "v":
-		if d.currentPlan() == nil {
-			d.status = "add a plan first"
-			return d, nil
-		}
-		d.mode = modeBoard
-		d.boardCol, d.boardRow = 0, 0
-	case "up", "k":
-		d.moveCursor(-1)
-	case "down", "j":
-		d.moveCursor(1)
-	case "g":
-		return d, d.startInput(inputEditGoal, "Goal:", d.meta.Goal)
-	case "m":
-		return d, d.startInput(inputEditSummary, "Summary:", d.meta.Summary)
-	case "a":
-		if d.focus == focusPlans {
-			return d, d.startInput(inputAddPlan, "New plan:", "")
-		}
-		if d.currentPlan() == nil {
-			d.status = "add a plan first"
-			return d, nil
-		}
-		return d, d.startInput(inputAddTask, "New task:", "")
-	case "n":
-		if d.focus == focusTasks && d.currentTask() == nil {
-			d.status = "no task selected"
-			return d, nil
-		}
-		if d.focus == focusPlans && d.currentPlan() == nil {
-			d.status = "nothing to annotate"
-			return d, nil
-		}
-		return d, d.startInput(inputAddNote, "Note:", "")
-	case "u": // set active plan
-		if p := d.currentPlan(); p != nil {
-			if err := d.store.SetActivePlan(p.ID); err != nil {
-				d.status = err.Error()
-			} else {
-				d.status = "active plan set"
-				_ = d.reload()
-			}
-		}
-	case "x": // mark plan done
-		if p := d.currentPlan(); p != nil {
-			d.applyErr(d.store.SetPlanStatus(p.ID, model.PlanDone), "plan done")
-		}
-	case "s": // task -> doing
-		d.setTask(model.TaskDoing, "task started")
-	case "d": // task -> done
-		d.setTask(model.TaskDone, "task done")
-	case "b": // task -> blocked
-		d.setTask(model.TaskBlocked, "task blocked")
-	case "r":
-		d.applyErr(d.reload(), "reloaded")
-	case "B": // backup
-		d.status = d.backup()
-	}
-	return d, nil
-}
-
-func (d *dashboard) moveCursor(delta int) {
-	if d.focus == focusPlans {
-		d.planCursor = clamp(d.planCursor+delta, 0, len(d.plans)-1)
-		d.taskCursor = 0
-		return
-	}
-	d.taskCursor = clamp(d.taskCursor+delta, 0, len(d.currentTasks())-1)
-}
-
-// setTask applies a status to the task under the cursor and reports a status line.
-func (d *dashboard) setTask(st model.TaskStatus, ok string) {
-	t := d.currentTask()
+func (d *dashboard) moveCard(dir int) {
+	t := d.boardTask()
 	if t == nil {
-		d.status = "no task selected"
+		d.status = "no card selected"
 		return
 	}
-	d.applyErr(d.store.SetTaskStatus(t.ID, st), ok)
-}
-
-// applyErr reloads and sets a status line, reporting err when non-nil.
-func (d *dashboard) applyErr(err error, ok string) {
-	if err != nil {
+	nc := d.boardCol + dir
+	if nc < 0 || nc >= len(boardStatuses) {
+		return
+	}
+	if err := d.store.SetTaskStatus(t.ID, boardStatuses[nc]); err != nil {
 		d.status = err.Error()
 		return
 	}
 	_ = d.reload()
-	d.status = ok
+	d.boardCol = nc
+	d.boardRow = clamp(d.boardRow, 0, len(d.boardColumns()[d.boardCol])-1)
+	d.status = "moved #" + strconv.FormatUint(t.ID, 10) + " → " + string(boardStatuses[nc])
 }
 
-// startInput enters text-input mode for the given purpose, seeding the field.
+func (d dashboard) updateMilestones(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "up", "k":
+		d.msCursor = clamp(d.msCursor-1, 0, len(d.milestones)-1)
+	case "down", "j":
+		d.msCursor = clamp(d.msCursor+1, 0, len(d.milestones)-1)
+	case "a":
+		return d, d.startInput(inputAddMilestone, "New milestone:", "")
+	case "x":
+		if m := d.currentMilestone(); m != nil {
+			d.applyErr(d.store.SetMilestoneStatus(m.ID, model.MilestoneDone), "milestone done")
+		}
+	case "o":
+		if m := d.currentMilestone(); m != nil {
+			d.applyErr(d.store.SetMilestoneStatus(m.ID, model.MilestoneOpen), "milestone reopened")
+		}
+	}
+	return d, nil
+}
+
+func (d dashboard) updateIssues(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "up", "k":
+		d.issueCursor = clamp(d.issueCursor-1, 0, len(d.issues)-1)
+	case "down", "j":
+		d.issueCursor = clamp(d.issueCursor+1, 0, len(d.issues)-1)
+	case "a":
+		return d, d.startInput(inputAddIssue, "New issue:", "")
+	case "c":
+		if is := d.currentIssue(); is != nil {
+			d.applyErr(d.store.SetIssueStatus(is.ID, model.IssueClosed), "issue closed")
+		}
+	case "o":
+		if is := d.currentIssue(); is != nil {
+			d.applyErr(d.store.SetIssueStatus(is.ID, model.IssueOpen), "issue reopened")
+		}
+	}
+	return d, nil
+}
+
+// --- input handling ---
+
 func (d *dashboard) startInput(p inputPurpose, prompt, initial string) tea.Cmd {
 	ti := textinput.New()
 	ti.Prompt = prompt + " "
@@ -432,9 +477,8 @@ func (d *dashboard) startInput(p inputPurpose, prompt, initial string) tea.Cmd {
 	return textinput.Blink
 }
 
-// commitInput applies the entered value according to the pending purpose.
 func (d *dashboard) commitInput() {
-	val := strings.TrimSpace(d.input.Value())
+	val := trim(d.input.Value())
 	p := d.purpose
 	d.purpose = inputNone
 
@@ -444,32 +488,18 @@ func (d *dashboard) commitInput() {
 	case inputEditSummary:
 		d.applyErr(d.store.SetSummary(val), "summary updated")
 	case inputAddPlan:
-		if val == "" {
-			d.status = "cancelled"
-			return
-		}
-		if pl, err := d.store.AddPlan(val); err != nil {
-			d.status = err.Error()
-		} else {
-			d.status = "added plan #" + itoa(pl.ID)
-			_ = d.reload()
-		}
+		d.addNamed(val, func() (uint64, error) { p, e := d.store.AddPlan(val); return p.ID, e }, "plan")
+	case inputAddMilestone:
+		d.addNamed(val, func() (uint64, error) { m, e := d.store.AddMilestone(val); return m.ID, e }, "milestone")
+	case inputAddIssue:
+		d.addNamed(val, func() (uint64, error) { is, e := d.store.AddIssue(val, "", "", 0); return is.ID, e }, "issue")
 	case inputAddTask:
-		if val == "" {
-			d.status = "cancelled"
-			return
-		}
 		pl := d.currentPlan()
 		if pl == nil {
 			d.status = "no plan selected"
 			return
 		}
-		if t, err := d.store.AddTask(pl.ID, val); err != nil {
-			d.status = err.Error()
-		} else {
-			d.status = "added task #" + itoa(t.ID)
-			_ = d.reload()
-		}
+		d.addNamed(val, func() (uint64, error) { t, e := d.store.AddTask(pl.ID, val); return t.ID, e }, "task")
 	case inputAddNote:
 		if val == "" {
 			d.status = "cancelled"
@@ -479,30 +509,47 @@ func (d *dashboard) commitInput() {
 	}
 }
 
-// addNote attaches a note to the selected target: the board card in board mode,
-// the selected task in the tasks pane, else the current plan, else the project.
-func (d *dashboard) addNote(body string) {
-	if d.mode == modeBoard {
-		if t := d.boardTask(); t != nil {
-			d.applyErr(mapErr(d.store.AddNote(model.TargetTask, t.ID, body)), "note added")
-			return
-		}
-	}
-	if d.focus == focusTasks {
-		if t := d.currentTask(); t != nil {
-			d.applyErr(mapErr(d.store.AddNote(model.TargetTask, t.ID, body)), "note added")
-			return
-		}
-	}
-	if p := d.currentPlan(); p != nil {
-		d.applyErr(mapErr(d.store.AddNote(model.TargetPlan, p.ID, body)), "note added")
+func (d *dashboard) addNamed(val string, create func() (uint64, error), kind string) {
+	if val == "" {
+		d.status = "cancelled"
 		return
 	}
-	d.applyErr(mapErr(d.store.AddNote(model.TargetProject, 0, body)), "note added")
+	id, err := create()
+	if err != nil {
+		d.status = err.Error()
+		return
+	}
+	_ = d.reload()
+	d.status = "added " + kind + " #" + strconv.FormatUint(id, 10)
 }
 
-// backup copies the project DB into the global backups dir and records it,
-// returning a status line for the footer.
+func (d *dashboard) addNote(body string) {
+	var err error
+	switch {
+	case d.tab == tabIssues && d.currentIssue() != nil:
+		// notes don't attach to issues; record against the project.
+		_, err = d.store.AddNote(model.TargetProject, 0, body)
+	case (d.tab == tabBoard) && d.boardTask() != nil:
+		_, err = d.store.AddNote(model.TargetTask, d.boardTask().ID, body)
+	case d.tab == tabOverview && d.focus == focusTasks && d.currentTask() != nil:
+		_, err = d.store.AddNote(model.TargetTask, d.currentTask().ID, body)
+	case d.currentPlan() != nil:
+		_, err = d.store.AddNote(model.TargetPlan, d.currentPlan().ID, body)
+	default:
+		_, err = d.store.AddNote(model.TargetProject, 0, body)
+	}
+	d.applyErr(err, "note added")
+}
+
+func (d *dashboard) applyErr(err error, ok string) {
+	if err != nil {
+		d.status = err.Error()
+		return
+	}
+	_ = d.reload()
+	d.status = ok
+}
+
 func (d dashboard) backup() string {
 	home, err := store.GlobalHome()
 	if err != nil {
@@ -518,22 +565,3 @@ func (d dashboard) backup() string {
 	}
 	return "backed up → " + dst
 }
-
-func clamp(v, lo, hi int) int {
-	if hi < lo {
-		return lo
-	}
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
-}
-
-// mapErr discards the value from an (T, error) result, keeping only the error,
-// so applyErr can consume store methods that also return the created record.
-func mapErr[T any](_ T, err error) error { return err }
-
-func itoa(v uint64) string { return strconv.FormatUint(v, 10) }

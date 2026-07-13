@@ -8,207 +8,316 @@ import (
 	"github.com/ro-ag/ptrack/internal/model"
 )
 
-var (
-	titleStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
-	labelStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
-	dimStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	activeStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true)
-	cursorStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true)
-	statusStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	focusStyle   = lipgloss.NewStyle().Bold(true).Underline(true).Foreground(lipgloss.Color("212"))
-	columnStyle  = lipgloss.NewStyle().Padding(0, 3, 0, 0)
-	headerBorder = lipgloss.NewStyle().Border(lipgloss.NormalBorder(), false, false, true, false).
-			BorderForeground(lipgloss.Color("240"))
-)
-
-// View renders the dashboard: a goal/summary header, the list or kanban body,
-// an optional input line, and a contextual help footer.
+// View composes the header, tab bar, active-tab body, and footer.
 func (d dashboard) View() string {
-	var h strings.Builder
-	h.WriteString(titleStyle.Render("ptrack"))
-	h.WriteString("\n")
-	h.WriteString(labelStyle.Render("Goal: ") + orUnset(d.meta.Goal) + "\n")
-	h.WriteString(labelStyle.Render("Summary: ") + orUnset(d.meta.Summary) + "\n")
-	header := headerBorder.Render(h.String())
+	w := d.width
+	if w <= 0 {
+		w = 100
+	}
+	h := d.height
+	if h <= 0 {
+		h = 30
+	}
+
+	header := d.header(w)
+	tabs := d.tabBar()
+	footer := d.footer(w)
+
+	// Body height = window - header - tabs - footer - separators.
+	used := lipgloss.Height(header) + lipgloss.Height(tabs) + lipgloss.Height(footer) + 3
+	bodyH := h - used
+	if bodyH < 6 {
+		bodyH = 6
+	}
 
 	var body string
-	if d.mode == modeBoard {
-		body = d.renderBoard()
-	} else {
-		body = lipgloss.JoinHorizontal(lipgloss.Top,
-			columnStyle.Render(d.renderPlans()),
-			d.renderTasks(),
-		)
+	switch d.tab {
+	case tabOverview:
+		body = d.viewOverview(w, bodyH)
+	case tabBoard:
+		body = d.viewBoard(w, bodyH)
+	case tabMilestones:
+		body = d.viewMilestones(w, bodyH)
+	case tabIssues:
+		body = d.viewIssues(w, bodyH)
 	}
 
-	var footer string
-	if d.purpose != inputNone {
-		footer = d.input.View() + "\n" + dimStyle.Render("enter confirm · esc cancel")
-	} else {
-		footer = d.help()
-		if d.status != "" {
-			footer = statusStyle.Render(d.status) + "\n" + footer
+	return lipgloss.JoinVertical(lipgloss.Left, header, tabs, "", body, "", footer)
+}
+
+func (d dashboard) header(w int) string {
+	c := d.counts
+	badges := strings.Join([]string{
+		badge("milestones", c.Milestones, fmt.Sprintf("%d done", c.MilestonesDone), cPink),
+		badge("plans", c.Plans, fmt.Sprintf("%d done", c.PlansDone), cBlue),
+		badge("tasks", c.Tasks, fmt.Sprintf("%d done", c.TasksDone), cGreen),
+		badge("issues", c.Issues, fmt.Sprintf("%d open", c.IssuesOpen), cRed),
+	}, "  ")
+
+	title := appTitleStyle.Render("ptrack")
+	goal := labelStyle.Render("Goal ") + textStyle.Render(truncate(orUnset(d.meta.Goal), w-8))
+	summary := dimStyle.Render(truncate("— "+orUnset(d.meta.Summary), w-2))
+
+	top := lipgloss.JoinHorizontal(lipgloss.Left, title, "   ", badges)
+	inner := lipgloss.JoinVertical(lipgloss.Left, top, goal, summary)
+	return lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder(), false, false, true, false).
+		BorderForeground(cBorder).
+		Width(w - 1).
+		Render(inner)
+}
+
+func badge(name string, total int, detail string, col lipgloss.Color) string {
+	return lipgloss.NewStyle().Foreground(col).Bold(true).Render(fmt.Sprintf("%d", total)) +
+		dimStyle.Render(fmt.Sprintf(" %s (%s)", name, detail))
+}
+
+func (d dashboard) tabBar() string {
+	parts := make([]string, len(tabNames))
+	for i, name := range tabNames {
+		label := fmt.Sprintf("%d %s", i+1, name)
+		if tab(i) == d.tab {
+			parts[i] = tabActiveStyle.Render(label)
+		} else {
+			parts[i] = tabInactiveStyle.Render(label)
 		}
 	}
-
-	return lipgloss.JoinVertical(lipgloss.Left, header, "", body, "", footer)
+	return lipgloss.JoinHorizontal(lipgloss.Left, parts...)
 }
 
-// columnAccent maps each board column to an accent color.
-var columnAccent = []lipgloss.Color{
-	lipgloss.Color("245"), // todo — gray
-	lipgloss.Color("214"), // doing — amber
-	lipgloss.Color("196"), // blocked — red
-	lipgloss.Color("42"),  // done — green
+// --- overview ---
+
+func (d dashboard) viewOverview(w, h int) string {
+	leftW := w/2 - 2
+	rightW := w - leftW - 4
+
+	// Plans panel.
+	var pl strings.Builder
+	rows := len(d.plans)
+	start, end := windowRange(rows, d.planCursor, h-2)
+	for i := start; i < end; i++ {
+		p := d.plans[i]
+		sel := i == d.planCursor && d.focus == focusPlans
+		mark := "  "
+		if sel {
+			mark = cursorStyle.Render("▸ ")
+		}
+		title := fmt.Sprintf("#%d %s", p.ID, p.Title)
+		line := lipgloss.NewStyle().Foreground(planStatusColor(p.Status)).Render(truncate(title, leftW-14))
+		if p.ID == d.meta.ActivePlan {
+			line = activeStyle.Render("★ ") + line
+		} else {
+			line = "  " + line
+		}
+		badge := dimStyle.Render(" [" + string(p.Status) + "]")
+		row := mark + line + badge
+		if sel {
+			star := ""
+			if p.ID == d.meta.ActivePlan {
+				star = "★ "
+			}
+			row = cursorStyle.Render("▸ ") + selRowStyle.Render(truncate(star+title+" ["+string(p.Status)+"]", leftW-4))
+		}
+		pl.WriteString(row + "\n")
+	}
+	if rows == 0 {
+		pl.WriteString(dimStyle.Render("press 'a' to add a plan"))
+	}
+
+	// Tasks panel (for selected plan).
+	var tk strings.Builder
+	tasks := d.currentTasks()
+	tstart, tend := windowRange(len(tasks), d.taskCursor, h-2)
+	for i := tstart; i < tend; i++ {
+		t := tasks[i]
+		sel := i == d.taskCursor && d.focus == focusTasks
+		mark := "  "
+		if sel {
+			mark = cursorStyle.Render("▸ ")
+		}
+		icon := lipgloss.NewStyle().Foreground(taskStatusColor(t.Status)).Render(taskIcon(t.Status))
+		title := truncate(fmt.Sprintf("#%d %s", t.ID, t.Title), rightW-8)
+		row := mark + icon + " " + textStyle.Render(title)
+		if sel {
+			row = selRowStyle.Render(truncate(fmt.Sprintf("%s #%d %s", taskIcon(t.Status), t.ID, t.Title), rightW-2))
+		}
+		tk.WriteString(row + "\n")
+	}
+	if d.currentPlan() != nil && len(tasks) == 0 {
+		tk.WriteString(dimStyle.Render("press 'a' to add a task"))
+	}
+
+	left := panelStyle(leftW, h, d.focus == focusPlans).Render(titleLine("Plans", len(d.plans)) + "\n" + pl.String())
+	right := panelStyle(rightW, h, d.focus == focusTasks).Render(titleLine("Tasks", len(tasks)) + "\n" + tk.String())
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 }
 
-// renderBoard draws the kanban board for the current plan: four bordered
-// columns with status-accented headers, cards, and a highlighted selection.
-func (d dashboard) renderBoard() string {
+// --- board ---
+
+func (d dashboard) viewBoard(w, h int) string {
 	p := d.currentPlan()
 	if p == nil {
-		return dimStyle.Render("no plan selected")
+		return panelStyle(w-2, h, true).Render(dimStyle.Render("no plan selected — add one in Overview"))
 	}
 	cols := d.boardColumns()
-	colW := 22
-	if d.width > 0 {
-		if w := (d.width - 6) / len(boardStatuses); w > colW {
-			colW = w
-		}
+	colW := (w-8)/len(boardStatuses) - 2
+	if colW < 12 {
+		colW = 12
 	}
-
 	rendered := make([]string, len(boardStatuses))
 	for i := range boardStatuses {
-		accent := columnAccent[i]
+		accent := taskStatusColor(boardStatuses[i])
 		head := lipgloss.NewStyle().Bold(true).Foreground(accent).
 			Render(fmt.Sprintf("%s (%d)", boardTitles[i], len(cols[i])))
-
-		var cards strings.Builder
-		cards.WriteString(head + "\n\n")
+		var body strings.Builder
+		body.WriteString(head + "\n\n")
 		if len(cols[i]) == 0 {
-			cards.WriteString(dimStyle.Render("—"))
+			body.WriteString(dimStyle.Render("—"))
 		}
 		for row, t := range cols[i] {
-			card := fmt.Sprintf("#%d %s", t.ID, t.Title)
-			card = truncate(card, colW-4)
-			cardStyle := lipgloss.NewStyle().Foreground(accent)
+			card := truncate(fmt.Sprintf("#%d %s", t.ID, t.Title), colW-4)
+			st := lipgloss.NewStyle().Foreground(accent)
 			if i == d.boardCol && row == d.boardRow {
-				cardStyle = lipgloss.NewStyle().Bold(true).
-					Foreground(lipgloss.Color("231")).Background(accent).Padding(0, 1)
+				st = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("231")).Background(accent).Padding(0, 1)
 			}
-			cards.WriteString(cardStyle.Render(card) + "\n")
+			body.WriteString(st.Render(card) + "\n")
 		}
-
-		border := lipgloss.RoundedBorder()
-		box := lipgloss.NewStyle().
-			Border(border).
-			BorderForeground(accent).
-			Width(colW).
-			Padding(0, 1).
-			MarginRight(1)
-		if i == d.boardCol {
-			box = box.BorderForeground(lipgloss.Color("212"))
-		}
-		rendered[i] = box.Render(cards.String())
+		box := lipgloss.NewStyle().MarginRight(1).Render(panelStyle(colW, h, i == d.boardCol).Render(body.String()))
+		rendered[i] = box
 	}
 	title := labelStyle.Render(fmt.Sprintf("Board — #%d %s", p.ID, p.Title))
-	return title + "\n\n" + lipgloss.JoinHorizontal(lipgloss.Top, rendered...)
+	return title + "\n" + lipgloss.JoinHorizontal(lipgloss.Top, rendered...)
 }
 
-// truncate shortens s to n runes, appending an ellipsis when cut.
-func truncate(s string, n int) string {
-	if n < 1 {
-		n = 1
-	}
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	if n <= 1 {
-		return string(r[:n])
-	}
-	return string(r[:n-1]) + "…"
-}
+// --- milestones ---
 
-func (d dashboard) paneTitle(name string, f focus) string {
-	if d.focus == f && d.purpose == inputNone {
-		return focusStyle.Render(name)
-	}
-	return labelStyle.Render(name)
-}
+func (d dashboard) viewMilestones(w, h int) string {
+	leftW := w/2 - 2
+	rightW := w - leftW - 4
 
-func (d dashboard) renderPlans() string {
-	var b strings.Builder
-	b.WriteString(d.paneTitle("Plans", focusPlans) + "\n")
-	if len(d.plans) == 0 {
-		b.WriteString(dimStyle.Render("  (press 'a' to add one)"))
-		return b.String()
-	}
-	for i, p := range d.plans {
-		marker := "  "
-		if i == d.planCursor && d.focus == focusPlans {
-			marker = cursorStyle.Render("▸ ")
+	var ml strings.Builder
+	start, end := windowRange(len(d.milestones), d.msCursor, h-2)
+	for i := start; i < end; i++ {
+		m := d.milestones[i]
+		sel := i == d.msCursor
+		mark := "  "
+		if sel {
+			mark = cursorStyle.Render("▸ ")
 		}
-		line := fmt.Sprintf("#%d %s", p.ID, p.Title)
-		if p.ID == d.meta.ActivePlan {
-			line = activeStyle.Render(line + " *")
+		col := cText
+		if m.Status == model.MilestoneDone {
+			col = cGreen
 		}
-		b.WriteString(marker + line + dimStyle.Render("  ["+string(p.Status)+"]") + "\n")
-	}
-	return b.String()
-}
-
-func (d dashboard) renderTasks() string {
-	var b strings.Builder
-	b.WriteString(d.paneTitle("Tasks", focusTasks) + "\n")
-	tasks := d.currentTasks()
-	if d.currentPlan() == nil {
-		return b.String()
-	}
-	if len(tasks) == 0 {
-		b.WriteString(dimStyle.Render("  (press 'a' to add a task)"))
-		return b.String()
-	}
-	for i, t := range tasks {
-		marker := "  "
-		if i == d.taskCursor && d.focus == focusTasks {
-			marker = cursorStyle.Render("▸ ")
+		due := ""
+		if !m.Due.IsZero() {
+			due = dimStyle.Render(" ⏰ " + m.Due.Format("2006-01-02"))
 		}
-		b.WriteString(marker + fmt.Sprintf("%s #%d %s\n", statusIcon(t.Status), t.ID, t.Title))
+		title := lipgloss.NewStyle().Foreground(col).Render(truncate(fmt.Sprintf("#%d %s", m.ID, m.Title), leftW-16))
+		row := mark + title + dimStyle.Render(" ["+string(m.Status)+"]") + due
+		if sel {
+			row = selRowStyle.Render(truncate(fmt.Sprintf("#%d %s [%s]", m.ID, m.Title, m.Status), leftW-2))
+		}
+		ml.WriteString(row + "\n")
 	}
-	return b.String()
+	if len(d.milestones) == 0 {
+		ml.WriteString(dimStyle.Render("press 'a' to add a milestone"))
+	}
+
+	// Right: plans of selected milestone.
+	var rp strings.Builder
+	if m := d.currentMilestone(); m != nil {
+		var done, open int
+		for _, p := range d.plans {
+			if p.MilestoneID != m.ID {
+				continue
+			}
+			rp.WriteString(textStyle.Render(truncate(fmt.Sprintf("#%d %s", p.ID, p.Title), rightW-6)) +
+				dimStyle.Render(" ["+string(p.Status)+"]") + "\n")
+			for _, t := range d.tasksByPlan[p.ID] {
+				if t.Status == model.TaskDone {
+					done++
+				} else {
+					open++
+				}
+			}
+		}
+		if rp.Len() == 0 {
+			rp.WriteString(dimStyle.Render("no plans — assign with 'ptrack plan add --milestone " + fmt.Sprintf("%d", m.ID) + "'"))
+		}
+		rp.WriteString("\n" + dimStyle.Render(fmt.Sprintf("tasks: %d done · %d open", done, open)))
+	}
+
+	left := panelStyle(leftW, h, true).Render(titleLine("Milestones", len(d.milestones)) + "\n" + ml.String())
+	right := panelStyle(rightW, h, false).Render(labelStyle.Render("Plans in milestone") + "\n" + rp.String())
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 }
 
-func (d dashboard) help() string {
-	if d.mode == modeBoard {
-		return dimStyle.Render("←/→ column · ↑/↓ card · H/L move card · a add · n note · v list · r reload · B backup · q quit")
+// --- issues ---
+
+func (d dashboard) viewIssues(w, h int) string {
+	var il strings.Builder
+	start, end := windowRange(len(d.issues), d.issueCursor, h-2)
+	for i := start; i < end; i++ {
+		is := d.issues[i]
+		sel := i == d.issueCursor
+		mark := "  "
+		if sel {
+			mark = cursorStyle.Render("▸ ")
+		}
+		sev := lipgloss.NewStyle().Foreground(severityColor(is.Severity)).Bold(true).Render(fmt.Sprintf("%-8s", is.Severity))
+		st := dimStyle.Render(fmt.Sprintf("%-6s", is.Status))
+		if is.Status == model.IssueOpen {
+			st = statusStyle.Render(fmt.Sprintf("%-6s", is.Status))
+		}
+		link := ""
+		if is.TaskID != 0 {
+			link = dimStyle.Render(fmt.Sprintf(" (task %d)", is.TaskID))
+		}
+		title := textStyle.Render(truncate(fmt.Sprintf("#%d %s", is.ID, is.Title), w-30))
+		row := mark + sev + " " + st + " " + title + link
+		if sel {
+			row = selRowStyle.Render(truncate(fmt.Sprintf("%-8s %-6s #%d %s", is.Severity, is.Status, is.ID, is.Title), w-6))
+		}
+		il.WriteString(row + "\n")
 	}
-	common := "tab pane · ↑/↓ move · v board · a add · n note · g goal · m summary · r reload · B backup · q quit"
-	var ctx string
-	if d.focus == focusPlans {
-		ctx = "u set-active · x done"
-	} else {
-		ctx = "s start · d done · b block"
+	if len(d.issues) == 0 {
+		il.WriteString(dimStyle.Render("press 'a' to add an issue"))
 	}
-	return dimStyle.Render(ctx + " · " + common)
+	return panelStyle(w-2, h, true).Render(titleLine("Issues", len(d.issues)) + "\n" + il.String())
 }
 
-func statusIcon(s model.TaskStatus) string {
-	switch s {
-	case model.TaskDone:
-		return activeStyle.Render("✓")
-	case model.TaskDoing:
-		return statusStyle.Render("◐")
-	case model.TaskBlocked:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("✗")
-	default:
-		return dimStyle.Render("○")
+// --- footer / helpers ---
+
+func (d dashboard) footer(w int) string {
+	if d.purpose != inputNone {
+		return d.input.View() + "\n" + dimStyle.Render("enter confirm · esc cancel")
 	}
+	var keys string
+	switch d.tab {
+	case tabOverview:
+		keys = "←/→ pane · ↑/↓ move · a add · u active · x done · s/d/b task · n note"
+	case tabBoard:
+		keys = "←/→ col · ↑/↓ card · H/L move card · a add · n note"
+	case tabMilestones:
+		keys = "↑/↓ move · a add · x done · o reopen"
+	case tabIssues:
+		keys = "↑/↓ move · a add · c close · o reopen"
+	}
+	global := dimStyle.Render("tab switch · 1-4 jump · g goal · m summary · r reload · B backup · q quit")
+	help := dimStyle.Render(keys)
+	if d.status != "" {
+		return statusStyle.Render(d.status) + "\n" + help + "\n" + global
+	}
+	return help + "\n" + global
+}
+
+func titleLine(name string, n int) string {
+	return labelStyle.Render(name) + dimStyle.Render(fmt.Sprintf("  (%d)", n))
 }
 
 func orUnset(s string) string {
 	if strings.TrimSpace(s) == "" {
-		return dimStyle.Render("(unset)")
+		return "(unset)"
 	}
 	return s
 }
