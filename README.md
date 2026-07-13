@@ -50,10 +50,12 @@ an LLM to read).
 | `ptrack guide [--print]` | Install/refresh the agent guide in AGENTS.md/CLAUDE.md, or print it |
 | `ptrack goal [show\|set S]` | Show or set the north-star goal |
 | `ptrack summary [show\|set S]` | Show or set the rolling context summary |
-| `ptrack plan add\|list\|show <id>\|done <id>\|use <id>` | Manage plans; `show` includes tasks + notes |
+| `ptrack milestone add\|list\|show <id>\|done\|open\|due` | Milestones (checkpoints grouping plans); `add --due YYYY-MM-DD` |
+| `ptrack plan add [--milestone N]\|list\|show\|done\|use` | Manage plans; `show` includes tasks + notes |
 | `ptrack task add\|list [--status …]\|show <id>\|start\|done\|block` | Manage tasks; `list --status todo,doing,…` filters |
+| `ptrack issue add [--severity S] [--task N]\|list [--status]\|show\|close\|open\|severity` | Track issues/bugs |
 | `ptrack note add S [--task N\|--plan N]` / `note list [--plan\|--task\|--limit]` | Attach or list notes |
-| `ptrack context [--json]` | Bounded restore digest: goal, summary, active plan, blockers, recent notes, inventory |
+| `ptrack context [--json]` | Bounded restore digest: goal, summary, active plan, blockers, open issues, recent notes, inventory |
 | `ptrack next [--json]` | The single most-actionable task (active plan: doing, else todo) |
 | `ptrack board [--plan N] [--json]` | Kanban view of a plan's tasks by status |
 | `ptrack search <term> [--json]` | Substring match across plan/task titles and note bodies |
@@ -66,9 +68,16 @@ an LLM to read).
 
 A fresh agent resuming a large project reads `ptrack context` (bounded — it never
 dumps the whole project, just the live edge plus counts and drill-down commands),
-then pulls detail on demand with `next`, `plan show`, `task show`,
-`task list --status`, `note list`, `search`, and `board`. It records decisions
-with `note add` and updates `summary set` before the session ends.
+then pulls detail on demand with `next`, `milestone show`, `plan show`,
+`task show`, `task list --status`, `issue list`, `note list`, `search`, and
+`board`. It records decisions with `note add` and updates `summary set` before
+the session ends.
+
+**Populating an existing repo:** point the agent at the repo and have it seed
+ptrack — `goal set` the north star, `milestone add` the checkpoints, `plan add
+--milestone N` the workstreams, `task add` the work (with `start`/`done`/`block`
+status), `issue add` known bugs, `note add` decisions. The agent guide written
+into `AGENTS.md`/`CLAUDE.md` spells this out.
 
 ### Agent guide (onboarding)
 

@@ -19,6 +19,7 @@ import (
 const (
 	contextRecentNotes  = 5
 	contextBlockedShown = 8
+	contextIssuesShown  = 8
 )
 
 // Digest is the bounded cold-start restore view.
@@ -28,8 +29,19 @@ type Digest struct {
 	ActivePlan  *PlanBrief   `json:"active_plan"`
 	Blocked     []TaskLine   `json:"blocked"`
 	BlockedMore int          `json:"blocked_more"`
+	OpenIssues  []IssueLine  `json:"open_issues"`
+	IssuesMore  int          `json:"open_issues_more"`
 	Notes       []NoteLine   `json:"recent_notes"`
 	Inventory   model.Counts `json:"inventory"`
+}
+
+// IssueLine is a compact issue reference.
+type IssueLine struct {
+	ID       uint64 `json:"id"`
+	Title    string `json:"title"`
+	Severity string `json:"severity"`
+	Status   string `json:"status"`
+	TaskID   uint64 `json:"task_id"`
 }
 
 // PlanBrief is a plan plus its open tasks, for the digest.
@@ -95,6 +107,21 @@ func Context(s *store.Store) (Digest, error) {
 		}
 	}
 
+	issues, err := s.ListIssues()
+	if err != nil {
+		return Digest{}, err
+	}
+	for _, is := range issues {
+		if is.Status != model.IssueOpen {
+			continue
+		}
+		if len(d.OpenIssues) < contextIssuesShown {
+			d.OpenIssues = append(d.OpenIssues, issueLine(is))
+		} else {
+			d.IssuesMore++
+		}
+	}
+
 	notes, err := s.RecentNotes(contextRecentNotes)
 	if err != nil {
 		return Digest{}, err
@@ -143,6 +170,21 @@ func (d Digest) Markdown() string {
 		b.WriteString("\n")
 	}
 
+	if len(d.OpenIssues) > 0 {
+		b.WriteString("## Open issues\n")
+		for _, is := range d.OpenIssues {
+			if is.TaskID == 0 {
+				fmt.Fprintf(&b, "- #%d [%s] %s\n", is.ID, is.Severity, is.Title)
+			} else {
+				fmt.Fprintf(&b, "- #%d [%s] %s (task %d)\n", is.ID, is.Severity, is.Title, is.TaskID)
+			}
+		}
+		if d.IssuesMore > 0 {
+			fmt.Fprintf(&b, "- … +%d more (use `ptrack issue list`)\n", d.IssuesMore)
+		}
+		b.WriteString("\n")
+	}
+
 	b.WriteString("## Recent decisions\n")
 	if len(d.Notes) == 0 {
 		b.WriteString("_none_\n")
@@ -155,11 +197,17 @@ func (d Digest) Markdown() string {
 
 	b.WriteString("## Inventory\n")
 	c := d.Inventory
-	fmt.Fprintf(&b, "%d plans (%d done) · %d tasks (%d done · %d blocked · %d open) · %d notes\n\n",
-		c.Plans, c.PlansDone, c.Tasks, c.TasksDone, c.TasksBlocked, c.TasksOpen, c.Notes)
-	b.WriteString("Drill deeper: `ptrack next` · `ptrack plan show <id>` · `ptrack task show <id>` · " +
-		"`ptrack task list --status doing,blocked` · `ptrack note list` · `ptrack search <term>` · `ptrack board`\n")
+	fmt.Fprintf(&b, "%d milestones (%d done) · %d plans (%d done) · %d tasks (%d done · %d blocked · %d open) · %d issues (%d open) · %d notes\n\n",
+		c.Milestones, c.MilestonesDone, c.Plans, c.PlansDone,
+		c.Tasks, c.TasksDone, c.TasksBlocked, c.TasksOpen, c.Issues, c.IssuesOpen, c.Notes)
+	b.WriteString("Drill deeper: `ptrack next` · `ptrack milestone list` · `ptrack plan show <id>` · " +
+		"`ptrack task show <id>` · `ptrack task list --status doing,blocked` · `ptrack issue list` · " +
+		"`ptrack note list` · `ptrack search <term>` · `ptrack board`\n")
 	return b.String()
+}
+
+func issueLine(is model.Issue) IssueLine {
+	return IssueLine{ID: is.ID, Title: is.Title, Severity: string(is.Severity), Status: string(is.Status), TaskID: is.TaskID}
 }
 
 func taskLine(t model.Task) TaskLine {

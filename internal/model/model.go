@@ -14,6 +14,15 @@ type TaskStatus string
 // NoteTarget names what a Note is attached to.
 type NoteTarget string
 
+// MilestoneStatus is the lifecycle state of a Milestone.
+type MilestoneStatus string
+
+// IssueStatus is the lifecycle state of an Issue.
+type IssueStatus string
+
+// Severity ranks an Issue's importance.
+type Severity string
+
 const (
 	// PlanActive marks a plan currently being worked on.
 	PlanActive PlanStatus = "active"
@@ -37,6 +46,22 @@ const (
 	TargetPlan NoteTarget = "plan"
 	// TargetTask attaches a note to a task.
 	TargetTask NoteTarget = "task"
+
+	// MilestoneOpen marks a milestone still being worked toward.
+	MilestoneOpen MilestoneStatus = "open"
+	// MilestoneDone marks a reached milestone.
+	MilestoneDone MilestoneStatus = "done"
+
+	// IssueOpen marks an unresolved issue.
+	IssueOpen IssueStatus = "open"
+	// IssueClosed marks a resolved issue.
+	IssueClosed IssueStatus = "closed"
+
+	// SeverityLow, SeverityMedium, SeverityHigh, and SeverityCritical rank issues.
+	SeverityLow      Severity = "low"
+	SeverityMedium   Severity = "medium"
+	SeverityHigh     Severity = "high"
+	SeverityCritical Severity = "critical"
 )
 
 // Meta is the singleton per-project record: the north-star goal, a rolling
@@ -56,12 +81,38 @@ type Meta struct {
 	LastWriteVersion string
 }
 
-// Plan is an ordered unit of work within a project.
-type Plan struct {
+// Milestone is a high-level checkpoint that groups plans toward a target,
+// optionally with a due date.
+type Milestone struct {
 	ID        uint64
 	Title     string
-	Status    PlanStatus
+	Status    MilestoneStatus
+	Due       time.Time // zero = no due date
 	Order     int
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// Plan is an ordered unit of work within a project, optionally belonging to a
+// milestone (MilestoneID 0 = unassigned).
+type Plan struct {
+	ID          uint64
+	Title       string
+	Status      PlanStatus
+	MilestoneID uint64
+	Order       int
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// Issue is a tracked problem or bug, optionally linked to a task.
+type Issue struct {
+	ID        uint64
+	Title     string
+	Body      string
+	Status    IssueStatus
+	Severity  Severity
+	TaskID    uint64 // 0 = not linked to a task
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -97,13 +148,17 @@ type ProjectRef struct {
 // Counts is a project-wide inventory summary used for the bounded context
 // footer: totals plus the breakdowns an agent needs to decide what to query.
 type Counts struct {
-	Plans        int
-	PlansDone    int
-	Tasks        int
-	TasksDone    int
-	TasksBlocked int
-	TasksOpen    int // not done (todo/doing/blocked)
-	Notes        int
+	Milestones     int
+	MilestonesDone int
+	Plans          int
+	PlansDone      int
+	Tasks          int
+	TasksDone      int
+	TasksBlocked   int
+	TasksOpen      int // not done (todo/doing/blocked)
+	Issues         int
+	IssuesOpen     int
+	Notes          int
 }
 
 // Open reports whether a task status counts as "open" (not done) for the
@@ -117,3 +172,6 @@ func (p Plan) Ord() int { return p.Order }
 
 // Ord exposes a Task's Order for generic sorting.
 func (t Task) Ord() int { return t.Order }
+
+// Ord exposes a Milestone's Order for generic sorting.
+func (m Milestone) Ord() int { return m.Order }

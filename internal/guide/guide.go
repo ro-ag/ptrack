@@ -37,18 +37,22 @@ This project uses ` + "`ptrack`" + ` to persist planning state so a fresh agent 
 resume after a previous session grew too large.
 
 **At session start** — reload context:
-- ` + "`ptrack context`" + ` — goal, rolling summary, active plan, open tasks, blockers, recent decisions (add ` + "`--json`" + ` to parse).
+- ` + "`ptrack context`" + ` — goal, summary, active plan, open tasks, blockers, open issues, inventory (add ` + "`--json`" + ` to parse).
 
-**While working** — keep state current:
-- Record decisions: ` + "`ptrack note add \"...\" [--task N | --plan N]`" + `
-- Advance work: ` + "`ptrack task start|done|block <id>`" + `, ` + "`ptrack plan use|done <id>`" + `
-- Add work: ` + "`ptrack plan add \"...\"`" + `, ` + "`ptrack task add \"...\" [--plan N]`" + `
+**If the project is empty** — populate it from this repo (README, docs, code, git
+log, open issues), then keep it current:
+- Goal: ` + "`ptrack goal set \"north star\"`" + `
+- Milestones (checkpoints): ` + "`ptrack milestone add \"v1.0\" [--due YYYY-MM-DD]`" + `
+- Plans (workstreams): ` + "`ptrack plan add \"...\" [--milestone N]`" + `, then ` + "`ptrack plan use N`" + `
+- Tasks with status: ` + "`ptrack task add \"...\" [--plan N]`" + ` then ` + "`task start`" + ` (in progress) / ` + "`task done`" + ` / ` + "`task block`" + ` (todo = pending)
+- Issues (bugs/problems): ` + "`ptrack issue add \"...\" [--severity high] [--task N]`" + `
+- Decisions: ` + "`ptrack note add \"...\" [--task N | --plan N]`" + `
 
 **Before ending** — save the narrative for the next agent:
 - ` + "`ptrack summary set \"where we are\"`" + `
 
 **Query on demand** (all bounded, ` + "`--json`" + ` available):
-- ` + "`ptrack next`" + ` · ` + "`ptrack board`" + ` · ` + "`ptrack plan show <id>`" + ` · ` + "`ptrack task show <id>`" + ` · ` + "`ptrack task list --status doing,blocked`" + ` · ` + "`ptrack search <term>`" + ` · ` + "`ptrack note list`" + `
+- ` + "`ptrack next`" + ` · ` + "`ptrack board`" + ` · ` + "`ptrack milestone list`" + ` · ` + "`ptrack plan show <id>`" + ` · ` + "`ptrack task show <id>`" + ` · ` + "`ptrack task list --status doing,blocked`" + ` · ` + "`ptrack issue list`" + ` · ` + "`ptrack search <term>`" + ` · ` + "`ptrack note list`" + `
 
 If no project exists yet: ` + "`ptrack init --goal \"...\"`" + `.
 `
