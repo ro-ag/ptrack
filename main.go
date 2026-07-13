@@ -2,6 +2,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -13,8 +14,16 @@ import (
 func main() {
 	// Record which ptrack version writes the database, for diagnostics.
 	store.WriterVersion = cli.VersionString()
-	// `ptrack` with no subcommand launches the human-facing dashboard.
-	cli.RunNoArgs = tui.Run
+	// `ptrack` with no subcommand launches the dashboard; outside a project it
+	// prints a friendly getting-started hint instead of a bare error.
+	cli.RunNoArgs = func() error {
+		err := tui.Run()
+		if errors.Is(err, store.ErrNoProject) {
+			fmt.Print(cli.NoProjectHint())
+			return nil
+		}
+		return err
+	}
 	if err := cli.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
