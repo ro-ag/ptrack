@@ -19,8 +19,10 @@ import (
 
 func trim(s string) string { return strings.TrimSpace(s) }
 
-// Run opens the current project's store and launches the dashboard. It returns
-// store.ErrNoProject (with guidance) when run outside a ptrack project.
+// Run launches the dashboard for the current project. It returns
+// store.ErrNoProject (with guidance) when run outside a ptrack project. The TUI
+// does not hold the database open: it reads a snapshot and closes, re-opening
+// only briefly for edits and refreshes, so agents can write concurrently.
 func Run() error {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -30,13 +32,14 @@ func Run() error {
 	if err != nil {
 		return err
 	}
+	// Open once to validate/migrate, then release the lock immediately.
 	s, err := store.Open(dbPath)
 	if err != nil {
 		return err
 	}
-	defer s.Close()
+	_ = s.Close()
 
-	m, err := newModel(s, dbPath)
+	m, err := newModel(dbPath)
 	if err != nil {
 		return err
 	}
@@ -83,7 +86,7 @@ var boardStatuses = []model.TaskStatus{
 var boardTitles = []string{"Todo", "Doing", "Blocked", "Done"}
 
 type dashboard struct {
-	store  *store.Store
+	store  conn
 	dbPath string
 
 	meta        model.Meta
@@ -116,8 +119,8 @@ type dashboard struct {
 	height int
 }
 
-func newModel(s *store.Store, dbPath string) (dashboard, error) {
-	d := dashboard{store: s, dbPath: dbPath, tasksByPlan: map[uint64][]model.Task{}}
+func newModel(dbPath string) (dashboard, error) {
+	d := dashboard{store: conn{dbPath: dbPath}, dbPath: dbPath, tasksByPlan: map[uint64][]model.Task{}}
 	if err := d.reload(); err != nil {
 		return d, err
 	}
