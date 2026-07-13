@@ -79,6 +79,12 @@ existing content), teaching any AI agent this workflow. Refresh it anytime with
 `--no-guide`. The block is idempotent — re-running only rewrites when the guide
 changes.
 
+**Your own working agreements:** put a Markdown file at
+`~/.ptrack/guide.md` (or `$PTRACK_HOME/guide.md`) and its contents are appended
+inside the block, after the built-in guide. Use it for personal conventions
+(branch-first, no AI attribution, release rules, …) so every project you `init`
+carries them — without changing what ptrack ships to others.
+
 ## TUI keys
 
 **List mode:** `tab` switch pane · `↑/↓` move · `v` board · `a` add plan/task ·

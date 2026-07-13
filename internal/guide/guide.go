@@ -19,6 +19,10 @@ const (
 // DefaultFiles are the agent-instruction files ptrack writes its guide into.
 var DefaultFiles = []string{"AGENTS.md", "CLAUDE.md"}
 
+// TemplateName is the file, under the global ptrack home, whose contents are
+// appended to the installed guide as the user's own working agreements.
+const TemplateName = "guide.md"
+
 // Body returns the guide content (without the markers) — also what `guide
 // --print` emits.
 func Body() string {
@@ -45,20 +49,34 @@ If no project exists yet: ` + "`ptrack init --goal \"...\"`" + `.
 `
 }
 
-// Block returns the full marker-delimited section to embed in a file.
-func Block() string {
-	return beginMarker + "\n" + Body() + endMarker + "\n"
+// Rendered returns the guide body plus, when extra is non-empty, the user's
+// global guidelines appended after a separator. This is the content between the
+// markers, and also what `guide --print` emits.
+func Rendered(extra string) string {
+	extra = strings.TrimSpace(extra)
+	if extra == "" {
+		return Body()
+	}
+	return Body() + "\n---\n\n" + extra + "\n"
+}
+
+// Block returns the full marker-delimited section to embed in a file, including
+// any extra global guidelines.
+func Block(extra string) string {
+	return beginMarker + "\n" + Rendered(extra) + endMarker + "\n"
 }
 
 // Install writes (or refreshes) the guide block into each named file under dir,
-// creating files that don't exist. It returns the paths it wrote. A file is only
+// creating files that don't exist. extra holds optional global guidelines to
+// append inside the block. It returns the paths it wrote; a file is only
 // rewritten when its guide block is missing or out of date, so repeated installs
 // are idempotent and no-ops report an empty slice.
-func Install(dir string, files []string) ([]string, error) {
+func Install(dir string, files []string, extra string) ([]string, error) {
+	block := Block(extra)
 	var written []string
 	for _, name := range files {
 		path := filepath.Join(dir, name)
-		changed, err := upsertFile(path)
+		changed, err := upsertFile(path, block)
 		if err != nil {
 			return written, err
 		}
@@ -71,12 +89,12 @@ func Install(dir string, files []string) ([]string, error) {
 
 // upsertFile inserts or replaces the guide block in one file, returning whether
 // the file changed.
-func upsertFile(path string) (bool, error) {
+func upsertFile(path, block string) (bool, error) {
 	existing, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return false, err
 	}
-	updated, changed := upsert(string(existing))
+	updated, changed := upsert(string(existing), block)
 	if !changed {
 		return false, nil
 	}
@@ -86,10 +104,9 @@ func upsertFile(path string) (bool, error) {
 	return true, nil
 }
 
-// upsert returns content with the guide block inserted or replaced, and whether
-// the result differs from the input.
-func upsert(content string) (string, bool) {
-	block := Block()
+// upsert returns content with the given guide block inserted or replaced, and
+// whether the result differs from the input.
+func upsert(content, block string) (string, bool) {
 	begin := strings.Index(content, beginMarker)
 	end := strings.Index(content, endMarker)
 

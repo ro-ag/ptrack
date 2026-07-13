@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-07-12
+
+### Added
+- **Global guide template.** A Markdown file at `~/.ptrack/guide.md` (or
+  `$PTRACK_HOME/guide.md`), when present, is appended inside the installed guide
+  block after the built-in section — so `ptrack init`/`guide` carry your own
+  working agreements into every project you initialize, without changing what
+  ptrack ships to other users. `guide --print` shows the combined result.
+
 ## [0.3.0] - 2026-07-12
 
 ### Added
@@ -59,6 +68,7 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
+[0.4.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.4.0
 [0.3.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.3.0
 [0.2.1]: https://github.com/ro-ag/ptrack/releases/tag/v0.2.1
 [0.2.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.2.0
