@@ -54,7 +54,8 @@ an LLM to read).
 | `ptrack plan add [--milestone N]\|list\|show\|done\|use\|rename` | Manage plans; `show` includes tasks + notes |
 | `ptrack task add\|list [--status …]\|show\|start\|done\|block\|rename` | Manage tasks; `list --status todo,doing,…` filters |
 | `ptrack issue add [--severity S] [--task N]\|list\|show\|close\|open\|severity\|rename` | Track issues/bugs |
-| `ptrack note add S [--task N\|--plan N]` / `note list [--plan\|--task\|--limit]` | Attach or list notes |
+| `ptrack note add S [--task N\|--plan N]` / `note list [--plan\|--task\|--limit]` | Attach or list notes (your audit trail) |
+| `ptrack commit add\|list\|record` · `ptrack hook install` | Track git commits; `hook install` auto-records each commit (links via `#<id>`) |
 | `ptrack context [--json]` | Bounded restore digest: goal, summary, active plan, blockers, open issues, recent notes, inventory |
 | `ptrack next [--json]` | The single most-actionable task (active plan: doing, else todo) |
 | `ptrack board [--plan N] [--json]` | Kanban view of a plan's tasks by status |
@@ -72,6 +73,11 @@ then pulls detail on demand with `next`, `milestone show`, `plan show`,
 `task show`, `task list --status`, `issue list`, `note list`, `search`, and
 `board`. It records decisions with `note add` and updates `summary set` before
 the session ends.
+
+**Audit trail & commits:** notes are the human-visible record of what the agent
+did and why — the detail view (`enter`) shows a task's/plan's notes and its
+commits. Run `ptrack hook install` once so every git commit is auto-recorded;
+put `#<id>` in a commit message to link it to that task.
 
 **Populating an existing repo:** point the agent at the repo and have it seed
 ptrack — `goal set` the north star, `milestone add` the checkpoints, `plan add

@@ -53,6 +53,16 @@ progress:", "Done:", etc. — ptrack tracks status separately. Set it with
 ` + "`task start|done|block`" + `, ` + "`plan done|use`" + `, ` + "`milestone done`" + `, ` + "`issue close`" + `. Rename with
 ` + "`ptrack <plan|task|milestone|issue> rename <id> \"new title\"`" + `.
 
+**Record decisions, not narration.** Notes are the human-visible audit trail of
+what you did and *why*. When you make a choice, hit a blocker, or find a
+constraint, capture it — one decision per note:
+` + "`ptrack note add \"chose X over Y because Z\" --task N`" + `. Do not log routine
+steps, tool output, or restate the code.
+
+**Commits are tracked.** Reference the task in commit messages as ` + "`#<id>`" + ` so the
+commit links to it (` + "`ptrack hook install`" + ` records commits automatically; each
+commit's ` + "`#<id>`" + ` links it to that task, otherwise the active plan).
+
 **Before ending** — save the narrative for the next agent:
 - ` + "`ptrack summary set \"where we are\"`" + `
 

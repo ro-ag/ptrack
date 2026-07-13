@@ -84,7 +84,25 @@ func (d *dashboard) taskDetail(t model.Task) []string {
 	)
 	notes, _ := d.store.NotesByTask(t.ID)
 	lines = append(lines, d.noteLines(notes)...)
+	lines = append(lines, "", section("Commits"))
+	commits, _ := d.store.CommitsByTask(t.ID)
+	lines = append(lines, d.commitLines(commits)...)
 	return lines
+}
+
+func (d *dashboard) commitLines(commits []model.Commit) []string {
+	if len(commits) == 0 {
+		return []string{dimStyle.Render("  (none)")}
+	}
+	out := make([]string, 0, len(commits))
+	for _, c := range commits {
+		sha := c.SHA
+		if len(sha) > 8 {
+			sha = sha[:8]
+		}
+		out = append(out, "• "+lipgloss.NewStyle().Foreground(cAmber).Render(sha)+"  "+textStyle.Render(c.Subject))
+	}
+	return out
 }
 
 func (d *dashboard) planDetail(p model.Plan) []string {
@@ -110,6 +128,9 @@ func (d *dashboard) planDetail(p model.Plan) []string {
 	lines = append(lines, "", section("Notes"))
 	notes, _ := d.store.NotesByPlan(p.ID)
 	lines = append(lines, d.noteLines(notes)...)
+	lines = append(lines, "", section("Commits"))
+	commits, _ := d.store.CommitsByPlan(p.ID)
+	lines = append(lines, d.commitLines(commits)...)
 	return lines
 }
 
