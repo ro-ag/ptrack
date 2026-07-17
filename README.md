@@ -102,14 +102,17 @@ carries them — without changing what ptrack ships to others.
 
 ## TUI
 
-Bare `ptrack` opens a tabbed dashboard: **Overview · Board · Milestones ·
-Issues**, with an inventory header and bordered panels.
+Bare `ptrack` opens a full-window tabbed dashboard: **Overview · Board ·
+Milestones · Issues**, with an inventory header, framed navigation, balanced
+panels, full-row selections, and status-aware color accents.
 
-Press `enter` on any selected item to open a **detail panel** — its full fields,
+Press `enter` on any selected item to open its full **item view** — fields,
 linked entities, and attached notes (the agent's decisions/explanations),
-scrollable; `esc` closes.
+scrollable; `enter` or `esc` returns to the dashboard. Notes, commits, related
+tasks/plans, and explanations are separated into nested panels, and long content
+wraps to the available terminal width.
 
-**Global:** `enter` details · `tab`/`shift+tab` switch tabs · `1`–`4` jump ·
+**Global:** `enter` view · `tab`/`shift+tab` switch tabs · `1`–`4` jump ·
 `g` edit goal · `m` edit summary · `r` reload · `B` backup · `q` quit.
 
 - **Overview** — `←/→` switch pane (plans/tasks) · `↑/↓` move · `a` add ·

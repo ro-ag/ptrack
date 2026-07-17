@@ -53,7 +53,11 @@ func kv(k, v string) string {
 	return dimStyle.Render(fmt.Sprintf("%-10s", k)) + textStyle.Render(v)
 }
 
-func section(name string) string { return labelStyle.Render(name) }
+// detailSectionPrefix marks semantic section boundaries in the logical detail
+// model. The renderer turns these markers into nested, width-aware panels.
+const detailSectionPrefix = "\x1e"
+
+func section(name string) string { return detailSectionPrefix + name }
 
 func (d *dashboard) noteLines(notes []model.Note) []string {
 	if len(notes) == 0 {
