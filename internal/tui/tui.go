@@ -257,6 +257,7 @@ func (d dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // updateDetail scrolls or closes the detail panel.
 func (d dashboard) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	lineCount := len(d.wrappedDetailLines(d.width))
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return d, tea.Quit
@@ -267,13 +268,13 @@ func (d dashboard) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			d.detailOffset--
 		}
 	case "down", "j":
-		if d.detailOffset < len(d.detailLines)-1 {
+		if d.detailOffset < lineCount-1 {
 			d.detailOffset++
 		}
 	case "pgup":
-		d.detailOffset = clamp(d.detailOffset-10, 0, len(d.detailLines)-1)
+		d.detailOffset = clamp(d.detailOffset-10, 0, lineCount-1)
 	case "pgdown", " ":
-		d.detailOffset = clamp(d.detailOffset+10, 0, len(d.detailLines)-1)
+		d.detailOffset = clamp(d.detailOffset+10, 0, lineCount-1)
 	case "r":
 		_ = d.reload()
 		d.openDetail()

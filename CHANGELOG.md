@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-07-16
+
+### Changed
+- Reworked the interactive dashboard into a denser, full-window layout with a
+  framed navigation bar, balanced overview panes, full-row selection surfaces,
+  and a restrained dark-cyan-to-blue-green focus treatment.
+- Detail views now group notes, commits, tasks, plans, and explanations into
+  distinct nested panels with a magenta-to-indigo accent family, making long
+  item histories easier to scan.
+
+### Fixed
+- Long detail content now wraps to the available terminal width without
+  splitting ANSI styling, and scrolling follows the wrapped visual lines so
+  note tails remain reachable instead of being clipped.
+- Dashboard panels now honor the terminal's exact outer dimensions at common
+  and narrow viewport sizes, preventing borders and footer hints from escaping
+  the visible window.
+
 ## [0.9.2] - 2026-07-12
 
 ### Fixed
@@ -167,6 +185,7 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
+[0.10.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.10.0
 [0.9.2]: https://github.com/ro-ag/ptrack/releases/tag/v0.9.2
 [0.9.1]: https://github.com/ro-ag/ptrack/releases/tag/v0.9.1
 [0.9.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.9.0

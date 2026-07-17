@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/ro-ag/ptrack/internal/model"
 )
 
@@ -20,14 +21,14 @@ func (d dashboard) View() string {
 	}
 
 	header := d.header(w)
-	tabs := d.tabBar()
+	tabs := d.tabBar(w)
 	footer := d.footer(w)
 
-	// Body height = window - header - tabs - footer - separators.
-	used := lipgloss.Height(header) + lipgloss.Height(tabs) + lipgloss.Height(footer) + 3
+	// All regions use outer dimensions, so their sum fits the terminal exactly.
+	used := lipgloss.Height(header) + lipgloss.Height(tabs) + lipgloss.Height(footer)
 	bodyH := h - used
-	if bodyH < 6 {
-		bodyH = 6
+	if bodyH < 3 {
+		bodyH = 3
 	}
 
 	var body string
@@ -44,29 +45,31 @@ func (d dashboard) View() string {
 		body = d.viewIssues(w, bodyH)
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left, header, tabs, "", body, "", footer)
+	return lipgloss.NewStyle().MaxWidth(w).MaxHeight(h).Render(
+		lipgloss.JoinVertical(lipgloss.Left, header, tabs, body, footer),
+	)
 }
 
 func (d dashboard) header(w int) string {
 	c := d.counts
 	badges := strings.Join([]string{
-		badge("milestones", c.Milestones, fmt.Sprintf("%d done", c.MilestonesDone), cPink),
+		badge("milestones", c.Milestones, fmt.Sprintf("%d done", c.MilestonesDone), cMagenta),
 		badge("plans", c.Plans, fmt.Sprintf("%d done", c.PlansDone), cBlue),
 		badge("tasks", c.Tasks, fmt.Sprintf("%d done", c.TasksDone), cGreen),
 		badge("issues", c.Issues, fmt.Sprintf("%d open", c.IssuesOpen), cRed),
 	}, "  ")
 
-	title := appTitleStyle.Render("ptrack")
+	title := lipgloss.NewStyle().Bold(true).Render(gradientText("ptrack", gradDarkCyan, gradBlueGreen))
 	goal := labelStyle.Render("Goal ") + textStyle.Render(truncate(orUnset(d.meta.Goal), w-8))
 	summary := dimStyle.Render(truncate("— "+orUnset(d.meta.Summary), w-2))
 
-	top := lipgloss.JoinHorizontal(lipgloss.Left, title, "   ", badges)
-	inner := lipgloss.JoinVertical(lipgloss.Left, top, goal, summary)
-	return lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder(), false, false, true, false).
-		BorderForeground(cBorder).
-		Width(w - 1).
-		Render(inner)
+	top := fitLine(lipgloss.JoinHorizontal(lipgloss.Left, title, "   ", badges), w)
+	return lipgloss.JoinVertical(lipgloss.Left,
+		top,
+		fitLine(goal, w),
+		fitLine(summary, w),
+		gradientText(strings.Repeat("─", w), gradDarkCyan, gradBlueGreen),
+	)
 }
 
 func badge(name string, total int, detail string, col lipgloss.Color) string {
@@ -74,7 +77,10 @@ func badge(name string, total int, detail string, col lipgloss.Color) string {
 		dimStyle.Render(fmt.Sprintf(" %s (%s)", name, detail))
 }
 
-func (d dashboard) tabBar() string {
+func (d dashboard) tabBar(w int) string {
+	if w < 4 {
+		return fitLine(tabNames[d.tab], w)
+	}
 	parts := make([]string, len(tabNames))
 	for i, name := range tabNames {
 		label := fmt.Sprintf("%d %s", i+1, name)
@@ -84,14 +90,24 @@ func (d dashboard) tabBar() string {
 			parts[i] = tabInactiveStyle.Render(label)
 		}
 	}
-	return lipgloss.JoinHorizontal(lipgloss.Left, parts...)
+	divider := lipgloss.NewStyle().Foreground(cBorder).Render("│")
+	content := fitLine(lipgloss.JoinHorizontal(lipgloss.Left,
+		parts[0], divider, parts[1], divider, parts[2], divider, parts[3],
+	), w-2)
+	top := gradientText("╭"+strings.Repeat("─", w-2)+"╮", gradDarkCyan, gradBlueGreen)
+	middle := lipgloss.NewStyle().Foreground(cCyan).Render("│") + content +
+		lipgloss.NewStyle().Foreground(cTeal).Render("│")
+	bottom := gradientText("╰"+strings.Repeat("─", w-2)+"╯", gradDarkCyan, gradBlueGreen)
+	return lipgloss.JoinVertical(lipgloss.Left, top, middle, bottom)
 }
 
 // --- overview ---
 
 func (d dashboard) viewOverview(w, h int) string {
-	leftW := w/2 - 2
-	rightW := w - leftW - 4
+	leftW := w / 2
+	rightW := w - leftW - 1
+	leftContentW := panelContentWidth(leftW)
+	rightContentW := panelContentWidth(rightW)
 
 	// Plans panel.
 	var pl strings.Builder
@@ -105,20 +121,23 @@ func (d dashboard) viewOverview(w, h int) string {
 			mark = cursorStyle.Render("▸ ")
 		}
 		title := fmt.Sprintf("#%d %s", p.ID, p.Title)
-		line := lipgloss.NewStyle().Foreground(planStatusColor(p.Status)).Render(truncate(title, leftW-14))
+		state := ""
+		if p.Status != model.PlanActive {
+			state = "  " + string(p.Status)
+		}
+		line := lipgloss.NewStyle().Foreground(planStatusColor(p.Status)).Render(truncate(title, leftContentW-6-lipgloss.Width(state)))
 		if p.ID == d.meta.ActivePlan {
 			line = activeStyle.Render("★ ") + line
 		} else {
 			line = "  " + line
 		}
-		badge := dimStyle.Render(" [" + string(p.Status) + "]")
-		row := mark + line + badge
+		row := mark + line + dimStyle.Render(state)
 		if sel {
 			star := ""
 			if p.ID == d.meta.ActivePlan {
 				star = "★ "
 			}
-			row = cursorStyle.Render("▸ ") + selRowStyle.Render(truncate(star+title+" ["+string(p.Status)+"]", leftW-4))
+			row = selectedLine("› "+truncate(star+title+state, leftContentW-2), leftContentW)
 		}
 		pl.WriteString(row + "\n")
 	}
@@ -138,10 +157,10 @@ func (d dashboard) viewOverview(w, h int) string {
 			mark = cursorStyle.Render("▸ ")
 		}
 		icon := lipgloss.NewStyle().Foreground(taskStatusColor(t.Status)).Render(taskIcon(t.Status))
-		title := truncate(fmt.Sprintf("#%d %s", t.ID, t.Title), rightW-8)
+		title := truncate(fmt.Sprintf("#%d %s", t.ID, t.Title), rightContentW-4)
 		row := mark + icon + " " + textStyle.Render(title)
 		if sel {
-			row = selRowStyle.Render(truncate(fmt.Sprintf("%s #%d %s", taskIcon(t.Status), t.ID, t.Title), rightW-2))
+			row = selectedLine(truncate(fmt.Sprintf("› %s  #%d %s", taskIcon(t.Status), t.ID, t.Title), rightContentW), rightContentW)
 		}
 		tk.WriteString(row + "\n")
 	}
@@ -149,8 +168,8 @@ func (d dashboard) viewOverview(w, h int) string {
 		tk.WriteString(dimStyle.Render("press 'a' to add a task"))
 	}
 
-	left := panelStyle(leftW, h, d.focus == focusPlans).Render(titleLine("Plans", len(d.plans)) + "\n" + pl.String())
-	right := panelStyle(rightW, h, d.focus == focusTasks).Render(titleLine("Tasks", len(tasks)) + "\n" + tk.String())
+	left := panel("Plans", len(d.plans), leftW, h, d.focus == focusPlans, pl.String())
+	right := panel("Tasks", len(tasks), rightW, h, d.focus == focusTasks, tk.String())
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 }
 
@@ -159,43 +178,47 @@ func (d dashboard) viewOverview(w, h int) string {
 func (d dashboard) viewBoard(w, h int) string {
 	p := d.currentPlan()
 	if p == nil {
-		return panelStyle(w-2, h, true).Render(dimStyle.Render("no plan selected — add one in Overview"))
+		return panel("Board", 0, w, h, true, dimStyle.Render("No plan selected — add one in Overview"))
 	}
 	cols := d.boardColumns()
-	colW := (w-8)/len(boardStatuses) - 2
-	if colW < 12 {
-		colW = 12
-	}
+	gapW := len(boardStatuses) - 1
+	available := max(0, w-gapW)
+	colW := available / len(boardStatuses)
+	remainder := available % len(boardStatuses)
 	rendered := make([]string, len(boardStatuses))
 	for i := range boardStatuses {
+		width := colW
+		if i < remainder {
+			width++
+		}
+		contentW := panelContentWidth(width)
 		accent := taskStatusColor(boardStatuses[i])
-		head := lipgloss.NewStyle().Bold(true).Foreground(accent).
-			Render(fmt.Sprintf("%s (%d)", boardTitles[i], len(cols[i])))
 		var body strings.Builder
-		body.WriteString(head + "\n\n")
 		if len(cols[i]) == 0 {
 			body.WriteString(dimStyle.Render("—"))
 		}
 		for row, t := range cols[i] {
-			card := truncate(fmt.Sprintf("#%d %s", t.ID, t.Title), colW-4)
+			card := truncate(fmt.Sprintf("#%d %s", t.ID, t.Title), contentW)
 			st := lipgloss.NewStyle().Foreground(accent)
 			if i == d.boardCol && row == d.boardRow {
-				st = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("231")).Background(accent).Padding(0, 1)
+				body.WriteString(selectedLine("› "+truncate(card, contentW-2), contentW) + "\n")
+				continue
 			}
 			body.WriteString(st.Render(card) + "\n")
 		}
-		box := lipgloss.NewStyle().MarginRight(1).Render(panelStyle(colW, h, i == d.boardCol).Render(body.String()))
-		rendered[i] = box
+		rendered[i] = panel(boardTitles[i], len(cols[i]), width, h-1, i == d.boardCol, body.String())
 	}
-	title := labelStyle.Render(fmt.Sprintf("Board — #%d %s", p.ID, p.Title))
-	return title + "\n" + lipgloss.JoinHorizontal(lipgloss.Top, rendered...)
+	title := fitLine(labelStyle.Render("Board")+dimStyle.Render(fmt.Sprintf("  /  Plan #%d  ", p.ID))+textStyle.Render(p.Title), w)
+	return title + "\n" + lipgloss.JoinHorizontal(lipgloss.Top, rendered[0], " ", rendered[1], " ", rendered[2], " ", rendered[3])
 }
 
 // --- milestones ---
 
 func (d dashboard) viewMilestones(w, h int) string {
-	leftW := w/2 - 2
-	rightW := w - leftW - 4
+	leftW := w / 2
+	rightW := w - leftW - 1
+	leftContentW := panelContentWidth(leftW)
+	rightContentW := panelContentWidth(rightW)
 
 	var ml strings.Builder
 	start, end := windowRange(len(d.milestones), d.msCursor, h-2)
@@ -206,7 +229,7 @@ func (d dashboard) viewMilestones(w, h int) string {
 		if sel {
 			mark = cursorStyle.Render("▸ ")
 		}
-		col := cText
+		col := cLavender
 		if m.Status == model.MilestoneDone {
 			col = cGreen
 		}
@@ -214,10 +237,10 @@ func (d dashboard) viewMilestones(w, h int) string {
 		if !m.Due.IsZero() {
 			due = dimStyle.Render(" ⏰ " + m.Due.Format("2006-01-02"))
 		}
-		title := lipgloss.NewStyle().Foreground(col).Render(truncate(fmt.Sprintf("#%d %s", m.ID, m.Title), leftW-16))
+		title := lipgloss.NewStyle().Foreground(col).Render(truncate(fmt.Sprintf("#%d %s", m.ID, m.Title), leftContentW-14))
 		row := mark + title + dimStyle.Render(" ["+string(m.Status)+"]") + due
 		if sel {
-			row = selRowStyle.Render(truncate(fmt.Sprintf("#%d %s [%s]", m.ID, m.Title, m.Status), leftW-2))
+			row = selectedLine(truncate(fmt.Sprintf("› #%d %s  %s", m.ID, m.Title, m.Status), leftContentW), leftContentW)
 		}
 		ml.WriteString(row + "\n")
 	}
@@ -233,7 +256,7 @@ func (d dashboard) viewMilestones(w, h int) string {
 			if p.MilestoneID != m.ID {
 				continue
 			}
-			rp.WriteString(textStyle.Render(truncate(fmt.Sprintf("#%d %s", p.ID, p.Title), rightW-6)) +
+			rp.WriteString(textStyle.Render(truncate(fmt.Sprintf("#%d %s", p.ID, p.Title), rightContentW-10)) +
 				dimStyle.Render(" ["+string(p.Status)+"]") + "\n")
 			for _, t := range d.tasksByPlan[p.ID] {
 				if t.Status == model.TaskDone {
@@ -249,14 +272,15 @@ func (d dashboard) viewMilestones(w, h int) string {
 		rp.WriteString("\n" + dimStyle.Render(fmt.Sprintf("tasks: %d done · %d open", done, open)))
 	}
 
-	left := panelStyle(leftW, h, true).Render(titleLine("Milestones", len(d.milestones)) + "\n" + ml.String())
-	right := panelStyle(rightW, h, false).Render(labelStyle.Render("Plans in milestone") + "\n" + rp.String())
+	left := panel("Milestones", len(d.milestones), leftW, h, true, ml.String())
+	right := panel("Plans in milestone", -1, rightW, h, false, rp.String())
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 }
 
 // --- issues ---
 
 func (d dashboard) viewIssues(w, h int) string {
+	contentW := panelContentWidth(w)
 	var il strings.Builder
 	start, end := windowRange(len(d.issues), d.issueCursor, h-2)
 	for i := start; i < end; i++ {
@@ -275,17 +299,17 @@ func (d dashboard) viewIssues(w, h int) string {
 		if is.TaskID != 0 {
 			link = dimStyle.Render(fmt.Sprintf(" (task %d)", is.TaskID))
 		}
-		title := textStyle.Render(truncate(fmt.Sprintf("#%d %s", is.ID, is.Title), w-30))
+		title := textStyle.Render(truncate(fmt.Sprintf("#%d %s", is.ID, is.Title), contentW-24))
 		row := mark + sev + " " + st + " " + title + link
 		if sel {
-			row = selRowStyle.Render(truncate(fmt.Sprintf("%-8s %-6s #%d %s", is.Severity, is.Status, is.ID, is.Title), w-6))
+			row = selectedLine(truncate(fmt.Sprintf("› %-8s %-6s #%d %s", is.Severity, is.Status, is.ID, is.Title), contentW), contentW)
 		}
 		il.WriteString(row + "\n")
 	}
 	if len(d.issues) == 0 {
 		il.WriteString(dimStyle.Render("press 'a' to add an issue"))
 	}
-	return panelStyle(w-2, h, true).Render(titleLine("Issues", len(d.issues)) + "\n" + il.String())
+	return panel("Issues", len(d.issues), w, h, true, il.String())
 }
 
 // viewDetail renders the scrollable detail panel for the selected entity.
@@ -294,49 +318,206 @@ func (d dashboard) viewDetail(w, h int) string {
 	if inner < 1 {
 		inner = 1
 	}
-	start, end := windowRange(len(d.detailLines), d.detailOffset, inner)
+	lines := d.wrappedDetailLines(w)
+	start, end := windowRange(len(lines), d.detailOffset, inner)
 	var b strings.Builder
 	for i := start; i < end; i++ {
-		b.WriteString(d.detailLines[i] + "\n")
+		b.WriteString(lines[i] + "\n")
 	}
-	scroll := ""
-	if len(d.detailLines) > inner {
-		scroll = dimStyle.Render(fmt.Sprintf("  (%d–%d of %d · ↑/↓ scroll)", start+1, end, len(d.detailLines)))
+	title := d.detailTitle
+	if len(lines) > inner {
+		title += fmt.Sprintf("  %d–%d/%d", start+1, end, len(lines))
 	}
-	title := labelStyle.Render(d.detailTitle) + scroll
-	return panelStyle(w-2, h, true).Render(title + "\n\n" + b.String())
+	return panel(title, -1, w, h, true, b.String())
+}
+
+// wrappedDetailLines expands logical detail rows into display rows for the
+// current panel width. ANSI-aware wrapping keeps styled notes and explanations
+// readable instead of silently clipping their tails at the right border.
+func (d dashboard) wrappedDetailLines(w int) []string {
+	if w <= 0 {
+		w = 100
+	}
+	width := panelContentWidth(w)
+	lines := make([]string, 0, len(d.detailLines)+4)
+	inSection := false
+	for i, line := range d.detailLines {
+		if name, ok := detailSectionName(line); ok {
+			if inSection {
+				lines = append(lines, detailSectionBottom(width))
+			}
+			lines = append(lines, detailSectionTop(name, width))
+			inSection = true
+			continue
+		}
+
+		// A logical spacer immediately before the next section belongs between
+		// panels, not inside the preceding panel.
+		if inSection && line == "" && i+1 < len(d.detailLines) {
+			if _, nextIsSection := detailSectionName(d.detailLines[i+1]); nextIsSection {
+				continue
+			}
+		}
+
+		lineWidth := width
+		if inSection {
+			lineWidth = max(1, width-4)
+		}
+		wrapped := strings.Split(ansi.Wrap(line, lineWidth, ""), "\n")
+		for _, displayLine := range wrapped {
+			if inSection {
+				lines = append(lines, detailSectionBody(displayLine, width))
+			} else {
+				lines = append(lines, displayLine)
+			}
+		}
+	}
+	if inSection {
+		lines = append(lines, detailSectionBottom(width))
+	}
+	return lines
+}
+
+func detailSectionName(line string) (string, bool) {
+	if !strings.HasPrefix(line, detailSectionPrefix) {
+		return "", false
+	}
+	return strings.TrimPrefix(line, detailSectionPrefix), true
+}
+
+func detailSectionTop(name string, width int) string {
+	if width < 6 {
+		return fitLine(name, width)
+	}
+	title := truncate(name, width-5)
+	tail := strings.Repeat("─", max(0, width-lipgloss.Width(title)-5)) + "╮"
+	return gradientText("╭─", gradMagenta, gradIndigo) + " " +
+		lipgloss.NewStyle().Bold(true).Render(gradientText(title, gradMagenta, gradIndigo)) + " " +
+		gradientText(tail, gradMagenta, gradIndigo)
+}
+
+func detailSectionBody(line string, width int) string {
+	if width < 4 {
+		return fitLine(line, width)
+	}
+	return lipgloss.NewStyle().Foreground(cMagenta).Render("│") + " " +
+		fitLine(line, width-4) + " " +
+		lipgloss.NewStyle().Foreground(cIndigo).Render("│")
+}
+
+func detailSectionBottom(width int) string {
+	if width < 2 {
+		return fitLine("", width)
+	}
+	return gradientText("╰"+strings.Repeat("─", width-2)+"╯", gradMagenta, gradIndigo)
 }
 
 // --- footer / helpers ---
 
 func (d dashboard) footer(w int) string {
 	if d.purpose != inputNone {
-		return d.input.View() + "\n" + dimStyle.Render("enter confirm · esc cancel")
+		return fitLine(d.input.View(), w) + "\n" + fitLine(hint("enter", "confirm")+"  "+hint("esc", "cancel"), w)
 	}
 	if d.showDetail {
-		return dimStyle.Render("↑/↓ scroll · pgup/pgdn page · esc/enter close · r refresh · q quit")
+		return fitLine(strings.Join([]string{
+			hint("enter/esc", "back"), hint("↑/↓", "scroll"), hint("pgup/pgdn", "page"),
+		}, "  "), w) + "\n" + fitLine(strings.Join([]string{hint("r", "refresh"), hint("q", "quit")}, "  "), w)
 	}
-	var keys string
+	var actions []string
 	switch d.tab {
 	case tabOverview:
-		keys = "enter details · ←/→ pane · ↑/↓ move · a add · e rename · u active · x done · s/d/b task · n note"
+		actions = []string{hint("enter", "view"), hint("←/→", "pane"), hint("↑/↓", "select"), hint("a", "add"), hint("e", "rename"), hint("u", "activate"), hint("x", "complete"), hint("s/d/b", "task status"), hint("n", "note")}
 	case tabBoard:
-		keys = "enter details · ←/→ col · ↑/↓ card · H/L move card · a add · e rename · n note"
+		actions = []string{hint("enter", "view"), hint("←/→", "column"), hint("↑/↓", "select"), hint("H/L", "move card"), hint("a", "add"), hint("e", "rename"), hint("n", "note")}
 	case tabMilestones:
-		keys = "enter details · ↑/↓ move · a add · e rename · x done · o reopen"
+		actions = []string{hint("enter", "view"), hint("↑/↓", "select"), hint("a", "add"), hint("e", "rename"), hint("x", "complete"), hint("o", "reopen")}
 	case tabIssues:
-		keys = "enter details · ↑/↓ move · a add · e rename · c close · o reopen"
+		actions = []string{hint("enter", "view"), hint("↑/↓", "select"), hint("a", "add"), hint("e", "rename"), hint("c", "close"), hint("o", "reopen")}
 	}
-	global := dimStyle.Render("tab switch · 1-4 jump · g goal · m summary · r reload · B backup · q quit")
-	help := dimStyle.Render(keys)
+	global := strings.Join([]string{hint("tab", "switch"), hint("1–4", "jump"), hint("g", "goal"), hint("m", "summary"), hint("r", "reload"), hint("B", "backup"), hint("q", "quit")}, "  ")
+	secondary := global
 	if d.status != "" {
-		return statusStyle.Render(d.status) + "\n" + help + "\n" + global
+		secondary = statusStyle.Render("● "+d.status) + dimStyle.Render("  ·  ") + global
 	}
-	return help + "\n" + global
+	return fitLine(strings.Join(actions, "  "), w) + "\n" + fitLine(secondary, w)
 }
 
-func titleLine(name string, n int) string {
-	return labelStyle.Render(name) + dimStyle.Render(fmt.Sprintf("  (%d)", n))
+func hint(key, action string) string {
+	return keyStyle.Render(key) + " " + hintStyle.Render(action)
+}
+
+// panel draws a btop-style frame whose title is embedded into the top border.
+// width and height are outer dimensions, preventing borders from overflowing
+// or pushing the first/last rows outside the terminal.
+func panel(name string, count, width, height int, focused bool, content string) string {
+	if width < 4 {
+		return fitLine(content, width)
+	}
+	if height < 2 {
+		return fitLine(content, width)
+	}
+
+	borderColor := cBorder
+	titleColor := cCyan
+	if focused {
+		borderColor = cTeal
+		titleColor = cTeal
+	}
+	borderStyle := lipgloss.NewStyle().Foreground(borderColor)
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(titleColor)
+
+	title := name
+	if count >= 0 {
+		title += fmt.Sprintf(" %d", count)
+	}
+	maxTitleWidth := max(1, width-6)
+	if lipgloss.Width(title) > maxTitleWidth {
+		title = truncate(title, maxTitleWidth)
+	}
+	titleWidth := lipgloss.Width(title)
+	topFill := max(0, width-titleWidth-5)
+	topTail := strings.Repeat("─", topFill) + "╮"
+	top := borderStyle.Render("╭─") + " " + titleStyle.Render(title) + " " + borderStyle.Render(topTail)
+	leftEdge := borderStyle.Render("│")
+	rightEdge := leftEdge
+	bottom := borderStyle.Render("╰" + strings.Repeat("─", width-2) + "╯")
+	if focused {
+		top = gradientText("╭─", gradDarkCyan, gradBlueGreen) + " " +
+			lipgloss.NewStyle().Bold(true).Render(gradientText(title, gradDarkCyan, gradBlueGreen)) + " " +
+			gradientText(topTail, gradDarkCyan, gradBlueGreen)
+		leftEdge = lipgloss.NewStyle().Foreground(cCyan).Render("│")
+		rightEdge = lipgloss.NewStyle().Foreground(cTeal).Render("│")
+		bottom = gradientText("╰"+strings.Repeat("─", width-2)+"╯", gradDarkCyan, gradBlueGreen)
+	}
+
+	innerWidth := panelContentWidth(width)
+	bodyRows := height - 2
+	trimmed := strings.TrimSuffix(content, "\n")
+	lines := []string{}
+	if trimmed != "" {
+		lines = strings.Split(trimmed, "\n")
+	}
+	if len(lines) > bodyRows {
+		lines = lines[:bodyRows]
+	}
+
+	var out strings.Builder
+	out.WriteString(top)
+	for i := 0; i < bodyRows; i++ {
+		line := ""
+		if i < len(lines) {
+			line = lines[i]
+		}
+		out.WriteByte('\n')
+		out.WriteString(leftEdge)
+		out.WriteByte(' ')
+		out.WriteString(fitLine(line, innerWidth))
+		out.WriteByte(' ')
+		out.WriteString(rightEdge)
+	}
+	out.WriteByte('\n')
+	out.WriteString(bottom)
+	return out.String()
 }
 
 func orUnset(s string) string {

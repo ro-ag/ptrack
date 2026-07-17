@@ -1,11 +1,14 @@
 package tui
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/ro-ag/ptrack/internal/model"
 	"github.com/ro-ag/ptrack/internal/store"
 )
@@ -239,6 +242,38 @@ func TestDetailShowsNotes(t *testing.T) {
 	}
 }
 
+func TestDetailWrapsLongNotes(t *testing.T) {
+	d, dbPath := newTestModel(t)
+	withStore(t, dbPath, func(s *store.Store) {
+		p, _ := s.AddPlan("plan")
+		tk, _ := s.AddTask(p.ID, "task")
+		s.AddNote(model.TargetTask, tk.ID, "This deliberately long note should wrap inside the detail frame so its tail remains visible: wrap sentinel")
+	})
+	_ = d.reload()
+	d.width, d.height = 50, 30
+	d = send(t, d, runes("l"))
+	d = send(t, d, key(tea.KeyEnter))
+
+	wrapped := d.wrappedDetailLines(d.width)
+	if len(wrapped) <= len(d.detailLines) {
+		t.Fatalf("detail did not wrap: %d display lines for %d logical lines", len(wrapped), len(d.detailLines))
+	}
+	view := ansi.Strip(d.View())
+	if !strings.Contains(view, "wrap sentinel") {
+		t.Errorf("wrapped note tail is not visible:\n%s", view)
+	}
+	for _, section := range []string{"╭─ Notes", "╭─ Commits"} {
+		if !strings.Contains(view, section) {
+			t.Errorf("detail missing section panel %q:\n%s", section, view)
+		}
+	}
+	for lineNo, line := range strings.Split(d.View(), "\n") {
+		if got := lipgloss.Width(line); got > d.width {
+			t.Errorf("detail line %d: width = %d want <= %d", lineNo+1, got, d.width)
+		}
+	}
+}
+
 func TestViewRendersWithoutPanic(t *testing.T) {
 	d, dbPath := newTestModel(t)
 	withStore(t, dbPath, func(s *store.Store) {
@@ -253,6 +288,59 @@ func TestViewRendersWithoutPanic(t *testing.T) {
 		d.tab = tb
 		if got := d.View(); got == "" {
 			t.Errorf("empty view for tab %v", tb)
+		}
+	}
+}
+
+func TestViewFitsWindow(t *testing.T) {
+	d, dbPath := newTestModel(t)
+	withStore(t, dbPath, func(s *store.Store) {
+		m, _ := s.AddMilestone("v1")
+		p, _ := s.AddPlan("a plan with a deliberately long title to exercise clipping")
+		s.SetPlanMilestone(p.ID, m.ID)
+		for i := range 12 {
+			tk, _ := s.AddTask(p.ID, fmt.Sprintf("task %02d with enough text to reach the panel edge", i))
+			if i%3 == 0 {
+				s.SetTaskStatus(tk.ID, model.TaskDoing)
+			}
+		}
+		s.AddIssue("an issue with enough text to reach the panel edge", "", model.SeverityHigh, 0)
+	})
+	_ = d.reload()
+
+	for _, size := range []struct{ width, height int }{{80, 24}, {120, 40}, {200, 60}} {
+		d.width, d.height = size.width, size.height
+		for _, tb := range []tab{tabOverview, tabBoard, tabMilestones, tabIssues} {
+			d.tab = tb
+			view := d.View()
+			if got := lipgloss.Height(view); got != size.height {
+				t.Errorf("tab %v at %dx%d: height = %d", tb, size.width, size.height, got)
+			}
+			for lineNo, line := range strings.Split(view, "\n") {
+				if got := lipgloss.Width(line); got > size.width {
+					t.Errorf("tab %v at %dx%d line %d: width = %d", tb, size.width, size.height, lineNo+1, got)
+				}
+			}
+		}
+	}
+
+	d.width, d.height, d.tab = 80, 24, tabOverview
+	lines := strings.Split(ansi.Strip(d.View()), "\n")
+	bodyStart := lipgloss.Height(d.header(d.width)) + lipgloss.Height(d.tabBar(d.width))
+	for lineNo, line := range lines[bodyStart : len(lines)-2] {
+		if !strings.HasPrefix(line, "╭") && !strings.HasPrefix(line, "│") && !strings.HasPrefix(line, "╰") {
+			t.Errorf("overview body row %d escaped its frame: %q", lineNo+1, line)
+		}
+	}
+
+	d.openDetail()
+	detail := d.View()
+	if got := lipgloss.Height(detail); got != d.height {
+		t.Errorf("detail height = %d want %d", got, d.height)
+	}
+	for lineNo, line := range strings.Split(detail, "\n") {
+		if got := lipgloss.Width(line); got > d.width {
+			t.Errorf("detail line %d: width = %d", lineNo+1, got)
 		}
 	}
 }
