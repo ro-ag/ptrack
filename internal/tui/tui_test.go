@@ -27,6 +27,7 @@ func newTestModel(t *testing.T) (dashboard, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	d.showWelcome = false
 	d.width, d.height = 120, 40
 	return d, dbPath
 }
@@ -70,8 +71,82 @@ func TestTabSwitching(t *testing.T) {
 		t.Errorf("tab should advance to issues, got %v", d.tab)
 	}
 	d = send(t, d, key(tea.KeyTab))
+	if d.tab != tabMaintenance {
+		t.Errorf("tab should advance to maintenance, got %v", d.tab)
+	}
+	d = send(t, d, key(tea.KeyTab))
 	if d.tab != tabOverview {
 		t.Errorf("tab should wrap to overview, got %v", d.tab)
+	}
+}
+
+func TestWelcomeUsesLineArtBranding(t *testing.T) {
+	d, _ := newTestModel(t)
+	d.showWelcome = true
+	welcome := ansi.Strip(d.View())
+	for _, want := range []string{"███████████", "░░███", "PERSISTENT PROJECT MEMORY", "Open dashboard", "screens", "menu"} {
+		if !strings.Contains(welcome, want) {
+			t.Errorf("welcome screen missing %q:\n%s", want, welcome)
+		}
+	}
+	if strings.Contains(welcome, " ____") {
+		t.Errorf("welcome screen still contains ASCII-art lettering:\n%s", welcome)
+	}
+	d = send(t, d, key(tea.KeyEnter))
+	if d.showWelcome || d.tab != tabOverview {
+		t.Fatalf("enter should open Overview: welcome %v tab %v", d.showWelcome, d.tab)
+	}
+	d.showWelcome = true
+	d = send(t, d, runes("5"))
+	if d.showWelcome || d.tab != tabMaintenance {
+		t.Fatalf("5 should open Maintenance: welcome %v tab %v", d.showWelcome, d.tab)
+	}
+}
+
+func TestCommandMenuNavigatesAndExposesMaintenance(t *testing.T) {
+	d, _ := newTestModel(t)
+	d = send(t, d, runes("?"))
+	if !d.showMenu {
+		t.Fatal("? should open the command menu")
+	}
+	view := ansi.Strip(d.View())
+	for _, want := range []string{"P-TRACK", "Command menu", "Board", "Create backup"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("menu missing %q:\n%s", want, view)
+		}
+	}
+
+	d = send(t, d, key(tea.KeyDown))
+	d = send(t, d, key(tea.KeyEnter))
+	if d.showMenu || d.tab != tabBoard {
+		t.Fatalf("selecting Board = showMenu %v, tab %v", d.showMenu, d.tab)
+	}
+
+	d = send(t, d, runes("?"))
+	d = send(t, d, runes("5"))
+	if d.showMenu || d.tab != tabMaintenance {
+		t.Fatalf("5 from menu = showMenu %v, tab %v; want maintenance", d.showMenu, d.tab)
+	}
+	view = ansi.Strip(d.View())
+	for _, want := range []string{"Project health", "Maintenance actions", "ptrack guide", "ptrack hook install"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("maintenance missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestMaintenanceBackup(t *testing.T) {
+	d, _ := newTestModel(t)
+	home := filepath.Join(t.TempDir(), "ptrack-home")
+	t.Setenv("PTRACK_HOME", home)
+	d = send(t, d, runes("5"))
+	d = send(t, d, runes("B"))
+	if !strings.Contains(d.status, "backed up") {
+		t.Fatalf("backup status = %q", d.status)
+	}
+	matches, err := filepath.Glob(filepath.Join(home, "backups", "*.db"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("backup files = %v, err = %v", matches, err)
 	}
 }
 
@@ -236,9 +311,18 @@ func TestDetailShowsNotes(t *testing.T) {
 	if !strings.Contains(joined, "agent decided to use X") {
 		t.Errorf("detail missing note:\n%s", joined)
 	}
+	d = send(t, d, runes("?"))
+	if !d.showMenu || !d.showDetail {
+		t.Fatalf("menu should open over detail: menu %v detail %v", d.showMenu, d.showDetail)
+	}
 	d = send(t, d, key(tea.KeyEsc))
-	if d.showDetail {
-		t.Error("esc did not close detail")
+	if d.showMenu || !d.showDetail {
+		t.Fatalf("closing menu should return to detail: menu %v detail %v", d.showMenu, d.showDetail)
+	}
+	d = send(t, d, runes("?"))
+	d = send(t, d, runes("2"))
+	if d.showMenu || d.showDetail || d.tab != tabBoard {
+		t.Fatalf("menu navigation should leave detail for Board: menu %v detail %v tab %v", d.showMenu, d.showDetail, d.tab)
 	}
 }
 
@@ -284,7 +368,7 @@ func TestViewRendersWithoutPanic(t *testing.T) {
 		s.AddIssue("bug", "", model.SeverityHigh, 0)
 	})
 	_ = d.reload()
-	for _, tb := range []tab{tabOverview, tabBoard, tabMilestones, tabIssues} {
+	for _, tb := range []tab{tabOverview, tabBoard, tabMilestones, tabIssues, tabMaintenance} {
 		d.tab = tb
 		if got := d.View(); got == "" {
 			t.Errorf("empty view for tab %v", tb)
@@ -310,7 +394,18 @@ func TestViewFitsWindow(t *testing.T) {
 
 	for _, size := range []struct{ width, height int }{{80, 24}, {120, 40}, {200, 60}} {
 		d.width, d.height = size.width, size.height
-		for _, tb := range []tab{tabOverview, tabBoard, tabMilestones, tabIssues} {
+		d.showWelcome = true
+		welcome := d.View()
+		if got := lipgloss.Height(welcome); got != size.height {
+			t.Errorf("welcome at %dx%d: height = %d", size.width, size.height, got)
+		}
+		for lineNo, line := range strings.Split(welcome, "\n") {
+			if got := lipgloss.Width(line); got > size.width {
+				t.Errorf("welcome at %dx%d line %d: width = %d", size.width, size.height, lineNo+1, got)
+			}
+		}
+		d.showWelcome = false
+		for _, tb := range []tab{tabOverview, tabBoard, tabMilestones, tabIssues, tabMaintenance} {
 			d.tab = tb
 			view := d.View()
 			if got := lipgloss.Height(view); got != size.height {
@@ -322,6 +417,17 @@ func TestViewFitsWindow(t *testing.T) {
 				}
 			}
 		}
+		d.showMenu = true
+		menu := d.View()
+		if got := lipgloss.Height(menu); got != size.height {
+			t.Errorf("menu at %dx%d: height = %d", size.width, size.height, got)
+		}
+		for lineNo, line := range strings.Split(menu, "\n") {
+			if got := lipgloss.Width(line); got > size.width {
+				t.Errorf("menu at %dx%d line %d: width = %d", size.width, size.height, lineNo+1, got)
+			}
+		}
+		d.showMenu = false
 	}
 
 	d.width, d.height, d.tab = 80, 24, tabOverview
