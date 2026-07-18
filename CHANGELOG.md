@@ -4,6 +4,33 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-07-17
+
+### Added
+- A focused launch screen for bare `ptrack`, featuring the P-TRACK Unicode
+  block wordmark, a compact narrow-terminal fallback, and direct shortcuts to
+  the dashboard, numbered screens, command menu, and quit action.
+- A keyboard-driven command menu (`?`) that makes navigation, goal and summary
+  editing, reload, and backup actions discoverable from the TUI.
+- A dedicated **Maintenance** screen with project and database diagnostics,
+  backup location, reload and backup actions, plus agent-guide and commit-hook
+  upkeep commands.
+- README screenshots captured from the real TUI for the launch screen,
+  Overview, Command Menu, Board, and Maintenance views.
+
+### Changed
+- The dashboard now returns to its compact, full-window layout after the launch
+  screen, with five numbered destinations: Overview, Board, Milestones, Issues,
+  and Maintenance.
+- The README has been reorganized around human and agent workflows, with a
+  complete keyboard map, command reference, and storage guide.
+- CLI help and the no-project hint now use the P-TRACK product identity and
+  clearer getting-started language.
+
+### Fixed
+- Backups created from the TUI now record the project root consistently with
+  backups created through the CLI.
+
 ## [0.10.0] - 2026-07-16
 
 ### Changed
@@ -185,6 +212,7 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
+[0.11.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.11.0
 [0.10.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.10.0
 [0.9.2]: https://github.com/ro-ag/ptrack/releases/tag/v0.9.2
 [0.9.1]: https://github.com/ro-ag/ptrack/releases/tag/v0.9.1
