@@ -54,10 +54,11 @@ const (
 	tabBoard
 	tabMilestones
 	tabIssues
+	tabMaintenance
 	tabCount
 )
 
-var tabNames = []string{"Overview", "Board", "Milestones", "Issues"}
+var tabNames = []string{"Overview", "Board", "Milestones", "Issues", "Maintenance"}
 
 type paneFocus int
 
@@ -113,6 +114,9 @@ type dashboard struct {
 	detailTitle  string
 	detailLines  []string
 	detailOffset int
+	showWelcome  bool
+	showMenu     bool
+	menuCursor   int
 
 	status string
 	width  int
@@ -120,7 +124,7 @@ type dashboard struct {
 }
 
 func newModel(dbPath string) (dashboard, error) {
-	d := dashboard{store: conn{dbPath: dbPath}, dbPath: dbPath, tasksByPlan: map[uint64][]model.Task{}}
+	d := dashboard{store: conn{dbPath: dbPath}, dbPath: dbPath, tasksByPlan: map[uint64][]model.Task{}, showWelcome: true}
 	if err := d.reload(); err != nil {
 		return d, err
 	}
@@ -244,13 +248,43 @@ func (d dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		d.width, d.height = msg.Width, msg.Height
 		return d, nil
 	case tea.KeyMsg:
+		if d.showWelcome {
+			return d.updateWelcome(msg)
+		}
 		if d.purpose != inputNone {
 			return d.updateInput(msg)
+		}
+		if d.showMenu {
+			return d.updateMenu(msg)
 		}
 		if d.showDetail {
 			return d.updateDetail(msg)
 		}
 		return d.updateKey(msg)
+	}
+	return d, nil
+}
+
+func (d dashboard) updateWelcome(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	d.showWelcome = false
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return d, tea.Quit
+	case "enter", " ", "1":
+		d.tab = tabOverview
+	case "2":
+		d.tab = tabBoard
+	case "3":
+		d.tab = tabMilestones
+	case "4":
+		d.tab = tabIssues
+	case "5":
+		d.tab = tabMaintenance
+	case "?", "f1":
+		d.showMenu = true
+		d.menuCursor = 0
+	default:
+		d.showWelcome = true
 	}
 	return d, nil
 }
@@ -261,6 +295,9 @@ func (d dashboard) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return d, tea.Quit
+	case "?", "f1":
+		d.showMenu = true
+		d.menuCursor = 0
 	case "esc", "enter", "backspace":
 		d.showDetail = false
 	case "up", "k":
@@ -302,6 +339,10 @@ func (d dashboard) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return d, tea.Quit
+	case "?", "f1":
+		d.showMenu = true
+		d.menuCursor = 0
+		return d, nil
 	case "tab":
 		d.tab = (d.tab + 1) % tabCount
 		return d, nil
@@ -319,6 +360,9 @@ func (d dashboard) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return d, nil
 	case "4":
 		d.tab = tabIssues
+		return d, nil
+	case "5":
+		d.tab = tabMaintenance
 		return d, nil
 	case "g":
 		return d, d.startInput(inputEditGoal, "Goal:", d.meta.Goal)
@@ -350,6 +394,8 @@ func (d dashboard) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return d.updateMilestones(msg)
 	case tabIssues:
 		return d.updateIssues(msg)
+	case tabMaintenance:
+		return d, nil
 	}
 	return d, nil
 }
@@ -659,7 +705,7 @@ func (d dashboard) backup() string {
 		return "backup error: " + err.Error()
 	}
 	if g, err := store.OpenGlobal(); err == nil {
-		_ = g.RecordBackup(d.dbPath, dst)
+		_ = g.RecordBackup(filepath.Dir(filepath.Dir(d.dbPath)), dst)
 		_ = g.Close()
 	}
 	return "backed up → " + dst

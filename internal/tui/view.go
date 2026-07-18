@@ -2,11 +2,13 @@ package tui
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/ro-ag/ptrack/internal/model"
+	"github.com/ro-ag/ptrack/internal/store"
 )
 
 // View composes the header, tab bar, active-tab body, and footer.
@@ -18,6 +20,9 @@ func (d dashboard) View() string {
 	h := d.height
 	if h <= 0 {
 		h = 30
+	}
+	if d.showWelcome {
+		return d.viewWelcome(w, h)
 	}
 
 	header := d.header(w)
@@ -33,6 +38,8 @@ func (d dashboard) View() string {
 
 	var body string
 	switch {
+	case d.showMenu:
+		body = d.viewMenu(w, bodyH)
 	case d.showDetail:
 		body = d.viewDetail(w, bodyH)
 	case d.tab == tabOverview:
@@ -43,6 +50,8 @@ func (d dashboard) View() string {
 		body = d.viewMilestones(w, bodyH)
 	case d.tab == tabIssues:
 		body = d.viewIssues(w, bodyH)
+	case d.tab == tabMaintenance:
+		body = d.viewMaintenance(w, bodyH)
 	}
 
 	return lipgloss.NewStyle().MaxWidth(w).MaxHeight(h).Render(
@@ -59,17 +68,66 @@ func (d dashboard) header(w int) string {
 		badge("issues", c.Issues, fmt.Sprintf("%d open", c.IssuesOpen), cRed),
 	}, "  ")
 
-	title := lipgloss.NewStyle().Bold(true).Render(gradientText("ptrack", gradDarkCyan, gradBlueGreen))
+	title := brandStyle.Render("P-TRACK")
+	tagline := dimStyle.Render("  PLAN TRACKER  ·  persistent project memory")
 	goal := labelStyle.Render("Goal ") + textStyle.Render(truncate(orUnset(d.meta.Goal), w-8))
 	summary := dimStyle.Render(truncate("— "+orUnset(d.meta.Summary), w-2))
 
-	top := fitLine(lipgloss.JoinHorizontal(lipgloss.Left, title, "   ", badges), w)
+	top := fitLine(lipgloss.JoinHorizontal(lipgloss.Left, title, tagline, "   ", hint("?", "MENU")), w)
 	return lipgloss.JoinVertical(lipgloss.Left,
 		top,
+		fitLine(badges, w),
 		fitLine(goal, w),
 		fitLine(summary, w),
 		gradientText(strings.Repeat("─", w), gradDarkCyan, gradBlueGreen),
 	)
+}
+
+func (d dashboard) viewWelcome(w, h int) string {
+	menuW := min(58, w-4)
+	if menuW < 20 {
+		menuW = max(4, w)
+	}
+	brandW := min(76, max(1, w-2))
+	identity := lipgloss.NewStyle().Width(brandW).Align(lipgloss.Center).Render(
+		dimStyle.Render("PERSISTENT PROJECT MEMORY  ·  HUMANS + AI AGENTS"),
+	)
+	action := selectedLine("  ENTER  Open dashboard", menuW)
+	shortcuts := lipgloss.NewStyle().Width(menuW).Align(lipgloss.Center).Render(
+		hint("1–5", "screens") + "    " + hint("?", "menu") + "    " + hint("q", "quit"),
+	)
+	content := lipgloss.JoinVertical(lipgloss.Center,
+		blockWordmark(w-2),
+		"",
+		identity,
+		"",
+		action,
+		shortcuts,
+	)
+	return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, content)
+}
+
+func blockWordmark(w int) string {
+	if w < 76 {
+		width := min(58, max(1, w))
+		rule := gradientText(strings.Repeat("━", width), gradDarkCyan, gradBlueGreen)
+		name := lipgloss.NewStyle().Width(width).Align(lipgloss.Center).Bold(true).Foreground(cText).Render("P-TRACK")
+		return lipgloss.JoinVertical(lipgloss.Center, rule, name, rule)
+	}
+	lines := []string{
+		` ███████████             ███████████                              █████     `,
+		`░░███░░░░░███           ░█░░░███░░░█                             ░░███      `,
+		` ░███    ░███           ░   ░███  ░  ████████   ██████    ██████  ░███ █████`,
+		` ░██████████  ██████████    ░███    ░░███░░███ ░░░░░███  ███░░███ ░███░░███ `,
+		` ░███░░░░░░  ░░░░░░░░░░     ░███     ░███ ░░░   ███████ ░███ ░░░  ░██████░  `,
+		` ░███                       ░███     ░███      ███░░███ ░███  ███ ░███░░███ `,
+		` █████                      █████    █████    ░░████████░░██████  ████ █████`,
+		`░░░░░                      ░░░░░    ░░░░░      ░░░░░░░░  ░░░░░░  ░░░░ ░░░░░ `,
+	}
+	for i := range lines {
+		lines[i] = gradientText(lines[i], gradDarkCyan, gradBlueGreen)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
 
 func badge(name string, total int, detail string, col lipgloss.Color) string {
@@ -91,9 +149,14 @@ func (d dashboard) tabBar(w int) string {
 		}
 	}
 	divider := lipgloss.NewStyle().Foreground(cBorder).Render("│")
-	content := fitLine(lipgloss.JoinHorizontal(lipgloss.Left,
-		parts[0], divider, parts[1], divider, parts[2], divider, parts[3],
-	), w-2)
+	contentParts := make([]string, 0, len(parts)*2-1)
+	for i, part := range parts {
+		if i > 0 {
+			contentParts = append(contentParts, divider)
+		}
+		contentParts = append(contentParts, part)
+	}
+	content := fitLine(lipgloss.JoinHorizontal(lipgloss.Left, contentParts...), w-2)
 	top := gradientText("╭"+strings.Repeat("─", w-2)+"╮", gradDarkCyan, gradBlueGreen)
 	middle := lipgloss.NewStyle().Foreground(cCyan).Render("│") + content +
 		lipgloss.NewStyle().Foreground(cTeal).Render("│")
@@ -312,6 +375,65 @@ func (d dashboard) viewIssues(w, h int) string {
 	return panel("Issues", len(d.issues), w, h, true, il.String())
 }
 
+// --- command menu / maintenance ---
+
+func (d dashboard) viewMenu(w, h int) string {
+	contentW := panelContentWidth(w)
+	var body strings.Builder
+	for i, item := range commandMenu {
+		group := groupStyle.Render(fmt.Sprintf("%-10s", item.group))
+		key := keyStyle.Render(fmt.Sprintf("%-2s", item.key))
+		line := group + "  " + key + "  " + textStyle.Render(fmt.Sprintf("%-16s", item.title)) +
+			dimStyle.Render(item.description)
+		if i == d.menuCursor {
+			plain := fmt.Sprintf("› %-10s  %-2s  %-16s%s", item.group, item.key, item.title, item.description)
+			line = selectedLine(truncate(plain, contentW), contentW)
+		}
+		body.WriteString(line + "\n")
+	}
+	return panel("Command menu  ·  choose what to do", -1, w, h, true, body.String())
+}
+
+func (d dashboard) viewMaintenance(w, h int) string {
+	leftW := w / 2
+	rightW := w - leftW - 1
+	root := filepath.Dir(filepath.Dir(d.dbPath))
+	home, err := store.GlobalHome()
+	if err != nil {
+		home = "unavailable: " + err.Error()
+	}
+
+	project := strings.Join([]string{
+		kv("Project", filepath.Base(root)),
+		kv("Root", root),
+		kv("Database", d.dbPath),
+		kv("Schema", fmt.Sprintf("v%d", d.meta.FormatVersion)),
+		kv("Writer", orUnset(d.meta.LastWriteVersion)),
+		kv("Updated", d.meta.UpdatedAt.Format("2006-01-02 15:04")),
+		"",
+		dimStyle.Render("P-TRACK opens the database only for each action,"),
+		dimStyle.Render("so agents and this dashboard can work side by side."),
+	}, "\n")
+
+	maintenance := strings.Join([]string{
+		keyStyle.Render("r") + textStyle.Render("  Reload project state"),
+		dimStyle.Render("   Pull in changes written by an agent or CLI."),
+		"",
+		keyStyle.Render("B") + textStyle.Render("  Create database backup"),
+		dimStyle.Render("   Destination: ") + textStyle.Render(filepath.Join(home, "backups")),
+		"",
+		labelStyle.Render("Agent upkeep"),
+		dimStyle.Render("ptrack guide") + textStyle.Render("         refresh agent instructions"),
+		dimStyle.Render("ptrack hook install") + textStyle.Render("  record git commits"),
+		"",
+		keyStyle.Render("?") + textStyle.Render("  Open the command menu from any screen"),
+	}, "\n")
+
+	left := panel("Project health", -1, leftW, h, true, project)
+	right := panel("Maintenance actions", -1, rightW, h, false, maintenance)
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
+}
+
 // viewDetail renders the scrollable detail panel for the selected entity.
 func (d dashboard) viewDetail(w, h int) string {
 	inner := h - 2
@@ -418,10 +540,14 @@ func (d dashboard) footer(w int) string {
 	if d.purpose != inputNone {
 		return fitLine(d.input.View(), w) + "\n" + fitLine(hint("enter", "confirm")+"  "+hint("esc", "cancel"), w)
 	}
+	if d.showMenu {
+		return fitLine(strings.Join([]string{hint("↑/↓", "select"), hint("enter", "open"), hint("1–5/g/m/r/B", "shortcut")}, "  "), w) + "\n" +
+			fitLine(strings.Join([]string{hint("esc/?", "close menu"), hint("q", "quit")}, "  "), w)
+	}
 	if d.showDetail {
 		return fitLine(strings.Join([]string{
 			hint("enter/esc", "back"), hint("↑/↓", "scroll"), hint("pgup/pgdn", "page"),
-		}, "  "), w) + "\n" + fitLine(strings.Join([]string{hint("r", "refresh"), hint("q", "quit")}, "  "), w)
+		}, "  "), w) + "\n" + fitLine(strings.Join([]string{hint("?", "menu"), hint("r", "refresh"), hint("q", "quit")}, "  "), w)
 	}
 	var actions []string
 	switch d.tab {
@@ -433,8 +559,10 @@ func (d dashboard) footer(w int) string {
 		actions = []string{hint("enter", "view"), hint("↑/↓", "select"), hint("a", "add"), hint("e", "rename"), hint("x", "complete"), hint("o", "reopen")}
 	case tabIssues:
 		actions = []string{hint("enter", "view"), hint("↑/↓", "select"), hint("a", "add"), hint("e", "rename"), hint("c", "close"), hint("o", "reopen")}
+	case tabMaintenance:
+		actions = []string{hint("r", "reload project"), hint("B", "create backup"), hint("g", "edit goal"), hint("m", "edit summary")}
 	}
-	global := strings.Join([]string{hint("tab", "switch"), hint("1–4", "jump"), hint("g", "goal"), hint("m", "summary"), hint("r", "reload"), hint("B", "backup"), hint("q", "quit")}, "  ")
+	global := strings.Join([]string{hint("?", "menu"), hint("tab", "switch"), hint("1–5", "jump"), hint("g", "goal"), hint("m", "summary"), hint("r", "reload"), hint("B", "backup"), hint("q", "quit")}, "  ")
 	secondary := global
 	if d.status != "" {
 		secondary = statusStyle.Render("● "+d.status) + dimStyle.Render("  ·  ") + global

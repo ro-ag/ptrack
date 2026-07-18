@@ -46,6 +46,8 @@ var (
 	activeStyle = lipgloss.NewStyle().Foreground(cGreen).Bold(true)
 	keyStyle    = lipgloss.NewStyle().Foreground(cLavender).Bold(true)
 	hintStyle   = lipgloss.NewStyle().Foreground(cGray)
+	brandStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#081316")).Background(cTeal).Padding(0, 1)
+	groupStyle  = lipgloss.NewStyle().Bold(true).Foreground(cMagenta)
 
 	tabActiveStyle   = lipgloss.NewStyle().Bold(true).Foreground(cText).Background(cCyan).Padding(0, 1)
 	tabInactiveStyle = lipgloss.NewStyle().Foreground(cGray).Padding(0, 1)
