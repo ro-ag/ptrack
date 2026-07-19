@@ -562,6 +562,8 @@ func (d dashboard) updateIssues(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (d *dashboard) startInput(p inputPurpose, prompt, initial string) tea.Cmd {
 	ti := textinput.New()
 	ti.Prompt = prompt + " "
+	ti.PromptStyle = labelStyle
+	ti.TextStyle = textStyle
 	ti.SetValue(initial)
 	ti.CursorEnd()
 	ti.Focus()

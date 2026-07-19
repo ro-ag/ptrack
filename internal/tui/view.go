@@ -62,25 +62,50 @@ func (d dashboard) View() string {
 func (d dashboard) header(w int) string {
 	c := d.counts
 	badges := strings.Join([]string{
-		badge("milestones", c.Milestones, fmt.Sprintf("%d done", c.MilestonesDone), cMagenta),
-		badge("plans", c.Plans, fmt.Sprintf("%d done", c.PlansDone), cBlue),
-		badge("tasks", c.Tasks, fmt.Sprintf("%d done", c.TasksDone), cGreen),
-		badge("issues", c.Issues, fmt.Sprintf("%d open", c.IssuesOpen), cRed),
-	}, "  ")
+		gauge("milestones", c.MilestonesDone, c.Milestones, cLavender),
+		gauge("plans", c.PlansDone, c.Plans, cBlue),
+		gauge("tasks", c.TasksDone, c.Tasks, cGreen),
+		issueBadge(c.IssuesOpen),
+	}, "   ")
 
+	// One identity row: brand, project, and the goal as the headline. The
+	// project summary lives in the Project health panel, not here.
 	title := brandStyle.Render("P-TRACK")
-	tagline := dimStyle.Render("  PLAN TRACKER  ·  persistent project memory")
-	goal := labelStyle.Render("Goal ") + textStyle.Render(truncate(orUnset(d.meta.Goal), w-8))
-	summary := dimStyle.Render(truncate("— "+orUnset(d.meta.Summary), w-2))
+	project := " " + lipgloss.NewStyle().Bold(true).Foreground(cText).Render(filepath.Base(filepath.Dir(filepath.Dir(d.dbPath))))
+	right := hint("?", "menu")
+	goalMax := w - lipgloss.Width(title) - lipgloss.Width(project) - lipgloss.Width(right) - 6
+	goal := labelStyle.Render("  ✦ ")
+	if strings.TrimSpace(d.meta.Goal) == "" {
+		goal += dimStyle.Render("no goal — press g")
+	} else {
+		goal += textStyle.Render(truncate(d.meta.Goal, max(1, goalMax)))
+	}
+	left := title + project + goal
+	top := left
+	if pad := w - lipgloss.Width(left) - lipgloss.Width(right); pad >= 1 {
+		top = left + strings.Repeat(" ", pad) + right
+	}
 
-	top := fitLine(lipgloss.JoinHorizontal(lipgloss.Left, title, tagline, "   ", hint("?", "MENU")), w)
 	return lipgloss.JoinVertical(lipgloss.Left,
-		top,
+		fitLine(top, w),
 		fitLine(badges, w),
-		fitLine(goal, w),
-		fitLine(summary, w),
 		gradientText(strings.Repeat("─", w), gradDarkCyan, gradBlueGreen),
 	)
+}
+
+// gauge is a header stat: dim label, compact meter, done/total count.
+func gauge(name string, done, total int, col lipgloss.Color) string {
+	count := lipgloss.NewStyle().Foreground(col).Bold(true).Render(fmt.Sprintf("%d/%d", done, total))
+	return dimStyle.Render(name+" ") + meter(done, total, 5, col) + " " + count
+}
+
+// issueBadge highlights open issues; quiet when there are none.
+func issueBadge(open int) string {
+	n := dimStyle.Render("0 open")
+	if open > 0 {
+		n = lipgloss.NewStyle().Foreground(cRed).Bold(true).Render(fmt.Sprintf("%d open", open))
+	}
+	return dimStyle.Render("issues ") + n
 }
 
 func (d dashboard) viewWelcome(w, h int) string {
@@ -92,7 +117,7 @@ func (d dashboard) viewWelcome(w, h int) string {
 	identity := lipgloss.NewStyle().Width(brandW).Align(lipgloss.Center).Render(
 		dimStyle.Render("PERSISTENT PROJECT MEMORY  ·  HUMANS + AI AGENTS"),
 	)
-	action := selectedLine("  ENTER  Open dashboard", menuW)
+	action := selectedLine(" ENTER  Open dashboard", menuW)
 	shortcuts := lipgloss.NewStyle().Width(menuW).Align(lipgloss.Center).Render(
 		hint("1–5", "screens") + "    " + hint("?", "menu") + "    " + hint("q", "quit"),
 	)
@@ -111,7 +136,7 @@ func blockWordmark(w int) string {
 	if w < 76 {
 		width := min(58, max(1, w))
 		rule := gradientText(strings.Repeat("━", width), gradDarkCyan, gradBlueGreen)
-		name := lipgloss.NewStyle().Width(width).Align(lipgloss.Center).Bold(true).Foreground(cText).Render("P-TRACK")
+		name := lipgloss.NewStyle().Width(width).Align(lipgloss.Center).Bold(true).Foreground(cAccent).Render("P-TRACK")
 		return lipgloss.JoinVertical(lipgloss.Center, rule, name, rule)
 	}
 	lines := []string{
@@ -130,38 +155,21 @@ func blockWordmark(w int) string {
 	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
 
-func badge(name string, total int, detail string, col lipgloss.Color) string {
-	return lipgloss.NewStyle().Foreground(col).Bold(true).Render(fmt.Sprintf("%d", total)) +
-		dimStyle.Render(fmt.Sprintf(" %s (%s)", name, detail))
-}
-
+// tabBar is a single-row segmented control: the active tab is an accent pill,
+// the rest stay quiet.
 func (d dashboard) tabBar(w int) string {
 	if w < 4 {
 		return fitLine(tabNames[d.tab], w)
 	}
 	parts := make([]string, len(tabNames))
 	for i, name := range tabNames {
-		label := fmt.Sprintf("%d %s", i+1, name)
 		if tab(i) == d.tab {
-			parts[i] = tabActiveStyle.Render(label)
+			parts[i] = tabActiveStyle.Render(fmt.Sprintf("%d %s", i+1, name))
 		} else {
-			parts[i] = tabInactiveStyle.Render(label)
+			parts[i] = " " + dimStyle.Render(fmt.Sprintf("%d", i+1)) + " " + hintStyle.Render(name) + " "
 		}
 	}
-	divider := lipgloss.NewStyle().Foreground(cBorder).Render("│")
-	contentParts := make([]string, 0, len(parts)*2-1)
-	for i, part := range parts {
-		if i > 0 {
-			contentParts = append(contentParts, divider)
-		}
-		contentParts = append(contentParts, part)
-	}
-	content := fitLine(lipgloss.JoinHorizontal(lipgloss.Left, contentParts...), w-2)
-	top := gradientText("╭"+strings.Repeat("─", w-2)+"╮", gradDarkCyan, gradBlueGreen)
-	middle := lipgloss.NewStyle().Foreground(cCyan).Render("│") + content +
-		lipgloss.NewStyle().Foreground(cTeal).Render("│")
-	bottom := gradientText("╰"+strings.Repeat("─", w-2)+"╯", gradDarkCyan, gradBlueGreen)
-	return lipgloss.JoinVertical(lipgloss.Left, top, middle, bottom)
+	return fitLine(strings.Join(parts, " "), w)
 }
 
 // --- overview ---
@@ -179,14 +187,22 @@ func (d dashboard) viewOverview(w, h int) string {
 	for i := start; i < end; i++ {
 		p := d.plans[i]
 		sel := i == d.planCursor && d.focus == focusPlans
-		mark := "  "
-		if sel {
-			mark = cursorStyle.Render("▸ ")
-		}
 		title := fmt.Sprintf("#%d %s", p.ID, p.Title)
 		state := ""
 		if p.Status != model.PlanActive {
 			state = "  " + string(p.Status)
+		}
+		if sel {
+			star := ""
+			if p.ID == d.meta.ActivePlan {
+				star = "★ "
+			}
+			pl.WriteString(selectedLine(truncate(star+title+state, leftContentW-2), leftContentW) + "\n")
+			continue
+		}
+		mark := "  "
+		if i == d.planCursor {
+			mark = dimStyle.Render("▏ ") // cursor parked here while the other pane has focus
 		}
 		line := lipgloss.NewStyle().Foreground(planStatusColor(p.Status)).Render(truncate(title, leftContentW-6-lipgloss.Width(state)))
 		if p.ID == d.meta.ActivePlan {
@@ -194,15 +210,7 @@ func (d dashboard) viewOverview(w, h int) string {
 		} else {
 			line = "  " + line
 		}
-		row := mark + line + dimStyle.Render(state)
-		if sel {
-			star := ""
-			if p.ID == d.meta.ActivePlan {
-				star = "★ "
-			}
-			row = selectedLine("› "+truncate(star+title+state, leftContentW-2), leftContentW)
-		}
-		pl.WriteString(row + "\n")
+		pl.WriteString(mark + line + dimStyle.Render(state) + "\n")
 	}
 	if rows == 0 {
 		pl.WriteString(dimStyle.Render("press 'a' to add a plan"))
@@ -215,24 +223,26 @@ func (d dashboard) viewOverview(w, h int) string {
 	for i := tstart; i < tend; i++ {
 		t := tasks[i]
 		sel := i == d.taskCursor && d.focus == focusTasks
-		mark := "  "
 		if sel {
-			mark = cursorStyle.Render("▸ ")
+			tk.WriteString(selectedLine(truncate(fmt.Sprintf("%s #%d %s", taskIcon(t.Status), t.ID, t.Title), rightContentW-2), rightContentW) + "\n")
+			continue
+		}
+		mark := "  "
+		if i == d.taskCursor {
+			mark = dimStyle.Render("▏ ")
 		}
 		icon := lipgloss.NewStyle().Foreground(taskStatusColor(t.Status)).Render(taskIcon(t.Status))
 		title := truncate(fmt.Sprintf("#%d %s", t.ID, t.Title), rightContentW-4)
-		row := mark + icon + " " + textStyle.Render(title)
-		if sel {
-			row = selectedLine(truncate(fmt.Sprintf("› %s  #%d %s", taskIcon(t.Status), t.ID, t.Title), rightContentW), rightContentW)
-		}
-		tk.WriteString(row + "\n")
+		tk.WriteString(mark + icon + " " + textStyle.Render(title) + "\n")
 	}
 	if d.currentPlan() != nil && len(tasks) == 0 {
 		tk.WriteString(dimStyle.Render("press 'a' to add a task"))
 	}
 
-	left := panel("Plans", len(d.plans), leftW, h, d.focus == focusPlans, pl.String())
-	right := panel("Tasks", len(tasks), rightW, h, d.focus == focusTasks, tk.String())
+	planHints := hintRow(hint("enter", "view"), hint("a", "add"), hint("e", "rename"), hint("u", "activate"), hint("x", "done"))
+	taskHints := hintRow(hint("enter", "view"), hint("a", "add"), hint("s/d/b", "status"), hint("n", "note"))
+	left := panel("Plans", len(d.plans), leftW, h, d.focus == focusPlans, planHints, pl.String())
+	right := panel("Tasks", len(tasks), rightW, h, d.focus == focusTasks, taskHints, tk.String())
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 }
 
@@ -241,7 +251,7 @@ func (d dashboard) viewOverview(w, h int) string {
 func (d dashboard) viewBoard(w, h int) string {
 	p := d.currentPlan()
 	if p == nil {
-		return panel("Board", 0, w, h, true, dimStyle.Render("No plan selected — add one in Overview"))
+		return panel("Board", 0, w, h, true, "", dimStyle.Render("No plan selected — add one in Overview"))
 	}
 	cols := d.boardColumns()
 	gapW := len(boardStatuses) - 1
@@ -261,18 +271,23 @@ func (d dashboard) viewBoard(w, h int) string {
 			body.WriteString(dimStyle.Render("—"))
 		}
 		for row, t := range cols[i] {
-			card := truncate(fmt.Sprintf("#%d %s", t.ID, t.Title), contentW)
-			st := lipgloss.NewStyle().Foreground(accent)
+			card := fmt.Sprintf("#%d %s", t.ID, t.Title)
 			if i == d.boardCol && row == d.boardRow {
-				body.WriteString(selectedLine("› "+truncate(card, contentW-2), contentW) + "\n")
+				body.WriteString(selectedLine(truncate(card, contentW-2), contentW) + "\n")
 				continue
 			}
-			body.WriteString(st.Render(card) + "\n")
+			st := lipgloss.NewStyle().Foreground(accent)
+			body.WriteString("  " + st.Render(truncate(card, contentW-2)) + "\n")
 		}
-		rendered[i] = panel(boardTitles[i], len(cols[i]), width, h-1, i == d.boardCol, body.String())
+		rendered[i] = panel(taskIcon(boardStatuses[i])+" "+boardTitles[i], len(cols[i]), width, h-1, i == d.boardCol, "", body.String())
 	}
-	title := fitLine(labelStyle.Render("Board")+dimStyle.Render(fmt.Sprintf("  /  Plan #%d  ", p.ID))+textStyle.Render(p.Title), w)
-	return title + "\n" + lipgloss.JoinHorizontal(lipgloss.Top, rendered[0], " ", rendered[1], " ", rendered[2], " ", rendered[3])
+	left := labelStyle.Render("Board") + dimStyle.Render(fmt.Sprintf("  /  Plan #%d  ", p.ID)) + textStyle.Render(p.Title)
+	hints := hintRow(hint("H/L", "move card"), hint("a", "add"), hint("e", "rename"), hint("n", "note"))
+	title := left
+	if pad := w - lipgloss.Width(left) - lipgloss.Width(hints); pad >= 2 {
+		title = left + strings.Repeat(" ", pad) + hints
+	}
+	return fitLine(title, w) + "\n" + lipgloss.JoinHorizontal(lipgloss.Top, rendered[0], " ", rendered[1], " ", rendered[2], " ", rendered[3])
 }
 
 // --- milestones ---
@@ -287,10 +302,9 @@ func (d dashboard) viewMilestones(w, h int) string {
 	start, end := windowRange(len(d.milestones), d.msCursor, h-2)
 	for i := start; i < end; i++ {
 		m := d.milestones[i]
-		sel := i == d.msCursor
-		mark := "  "
-		if sel {
-			mark = cursorStyle.Render("▸ ")
+		if i == d.msCursor {
+			ml.WriteString(selectedLine(truncate(fmt.Sprintf("#%d %s  %s", m.ID, m.Title, m.Status), leftContentW-2), leftContentW) + "\n")
+			continue
 		}
 		col := cLavender
 		if m.Status == model.MilestoneDone {
@@ -301,11 +315,7 @@ func (d dashboard) viewMilestones(w, h int) string {
 			due = dimStyle.Render(" ⏰ " + m.Due.Format("2006-01-02"))
 		}
 		title := lipgloss.NewStyle().Foreground(col).Render(truncate(fmt.Sprintf("#%d %s", m.ID, m.Title), leftContentW-14))
-		row := mark + title + dimStyle.Render(" ["+string(m.Status)+"]") + due
-		if sel {
-			row = selectedLine(truncate(fmt.Sprintf("› #%d %s  %s", m.ID, m.Title, m.Status), leftContentW), leftContentW)
-		}
-		ml.WriteString(row + "\n")
+		ml.WriteString("  " + title + dimStyle.Render(" ["+string(m.Status)+"]") + due + "\n")
 	}
 	if len(d.milestones) == 0 {
 		ml.WriteString(dimStyle.Render("press 'a' to add a milestone"))
@@ -335,8 +345,9 @@ func (d dashboard) viewMilestones(w, h int) string {
 		rp.WriteString("\n" + dimStyle.Render(fmt.Sprintf("tasks: %d done · %d open", done, open)))
 	}
 
-	left := panel("Milestones", len(d.milestones), leftW, h, true, ml.String())
-	right := panel("Plans in milestone", -1, rightW, h, false, rp.String())
+	msHints := hintRow(hint("enter", "view"), hint("a", "add"), hint("e", "rename"), hint("x", "done"), hint("o", "reopen"))
+	left := panel("Milestones", len(d.milestones), leftW, h, true, msHints, ml.String())
+	right := panel("Plans in milestone", -1, rightW, h, false, "", rp.String())
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 }
 
@@ -348,10 +359,9 @@ func (d dashboard) viewIssues(w, h int) string {
 	start, end := windowRange(len(d.issues), d.issueCursor, h-2)
 	for i := start; i < end; i++ {
 		is := d.issues[i]
-		sel := i == d.issueCursor
-		mark := "  "
-		if sel {
-			mark = cursorStyle.Render("▸ ")
+		if i == d.issueCursor {
+			il.WriteString(selectedLine(truncate(fmt.Sprintf("%-8s %-6s #%d %s", is.Severity, is.Status, is.ID, is.Title), contentW-2), contentW) + "\n")
+			continue
 		}
 		sev := lipgloss.NewStyle().Foreground(severityColor(is.Severity)).Bold(true).Render(fmt.Sprintf("%-8s", is.Severity))
 		st := dimStyle.Render(fmt.Sprintf("%-6s", is.Status))
@@ -363,16 +373,13 @@ func (d dashboard) viewIssues(w, h int) string {
 			link = dimStyle.Render(fmt.Sprintf(" (task %d)", is.TaskID))
 		}
 		title := textStyle.Render(truncate(fmt.Sprintf("#%d %s", is.ID, is.Title), contentW-24))
-		row := mark + sev + " " + st + " " + title + link
-		if sel {
-			row = selectedLine(truncate(fmt.Sprintf("› %-8s %-6s #%d %s", is.Severity, is.Status, is.ID, is.Title), contentW), contentW)
-		}
-		il.WriteString(row + "\n")
+		il.WriteString("  " + sev + " " + st + " " + title + link + "\n")
 	}
 	if len(d.issues) == 0 {
 		il.WriteString(dimStyle.Render("press 'a' to add an issue"))
 	}
-	return panel("Issues", len(d.issues), w, h, true, il.String())
+	issueHints := hintRow(hint("enter", "view"), hint("a", "add"), hint("e", "rename"), hint("c", "close"), hint("o", "reopen"))
+	return panel("Issues", len(d.issues), w, h, true, issueHints, il.String())
 }
 
 // --- command menu / maintenance ---
@@ -380,18 +387,25 @@ func (d dashboard) viewIssues(w, h int) string {
 func (d dashboard) viewMenu(w, h int) string {
 	contentW := panelContentWidth(w)
 	var body strings.Builder
+	lastGroup := ""
 	for i, item := range commandMenu {
-		group := groupStyle.Render(fmt.Sprintf("%-10s", item.group))
-		key := keyStyle.Render(fmt.Sprintf("%-2s", item.key))
-		line := group + "  " + key + "  " + textStyle.Render(fmt.Sprintf("%-16s", item.title)) +
-			dimStyle.Render(item.description)
+		if item.group != lastGroup {
+			if lastGroup != "" {
+				body.WriteString("\n")
+			}
+			body.WriteString(groupStyle.Render(strings.ToUpper(item.group)) + "\n")
+			lastGroup = item.group
+		}
+		key := keyStyle.Render(fmt.Sprintf(" %-3s", item.key))
+		line := key + textStyle.Render(fmt.Sprintf("%-16s", item.title)) + dimStyle.Render(item.description)
 		if i == d.menuCursor {
-			plain := fmt.Sprintf("› %-10s  %-2s  %-16s%s", item.group, item.key, item.title, item.description)
-			line = selectedLine(truncate(plain, contentW), contentW)
+			plain := fmt.Sprintf("%-3s %-16s%s", item.key, item.title, item.description)
+			line = selectedLine(truncate(plain, contentW-2), contentW)
 		}
 		body.WriteString(line + "\n")
 	}
-	return panel("Command menu  ·  choose what to do", -1, w, h, true, body.String())
+	menuHints := hintRow(hint("↑/↓", "select"), hint("enter", "open"), hint("esc", "close"))
+	return panel("Command menu", -1, w, h, true, menuHints, body.String())
 }
 
 func (d dashboard) viewMaintenance(w, h int) string {
@@ -405,6 +419,8 @@ func (d dashboard) viewMaintenance(w, h int) string {
 
 	project := strings.Join([]string{
 		kv("Project", filepath.Base(root)),
+		kv("Goal", orUnset(d.meta.Goal)),
+		kv("Summary", orUnset(d.meta.Summary)),
 		kv("Root", root),
 		kv("Database", d.dbPath),
 		kv("Schema", fmt.Sprintf("v%d", d.meta.FormatVersion)),
@@ -429,8 +445,9 @@ func (d dashboard) viewMaintenance(w, h int) string {
 		keyStyle.Render("?") + textStyle.Render("  Open the command menu from any screen"),
 	}, "\n")
 
-	left := panel("Project health", -1, leftW, h, true, project)
-	right := panel("Maintenance actions", -1, rightW, h, false, maintenance)
+	mHints := hintRow(hint("r", "reload"), hint("B", "backup"), hint("g", "goal"), hint("m", "summary"))
+	left := panel("Project health", -1, leftW, h, true, mHints, project)
+	right := panel("Maintenance actions", -1, rightW, h, false, "", maintenance)
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 }
 
@@ -450,7 +467,8 @@ func (d dashboard) viewDetail(w, h int) string {
 	if len(lines) > inner {
 		title += fmt.Sprintf("  %d–%d/%d", start+1, end, len(lines))
 	}
-	return panel(title, -1, w, h, true, b.String())
+	detailHints := hintRow(hint("↑/↓", "scroll"), hint("pgup/pgdn", "page"), hint("esc", "back"))
+	return panel(title, -1, w, h, true, detailHints, b.String())
 }
 
 // wrappedDetailLines expands logical detail rows into display rows for the
@@ -513,71 +531,64 @@ func detailSectionTop(name string, width int) string {
 	}
 	title := truncate(name, width-5)
 	tail := strings.Repeat("─", max(0, width-lipgloss.Width(title)-5)) + "╮"
-	return gradientText("╭─", gradMagenta, gradIndigo) + " " +
-		lipgloss.NewStyle().Bold(true).Render(gradientText(title, gradMagenta, gradIndigo)) + " " +
-		gradientText(tail, gradMagenta, gradIndigo)
+	return borderStyle.Render("╭─") + " " +
+		lipgloss.NewStyle().Bold(true).Foreground(cAccentDim).Render(title) + " " +
+		borderStyle.Render(tail)
 }
 
 func detailSectionBody(line string, width int) string {
 	if width < 4 {
 		return fitLine(line, width)
 	}
-	return lipgloss.NewStyle().Foreground(cMagenta).Render("│") + " " +
-		fitLine(line, width-4) + " " +
-		lipgloss.NewStyle().Foreground(cIndigo).Render("│")
+	edge := borderStyle.Render("│")
+	return edge + " " + fitLine(line, width-4) + " " + edge
 }
 
 func detailSectionBottom(width int) string {
 	if width < 2 {
 		return fitLine("", width)
 	}
-	return gradientText("╰"+strings.Repeat("─", width-2)+"╯", gradMagenta, gradIndigo)
+	return borderStyle.Render("╰" + strings.Repeat("─", width-2) + "╯")
 }
 
 // --- footer / helpers ---
 
+// footer is a single global-keys line; per-context actions live in the focused
+// panel's bottom border. The status toast docks to the right edge.
 func (d dashboard) footer(w int) string {
 	if d.purpose != inputNone {
 		return fitLine(d.input.View(), w) + "\n" + fitLine(hint("enter", "confirm")+"  "+hint("esc", "cancel"), w)
 	}
-	if d.showMenu {
-		return fitLine(strings.Join([]string{hint("↑/↓", "select"), hint("enter", "open"), hint("1–5/g/m/r/B", "shortcut")}, "  "), w) + "\n" +
-			fitLine(strings.Join([]string{hint("esc/?", "close menu"), hint("q", "quit")}, "  "), w)
+	keys := []string{hint("?", "menu"), hint("tab", "switch"), hint("1–5", "jump")}
+	if !d.showMenu && !d.showDetail {
+		keys = append(keys, hint("←/→ ↑/↓", "navigate"))
 	}
-	if d.showDetail {
-		return fitLine(strings.Join([]string{
-			hint("enter/esc", "back"), hint("↑/↓", "scroll"), hint("pgup/pgdn", "page"),
-		}, "  "), w) + "\n" + fitLine(strings.Join([]string{hint("?", "menu"), hint("r", "refresh"), hint("q", "quit")}, "  "), w)
+	keys = append(keys, hint("g", "goal"), hint("m", "summary"), hint("r", "reload"), hint("B", "backup"), hint("q", "quit"))
+	global := strings.Join(keys, "  ")
+	if d.status == "" {
+		return fitLine(global, w)
 	}
-	var actions []string
-	switch d.tab {
-	case tabOverview:
-		actions = []string{hint("enter", "view"), hint("←/→", "pane"), hint("↑/↓", "select"), hint("a", "add"), hint("e", "rename"), hint("u", "activate"), hint("x", "complete"), hint("s/d/b", "task status"), hint("n", "note")}
-	case tabBoard:
-		actions = []string{hint("enter", "view"), hint("←/→", "column"), hint("↑/↓", "select"), hint("H/L", "move card"), hint("a", "add"), hint("e", "rename"), hint("n", "note")}
-	case tabMilestones:
-		actions = []string{hint("enter", "view"), hint("↑/↓", "select"), hint("a", "add"), hint("e", "rename"), hint("x", "complete"), hint("o", "reopen")}
-	case tabIssues:
-		actions = []string{hint("enter", "view"), hint("↑/↓", "select"), hint("a", "add"), hint("e", "rename"), hint("c", "close"), hint("o", "reopen")}
-	case tabMaintenance:
-		actions = []string{hint("r", "reload project"), hint("B", "create backup"), hint("g", "edit goal"), hint("m", "edit summary")}
+	toast := statusStyle.Render("● " + d.status)
+	if pad := w - lipgloss.Width(global) - lipgloss.Width(toast); pad >= 2 {
+		return fitLine(global+strings.Repeat(" ", pad)+toast, w)
 	}
-	global := strings.Join([]string{hint("?", "menu"), hint("tab", "switch"), hint("1–5", "jump"), hint("g", "goal"), hint("m", "summary"), hint("r", "reload"), hint("B", "backup"), hint("q", "quit")}, "  ")
-	secondary := global
-	if d.status != "" {
-		secondary = statusStyle.Render("● "+d.status) + dimStyle.Render("  ·  ") + global
-	}
-	return fitLine(strings.Join(actions, "  "), w) + "\n" + fitLine(secondary, w)
+	return fitLine(toast+dimStyle.Render("  ·  ")+global, w)
 }
 
 func hint(key, action string) string {
 	return keyStyle.Render(key) + " " + hintStyle.Render(action)
 }
 
-// panel draws a btop-style frame whose title is embedded into the top border.
-// width and height are outer dimensions, preventing borders from overflowing
-// or pushing the first/last rows outside the terminal.
-func panel(name string, count, width, height int, focused bool, content string) string {
+// hintRow joins key/action hints with dim separators, for border embedding.
+func hintRow(parts ...string) string {
+	return strings.Join(parts, dimStyle.Render(" · "))
+}
+
+// panel draws a btop-style frame: the title sits inside ┤ ├ caps embedded in
+// the top border, and a focused panel may carry its contextual key hints
+// embedded in the bottom border. width and height are outer dimensions,
+// preventing borders from overflowing or pushing rows outside the terminal.
+func panel(name string, count, width, height int, focused bool, hints, content string) string {
 	if width < 4 {
 		return fitLine(content, width)
 	}
@@ -585,37 +596,55 @@ func panel(name string, count, width, height int, focused bool, content string) 
 		return fitLine(content, width)
 	}
 
-	borderColor := cBorder
-	titleColor := cCyan
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(cGray)
 	if focused {
-		borderColor = cTeal
-		titleColor = cTeal
+		titleStyle = lipgloss.NewStyle().Bold(true).Foreground(cAccent)
 	}
-	borderStyle := lipgloss.NewStyle().Foreground(borderColor)
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(titleColor)
 
-	title := name
+	countStr := ""
 	if count >= 0 {
-		title += fmt.Sprintf(" %d", count)
+		countStr = fmt.Sprintf(" · %d", count)
 	}
-	maxTitleWidth := max(1, width-6)
-	if lipgloss.Width(title) > maxTitleWidth {
-		title = truncate(title, maxTitleWidth)
+	useCaps := width >= 12
+	overhead := 5 // ╭─ ␣title␣ …╮
+	if useCaps {
+		overhead = 7 // ╭─┤ ␣title␣ ├…╮
 	}
-	titleWidth := lipgloss.Width(title)
-	topFill := max(0, width-titleWidth-5)
-	topTail := strings.Repeat("─", topFill) + "╮"
-	top := borderStyle.Render("╭─") + " " + titleStyle.Render(title) + " " + borderStyle.Render(topTail)
+	maxTitleWidth := max(1, width-overhead-1)
+	if nameMax := maxTitleWidth - lipgloss.Width(countStr); nameMax >= 1 {
+		name = truncate(name, nameMax)
+	} else {
+		countStr = ""
+		name = truncate(name, maxTitleWidth)
+	}
+	titleWidth := lipgloss.Width(name) + lipgloss.Width(countStr)
+	topFill := max(0, width-titleWidth-overhead)
+	title := titleStyle.Render(name) + dimStyle.Render(countStr)
+	topLead, topTail := "╭─", strings.Repeat("─", topFill)+"╮"
+	if useCaps {
+		topLead, topTail = "╭─┤", "├"+strings.Repeat("─", topFill)+"╮"
+	}
+
+	// The focused frame carries the house gradient; the title stays solid so
+	// it reads instantly. Side edges pick up the gradient's endpoint colors,
+	// letting the sweep visually continue down the borders.
+	top := borderStyle.Render(topLead) + " " + title + " " + borderStyle.Render(topTail)
 	leftEdge := borderStyle.Render("│")
 	rightEdge := leftEdge
-	bottom := borderStyle.Render("╰" + strings.Repeat("─", width-2) + "╯")
+	bottomPlain := "╰" + strings.Repeat("─", width-2) + "╯"
+	bottom := borderStyle.Render(bottomPlain)
 	if focused {
-		top = gradientText("╭─", gradDarkCyan, gradBlueGreen) + " " +
-			lipgloss.NewStyle().Bold(true).Render(gradientText(title, gradDarkCyan, gradBlueGreen)) + " " +
-			gradientText(topTail, gradDarkCyan, gradBlueGreen)
-		leftEdge = lipgloss.NewStyle().Foreground(cCyan).Render("│")
-		rightEdge = lipgloss.NewStyle().Foreground(cTeal).Render("│")
-		bottom = gradientText("╰"+strings.Repeat("─", width-2)+"╯", gradDarkCyan, gradBlueGreen)
+		top = gradientText(topLead, gradDarkCyan) + " " + title + " " + gradientText(topTail, gradDarkCyan, gradBlueGreen)
+		leftEdge = gradientText("│", gradDarkCyan)
+		rightEdge = gradientText("│", gradBlueGreen)
+		bottom = gradientText(bottomPlain, gradDarkCyan, gradBlueGreen)
+		// Contextual keys live in the bottom border, right-aligned btop-style.
+		if hw := lipgloss.Width(hints); hints != "" && width-hw-7 >= 0 {
+			fill := width - hw - 7
+			bottom = gradientText("╰"+strings.Repeat("─", fill), gradDarkCyan, gradBlueGreen) +
+				gradientText("┤", gradBlueGreen) + " " + hints + " " +
+				gradientText("├─╯", gradBlueGreen)
+		}
 	}
 
 	innerWidth := panelContentWidth(width)
