@@ -59,53 +59,119 @@ func (d dashboard) View() string {
 	)
 }
 
+// header composition: two blocks anchored to opposite margins with open
+// space between. Left rail (reading position) carries identity and the goal;
+// right rail carries the menu hint and the 2×2 stat grid, right edges flush.
+//
+//	▉P-TRACK · project▉▒░fade                                        ? menu
+//	✦ Goal line one …                        milestones ▰▰▱▱▱  1/2  plans …
+//	  goal line two …                        tasks      ▰▱▱▱▱  1/5  issues …
+//	───────────────────────────── gradient rule ────────────────────────────
 func (d dashboard) header(w int) string {
-	c := d.counts
-	badges := strings.Join([]string{
-		gauge("milestones", c.MilestonesDone, c.Milestones, cLavender),
-		gauge("plans", c.PlansDone, c.Plans, cBlue),
-		gauge("tasks", c.TasksDone, c.Tasks, cGreen),
-		issueBadge(c.IssuesOpen),
-	}, "   ")
-
-	// One identity row: brand, project, and the goal as the headline. The
-	// project summary lives in the Project health panel, not here.
-	title := brandStyle.Render("P-TRACK")
-	project := " " + lipgloss.NewStyle().Bold(true).Foreground(cText).Render(filepath.Base(filepath.Dir(filepath.Dir(d.dbPath))))
+	// Row 1 — brand band: project name rides the accent band, which fades
+	// rightward toward the terminal background.
+	name := filepath.Base(filepath.Dir(filepath.Dir(d.dbPath)))
+	bandText := lipgloss.NewStyle().Bold(true).Foreground(cInk).Background(cAccent)
+	pill := bandText.Render(" P-TRACK · " + name + " ")
 	right := hint("?", "menu")
-	goalMax := w - lipgloss.Width(title) - lipgloss.Width(project) - lipgloss.Width(right) - 6
-	goal := labelStyle.Render("  ✦ ")
-	if strings.TrimSpace(d.meta.Goal) == "" {
-		goal += dimStyle.Render("no goal — press g")
-	} else {
-		goal += textStyle.Render(truncate(d.meta.Goal, max(1, goalMax)))
+	fadeW := min(24, max(0, w-lipgloss.Width(pill)-lipgloss.Width(right)-2))
+	row1 := pill + bgFade(fadeW, gradAccent, gradNight)
+	if pad := w - lipgloss.Width(row1) - lipgloss.Width(right); pad >= 1 {
+		row1 += strings.Repeat(" ", pad) + right
 	}
-	left := title + project + goal
-	top := left
-	if pad := w - lipgloss.Width(left) - lipgloss.Width(right); pad >= 1 {
-		top = left + strings.Repeat(" ", pad) + right
+
+	stats1, stats2, statsW := d.headerStats()
+	var row2, row3 string
+	if goalW := w - statsW - 4; goalW >= 34 {
+		// Wide: goal left, stats right, both flush to their margins.
+		g1, g2 := d.goalLines(goalW)
+		join := func(left, right string) string {
+			pad := max(1, w-lipgloss.Width(left)-lipgloss.Width(right))
+			return fitLine(left+strings.Repeat(" ", pad)+right, w)
+		}
+		row2 = join(g1, stats1)
+		row3 = join(g2, stats2)
+	} else {
+		// Narrow: goal gets the full row, stats compress to one line.
+		g1, _ := d.goalLines(w)
+		row2 = fitLine(g1, w)
+		row3 = fitLine(d.compactStats(), w)
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left,
-		fitLine(top, w),
-		fitLine(badges, w),
+		fitLine(row1, w),
+		row2,
+		row3,
 		gradientText(strings.Repeat("─", w), gradDarkCyan, gradBlueGreen),
 	)
 }
 
-// gauge is a header stat: dim label, compact meter, done/total count.
-func gauge(name string, done, total int, col lipgloss.Color) string {
-	count := lipgloss.NewStyle().Foreground(col).Bold(true).Render(fmt.Sprintf("%d/%d", done, total))
-	return dimStyle.Render(name+" ") + meter(done, total, 5, col) + " " + count
+// headerStats renders the 2×2 stat grid. All four cells share label, meter,
+// and count columns — counts right-aligned — so the block reads as one shape.
+// Returns both rows and the block width.
+func (d dashboard) headerStats() (string, string, int) {
+	c := d.counts
+	count := func(col lipgloss.Color, width int, s string, quiet bool) string {
+		pad := strings.Repeat(" ", max(0, width-len([]rune(s))))
+		if quiet {
+			return pad + dimStyle.Render(s)
+		}
+		return pad + lipgloss.NewStyle().Foreground(col).Bold(true).Render(s)
+	}
+	// Meter leads each cell as a colored row marker: meter · label · count.
+	cell := func(m string, labelW int, label string, cnt string) string {
+		return m + " " + dimStyle.Render(fmt.Sprintf("%-*s", labelW, label)) + " " + cnt
+	}
+	msC := fmt.Sprintf("%d/%d", c.MilestonesDone, c.Milestones)
+	tkC := fmt.Sprintf("%d/%d", c.TasksDone, c.Tasks)
+	plC := fmt.Sprintf("%d/%d", c.PlansDone, c.Plans)
+	isC := fmt.Sprintf("%d", c.IssuesOpen)
+	cw1 := max(len(msC), len(tkC))
+	cw2 := max(len(plC), len(isC))
+
+	row1 := cell(meter(c.MilestonesDone, c.Milestones, 5, cLavender), 10, "milestones", count(cLavender, cw1, msC, false)) + "   " +
+		cell(meter(c.PlansDone, c.Plans, 5, cBlue), 6, "plans", count(cBlue, cw2, plC, false))
+	row2 := cell(meter(c.TasksDone, c.Tasks, 5, cGreen), 10, "tasks", count(cGreen, cw1, tkC, false)) + "   " +
+		cell(meter(c.IssuesOpen, c.Issues, 5, cRed), 6, "issues", count(cRed, cw2, isC, c.IssuesOpen == 0))
+	return row1, row2, lipgloss.Width(row1)
 }
 
-// issueBadge highlights open issues; quiet when there are none.
-func issueBadge(open int) string {
-	n := dimStyle.Render("0 open")
-	if open > 0 {
-		n = lipgloss.NewStyle().Foreground(cRed).Bold(true).Render(fmt.Sprintf("%d open", open))
+// compactStats is the narrow-terminal fallback: counts only, one line.
+func (d dashboard) compactStats() string {
+	c := d.counts
+	n := func(col lipgloss.Color, s string) string {
+		return lipgloss.NewStyle().Foreground(col).Bold(true).Render(s)
 	}
-	return dimStyle.Render("issues ") + n
+	issues := dimStyle.Render("0 open")
+	if c.IssuesOpen > 0 {
+		issues = n(cRed, fmt.Sprintf("%d open", c.IssuesOpen))
+	}
+	return hintRow(
+		dimStyle.Render("milestones ")+n(cLavender, fmt.Sprintf("%d/%d", c.MilestonesDone, c.Milestones)),
+		dimStyle.Render("plans ")+n(cBlue, fmt.Sprintf("%d/%d", c.PlansDone, c.Plans)),
+		dimStyle.Render("tasks ")+n(cGreen, fmt.Sprintf("%d/%d", c.TasksDone, c.Tasks)),
+		dimStyle.Render("issues ")+issues,
+	)
+}
+
+// goalLines wraps the goal into up to two left-rail lines; the second line
+// continues in a quieter gray and ends with an ellipsis when cut.
+func (d dashboard) goalLines(width int) (string, string) {
+	if width < 8 {
+		return "", ""
+	}
+	textW := width - 2
+	if strings.TrimSpace(d.meta.Goal) == "" {
+		return labelStyle.Render("✦ ") + dimStyle.Render("no goal — press g"), ""
+	}
+	lines := strings.Split(ansi.Wrap(d.meta.Goal, textW, ""), "\n")
+	first := labelStyle.Render("✦ ") + textStyle.Render(lines[0])
+	second := ""
+	if len(lines) > 1 {
+		rest := strings.Join(lines[1:], " ")
+		second = "  " + lipgloss.NewStyle().Foreground(cGray).Render(truncate(rest, textW))
+	}
+	return first, second
 }
 
 func (d dashboard) viewWelcome(w, h int) string {

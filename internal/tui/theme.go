@@ -38,6 +38,8 @@ type rgb struct{ r, g, b uint8 }
 var (
 	gradDarkCyan  = rgb{0x17, 0x8F, 0x95}
 	gradBlueGreen = rgb{0x3C, 0xD1, 0xA5}
+	gradAccent    = rgb{0x3D, 0xD6, 0xA3} // cAccent, for band fades
+	gradNight     = rgb{0x0C, 0x10, 0x16} // near-terminal-black fade target
 )
 
 var (
@@ -107,6 +109,22 @@ func gradientText(s string, stops ...rgb) string {
 		lerp := func(a, b uint8) uint8 { return uint8(float64(a) + (float64(b)-float64(a))*mix) }
 		c := rgb{lerp(from.r, to.r), lerp(from.g, to.g), lerp(from.b, to.b)}
 		out.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(fmt.Sprintf("#%02X%02X%02X", c.r, c.g, c.b))).Render(string(r)))
+	}
+	return out.String()
+}
+
+// bgFade renders a run of blank cells whose background sweeps from one color
+// to another, letting an accent band melt into the terminal background.
+func bgFade(width int, from, to rgb) string {
+	if width < 1 {
+		return ""
+	}
+	var out strings.Builder
+	for i := 0; i < width; i++ {
+		t := float64(i) / float64(max(1, width-1))
+		lerp := func(a, b uint8) uint8 { return uint8(float64(a) + (float64(b)-float64(a))*t) }
+		c := rgb{lerp(from.r, to.r), lerp(from.g, to.g), lerp(from.b, to.b)}
+		out.WriteString(lipgloss.NewStyle().Background(lipgloss.Color(fmt.Sprintf("#%02X%02X%02X", c.r, c.g, c.b))).Render(" "))
 	}
 	return out.String()
 }
