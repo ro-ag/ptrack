@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- Application builds now require Wails desktop build tags, preventing plain
+  `go build` or `go install` from producing a binary with a broken `--gui`
+  option. The default `make build` target always creates the complete hybrid
+  CLI, TUI, and GUI executable.
+- Installation guidance now directs users to native release archives, which
+  always include GUI support.
+
 ## [0.13.1] - 2026-07-25
 
 ### Fixed
