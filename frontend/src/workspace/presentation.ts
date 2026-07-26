@@ -46,14 +46,18 @@ export function confirmationCopy(
   action: "close" | "switch",
   terminals: number,
   agentRuns: number,
+  pendingAdmissions = 0,
 ): { heading: string; submit: string; detail: string } {
   const terminalText = `${terminals} active terminal${terminals === 1 ? "" : "s"}`;
   const agentText = `${agentRuns} registered agent run${agentRuns === 1 ? "" : "s"}`;
+  const pendingText = pendingAdmissions
+    ? ` ${pendingAdmissions} resource operation${pendingAdmissions === 1 ? "" : "s"} still finishing.`
+    : "";
   return {
     heading: action === "close" ? "Close this project?" : "Switch projects?",
     submit: action === "close" ? "Close project" : "Switch project",
     detail:
-      `${terminalText} and ${agentText} will be stopped. ` +
+      `${terminalText} and ${agentText} will be stopped.${pendingText} ` +
       "Their project resources will be cleaned up before the transition completes.",
   };
 }

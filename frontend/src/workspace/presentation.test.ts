@@ -26,6 +26,15 @@ describe("workspace presentation policy", () => {
     });
   });
 
+  it("describes pending resource operations separately from terminals", () => {
+    expect(confirmationCopy("switch", 0, 0, 1).detail).toContain(
+      "1 resource operation still finishing",
+    );
+    expect(confirmationCopy("switch", 0, 0, 1).detail).toContain(
+      "0 active terminals",
+    );
+  });
+
   it("cycles focus in both directions", () => {
     expect(focusCycleIndex(3, 2, false)).toBe(0);
     expect(focusCycleIndex(3, 0, true)).toBe(2);

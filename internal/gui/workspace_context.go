@@ -175,10 +175,10 @@ func (w *WorkspaceContext) activeResourceSummary() ActiveResourceSummary {
 			active++
 		}
 	}
-	active += w.resourceOperations
 	summary := ActiveResourceSummary{
-		Terminals:        active,
-		ResourceRevision: w.resourceRevision,
+		Terminals:         active,
+		PendingAdmissions: w.resourceOperations,
+		ResourceRevision:  w.resourceRevision,
 	}
 	if agents, ok := w.agents.(interface{ ActiveCount() int }); ok {
 		summary.AgentRuns = agents.ActiveCount()

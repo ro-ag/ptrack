@@ -40,9 +40,10 @@ type WorkspaceState struct {
 }
 
 type ActiveResourceSummary struct {
-	Terminals        int    `json:"terminals"`
-	AgentRuns        int    `json:"agentRuns"`
-	ResourceRevision uint64 `json:"resourceRevision"`
+	Terminals         int    `json:"terminals"`
+	AgentRuns         int    `json:"agentRuns"`
+	PendingAdmissions int    `json:"pendingAdmissions"`
+	ResourceRevision  uint64 `json:"resourceRevision"`
 }
 
 type WorkspaceChangeResult struct {
@@ -137,7 +138,9 @@ func (a *App) OpenProject(path, confirmationToken string) (WorkspaceChangeResult
 		if current, err := a.currentWorkspace(0); err == nil {
 			releaseFence = current.fenceResourceAdmission()
 			summary := current.activeResourceSummary()
-			if summary.Terminals > 0 || summary.AgentRuns > 0 {
+			if summary.Terminals > 0 ||
+				summary.AgentRuns > 0 ||
+				summary.PendingAdmissions > 0 {
 				token, tokenErr := randomWorkspaceToken()
 				if tokenErr != nil {
 					releaseFence()
@@ -238,7 +241,9 @@ func (a *App) CloseProject(confirmationToken string) (WorkspaceChangeResult, err
 		a.clearConfirmationLocked()
 		releaseFence = current.fenceResourceAdmission()
 		summary := current.activeResourceSummary()
-		if summary.Terminals > 0 || summary.AgentRuns > 0 {
+		if summary.Terminals > 0 ||
+			summary.AgentRuns > 0 ||
+			summary.PendingAdmissions > 0 {
 			token, tokenErr := randomWorkspaceToken()
 			if tokenErr != nil {
 				releaseFence()

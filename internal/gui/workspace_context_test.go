@@ -176,6 +176,23 @@ func TestWorkspaceContextGenerationAndResourceFence(t *testing.T) {
 	release()
 }
 
+func TestActiveResourceSummarySeparatesSessionsFromPendingAdmissions(t *testing.T) {
+	workspace := newWorkspaceContext(workspaceContextConfig{
+		generation: 1,
+		root:       t.TempDir(),
+		dbPath:     "test.db",
+	})
+	release, err := workspace.beginOperation(1, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	summary := workspace.activeResourceSummary()
+	if summary.Terminals != 0 || summary.PendingAdmissions != 1 {
+		t.Fatalf("active resource summary = %#v", summary)
+	}
+}
+
 type countingWorkspaceTerminalManager struct {
 	mu              sync.Mutex
 	shutdownCalls   int

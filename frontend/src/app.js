@@ -766,7 +766,12 @@ function closeMemoryHistory() {
 
 function showWorkspaceConfirmation(action, resources) {
   confirmReturnFocus = document.activeElement;
-  const copy = confirmationCopy(action, resources.terminals, resources.agentRuns);
+  const copy = confirmationCopy(
+    action,
+    resources.terminals,
+    resources.agentRuns,
+    resources.pendingAdmissions || 0,
+  );
   elements.confirmHeading.textContent = copy.heading;
   elements.confirmDetail.textContent = copy.detail;
   elements.confirmSubmit.textContent = copy.submit;
