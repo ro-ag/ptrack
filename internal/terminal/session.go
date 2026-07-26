@@ -47,16 +47,21 @@ type Session struct {
 	request      StartRequest
 	dependencies sessionDependencies
 
-	mu        sync.Mutex
-	id        string
-	token     string
-	profile   string
-	cwd       string
-	state     SessionState
-	streamErr error
-	process   PTYProcess
-	rows      int
-	columns   int
+	mu             sync.Mutex
+	id             string
+	token          string
+	profile        string
+	profileKind    ProfileKind
+	provider       string
+	cwd            string
+	state          SessionState
+	streamErr      error
+	process        PTYProcess
+	pid            int
+	startedAt      time.Time
+	lastActivityAt time.Time
+	rows           int
+	columns        int
 
 	startupOutput []byte
 	attached      bool
@@ -138,6 +143,11 @@ func (s *Session) start() error {
 
 	s.mu.Lock()
 	s.process = process
+	if identified, ok := process.(interface{ PID() int }); ok {
+		s.pid = identified.PID()
+	}
+	s.startedAt = time.Now()
+	s.lastActivityAt = s.startedAt
 	s.state = SessionRunning
 	s.mu.Unlock()
 
@@ -180,13 +190,25 @@ func (s *Session) CWD() string {
 	return s.cwd
 }
 
-func (s *Session) setMetadata(id, token, profileID, cwd string) {
+func (s *Session) setMetadata(
+	id, token, profileID string,
+	profileKind ProfileKind,
+	provider, cwd string,
+) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.id = id
 	s.token = token
 	s.profile = profileID
+	s.profileKind = profileKind
+	s.provider = provider
 	s.cwd = cwd
+}
+
+func (s *Session) PID() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pid
 }
 
 func (s *Session) State() SessionState {
@@ -242,6 +264,7 @@ func (s *Session) WriteInput(input []byte) error {
 		return fmt.Errorf("write terminal input in state %q", state)
 	}
 	process := s.process
+	s.lastActivityAt = time.Now()
 	s.mu.Unlock()
 	for len(input) > 0 {
 		written, err := process.Write(input)
@@ -385,6 +408,7 @@ func (s *Session) deliverOutput(output []byte) {
 	chunk := append([]byte(nil), output...)
 
 	s.mu.Lock()
+	s.lastActivityAt = time.Now()
 	if !s.attached {
 		remaining := s.dependencies.startupBufferBytes - len(s.startupOutput)
 		if remaining > 0 {

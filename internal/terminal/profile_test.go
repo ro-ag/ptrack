@@ -234,6 +234,9 @@ func TestDiscoverProfilesDeterministicallyFindsLoginShellAndInstalledAgents(t *t
 		if profile.Kind != wantKind {
 			t.Fatalf("profile %q kind = %q, want %q", profile.ID, profile.Kind, wantKind)
 		}
+		if profile.Kind == ProfileAgent && strings.TrimSpace(profile.Provider) == "" {
+			t.Fatalf("agent profile has no provider metadata: %#v", profile)
+		}
 		if strings.TrimSpace(profile.ID) == "" || strings.TrimSpace(profile.Name) == "" {
 			t.Fatalf("discovered profile has empty identity: %#v", profile)
 		}

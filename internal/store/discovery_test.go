@@ -68,6 +68,24 @@ func TestFindStopsAtGitBoundary(t *testing.T) {
 	}
 }
 
+func TestFindStopsAtGitWorktreeFileBoundary(t *testing.T) {
+	outer := t.TempDir()
+	db, _ := InitProject(outer)
+	if err := os.WriteFile(db, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	worktree := filepath.Join(outer, "worktree")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktree, ".git"), []byte("gitdir: elsewhere\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := FindProjectDB(worktree); err != ErrNoProject {
+		t.Errorf("want ErrNoProject at worktree boundary, got %v", err)
+	}
+}
+
 func TestInitTwiceFails(t *testing.T) {
 	dir := t.TempDir()
 	db, _ := InitProject(dir)

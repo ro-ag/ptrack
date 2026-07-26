@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark" />
-    <title>P-TRACK Board</title>
+    <title>P-TRACK Project Workspace</title>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
@@ -14,21 +14,55 @@
           <span class="brand-mark" aria-hidden="true"></span>
           <div>
             <p class="eyebrow">P-TRACK</p>
-            <h1 id="project-name">Project board</h1>
+            <h1 id="project-name" tabindex="-1">Project workspace</h1>
           </div>
         </div>
         <div class="toolbar">
-          <label class="plan-picker">
+          <label id="plan-picker" class="plan-picker" hidden>
             <span>Plan</span>
             <select id="plan-select" aria-label="Select plan"></select>
           </label>
-          <button id="refresh-button" class="button-secondary" type="button">
+          <button id="refresh-button" class="button-secondary" type="button" hidden>
             Refresh
           </button>
+          <button id="open-project-button" type="button">Open Project…</button>
+          <button
+            id="switch-project-button"
+            class="button-secondary"
+            type="button"
+            hidden
+          >Switch Project…</button>
+          <button
+            id="close-project-button"
+            class="button-secondary"
+            type="button"
+            hidden
+          >Close Project</button>
         </div>
       </header>
 
-      <main class="workspace">
+      <section
+        id="workspace-state-screen"
+        class="workspace-state-screen"
+        aria-live="polite"
+      >
+        <div class="state-card">
+          <p id="workspace-state-eyebrow" class="eyebrow">P-TRACK projects</p>
+          <h2 id="workspace-state-heading" tabindex="-1">Choose a project</h2>
+          <p id="workspace-state-detail" class="state-detail">
+            Open a directory containing a P-TRACK project to begin.
+          </p>
+          <button id="state-open-project-button" type="button">Open Project…</button>
+          <div class="recent-projects-section">
+            <div class="section-heading">
+              <p class="section-label">Recent projects</p>
+            </div>
+            <div id="recent-project-list" class="recent-project-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <main id="workspace" class="workspace" hidden>
         <aside class="memory-rail" aria-label="Project memory">
           <div class="rail-heading">
             <h2>Project memory</h2>
@@ -47,6 +81,7 @@
           <section class="memory-section">
             <p class="section-label">Project status</p>
             <div id="project-stats" class="stats-grid"></div>
+            <div id="snapshot-bounds" class="intelligence-summary"></div>
           </section>
 
           <section class="memory-section">
@@ -73,6 +108,42 @@
               Show more…
             </button>
           </section>
+
+          <section class="memory-section intelligence-section">
+            <div class="section-heading">
+              <p class="section-label">Repository</p>
+              <span id="git-state" class="section-count">Loading</span>
+            </div>
+            <p id="project-root" class="intelligence-path"></p>
+            <p id="storage-status" class="intelligence-meta"></p>
+            <div id="git-summary" class="intelligence-summary"></div>
+          </section>
+
+          <details class="memory-section intelligence-section">
+            <summary>Remotes and branches</summary>
+            <div id="git-remotes" class="intelligence-list"></div>
+            <div id="git-branches" class="intelligence-list"></div>
+          </details>
+
+          <details class="memory-section intelligence-section">
+            <summary>Recent Git commits</summary>
+            <div id="git-commits" class="intelligence-list"></div>
+          </details>
+
+          <section class="memory-section intelligence-section">
+            <div class="section-heading">
+              <p class="section-label">Active sessions</p>
+              <span id="runtime-total" class="section-count">0</span>
+            </div>
+            <div id="terminal-sessions" class="intelligence-list"></div>
+            <div id="agent-runs" class="intelligence-list"></div>
+          </section>
+
+          <details class="memory-section intelligence-section">
+            <summary>Project blockers and notes</summary>
+            <div id="overview-blockers" class="intelligence-list"></div>
+            <div id="overview-notes" class="intelligence-list"></div>
+          </details>
         </aside>
 
         <div class="work-area">
@@ -234,6 +305,29 @@
           </button>
         </div>
         <div id="memory-dialog-list" class="memory-dialog-list"></div>
+      </section>
+    </div>
+
+    <div id="workspace-confirm-modal" class="modal" hidden>
+      <div class="modal-backdrop"></div>
+      <section
+        class="dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="workspace-confirm-heading"
+        aria-describedby="workspace-confirm-detail"
+      >
+        <p class="eyebrow">Active project resources</p>
+        <h2 id="workspace-confirm-heading">Leave this project?</h2>
+        <p id="workspace-confirm-detail" class="dialog-help"></p>
+        <div class="dialog-actions">
+          <button
+            id="workspace-confirm-cancel"
+            class="button-secondary"
+            type="button"
+          >Stay here</button>
+          <button id="workspace-confirm-submit" type="button">Continue</button>
+        </div>
       </section>
     </div>
 

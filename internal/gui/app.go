@@ -21,9 +21,8 @@ var statuses = []model.TaskStatus{
 	model.TaskDone,
 }
 
-// App is the Go backend exposed to the Wails frontend. It keeps only the
-// database path; each operation opens and closes the store so other ptrack
-// processes can continue to write while the board is open.
+// App is the durable Go backend exposed to the Wails frontend. Published
+// project resources live in generation-scoped WorkspaceContexts.
 type App struct {
 	dbPath       string
 	initialPlan  uint64
@@ -32,18 +31,31 @@ type App struct {
 	terminals    terminalManager
 	emitTerminal terminalEventEmitter
 
-	lifecycleMu        sync.Mutex
-	wailsContext       context.Context
-	monitorCtx         context.Context
-	monitorCancel      context.CancelFunc
-	monitorWG          sync.WaitGroup
-	terminalOps        sync.WaitGroup
-	startupReady       chan struct{}
-	startupOnce        sync.Once
-	shuttingDown       bool
-	shutdownStarted    chan struct{}
-	shutdownSignalOnce sync.Once
-	shutdownOnce       sync.Once
+	lifecycleMu         sync.Mutex
+	wailsContext        context.Context
+	monitorCtx          context.Context
+	monitorCancel       context.CancelFunc
+	monitorWG           lifecycleGroup
+	terminalOps         lifecycleGroup
+	startupReady        chan struct{}
+	startupOnce         sync.Once
+	shuttingDown        bool
+	shutdownStarted     chan struct{}
+	shutdownSignalOnce  sync.Once
+	shutdownOnce        sync.Once
+	shutdownWaitTimeout time.Duration
+
+	workspaceMu       sync.RWMutex
+	workspace         *WorkspaceContext
+	workspaceStatus   WorkspaceStatus
+	workspaceError    string
+	lastGeneration    uint64
+	transitionMu      sync.Mutex
+	buildWorkspace    workspaceBuilder
+	confirmation      *workspaceConfirmation
+	confirmationTTL   time.Duration
+	confirmationTimer *time.Timer
+	gitSnapshots      gitSnapshotter
 }
 
 // Board is the complete snapshot rendered by the frontend.
@@ -58,6 +70,20 @@ type Board struct {
 	Stats       ProjectStats  `json:"stats"`
 	Activity    []Activity    `json:"activity"`
 	OpenIssues  []Issue       `json:"openIssues"`
+}
+
+type BoardV2 struct {
+	Generation uint64 `json:"generation"`
+	Board      Board  `json:"board"`
+}
+
+type TaskV2 struct {
+	Generation uint64 `json:"generation"`
+	Task       Task   `json:"task"`
+}
+
+type WorkspaceMutationResult struct {
+	Generation uint64 `json:"generation"`
 }
 
 // PlanSummary is a selectable plan in the board header.
@@ -119,17 +145,50 @@ func newApp(dbPath string, initialPlan uint64) *App {
 	return app
 }
 
-func (a *App) open() (*store.Store, error) {
-	return store.Open(a.dbPath)
+func (a *App) openWorkspace(
+	expectedGeneration uint64,
+) (*store.Store, *WorkspaceContext, func(), error) {
+	workspace, err := a.currentWorkspace(expectedGeneration)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	release, err := workspace.beginOperation(expectedGeneration, false)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	s, err := store.Open(workspace.dbPath)
+	if err != nil {
+		release()
+		return nil, nil, nil, err
+	}
+	return s, workspace, release, nil
 }
 
 // GetBoard returns a fresh board snapshot. A zero plan ID selects the command's
 // --plan value, then falls back to the project's active plan.
 func (a *App) GetBoard(planID uint64) (Board, error) {
-	s, err := a.open()
+	return a.getBoard(0, planID)
+}
+
+func (a *App) GetBoardV2(generation, planID uint64) (BoardV2, error) {
+	workspace, err := a.currentWorkspace(generation)
+	if err != nil {
+		return BoardV2{}, err
+	}
+	actualGeneration := workspace.Generation()
+	board, err := a.getBoard(actualGeneration, planID)
+	if err != nil {
+		return BoardV2{}, err
+	}
+	return BoardV2{Generation: actualGeneration, Board: board}, nil
+}
+
+func (a *App) getBoard(expectedGeneration, planID uint64) (Board, error) {
+	s, workspace, release, err := a.openWorkspace(expectedGeneration)
 	if err != nil {
 		return Board{}, err
 	}
+	defer release()
 	defer s.Close()
 
 	meta, err := s.GetMeta()
@@ -179,7 +238,7 @@ func (a *App) GetBoard(planID uint64) (Board, error) {
 	}
 
 	board := Board{
-		ProjectName: a.projectName,
+		ProjectName: workspace.name,
 		Goal:        meta.Goal,
 		Summary:     meta.Summary,
 		PlanID:      selected.ID,
@@ -344,53 +403,97 @@ func recentActivity(planID uint64, taskIDs map[uint64]bool, notes []model.Note, 
 
 // AddTask creates a todo card in planID.
 func (a *App) AddTask(planID uint64, title string) (Task, error) {
+	result, err := a.addTask(0, planID, title)
+	return result.Task, err
+}
+
+func (a *App) AddTaskV2(generation, planID uint64, title string) (TaskV2, error) {
+	return a.addTask(generation, planID, title)
+}
+
+func (a *App) addTask(expectedGeneration, planID uint64, title string) (TaskV2, error) {
 	title = strings.TrimSpace(title)
 	if title == "" {
-		return Task{}, errors.New("task title cannot be empty")
+		return TaskV2{}, errors.New("task title cannot be empty")
 	}
-	s, err := a.open()
+	s, workspace, release, err := a.openWorkspace(expectedGeneration)
 	if err != nil {
-		return Task{}, err
+		return TaskV2{}, err
 	}
+	defer release()
 	defer s.Close()
 	task, err := s.AddTask(planID, title)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return Task{}, fmt.Errorf("plan #%d not found", planID)
+			return TaskV2{}, fmt.Errorf("plan #%d not found", planID)
 		}
-		return Task{}, err
+		return TaskV2{}, err
 	}
-	return Task{
-		ID:        task.ID,
-		Title:     task.Title,
-		Status:    string(task.Status),
-		UpdatedAt: task.UpdatedAt.Format(time.RFC3339),
+	return TaskV2{
+		Generation: workspace.Generation(),
+		Task: Task{
+			ID:        task.ID,
+			Title:     task.Title,
+			Status:    string(task.Status),
+			UpdatedAt: task.UpdatedAt.Format(time.RFC3339),
+		},
 	}, nil
 }
 
 // RenameTask updates a card title.
 func (a *App) RenameTask(taskID uint64, title string) error {
+	_, err := a.renameTask(0, taskID, title)
+	return err
+}
+
+func (a *App) RenameTaskV2(
+	generation, taskID uint64,
+	title string,
+) (WorkspaceMutationResult, error) {
+	return a.renameTask(generation, taskID, title)
+}
+
+func (a *App) renameTask(
+	expectedGeneration, taskID uint64,
+	title string,
+) (WorkspaceMutationResult, error) {
 	title = strings.TrimSpace(title)
 	if title == "" {
-		return errors.New("task title cannot be empty")
+		return WorkspaceMutationResult{}, errors.New("task title cannot be empty")
 	}
-	s, err := a.open()
+	s, workspace, release, err := a.openWorkspace(expectedGeneration)
 	if err != nil {
-		return err
+		return WorkspaceMutationResult{}, err
 	}
+	defer release()
 	defer s.Close()
 	if err := s.SetTaskTitle(taskID, title); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return fmt.Errorf("task #%d not found", taskID)
+			return WorkspaceMutationResult{}, fmt.Errorf("task #%d not found", taskID)
 		}
-		return err
+		return WorkspaceMutationResult{}, err
 	}
-	return nil
+	return WorkspaceMutationResult{Generation: workspace.Generation()}, nil
 }
 
 // MoveTask changes a card's status after validating the status value supplied
 // by JavaScript.
 func (a *App) MoveTask(taskID uint64, status string) error {
+	_, err := a.moveTask(0, taskID, status)
+	return err
+}
+
+func (a *App) MoveTaskV2(
+	generation, taskID uint64,
+	status string,
+) (WorkspaceMutationResult, error) {
+	return a.moveTask(generation, taskID, status)
+}
+
+func (a *App) moveTask(
+	expectedGeneration, taskID uint64,
+	status string,
+) (WorkspaceMutationResult, error) {
 	wanted := model.TaskStatus(status)
 	valid := false
 	for _, candidate := range statuses {
@@ -400,39 +503,59 @@ func (a *App) MoveTask(taskID uint64, status string) error {
 		}
 	}
 	if !valid {
-		return fmt.Errorf("invalid task status %q", status)
+		return WorkspaceMutationResult{}, fmt.Errorf("invalid task status %q", status)
 	}
-	s, err := a.open()
+	s, workspace, release, err := a.openWorkspace(expectedGeneration)
 	if err != nil {
-		return err
+		return WorkspaceMutationResult{}, err
 	}
+	defer release()
 	defer s.Close()
 	if err := s.SetTaskStatus(taskID, wanted); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return fmt.Errorf("task #%d not found", taskID)
+			return WorkspaceMutationResult{}, fmt.Errorf("task #%d not found", taskID)
 		}
-		return err
+		return WorkspaceMutationResult{}, err
 	}
-	return nil
+	return WorkspaceMutationResult{Generation: workspace.Generation()}, nil
 }
 
 // AddTaskNote records a decision or observation on a card.
 func (a *App) AddTaskNote(taskID uint64, body string) error {
+	_, err := a.addTaskNote(0, taskID, body)
+	return err
+}
+
+func (a *App) AddTaskNoteV2(
+	generation, taskID uint64,
+	body string,
+) (WorkspaceMutationResult, error) {
+	return a.addTaskNote(generation, taskID, body)
+}
+
+func (a *App) addTaskNote(
+	expectedGeneration, taskID uint64,
+	body string,
+) (WorkspaceMutationResult, error) {
 	body = strings.TrimSpace(body)
 	if body == "" {
-		return errors.New("memory note cannot be empty")
+		return WorkspaceMutationResult{}, errors.New("memory note cannot be empty")
 	}
-	s, err := a.open()
+	s, workspace, release, err := a.openWorkspace(expectedGeneration)
 	if err != nil {
-		return err
+		return WorkspaceMutationResult{}, err
 	}
+	defer release()
 	defer s.Close()
 	if _, err := s.GetTask(taskID); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return fmt.Errorf("task #%d not found", taskID)
+			return WorkspaceMutationResult{}, fmt.Errorf("task #%d not found", taskID)
 		}
-		return err
+		return WorkspaceMutationResult{}, err
 	}
 	_, err = s.AddNote(model.TargetTask, taskID, body)
-	return err
+	if err != nil {
+		return WorkspaceMutationResult{}, err
+	}
+	return WorkspaceMutationResult{Generation: workspace.Generation()}, nil
 }

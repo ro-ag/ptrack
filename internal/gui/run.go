@@ -2,66 +2,47 @@ package gui
 
 import (
 	"context"
+	"errors"
 	"io/fs"
-	"os"
-	"path/filepath"
-	"time"
 
 	"github.com/ro-ag/ptrack/internal/store"
-	"github.com/ro-ag/ptrack/internal/terminal"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-// Run opens the Wails kanban board for the project containing the current
-// directory. initialPlan is zero to use the active plan.
-func Run(initialPlan uint64, assets fs.FS) error {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	dbPath, err := store.FindProjectDB(cwd)
-	if err != nil {
-		return err
-	}
-	projectRoot := filepath.Dir(filepath.Dir(dbPath))
-	projectRoot, err = filepath.Abs(projectRoot)
-	if err != nil {
-		return err
-	}
-	projectRoot, err = filepath.EvalSymlinks(projectRoot)
-	if err != nil {
-		return err
-	}
-	profiles, err := terminal.DiscoverProfiles()
-	if err != nil {
-		return err
-	}
-	manager, err := terminal.NewManager(projectRoot, profiles, terminal.GoPTYFactory{})
-	if err != nil {
-		return err
-	}
-	app, err := newAppWithTerminal(
-		dbPath,
-		initialPlan,
-		productionTerminalManager{manager: manager},
-		nil,
-	)
-	if err != nil {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = manager.Shutdown(shutdownCtx)
-		return err
+// Run opens the Wails project workspace. An empty startPath resolves from the
+// current directory. initialPlan is zero to use the active plan.
+func Run(startPath string, initialPlan uint64, assets fs.FS) error {
+	emitter := terminalEventEmitter(func(ctx context.Context, name string, payload any) {
+		wailsruntime.EventsEmit(ctx, name, payload)
+	})
+	app := newWorkspaceCoordinator(buildProductionWorkspace, emitter)
+	candidate, err := buildProductionWorkspace(startPath, initialPlan)
+	switch {
+	case err == nil:
+		candidate.setGeneration(1)
+		if activateErr := candidate.activate(); activateErr != nil {
+			app.workspaceStatus = WorkspaceError
+			app.workspaceError = activateErr.Error()
+			_ = closeWorkspaceWithTimeout(candidate)
+		} else {
+			app.lastGeneration = 1
+			app.workspace = candidate
+			app.workspaceStatus = WorkspaceOpen
+			app.syncLegacyWorkspaceFieldsLocked(candidate)
+		}
+	case errors.Is(err, store.ErrNoProject):
+		// Welcome is a valid startup state.
+	default:
+		app.workspaceStatus = WorkspaceError
+		app.workspaceError = err.Error()
 	}
 	defer app.onShutdown(context.Background())
-	board, err := app.GetBoard(0)
-	if err != nil {
-		return err
-	}
 
 	return wails.Run(&options.App{
-		Title:     "P-TRACK — " + board.ProjectName,
+		Title:     "P-TRACK Project Workspace",
 		Width:     1440,
 		Height:    900,
 		MinWidth:  880,
@@ -73,6 +54,7 @@ func Run(initialPlan uint64, assets fs.FS) error {
 			A: 255,
 		},
 		AssetServer: &assetserver.Options{Assets: assets},
+		Menu:        newProjectWorkspaceMenu(app),
 		Bind:        []interface{}{app},
 		OnStartup:   app.onStartup,
 		OnShutdown:  app.onShutdown,

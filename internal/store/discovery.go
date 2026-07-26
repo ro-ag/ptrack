@@ -32,7 +32,7 @@ func FindProjectDB(start string) (string, error) {
 		}
 		// Stop at the repo boundary: if this dir is a git root and had no
 		// .ptrack, don't escape the repository.
-		if isDir(filepath.Join(dir, gitDir)) {
+		if isGitMarker(filepath.Join(dir, gitDir)) {
 			return "", ErrNoProject
 		}
 		parent := filepath.Dir(dir)
@@ -75,12 +75,12 @@ func InitProject(dir string) (string, error) {
 	return db, nil
 }
 
-// gitRootOr returns the nearest ancestor of start containing a .git directory,
+// gitRootOr returns the nearest ancestor of start containing a .git marker,
 // or start itself if none is found.
 func gitRootOr(start string) string {
 	dir := start
 	for {
-		if isDir(filepath.Join(dir, gitDir)) {
+		if isGitMarker(filepath.Join(dir, gitDir)) {
 			return dir
 		}
 		parent := filepath.Dir(dir)
@@ -89,6 +89,11 @@ func gitRootOr(start string) string {
 		}
 		dir = parent
 	}
+}
+
+func isGitMarker(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && (fi.IsDir() || fi.Mode().IsRegular())
 }
 
 func isDir(path string) bool {

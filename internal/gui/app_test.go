@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -118,5 +119,26 @@ func TestBoardRejectsInvalidInput(t *testing.T) {
 	}
 	if err := app.AddTaskNote(1, " "); err == nil {
 		t.Fatal("AddTaskNote accepted an empty note")
+	}
+}
+
+func TestBoardV2RejectsStaleGeneration(t *testing.T) {
+	app := seedApp(t)
+	if _, err := app.GetBoardV2(2, 0); !errors.Is(err, errStaleWorkspaceGeneration) {
+		t.Fatalf("GetBoardV2 stale generation = %v", err)
+	}
+	if _, err := app.AddTaskV2(2, 1, "wrong project"); !errors.Is(err, errStaleWorkspaceGeneration) {
+		t.Fatalf("AddTaskV2 stale generation = %v", err)
+	}
+}
+
+func TestGetBoardV2ResolvesCurrentGenerationForZero(t *testing.T) {
+	app := seedApp(t)
+	response, err := app.GetBoardV2(0, 0)
+	if err != nil {
+		t.Fatalf("GetBoardV2 current generation: %v", err)
+	}
+	if response.Generation != 1 {
+		t.Fatalf("response generation = %d, want current generation 1", response.Generation)
 	}
 }

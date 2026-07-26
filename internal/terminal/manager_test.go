@@ -114,6 +114,37 @@ func TestManagerOwnsSessionsAndStartsWithCopiedProfileParameters(t *testing.T) {
 	}
 }
 
+func TestManagerSessionSnapshotIncludesOwnedProcessMetadata(t *testing.T) {
+	root := t.TempDir()
+	process := newManagerFakeProcess()
+	manager, err := NewManager(root, []Profile{{
+		ID:         "agent-codex",
+		Name:       "Codex",
+		Kind:       ProfileAgent,
+		Provider:   "codex",
+		Executable: filepath.Join(root, "codex"),
+	}}, newManagerFakeFactory(managerStartOutcome{process: process}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupManager(t, manager, process)
+	session, err := manager.Create("agent-codex", "", 24, 80)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.PID() != 31337 {
+		t.Fatalf("session PID = %d want 31337", session.PID())
+	}
+	snapshot := manager.SessionSnapshot(64)
+	if len(snapshot) != 1 || snapshot[0].ID != session.ID() ||
+		snapshot[0].ProfileID != "agent-codex" ||
+		snapshot[0].ProfileKind != ProfileAgent ||
+		snapshot[0].Provider != "codex" || snapshot[0].PID != 31337 ||
+		snapshot[0].State != SessionRunning || snapshot[0].CWD != root {
+		t.Fatalf("session snapshot = %#v", snapshot)
+	}
+}
+
 func TestManagerCreateFailureIsCleanedUpAndNotRetained(t *testing.T) {
 	projectRoot := t.TempDir()
 	startError := errors.New("start failed")

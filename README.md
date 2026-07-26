@@ -20,8 +20,9 @@ P-TRACK gives one project two complementary interfaces:
 
 - **Humans get a full-screen terminal dashboard.** Run `ptrack` to browse and
   edit the live project state, move work on a board, and perform maintenance.
-- **The kanban board can also run as a desktop GUI.** Run
-  `ptrack board --gui` for a Wails window with drag-and-drop cards.
+- **Humans also get a canonical desktop project workspace.** Run
+  `ptrack gui [PATH]` for project switching, tracking context, read-only Git
+  intelligence, registered agent runs, terminals, and the kanban board.
 - **Agents get small, scriptable commands.** Run `ptrack context` to restore a
   bounded handoff, then query or update only what the current task needs.
 
@@ -34,7 +35,7 @@ holding a long-lived lock.
 - [Install](#install)
 - [Quick start](#quick-start)
 - [The terminal dashboard](#the-terminal-dashboard)
-- [The desktop board](#the-desktop-board)
+- [The desktop project workspace](#the-desktop-project-workspace)
 - [Organize tasks](#organize-tasks)
 - [Agent workflow](#agent-workflow)
 - [Command reference](#command-reference)
@@ -72,7 +73,7 @@ Now choose the interface that fits the job:
 
 ```sh
 ptrack          # human: open the interactive dashboard
-ptrack board --gui  # human: open the desktop kanban board
+ptrack gui       # human: open the desktop project workspace
 ptrack context  # agent: restore a compact project handoff
 ptrack next     # agent: ask for the single most-actionable task
 ```
@@ -142,19 +143,29 @@ project root, database location, schema, last writer, and backup destination.
 | Issues | `↑`/`↓` select · `a` add · `e` rename · `c` close · `o` reopen |
 | Item view | `↑`/`↓` scroll · `pgup`/`pgdn` page · `e` edit · `M` move task · `P` convert task to plan · `r` refresh · `enter`/`esc` back |
 
-## The desktop board
+## The desktop project workspace
 
-Use the Wails GUI when you want the board in a native desktop window:
+Use the Wails GUI for the canonical native project workspace:
 
 ```sh
-ptrack board --gui
+ptrack gui
+ptrack gui ../another-project
+ptrack board --gui          # compatible alias
 ptrack board --gui --plan 4
 ```
 
 ![P-TRACK desktop kanban board](docs/assets/gui-board.png)
 
-Select a plan from the header, drag cards between Todo, Doing, Blocked, and Done,
-or use the status selector on a card. Add tasks from the board header,
+Outside a project, the app opens a welcome screen with recent projects. Use the
+native directory picker to open or switch projects, or close a project without
+exiting the app. P-TRACK confirms before a transition stops active terminals or
+registered agent runs.
+
+The project-memory rail combines a bounded tracking snapshot with repository
+and storage status, read-only Git status/remotes/branches/commits/divergence,
+active terminals, and explicitly registered agent runs. Select a plan from the
+header, drag cards between Todo, Doing, Blocked, and Done, or use the status
+selector on a card. Add tasks from the board header,
 double-click a card to rename it, or record durable task context with **Memory**.
 Cards surface linked notes, commits, and open issues, while the project-memory
 rail keeps the goal, agent handoff, project status, issues, and recent decisions
@@ -256,6 +267,7 @@ Put `#<task-id>` in a commit message to link the commit to that task.
 | `ptrack hook install` | Install the post-commit hook that records commits. |
 | `ptrack context [--json]` | Print the bounded restore digest. |
 | `ptrack next [--json]` | Print the most-actionable task in the active plan. |
+| `ptrack gui [PATH]` | Open the canonical desktop project workspace; PATH defaults to the current directory. |
 | `ptrack board [--plan N] [--json] [--gui]` | Print a kanban board or open it as a Wails desktop GUI. |
 | `ptrack search <term> [--json]` | Search plan and task titles plus note bodies. |
 | `ptrack status [--json]` | Print a compact project overview. |

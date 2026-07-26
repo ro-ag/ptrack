@@ -23,6 +23,7 @@ type Profile struct {
 	ID         string            `json:"id"`
 	Name       string            `json:"name"`
 	Kind       ProfileKind       `json:"kind"`
+	Provider   string            `json:"provider,omitempty"`
 	Executable string            `json:"executable"`
 	Args       []string          `json:"args"`
 	Env        map[string]string `json:"env"`
@@ -39,14 +40,15 @@ type profileDependencies struct {
 type agentCandidate struct {
 	id         string
 	name       string
+	provider   string
 	executable string
 }
 
 var supportedAgentCandidates = []agentCandidate{
-	{id: "agent-claude", name: "Claude Code", executable: "claude"},
-	{id: "agent-codex", name: "Codex", executable: "codex"},
-	{id: "agent-gemini", name: "Gemini", executable: "gemini"},
-	{id: "agent-opencode", name: "OpenCode", executable: "opencode"},
+	{id: "agent-claude", name: "Claude Code", provider: "claude", executable: "claude"},
+	{id: "agent-codex", name: "Codex", provider: "codex", executable: "codex"},
+	{id: "agent-gemini", name: "Gemini", provider: "gemini", executable: "gemini"},
+	{id: "agent-opencode", name: "OpenCode", provider: "opencode", executable: "opencode"},
 }
 
 func ValidateProfile(profile Profile) (Profile, error) {
@@ -63,10 +65,17 @@ func validateProfile(profile Profile, lookPath func(string) (string, error)) (Pr
 	if profile.Kind != ProfileShell && profile.Kind != ProfileAgent {
 		return Profile{}, fmt.Errorf("unknown profile kind %q", profile.Kind)
 	}
+	if profile.Kind == ProfileAgent && strings.TrimSpace(profile.Provider) == "" {
+		profile.Provider = strings.TrimPrefix(profile.ID, "agent-")
+	}
+	if profile.Kind == ProfileAgent && strings.TrimSpace(profile.Provider) == "" {
+		return Profile{}, errors.New("agent profile provider must be nonempty")
+	}
 	if strings.TrimSpace(profile.Executable) == "" {
 		return Profile{}, errors.New("profile executable must be nonempty")
 	}
-	if containsNUL(profile.ID) || containsNUL(profile.Name) || containsNUL(profile.Executable) {
+	if containsNUL(profile.ID) || containsNUL(profile.Name) ||
+		containsNUL(profile.Provider) || containsNUL(profile.Executable) {
 		return Profile{}, errors.New("profile contains a NUL value")
 	}
 
@@ -136,6 +145,7 @@ func discoverProfiles(dependencies profileDependencies) ([]Profile, error) {
 			ID:         candidate.id,
 			Name:       candidate.name,
 			Kind:       ProfileAgent,
+			Provider:   candidate.provider,
 			Executable: executable,
 		}, dependencies.lookPath)
 		if validateErr != nil {

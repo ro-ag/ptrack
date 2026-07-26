@@ -55,20 +55,53 @@ func TestBoardCommand(t *testing.T) {
 func TestBoardGUIOption(t *testing.T) {
 	previous := RunGUI
 	t.Cleanup(func() { RunGUI = previous })
-	var calledWith uint64
-	RunGUI = func(planID uint64) error {
-		calledWith = planID
+	var calledPath string
+	var calledPlan uint64
+	RunGUI = func(path string, planID uint64) error {
+		calledPath = path
+		calledPlan = planID
 		return nil
 	}
 
 	if _, err := runCmd(t, "board", "--gui", "--plan", "42"); err != nil {
 		t.Fatalf("board --gui: %v", err)
 	}
-	if calledWith != 42 {
-		t.Fatalf("RunGUI called with plan %d, want 42", calledWith)
+	if calledPath != "" || calledPlan != 42 {
+		t.Fatalf("RunGUI called with path %q plan %d, want empty path plan 42", calledPath, calledPlan)
 	}
 	if _, err := runCmd(t, "board", "--gui", "--json"); err == nil {
 		t.Fatal("board accepted --gui with --json")
+	}
+}
+
+func TestGUICommand(t *testing.T) {
+	previous := RunGUI
+	t.Cleanup(func() { RunGUI = previous })
+	var calledPath string
+	var calledPlan uint64
+	RunGUI = func(path string, planID uint64) error {
+		calledPath = path
+		calledPlan = planID
+		return nil
+	}
+
+	if _, err := runCmd(t, "gui"); err != nil {
+		t.Fatalf("gui: %v", err)
+	}
+	if calledPath != "" || calledPlan != 0 {
+		t.Fatalf("gui called with path %q plan %d, want empty path and zero plan", calledPath, calledPlan)
+	}
+
+	wantPath := filepath.Join("some", "project")
+	if _, err := runCmd(t, "gui", wantPath); err != nil {
+		t.Fatalf("gui path: %v", err)
+	}
+	if calledPath != wantPath || calledPlan != 0 {
+		t.Fatalf("gui path called with path %q plan %d, want %q and zero", calledPath, calledPlan, wantPath)
+	}
+
+	if _, err := runCmd(t, "gui", "one", "two"); err == nil {
+		t.Fatal("gui accepted more than one path")
 	}
 }
 

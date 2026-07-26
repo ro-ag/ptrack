@@ -1,4 +1,16 @@
 import { mountTerminalDock } from "./terminal/pane";
+import {
+  RefreshGate,
+  RefreshLoop,
+  WorkspaceController,
+} from "./workspace/controller";
+import {
+  confirmationCopy,
+  focusCycleIndex,
+  preserveSectionOnError,
+  shortcutIntent,
+  workspaceStateCopy,
+} from "./workspace/presentation";
 
 const statuses = ["todo", "doing", "blocked", "done"];
 const laneColors = {
@@ -15,15 +27,24 @@ const severityColors = {
 };
 
 const elements = {
+  workspace: document.querySelector("#workspace"),
+  stateScreen: document.querySelector("#workspace-state-screen"),
+  stateEyebrow: document.querySelector("#workspace-state-eyebrow"),
+  stateHeading: document.querySelector("#workspace-state-heading"),
+  stateDetail: document.querySelector("#workspace-state-detail"),
+  stateOpen: document.querySelector("#state-open-project-button"),
+  recents: document.querySelector("#recent-project-list"),
   board: document.querySelector("#board"),
   projectName: document.querySelector("#project-name"),
   planTitle: document.querySelector("#plan-title"),
+  planPicker: document.querySelector("#plan-picker"),
   planSelect: document.querySelector("#plan-select"),
   planProgress: document.querySelector("#plan-progress"),
   planProgressLabel: document.querySelector("#plan-progress-label"),
   goal: document.querySelector("#goal"),
   summary: document.querySelector("#summary"),
   stats: document.querySelector("#project-stats"),
+  snapshotBounds: document.querySelector("#snapshot-bounds"),
   issues: document.querySelector("#issue-list"),
   issueTotal: document.querySelector("#issue-total"),
   activity: document.querySelector("#activity-list"),
@@ -33,6 +54,9 @@ const elements = {
   memoryDialogClose: document.querySelector("#memory-dialog-close"),
   status: document.querySelector("#status"),
   refresh: document.querySelector("#refresh-button"),
+  openProject: document.querySelector("#open-project-button"),
+  switchProject: document.querySelector("#switch-project-button"),
+  closeProject: document.querySelector("#close-project-button"),
   addForm: document.querySelector("#add-form"),
   taskTitle: document.querySelector("#task-title"),
   modal: document.querySelector("#modal"),
@@ -44,16 +68,48 @@ const elements = {
   dialogNote: document.querySelector("#dialog-note"),
   dialogHelp: document.querySelector("#dialog-help"),
   dialogSubmit: document.querySelector("#dialog-submit"),
+  confirmModal: document.querySelector("#workspace-confirm-modal"),
+  confirmHeading: document.querySelector("#workspace-confirm-heading"),
+  confirmDetail: document.querySelector("#workspace-confirm-detail"),
+  confirmCancel: document.querySelector("#workspace-confirm-cancel"),
+  confirmSubmit: document.querySelector("#workspace-confirm-submit"),
+  projectRoot: document.querySelector("#project-root"),
+  storageStatus: document.querySelector("#storage-status"),
+  gitState: document.querySelector("#git-state"),
+  gitSummary: document.querySelector("#git-summary"),
+  gitRemotes: document.querySelector("#git-remotes"),
+  gitBranches: document.querySelector("#git-branches"),
+  gitCommits: document.querySelector("#git-commits"),
+  runtimeTotal: document.querySelector("#runtime-total"),
+  terminalSessions: document.querySelector("#terminal-sessions"),
+  agentRuns: document.querySelector("#agent-runs"),
+  blockers: document.querySelector("#overview-blockers"),
+  notes: document.querySelector("#overview-notes"),
   toast: document.querySelector("#toast"),
 };
 
+const workspaceController = new WorkspaceController();
+const refreshGate = new RefreshGate();
+const nativeEventDisposers = [];
+const refreshLoop = new RefreshLoop(() => {
+  void loadSnapshot(board?.planId || 0, true);
+}, 15_000);
+
+let workspaceState = { status: "welcome", generation: 0 };
+let snapshot = null;
 let board = null;
 let draggedTask = null;
 let editingTask = null;
 let dialogMode = "rename";
 let toastTimer = null;
-let loading = false;
 let memoryModalReturnFocus = null;
+let confirmReturnFocus = null;
+let confirmResolve = null;
+let terminalHandle = null;
+let terminalGeneration = 0;
+let snapshotSequence = 0;
+let activeSnapshotRequest = null;
+let queuedSnapshotPlanId = 0;
 
 function api() {
   const backend = window.go?.gui?.App;
@@ -88,8 +144,13 @@ function relativeTime(value) {
   if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.round(minutes / 60);
   if (hours < 24) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
-  return `${days}d ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+function compactBytes(value) {
+  if (!Number.isFinite(value) || value < 1024) return `${value || 0} B`;
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KiB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 function statElement(value, label) {
@@ -103,6 +164,35 @@ function statElement(value, label) {
   number.textContent = value;
   stat.append(caption, number);
   return stat;
+}
+
+function emptyMemory(message) {
+  const empty = document.createElement("div");
+  empty.className = "memory-empty";
+  empty.textContent = message;
+  return empty;
+}
+
+function intelligenceItem(titleText, detailText, state = "") {
+  const item = document.createElement("article");
+  item.className = "intelligence-item";
+  if (state) item.dataset.state = state;
+  const title = document.createElement("p");
+  title.className = "intelligence-title";
+  title.textContent = titleText;
+  const detail = document.createElement("p");
+  detail.className = "intelligence-detail";
+  detail.textContent = detailText;
+  item.append(title, detail);
+  return item;
+}
+
+function pill(label, value, tone = "") {
+  const item = document.createElement("span");
+  item.className = "intelligence-pill";
+  if (tone) item.dataset.tone = tone;
+  item.textContent = `${label} ${value}`;
+  return item;
 }
 
 function activityElement(activity, expanded = false) {
@@ -132,7 +222,6 @@ function fitRecentMemory() {
     item.hidden = false;
   });
   elements.activityMore.hidden = true;
-
   if (elements.activity.scrollHeight <= elements.activity.clientHeight + 1) return;
 
   elements.activityMore.hidden = false;
@@ -155,7 +244,6 @@ function renderMemory() {
   elements.goal.textContent = board.goal || "No north star set for this project.";
   elements.summary.textContent =
     board.summary || "No rolling handoff yet. Agents can update it with ptrack summary set.";
-
   elements.stats.replaceChildren(
     statElement(board.stats.tasksOpen, "Open tasks"),
     statElement(board.stats.tasksBlocked, "Blocked"),
@@ -193,12 +281,9 @@ function renderMemory() {
   elements.activity.replaceChildren();
   elements.memoryDialogList.replaceChildren();
   if (board.activity.length === 0) {
-    elements.activity.append(
-      emptyMemory("Decisions and linked commits will appear here as the project evolves."),
-    );
-    elements.memoryDialogList.append(
-      emptyMemory("Decisions and linked commits will appear here as the project evolves."),
-    );
+    const message = "Decisions and linked commits will appear here as the project evolves.";
+    elements.activity.append(emptyMemory(message));
+    elements.memoryDialogList.append(emptyMemory(message));
     elements.activityMore.hidden = true;
   } else {
     board.activity.forEach((activity) => {
@@ -209,18 +294,22 @@ function renderMemory() {
   }
 }
 
-function emptyMemory(message) {
-  const empty = document.createElement("div");
-  empty.className = "memory-empty";
-  empty.textContent = message;
-  return empty;
-}
-
 function contextChip(count, singular, extraClass = "") {
   const chip = document.createElement("span");
   chip.className = `context-chip ${extraClass}`.trim();
   chip.textContent = `${count} ${count === 1 ? singular : `${singular}s`}`;
   return chip;
+}
+
+function actionButton(label, title, handler) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "card-action";
+  button.textContent = label;
+  button.title = title;
+  button.setAttribute("aria-label", title);
+  button.addEventListener("click", handler);
+  return button;
 }
 
 function cardElement(task) {
@@ -233,7 +322,6 @@ function cardElement(task) {
   dragZone.className = "card-drag-zone";
   dragZone.draggable = true;
   dragZone.setAttribute("aria-label", `Task #${task.id}: ${task.title}. Drag to change status.`);
-
   const meta = document.createElement("div");
   meta.className = "card-meta";
   const identity = document.createElement("span");
@@ -242,7 +330,6 @@ function cardElement(task) {
   dragLabel.className = "drag-label";
   dragLabel.textContent = "Drag";
   meta.append(identity, dragLabel);
-
   const title = document.createElement("p");
   title.className = "card-title";
   title.textContent = task.title;
@@ -262,7 +349,6 @@ function cardElement(task) {
     if (task.issueCount) context.append(contextChip(task.issueCount, "issue", "issue-chip"));
     dragZone.append(context);
   }
-
   dragZone.addEventListener("dblclick", () => openRename(task));
   dragZone.addEventListener("dragstart", (event) => {
     draggedTask = task;
@@ -287,26 +373,14 @@ function cardElement(task) {
     option.selected = column.status === task.status;
     statusSelect.append(option);
   });
-  statusSelect.addEventListener("change", () => moveTask(task.id, statusSelect.value));
+  statusSelect.addEventListener("change", () => void moveTask(task.id, statusSelect.value));
   actions.append(
     statusSelect,
     actionButton("Edit", "Rename task", () => openRename(task)),
     actionButton("Memory", "Record a memory note", () => openMemory(task)),
   );
-
   card.append(dragZone, actions);
   return card;
-}
-
-function actionButton(label, title, handler) {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "card-action";
-  button.textContent = label;
-  button.title = title;
-  button.setAttribute("aria-label", title);
-  button.addEventListener("click", handler);
-  return button;
 }
 
 function columnElement(column) {
@@ -314,7 +388,6 @@ function columnElement(column) {
   lane.className = "column";
   lane.dataset.status = column.status;
   lane.style.setProperty("--lane-color", laneColors[column.status]);
-
   const header = document.createElement("header");
   header.className = "column-header";
   const heading = document.createElement("h3");
@@ -327,19 +400,17 @@ function columnElement(column) {
   count.className = "column-count";
   count.textContent = column.tasks.length;
   header.append(heading, count);
-
   const cards = document.createElement("div");
   cards.className = "cards";
   if (column.tasks.length === 0) {
     const empty = document.createElement("div");
     empty.className = "empty";
-    empty.textContent = "Drop a task here";
+    empty.textContent = board.planId ? "Drop a task here" : "No active plan";
     cards.append(empty);
   } else {
     column.tasks.forEach((task) => cards.append(cardElement(task)));
   }
   lane.append(header, cards);
-
   lane.addEventListener("dragover", (event) => {
     if (!draggedTask || draggedTask.status === column.status) return;
     event.preventDefault();
@@ -353,16 +424,15 @@ function columnElement(column) {
     event.preventDefault();
     lane.classList.remove("drag-over");
     if (draggedTask && draggedTask.status !== column.status) {
-      moveTask(draggedTask.id, column.status);
+      void moveTask(draggedTask.id, column.status);
     }
   });
   return lane;
 }
 
-function render() {
+function renderBoard() {
   elements.projectName.textContent = board.projectName;
-  elements.planTitle.textContent = board.planTitle;
-
+  elements.planTitle.textContent = board.planTitle || "No active plan";
   const selected = String(board.planId);
   elements.planSelect.replaceChildren();
   board.plans.forEach((plan) => {
@@ -372,57 +442,273 @@ function render() {
     option.selected = String(plan.id) === selected;
     elements.planSelect.append(option);
   });
-
+  elements.planSelect.disabled = board.plans.length === 0;
   const total = board.stats.planTasks;
   const done = board.stats.planTasksDone;
   const percentage = total ? Math.round((done / total) * 100) : 0;
   elements.planProgress.style.width = `${percentage}%`;
   elements.planProgressLabel.textContent = `${done}/${total} done`;
-
+  elements.taskTitle.disabled = board.planId === 0;
+  elements.addForm.querySelector("button").disabled = board.planId === 0;
   elements.board.replaceChildren();
   board.columns.forEach((column) => elements.board.append(columnElement(column)));
   renderMemory();
 }
 
-async function loadBoard(planId = board?.planId || 0, quiet = false) {
-  if (loading) return;
+function renderIntelligence() {
+  const project = snapshot.project;
+  const tracking = snapshot.tracking;
+  elements.projectRoot.textContent = project.root;
+  const storage = project.storage;
+  elements.storageStatus.textContent = storage.exists
+    ? `P-TRACK format v${storage.formatVersion} · ${compactBytes(storage.sizeBytes)} · writer ${storage.lastWriteVersion || "unknown"}`
+    : storage.error || "P-TRACK storage unavailable";
+  elements.snapshotBounds.replaceChildren();
+  for (const [label, bound] of Object.entries(tracking.bounds || {})) {
+    elements.snapshotBounds.append(
+      pill(label, bound.more ? `${bound.shown}/${bound.total}` : bound.total),
+    );
+  }
+
+  elements.blockers.replaceChildren();
+  if (tracking.blockers.length === 0) {
+    elements.blockers.append(emptyMemory("No blocked tasks."));
+  } else {
+    tracking.blockers.slice(0, 10).forEach((task) => {
+      elements.blockers.append(intelligenceItem(`Blocked · #${task.id}`, task.title, "error"));
+    });
+  }
+  elements.notes.replaceChildren();
+  tracking.notes.slice(0, 10).forEach((note) => {
+    elements.notes.append(
+      intelligenceItem(
+        `Note · ${note.target}${note.targetId ? ` #${note.targetId}` : ""}`,
+        `${relativeTime(note.occurredAt)} · ${note.body}`,
+      ),
+    );
+  });
+
+  renderGitIntelligence(snapshot.git);
+  renderRuntimeIntelligence(snapshot.terminals, snapshot.agentRuns);
+}
+
+function renderGitIntelligence(section) {
+  elements.gitSummary.replaceChildren();
+  elements.gitRemotes.replaceChildren();
+  elements.gitBranches.replaceChildren();
+  elements.gitCommits.replaceChildren();
+  elements.gitState.textContent = section.state;
+  if (section.state !== "ready" && section.state !== "stale") {
+    elements.gitState.textContent = "Error";
+    elements.gitSummary.append(pill("Git", section.error || "unavailable", "error"));
+    return;
+  }
+  if (section.state === "stale") {
+    elements.gitSummary.append(
+      pill("Git", `stale · ${section.error || "refresh unavailable"}`, "error"),
+    );
+  }
+  const git = section.snapshot;
+  if (git.state === "notRepository") {
+    elements.gitState.textContent = "No repository";
+    elements.gitSummary.append(pill("Git", "not found"));
+    return;
+  }
+  const status = git.status;
+  elements.gitState.textContent = status.detached
+    ? "Detached"
+    : git.linkedWorktree
+      ? "Worktree"
+      : "Ready";
+  elements.gitSummary.append(
+    pill("branch", status.detached ? status.oid?.slice(0, 8) || "detached" : status.branch || "initial"),
+    pill("staged", status.staged),
+    pill("unstaged", status.unstaged),
+    pill("untracked", status.untracked),
+    pill("conflicts", status.conflicted, status.conflicted ? "error" : ""),
+    pill("ignored", status.ignored),
+  );
+  if (status.upstream) {
+    elements.gitSummary.append(
+      pill("upstream", status.upstream),
+      pill("ahead", git.divergence?.ahead ?? status.ahead, status.ahead ? "warning" : ""),
+      pill("behind", git.divergence?.behind ?? status.behind, status.behind ? "warning" : ""),
+      pill("unpushed", git.unpushedCommits?.length || 0, git.unpushedCommits?.length ? "warning" : ""),
+    );
+  } else {
+    elements.gitSummary.append(pill("upstream", "none", "warning"));
+  }
+
+  if (!git.remotes?.length) {
+    elements.gitRemotes.append(emptyMemory("No remotes configured."));
+  } else {
+    git.remotes.forEach((remote) => {
+      const fetch = remote.fetchUrls?.join(", ") || "none";
+      const push = remote.pushUrls?.join(", ") || fetch;
+      elements.gitRemotes.append(intelligenceItem(`Remote · ${remote.name}`, `fetch ${fetch} · push ${push}`));
+    });
+  }
+  const branches = [...(git.localBranches || []), ...(git.remoteBranches || [])];
+  branches.slice(0, 24).forEach((branch) => {
+    const flags = [
+      branch.current ? "current" : "",
+      branch.remote ? "remote" : "local",
+      branch.stale ? "stale signal" : "",
+      branch.worktreePath ? `worktree ${branch.worktreePath}` : "",
+    ].filter(Boolean);
+    elements.gitBranches.append(
+      intelligenceItem(branch.name, `${flags.join(" · ")} · ${relativeTime(branch.lastCommitAt)}`, branch.stale ? "stale" : ""),
+    );
+  });
+  if (branches.length === 0) {
+    elements.gitBranches.append(emptyMemory("No branch refs found."));
+  }
+  (git.recentCommits || []).slice(0, 12).forEach((commit) => {
+    const areas = commit.changedAreas?.map((area) => `${area.name} ${area.files}`).join(", ");
+    const refs = commit.refs?.length ? ` · ${commit.refs.join(", ")}` : "";
+    elements.gitCommits.append(
+      intelligenceItem(
+        `${commit.sha.slice(0, 8)} · ${commit.subject}`,
+        `${commit.authorName} · ${relativeTime(commit.date)} · ${commit.filesChanged} files${areas ? ` · ${areas}` : ""}${refs}`,
+      ),
+    );
+  });
+}
+
+function renderRuntimeIntelligence(terminals, agents) {
+  elements.terminalSessions.replaceChildren();
+  elements.agentRuns.replaceChildren();
+  const sessions = terminals.sessions || [];
+  const runs = agents.runs || [];
+  const activeRuns = runs.filter((run) => ["running", "unknown", "stale"].includes(run.state));
+  elements.runtimeTotal.textContent = sessions.length + activeRuns.length;
+  if (sessions.length === 0) {
+    elements.terminalSessions.append(emptyMemory("No terminal sessions."));
+  } else {
+    sessions.forEach((session) => {
+      elements.terminalSessions.append(
+        intelligenceItem(
+          `Terminal · ${session.profileId}`,
+          `${session.state} · PID ${session.pid || "unknown"} · ${relativeTime(session.lastActivityAt)} · ${session.cwd}`,
+          session.state === "failed" ? "error" : "",
+        ),
+      );
+    });
+  }
+  if (runs.length === 0) {
+    elements.agentRuns.append(emptyMemory("No registered agent runs."));
+  } else {
+    runs.forEach((run) => {
+      const association = [
+        run.planId ? `plan #${run.planId}` : "",
+        run.taskId ? `task #${run.taskId}` : "",
+        run.terminalId ? `terminal ${run.terminalId.slice(0, 8)}` : "",
+      ].filter(Boolean);
+      elements.agentRuns.append(
+        intelligenceItem(
+          `Agent · ${run.profile} · ${run.provider}`,
+          `${run.state} · process ${run.processState} · lease ${run.leaseState} · PID ${run.pid || "unknown"} · ${association.join(" · ") || "project"} · ${relativeTime(run.lastActivityAt)}`,
+          ["stale", "unknown"].includes(run.state) ? "stale" : run.state === "exited" ? "" : "",
+        ),
+      );
+    });
+  }
+}
+
+function snapshotDialogIsOpen() {
+  return (
+    !elements.modal.hidden ||
+    !elements.memoryModal.hidden ||
+    !elements.confirmModal.hidden ||
+    Boolean(
+      document.querySelector(
+        "#terminal-paste-modal:not([hidden]), #terminal-context-menu:not([hidden])",
+      ),
+    )
+  );
+}
+
+async function loadSnapshot(planId = board?.planId || 0, quiet = false) {
+  if (workspaceController.state.status !== "open") return;
+  if (!refreshGate.tryBegin(!quiet)) {
+    if (!quiet) queuedSnapshotPlanId = Number(planId);
+    return;
+  }
   if (
     quiet &&
-    (!elements.modal.hidden ||
-      !elements.memoryModal.hidden ||
+    (snapshotDialogIsOpen() ||
       draggedTask ||
       elements.taskTitle.value.trim().length > 0)
   ) {
+    refreshGate.finish();
     return;
   }
-  loading = true;
+
+  const ticket = workspaceController.capture();
+  const request = ++snapshotSequence;
+  activeSnapshotRequest = request;
   elements.refresh.disabled = true;
-  if (!quiet) setStatus("Refreshing board…");
+  if (!quiet) setStatus("Refreshing project snapshot…");
   try {
-    board = await api().GetBoard(Number(planId));
-    render();
-    const count = board.stats.planTasks;
-    const now = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-    setStatus(`${count} task${count === 1 ? "" : "s"} · synced ${now}`);
+    const response = await api().GetWorkspaceSnapshot(ticket.generation, Number(planId));
+    if (request !== snapshotSequence || !workspaceController.accepts(ticket, response.generation)) {
+      return;
+    }
+    response.git = preserveSectionOnError(snapshot?.git, response.git);
+    snapshot = response;
+    board = response.tracking.board;
+    elements.workspace.dataset.snapshotState = "ready";
+    renderBoard();
+    renderIntelligence();
+    const now = new Date(response.capturedAt).toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+    setStatus(`Snapshot synced ${now}`);
   } catch (error) {
+    if (request !== snapshotSequence || ticket.epoch !== workspaceController.capture().epoch) return;
+    if (snapshot) {
+      elements.workspace.dataset.snapshotState = "stale";
+      setStatus(`Snapshot stale · ${messageFrom(error)}`);
+    } else {
+      setStatus("Snapshot failed");
+    }
     showError(error);
-    setStatus("Refresh failed");
   } finally {
-    loading = false;
-    elements.refresh.disabled = false;
+    if (activeSnapshotRequest === request) activeSnapshotRequest = null;
+    if (workspaceController.state.status === "open") elements.refresh.disabled = false;
+    const rerun = refreshGate.finish();
+    if (rerun && workspaceController.state.status === "open") {
+      const queuedPlan = queuedSnapshotPlanId || board?.planId || 0;
+      queuedSnapshotPlanId = 0;
+      queueMicrotask(() => void loadSnapshot(queuedPlan));
+    }
+  }
+}
+
+async function runMutation(operation, progress, failed) {
+  if (!board || workspaceController.state.status !== "open") return;
+  const ticket = workspaceController.capture();
+  setStatus(progress);
+  try {
+    const result = await operation(ticket.generation);
+    if (result?.generation && !workspaceController.accepts(ticket, result.generation)) return;
+    await loadSnapshot(board.planId);
+  } catch (error) {
+    if (ticket.epoch === workspaceController.capture().epoch) {
+      showError(error);
+      setStatus(failed);
+      await loadSnapshot(board.planId, true);
+    }
   }
 }
 
 async function moveTask(taskId, status) {
-  setStatus(`Moving task #${taskId}…`);
-  try {
-    await api().MoveTask(Number(taskId), status);
-    await loadBoard(board.planId);
-  } catch (error) {
-    showError(error);
-    setStatus(`Could not move task #${taskId}`);
-    await loadBoard(board.planId, true);
-  }
+  await runMutation(
+    (generation) => api().MoveTaskV2(generation, Number(taskId), status),
+    `Moving task #${taskId}…`,
+    `Could not move task #${taskId}`,
+  );
 }
 
 function openRename(task) {
@@ -478,60 +764,296 @@ function closeMemoryHistory() {
   memoryModalReturnFocus = null;
 }
 
-elements.refresh.addEventListener("click", () => loadBoard());
-elements.planSelect.addEventListener("change", () => loadBoard(elements.planSelect.value));
-elements.activityMore.addEventListener("click", openMemoryHistory);
-elements.addForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const title = elements.taskTitle.value.trim();
-  if (!title || !board) return;
-  setStatus("Adding task…");
-  try {
-    await api().AddTask(Number(board.planId), title);
-    elements.taskTitle.value = "";
-    await loadBoard(board.planId);
-    elements.taskTitle.focus();
-  } catch (error) {
-    showError(error);
-    setStatus("Could not add task");
-  }
-});
+function showWorkspaceConfirmation(action, resources) {
+  confirmReturnFocus = document.activeElement;
+  const copy = confirmationCopy(
+    action,
+    resources.terminals,
+    resources.agentRuns,
+    resources.pendingAdmissions || 0,
+  );
+  elements.confirmHeading.textContent = copy.heading;
+  elements.confirmDetail.textContent = copy.detail;
+  elements.confirmSubmit.textContent = copy.submit;
+  elements.confirmModal.hidden = false;
+  requestAnimationFrame(() => elements.confirmCancel.focus());
+  return new Promise((resolve) => {
+    confirmResolve = resolve;
+  });
+}
 
-elements.dialogForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (!editingTask) return;
+function finishWorkspaceConfirmation(confirmed) {
+  if (!confirmResolve) return;
+  const resolve = confirmResolve;
+  confirmResolve = null;
+  elements.confirmModal.hidden = true;
+  confirmReturnFocus?.focus();
+  confirmReturnFocus = null;
+  resolve(confirmed);
+}
+
+function renderRecentProjects(projects) {
+  elements.recents.replaceChildren();
+  const available = projects.filter((project) => project.available);
+  if (available.length === 0) {
+    elements.recents.append(emptyMemory("No available recent projects."));
+    return;
+  }
+  available.forEach((project) => {
+    const item = document.createElement("article");
+    item.className = "recent-project";
+    const content = document.createElement("div");
+    const name = document.createElement("p");
+    name.className = "recent-project-name";
+    name.textContent = project.name;
+    const path = document.createElement("p");
+    path.className = "recent-project-path";
+    path.textContent = `${project.path} · ${relativeTime(project.lastSeen)}`;
+    content.append(name, path);
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "button-secondary";
+    open.textContent = "Open";
+    open.addEventListener("click", () => void requestOpenProject(project.path));
+    item.append(content, open);
+    elements.recents.append(item);
+  });
+}
+
+async function loadRecentProjects() {
   try {
-    if (dialogMode === "rename") {
-      const title = elements.dialogInput.value.trim();
-      if (!title) return;
-      await api().RenameTask(Number(editingTask.id), title);
-    } else {
-      const note = elements.dialogNote.value.trim();
-      if (!note) return;
-      await api().AddTaskNote(Number(editingTask.id), note);
+    renderRecentProjects(await api().GetRecentProjects());
+  } catch (error) {
+    elements.recents.replaceChildren(emptyMemory("Recent projects are unavailable."));
+    showError(error);
+  }
+}
+
+function renderWorkspaceState(state, focus = false) {
+  workspaceState = state;
+  const open = state.status === "open";
+  elements.workspace.hidden = !open;
+  elements.stateScreen.hidden = open;
+  elements.planPicker.hidden = !open;
+  elements.refresh.hidden = !open;
+  elements.switchProject.hidden = !open;
+  elements.closeProject.hidden = !open;
+  elements.openProject.hidden = open;
+  elements.workspace.removeAttribute("aria-busy");
+  elements.workspace.inert = false;
+  elements.refresh.disabled = false;
+  elements.switchProject.disabled = false;
+  elements.closeProject.disabled = false;
+
+  if (open) {
+    elements.projectName.textContent = state.project?.name || "Project workspace";
+    void ensureTerminalDock(state.generation);
+    if (focus) requestAnimationFrame(() => elements.projectName.focus());
+    return;
+  }
+
+  snapshotSequence += 1;
+  activeSnapshotRequest = null;
+  disposeTerminalDock();
+  board = null;
+  snapshot = null;
+  elements.projectName.textContent = "Project workspace";
+  const copy = workspaceStateCopy(state.status, state.error);
+  elements.stateEyebrow.textContent = copy.eyebrow;
+  elements.stateHeading.textContent = copy.heading;
+  elements.stateDetail.textContent = copy.detail;
+  elements.stateOpen.hidden = state.status === "loading";
+  if (state.status !== "loading") void loadRecentProjects();
+  if (focus) {
+    requestAnimationFrame(() => {
+      if (!elements.stateOpen.hidden) elements.stateOpen.focus();
+      else elements.stateHeading.focus();
+    });
+  }
+}
+
+function publishBackendState(state, transition, focus = false, keepInert = false) {
+  const published = workspaceController.publish(
+    { status: state.status, generation: Number(state.generation || 0) },
+    transition,
+  );
+  if (!published) return false;
+  renderWorkspaceState(state, focus);
+  if (state.status === "open" && keepInert) {
+    elements.workspace.inert = true;
+    elements.workspace.setAttribute("aria-busy", "true");
+  }
+  if (state.status === "open" && !keepInert) void loadSnapshot(0);
+  return true;
+}
+
+function beginWorkspaceTransition() {
+  const transition = workspaceController.beginTransition();
+  if (workspaceState.status === "open") {
+    elements.workspace.inert = true;
+    elements.workspace.setAttribute("aria-busy", "true");
+    elements.refresh.disabled = true;
+    elements.switchProject.disabled = true;
+    elements.closeProject.disabled = true;
+    setStatus("Preparing project transition…");
+  } else {
+    renderWorkspaceState({
+      status: "loading",
+      generation: transition.generation,
+    });
+  }
+  return transition;
+}
+
+async function recoverWorkspaceState(error) {
+  showError(error);
+  try {
+    const state = await api().GetWorkspaceState();
+    workspaceController.publish({
+      status: state.status,
+      generation: Number(state.generation || 0),
+    });
+    renderWorkspaceState(state, true);
+    if (state.status === "open") await loadSnapshot(board?.planId || 0);
+  } catch (stateError) {
+    workspaceController.publish({ status: "error", generation: 0 });
+    renderWorkspaceState(
+      { status: "error", generation: 0, error: messageFrom(stateError) },
+      true,
+    );
+  }
+}
+
+async function chooseProjectDirectory() {
+  const path = await api().PickProjectDirectory();
+  return typeof path === "string" ? path : "";
+}
+
+async function requestOpenProject(selectedPath = "") {
+  try {
+    const path = selectedPath || (await chooseProjectDirectory());
+    if (!path) return;
+    let transition = beginWorkspaceTransition();
+    let result = await api().OpenProject(path, "");
+    if (result.requiresConfirmation) {
+      if (!publishBackendState(result.state, transition, false, true)) return;
+      const confirmed = await showWorkspaceConfirmation("switch", result.activeResources);
+      if (!confirmed) {
+        await api().CancelWorkspaceChange(result.confirmationToken);
+        renderWorkspaceState(result.state, true);
+        return;
+      }
+      transition = beginWorkspaceTransition();
+      result = await api().OpenProject(path, result.confirmationToken);
     }
-    closeDialog();
-    await loadBoard(board.planId);
+    if (!publishBackendState(result.state, transition, true)) return;
+    if (result.warning) showError(result.warning);
   } catch (error) {
-    showError(error);
+    await recoverWorkspaceState(error);
   }
-});
+}
 
-document.querySelectorAll("[data-close-modal]").forEach((element) => {
-  element.addEventListener("click", closeDialog);
-});
-document.querySelectorAll("[data-close-memory-modal]").forEach((element) => {
-  element.addEventListener("click", closeMemoryHistory);
-});
-elements.memoryDialogClose.addEventListener("click", closeMemoryHistory);
+async function requestCloseProject() {
+  if (workspaceController.state.status !== "open") return;
+  try {
+    let transition = beginWorkspaceTransition();
+    let result = await api().CloseProject("");
+    if (result.requiresConfirmation) {
+      if (!publishBackendState(result.state, transition, false, true)) return;
+      const confirmed = await showWorkspaceConfirmation("close", result.activeResources);
+      if (!confirmed) {
+        await api().CancelWorkspaceChange(result.confirmationToken);
+        renderWorkspaceState(result.state, true);
+        return;
+      }
+      transition = beginWorkspaceTransition();
+      result = await api().CloseProject(result.confirmationToken);
+    }
+    if (!publishBackendState(result.state, transition, true)) return;
+    if (result.warning) showError(result.warning);
+    if (result.state.status === "closed") {
+      window.setTimeout(async () => {
+        try {
+          const state = await api().GetWorkspaceState();
+          workspaceController.publish({
+            status: state.status,
+            generation: Number(state.generation || 0),
+          });
+          renderWorkspaceState(state, true);
+        } catch (error) {
+          showError(error);
+        }
+      }, 350);
+    }
+  } catch (error) {
+    await recoverWorkspaceState(error);
+  }
+}
+
+function generationTerminalBackend(generation) {
+  function assertGeneration(response) {
+    if (Number(response.generation) !== generation) {
+      throw new Error("Stale terminal response ignored");
+    }
+    return response;
+  }
+  return {
+    async GetTerminalProfiles() {
+      return assertGeneration(await api().GetTerminalProfilesV2(generation)).profiles;
+    },
+    async CreateTerminal(profileID, cwd, rows, columns) {
+      return assertGeneration(
+        await api().CreateTerminalV2(generation, profileID, cwd, rows, columns),
+      );
+    },
+    ResizeTerminal(sessionID, rows, columns) {
+      return api().ResizeTerminalV2(generation, sessionID, rows, columns);
+    },
+    CloseTerminal(sessionID, force) {
+      return api().CloseTerminalV2(generation, sessionID, force);
+    },
+  };
+}
+
+async function ensureTerminalDock(generation) {
+  if (terminalHandle && terminalGeneration === generation) return;
+  disposeTerminalDock();
+  terminalGeneration = generation;
+  try {
+    const handle = mountTerminalDock({
+      backend: generationTerminalBackend(generation),
+      workspaceGeneration: generation,
+      showError,
+    });
+    terminalHandle = handle;
+    await handle.ready;
+    const current = workspaceController.state;
+    if (
+      terminalHandle !== handle ||
+      current.generation !== generation ||
+      !["open", "loading"].includes(current.status)
+    ) {
+      handle.dispose();
+      if (terminalHandle === handle) terminalHandle = null;
+      return;
+    }
+  } catch (error) {
+    const current = workspaceController.state;
+    if (current.status === "open" && current.generation === generation) {
+      showError(error);
+    }
+  }
+}
+
+function disposeTerminalDock() {
+  terminalHandle?.dispose();
+  terminalHandle = null;
+  terminalGeneration = 0;
+}
 
 function boardShortcutIsBlocked(event) {
+  if (event.isComposing || workspaceController.state.status !== "open") return true;
   const active = document.activeElement;
-  const terminalInteractionVisible = Boolean(
-    document.querySelector(
-      "#terminal-paste-modal:not([hidden]), #terminal-context-menu:not([hidden])",
-    ),
-  );
   const interactive =
     active instanceof HTMLElement &&
     (["INPUT", "SELECT", "TEXTAREA", "BUTTON"].includes(active.tagName) ||
@@ -546,39 +1068,133 @@ function boardShortcutIsBlocked(event) {
         (node.matches("#terminal-dock, [data-terminal-overlay]") ||
           Boolean(node.closest("#terminal-dock, [data-terminal-overlay]"))),
     );
-  return interactive || terminalFocused || terminalInteractionVisible;
+  return interactive || terminalFocused || snapshotDialogIsOpen();
 }
 
+function trapModalFocus(event) {
+  if (event.key !== "Tab") return;
+  const modal = [elements.confirmModal, elements.modal, elements.memoryModal].find(
+    (candidate) => !candidate.hidden,
+  );
+  if (!modal) return;
+  const focusable = Array.from(
+    modal.querySelectorAll(
+      'button:not([disabled]), input:not([disabled]):not([hidden]), textarea:not([disabled]):not([hidden]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter((item) => !item.hidden);
+  if (focusable.length === 0) return;
+  const first = focusable[0];
+  const current = focusable.indexOf(document.activeElement);
+  const next = focusCycleIndex(focusable.length, current, event.shiftKey);
+  if (next < 0) return;
+  event.preventDefault();
+  (focusable[next] || first).focus();
+}
+
+function eventsOn(name, callback) {
+  const runtime = window.runtime;
+  if (typeof runtime?.EventsOnMultiple !== "function") return () => {};
+  return runtime.EventsOnMultiple(name, callback, -1);
+}
+
+function registerNativeProjectActions() {
+  nativeEventDisposers.push(
+    eventsOn("workspace:open-requested", () => void requestOpenProject()),
+    eventsOn("workspace:switch-requested", () => void requestOpenProject()),
+    eventsOn("workspace:close-requested", () => void requestCloseProject()),
+  );
+}
+
+elements.refresh.addEventListener("click", () => void loadSnapshot());
+elements.planSelect.addEventListener("change", () =>
+  void loadSnapshot(elements.planSelect.value),
+);
+elements.openProject.addEventListener("click", () => void requestOpenProject());
+elements.switchProject.addEventListener("click", () => void requestOpenProject());
+elements.closeProject.addEventListener("click", () => void requestCloseProject());
+elements.stateOpen.addEventListener("click", () => void requestOpenProject());
+elements.activityMore.addEventListener("click", openMemoryHistory);
+elements.confirmCancel.addEventListener("click", () => finishWorkspaceConfirmation(false));
+elements.confirmSubmit.addEventListener("click", () => finishWorkspaceConfirmation(true));
+
+elements.addForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const title = elements.taskTitle.value.trim();
+  if (!title || !board?.planId) return;
+  const ticket = workspaceController.capture();
+  await runMutation(
+    async (generation) => {
+      const result = await api().AddTaskV2(generation, Number(board.planId), title);
+      if (workspaceController.accepts(ticket, Number(result.generation))) {
+        elements.taskTitle.value = "";
+      }
+      return result;
+    },
+    "Adding task…",
+    "Could not add task",
+  );
+  if (workspaceController.accepts(ticket, ticket.generation)) {
+    elements.taskTitle.focus();
+  }
+});
+
+elements.dialogForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!editingTask) return;
+  const task = editingTask;
+  if (dialogMode === "rename") {
+    const title = elements.dialogInput.value.trim();
+    if (!title) return;
+    closeDialog();
+    await runMutation(
+      (generation) => api().RenameTaskV2(generation, Number(task.id), title),
+      `Renaming task #${task.id}…`,
+      `Could not rename task #${task.id}`,
+    );
+  } else {
+    const note = elements.dialogNote.value.trim();
+    if (!note) return;
+    closeDialog();
+    await runMutation(
+      (generation) => api().AddTaskNoteV2(generation, Number(task.id), note),
+      `Recording memory for task #${task.id}…`,
+      `Could not record memory for task #${task.id}`,
+    );
+  }
+});
+
+document.querySelectorAll("[data-close-modal]").forEach((element) => {
+  element.addEventListener("click", closeDialog);
+});
+document.querySelectorAll("[data-close-memory-modal]").forEach((element) => {
+  element.addEventListener("click", closeMemoryHistory);
+});
+elements.memoryDialogClose.addEventListener("click", closeMemoryHistory);
+
 document.addEventListener("keydown", (event) => {
+  trapModalFocus(event);
+  if (event.key === "Escape" && !elements.confirmModal.hidden) {
+    event.preventDefault();
+    finishWorkspaceConfirmation(false);
+    return;
+  }
   if (event.key === "Escape" && !elements.modal.hidden) closeDialog();
   if (event.key === "Escape" && !elements.memoryModal.hidden) closeMemoryHistory();
-  if (
-    event.key.toLowerCase() === "r" &&
-    !event.metaKey &&
-    !event.ctrlKey &&
-    !event.altKey &&
-    !event.shiftKey &&
-    !event.repeat &&
-    !event.defaultPrevented &&
-    elements.modal.hidden &&
-    elements.memoryModal.hidden &&
-    !boardShortcutIsBlocked(event)
-  ) {
+  const shortcut = shortcutIntent({
+    key: event.key,
+    composing: event.isComposing,
+    meta: event.metaKey,
+    ctrl: event.ctrlKey,
+    alt: event.altKey,
+    shift: event.shiftKey,
+    repeat: event.repeat,
+    prevented: event.defaultPrevented,
+  });
+  if (shortcut === "refresh" && !boardShortcutIsBlocked(event)) {
     event.preventDefault();
-    loadBoard();
+    void loadSnapshot();
   }
-  if (
-    event.key === "/" &&
-    !event.metaKey &&
-    !event.ctrlKey &&
-    !event.altKey &&
-    !event.shiftKey &&
-    !event.repeat &&
-    !event.defaultPrevented &&
-    elements.modal.hidden &&
-    elements.memoryModal.hidden &&
-    !boardShortcutIsBlocked(event)
-  ) {
+  if (shortcut === "addTask" && !boardShortcutIsBlocked(event)) {
     event.preventDefault();
     elements.taskTitle.focus();
   }
@@ -590,24 +1206,39 @@ if ("ResizeObserver" in window) {
   );
 }
 
+window.addEventListener("beforeunload", () => {
+  refreshLoop.dispose();
+  disposeTerminalDock();
+  nativeEventDisposers.splice(0).forEach((dispose) => dispose());
+});
+
 async function start() {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     try {
       api();
-      await loadBoard();
-      try {
-        await mountTerminalDock({ backend: api(), showError });
-      } catch (error) {
-        showError(error);
-      }
-      window.setInterval(() => loadBoard(board?.planId || 0, true), 15000);
+      const state = await api().GetWorkspaceState();
+      workspaceController.publish({
+        status: state.status,
+        generation: Number(state.generation || 0),
+      });
+      renderWorkspaceState(state);
+      registerNativeProjectActions();
+      refreshLoop.start();
+      if (state.status === "open") await loadSnapshot(0);
       return;
     } catch {
       await new Promise((resolve) => window.setTimeout(resolve, 100));
     }
   }
-  showError("Could not connect to the Wails backend");
-  setStatus("Backend unavailable");
+  workspaceController.publish({ status: "error", generation: 0 });
+  renderWorkspaceState(
+    {
+      status: "error",
+      generation: 0,
+      error: "Could not connect to the Wails backend.",
+    },
+    true,
+  );
 }
 
-start();
+void start();
