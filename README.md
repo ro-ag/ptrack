@@ -8,7 +8,7 @@ Keep goals, plans, tasks, decisions, issues, and commit context alive across
 terminal sessions—without a server or a cloud account.
 
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
-[![Release](https://img.shields.io/badge/release-v0.13.1-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.13.1)
+[![Release](https://img.shields.io/badge/release-v0.14.0-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.14.0)
 [![License](https://img.shields.io/badge/License-Apache--2.0-3DD6A3)](LICENSE)
 [![Storage](https://img.shields.io/badge/Storage-local--first-AFA8FF)](#storage-and-safety)
 
@@ -162,6 +162,21 @@ in view. The board refreshes automatically while it is open; press `R` to reload
 immediately after another process changes the project.
 
 ![P-TRACK task-memory dialog](docs/assets/gui-memory.png)
+
+The bottom dock hosts one resizable embedded terminal at the project root.
+Choose the default login shell or a detected installed-agent profile, then use
+an interactive PTY-backed shell. Copy, paste, selection-aware `Ctrl+C`,
+platform shortcuts, and the right-click terminal menu use the native clipboard.
+Multiline text is held behind a bounded review dialog and sent through xterm's
+bracketed-paste behavior only after confirmation. Exited sessions show their
+status and can be restarted without reopening the board.
+
+Clipboard, shortcut, context-menu, restart, and shutdown interactions have been
+verified on macOS. Windows and Linux archives include the native implementation,
+but their PTY, clipboard, input, and descendant-process cleanup paths still
+require interactive validation. Curses and mouse input, IME and Unicode,
+sustained high-volume output, resize stress, and sleep/wake recovery also remain
+in the manual acceptance matrix.
 
 Like the terminal dashboard, the GUI opens the database only for each action.
 The CLI and AI agents can therefore keep reading and writing the same project
