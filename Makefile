@@ -1,4 +1,4 @@
-.PHONY: build test
+.PHONY: build frontend-build frontend-install frontend-test go-test test
 
 # Application builds must go through Wails. A plain `go build` cannot supply
 # Wails' platform-specific tags, CGO setup, or native linker flags.
@@ -9,5 +9,16 @@ build:
 		-trimpath \
 		-windowsconsole
 
-test:
+frontend-install:
+	cd frontend && npm ci
+
+frontend-test:
+	cd frontend && npm test
+
+frontend-build:
+	cd frontend && npm run build
+
+go-test:
 	go test ./...
+
+test: frontend-install frontend-test frontend-build go-test
