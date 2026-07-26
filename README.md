@@ -43,15 +43,16 @@ holding a long-lived lock.
 
 ## Install
 
-Install the latest release with Go:
+Download the native archive for your platform from the
+[GitHub releases page](https://github.com/ro-ag/ptrack/releases), then place the
+`ptrack` executable somewhere on your `PATH`. Every release binary includes the
+CLI, terminal dashboard, and Wails desktop GUI.
 
-```sh
-go install github.com/ro-ag/ptrack@latest
-```
-
-Or download a prebuilt binary from the
-[GitHub releases page](https://github.com/ro-ag/ptrack/releases). Building from
-source requires Go 1.26 or newer.
+Do not install P-TRACK with `go install`. Wails requires platform-specific build
+tags, CGO setup, and native linker flags that `go install module@version` cannot
+apply. P-TRACK rejects plain Go application builds instead of producing a
+binary whose `--gui` option fails at runtime. Building from source requires Go
+1.26 or newer and the Wails prerequisites for your platform.
 
 ## Quick start
 
@@ -263,17 +264,25 @@ only when a command is explicitly asked for `--json` output.
 ## Development
 
 ```sh
-go build ./...
 go test ./...
+go vet ./...
 ```
 
-To produce the native desktop application bundle, install the
+Application builds always go through Wails so the resulting executable includes
+the CLI, terminal dashboard, and desktop GUI. Install the
 [Wails v2 prerequisites](https://wails.io/docs/gettingstarted/installation/)
-for your platform and run:
+for your platform, then run:
 
 ```sh
-go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
-wails build
+make build
+./build/bin/ptrack version
+```
+
+The equivalent command, for environments without `make`, is:
+
+```sh
+go run github.com/wailsapp/wails/v2/cmd/wails@v2.13.0 build \
+  -clean -nopackage -trimpath -windowsconsole
 ```
 
 Architecture and product design notes live in
