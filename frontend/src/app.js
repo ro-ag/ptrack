@@ -1,3 +1,5 @@
+import { mountTerminalDock } from "./terminal/pane";
+
 const statuses = ["todo", "doing", "blocked", "done"];
 const laneColors = {
   todo: "var(--todo)",
@@ -523,23 +525,59 @@ document.querySelectorAll("[data-close-memory-modal]").forEach((element) => {
 });
 elements.memoryDialogClose.addEventListener("click", closeMemoryHistory);
 
+function boardShortcutIsBlocked(event) {
+  const active = document.activeElement;
+  const terminalInteractionVisible = Boolean(
+    document.querySelector(
+      "#terminal-paste-modal:not([hidden]), #terminal-context-menu:not([hidden])",
+    ),
+  );
+  const interactive =
+    active instanceof HTMLElement &&
+    (["INPUT", "SELECT", "TEXTAREA", "BUTTON"].includes(active.tagName) ||
+      active.isContentEditable);
+  const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+  const terminalFocused =
+    (active instanceof Element &&
+      Boolean(active.closest("#terminal-dock, [data-terminal-overlay]"))) ||
+    path.some(
+      (node) =>
+        node instanceof Element &&
+        (node.matches("#terminal-dock, [data-terminal-overlay]") ||
+          Boolean(node.closest("#terminal-dock, [data-terminal-overlay]"))),
+    );
+  return interactive || terminalFocused || terminalInteractionVisible;
+}
+
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !elements.modal.hidden) closeDialog();
   if (event.key === "Escape" && !elements.memoryModal.hidden) closeMemoryHistory();
   if (
     event.key.toLowerCase() === "r" &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    !event.shiftKey &&
+    !event.repeat &&
+    !event.defaultPrevented &&
     elements.modal.hidden &&
     elements.memoryModal.hidden &&
-    !["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName)
+    !boardShortcutIsBlocked(event)
   ) {
     event.preventDefault();
     loadBoard();
   }
   if (
     event.key === "/" &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    !event.shiftKey &&
+    !event.repeat &&
+    !event.defaultPrevented &&
     elements.modal.hidden &&
     elements.memoryModal.hidden &&
-    !["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName)
+    !boardShortcutIsBlocked(event)
   ) {
     event.preventDefault();
     elements.taskTitle.focus();
@@ -557,6 +595,11 @@ async function start() {
     try {
       api();
       await loadBoard();
+      try {
+        await mountTerminalDock({ backend: api(), showError });
+      } catch (error) {
+        showError(error);
+      }
       window.setInterval(() => loadBoard(board?.planId || 0, true), 15000);
       return;
     } catch {

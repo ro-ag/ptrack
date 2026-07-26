@@ -3,8 +3,10 @@
   "name": "P-TRACK",
   "outputfilename": "ptrack",
   "frontend:dir": "frontend",
-  "frontend:install": "",
-  "frontend:build": "",
+  "frontend:install": "npm ci",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
   "wailsjsdir": "frontend",
   "author": {
     "name": "ro-ag"

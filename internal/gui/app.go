@@ -2,11 +2,12 @@
 package gui
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ro-ag/ptrack/internal/model"
@@ -24,9 +25,25 @@ var statuses = []model.TaskStatus{
 // database path; each operation opens and closes the store so other ptrack
 // processes can continue to write while the board is open.
 type App struct {
-	dbPath      string
-	initialPlan uint64
-	projectName string
+	dbPath       string
+	initialPlan  uint64
+	projectName  string
+	projectRoot  string
+	terminals    terminalManager
+	emitTerminal terminalEventEmitter
+
+	lifecycleMu        sync.Mutex
+	wailsContext       context.Context
+	monitorCtx         context.Context
+	monitorCancel      context.CancelFunc
+	monitorWG          sync.WaitGroup
+	terminalOps        sync.WaitGroup
+	startupReady       chan struct{}
+	startupOnce        sync.Once
+	shuttingDown       bool
+	shutdownStarted    chan struct{}
+	shutdownSignalOnce sync.Once
+	shutdownOnce       sync.Once
 }
 
 // Board is the complete snapshot rendered by the frontend.
@@ -98,12 +115,8 @@ type Issue struct {
 }
 
 func newApp(dbPath string, initialPlan uint64) *App {
-	root := filepath.Dir(filepath.Dir(dbPath))
-	return &App{
-		dbPath:      dbPath,
-		initialPlan: initialPlan,
-		projectName: filepath.Base(root),
-	}
+	app, _ := newAppWithTerminal(dbPath, initialPlan, nil, nil)
+	return app
 }
 
 func (a *App) open() (*store.Store, error) {
