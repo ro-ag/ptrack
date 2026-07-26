@@ -79,6 +79,8 @@ const (
 	inputEditGoal
 	inputEditSummary
 	inputRename
+	inputMoveTask
+	inputConvertTask
 )
 
 var boardStatuses = []model.TaskStatus{
@@ -109,6 +111,9 @@ type dashboard struct {
 
 	input   textinput.Model
 	purpose inputPurpose
+	// pendingTaskID pins a move/convert action to the task selected when the
+	// action began, even if reloading changes cursor positions.
+	pendingTaskID uint64
 
 	showDetail   bool
 	detailTitle  string
@@ -315,6 +320,17 @@ func (d dashboard) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		_ = d.reload()
 		d.openDetail()
+	case "e":
+		if _, _, title, ok := d.renameTarget(); ok {
+			return d, d.startInput(inputRename, "Rename:", title)
+		}
+		d.status = "nothing to edit"
+	case "M":
+		d.showDetail = false
+		return d.startMoveTask()
+	case "P":
+		d.showDetail = false
+		return d.startConvertTask()
 	}
 	return d, nil
 }
@@ -325,6 +341,9 @@ func (d dashboard) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		d.commitInput()
 		return d, nil
 	case "esc":
+		if d.purpose == inputMoveTask || d.purpose == inputConvertTask {
+			d.pendingTaskID = 0
+		}
 		d.purpose = inputNone
 		d.status = "cancelled"
 		return d, nil
@@ -437,6 +456,10 @@ func (d dashboard) updateOverview(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		d.setTask(model.TaskDone, "task done")
 	case "b":
 		d.setTask(model.TaskBlocked, "task blocked")
+	case "M":
+		return d.startMoveTask()
+	case "P":
+		return d.startConvertTask()
 	}
 	return d, nil
 }
@@ -493,6 +516,10 @@ func (d dashboard) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return d, nil
 		}
 		return d, d.startInput(inputAddNote, "Note:", "")
+	case "M":
+		return d.startMoveTask()
+	case "P":
+		return d.startConvertTask()
 	}
 	return d, nil
 }
@@ -604,6 +631,10 @@ func (d *dashboard) commitInput() {
 		d.addNote(val)
 	case inputRename:
 		d.rename(val)
+	case inputMoveTask:
+		d.moveTask(val)
+	case inputConvertTask:
+		d.convertTask(val)
 	}
 }
 
@@ -668,6 +699,70 @@ func (d *dashboard) rename(val string) {
 		err = d.store.SetIssueTitle(id, val)
 	}
 	d.applyErr(err, "renamed")
+	if err == nil && d.showDetail {
+		d.openDetail()
+	}
+}
+
+func (d *dashboard) selectedTask() *model.Task {
+	switch d.tab {
+	case tabBoard:
+		return d.boardTask()
+	case tabOverview:
+		if d.focus == focusTasks {
+			return d.currentTask()
+		}
+	}
+	return nil
+}
+
+func (d dashboard) startMoveTask() (tea.Model, tea.Cmd) {
+	t := d.selectedTask()
+	if t == nil {
+		d.status = "no task selected"
+		return d, nil
+	}
+	d.pendingTaskID = t.ID
+	return d, d.startInput(inputMoveTask, "Move to plan ID:", "")
+}
+
+func (d dashboard) startConvertTask() (tea.Model, tea.Cmd) {
+	t := d.selectedTask()
+	if t == nil {
+		d.status = "no task selected"
+		return d, nil
+	}
+	d.pendingTaskID = t.ID
+	prompt := "Convert task #" + strconv.FormatUint(t.ID, 10) + " to a plan? Type yes:"
+	return d, d.startInput(inputConvertTask, prompt, "")
+}
+
+func (d *dashboard) moveTask(val string) {
+	taskID := d.pendingTaskID
+	d.pendingTaskID = 0
+	planID, err := strconv.ParseUint(val, 10, 64)
+	if err != nil || planID == 0 {
+		d.status = "enter a valid target plan ID"
+		return
+	}
+	d.applyErr(d.store.SetTaskPlan(taskID, planID), "task moved to plan #"+strconv.FormatUint(planID, 10))
+}
+
+func (d *dashboard) convertTask(val string) {
+	if !strings.EqualFold(val, "yes") {
+		d.pendingTaskID = 0
+		d.status = "cancelled"
+		return
+	}
+	taskID := d.pendingTaskID
+	d.pendingTaskID = 0
+	p, err := d.store.ConvertTaskToPlan(taskID)
+	if err != nil {
+		d.status = err.Error()
+		return
+	}
+	_ = d.reload()
+	d.status = "converted task #" + strconv.FormatUint(taskID, 10) + " to plan #" + strconv.FormatUint(p.ID, 10)
 }
 
 func (d *dashboard) addNote(body string) {

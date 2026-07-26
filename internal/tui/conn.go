@@ -71,6 +71,13 @@ func (c conn) SetTaskStatus(id uint64, st model.TaskStatus) error {
 func (c conn) SetTaskTitle(id uint64, t string) error {
 	return c.do(func(s *store.Store) error { return s.SetTaskTitle(id, t) })
 }
+func (c conn) SetTaskPlan(id, planID uint64) error {
+	return c.do(func(s *store.Store) error { return s.SetTaskPlan(id, planID) })
+}
+func (c conn) ConvertTaskToPlan(id uint64) (model.Plan, error) {
+	var r model.Plan
+	return r, c.do(func(s *store.Store) (e error) { r, e = s.ConvertTaskToPlan(id); return })
+}
 
 func (c conn) AddNote(target model.NoteTarget, id uint64, body string) (model.Note, error) {
 	var r model.Note

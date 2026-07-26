@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-07-25
+
+### Added
+- Selected-entry editing actions in the TUI command menu and item detail view.
+- `ptrack task move <id> --plan <id>` and matching TUI actions for moving a
+  task to another plan.
+- `ptrack task convert <id>` (also available as `promote`) and matching
+  confirmed TUI actions for promoting a task to a plan while preserving its
+  milestone, notes, and commits.
+
+### Changed
+- Converting a task now maps a completed task to a completed plan, removes the
+  original task atomically, and safely unlinks issues because issues cannot
+  target plans.
+
 ## [0.11.0] - 2026-07-17
 
 ### Added
@@ -212,6 +227,7 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
+[0.12.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.12.0
 [0.11.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.11.0
 [0.10.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.10.0
 [0.9.2]: https://github.com/ro-ag/ptrack/releases/tag/v0.9.2
