@@ -52,6 +52,26 @@ func TestBoardCommand(t *testing.T) {
 	}
 }
 
+func TestBoardGUIOption(t *testing.T) {
+	previous := RunGUI
+	t.Cleanup(func() { RunGUI = previous })
+	var calledWith uint64
+	RunGUI = func(planID uint64) error {
+		calledWith = planID
+		return nil
+	}
+
+	if _, err := runCmd(t, "board", "--gui", "--plan", "42"); err != nil {
+		t.Fatalf("board --gui: %v", err)
+	}
+	if calledWith != 42 {
+		t.Fatalf("RunGUI called with plan %d, want 42", calledWith)
+	}
+	if _, err := runCmd(t, "board", "--gui", "--json"); err == nil {
+		t.Fatal("board accepted --gui with --json")
+	}
+}
+
 func TestTaskListStatusFilter(t *testing.T) {
 	seedProject(t)
 	out := mustRun(t, "task", "list", "--status", "doing,blocked")

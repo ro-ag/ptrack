@@ -10,14 +10,17 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  goreleaser:
+  test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -27,10 +30,167 @@ jobs:
       - name: Run tests
         run: go test ./...
 
-      - name: Release
-        uses: goreleaser/goreleaser-action@v7
+      - name: Check module files
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+  build:
+    name: build (${{ matrix.target }})
+    needs: test
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: linux/amd64
+            archive_os: linux
+            goarch: amd64
+          - runner: ubuntu-24.04-arm
+            target: linux/arm64
+            archive_os: linux
+            goarch: arm64
+          - runner: macos-15-intel
+            target: darwin/amd64
+            archive_os: darwin
+            goarch: amd64
+          - runner: macos-15
+            target: darwin/arm64
+            archive_os: darwin
+            goarch: arm64
+          - runner: windows-2025
+            target: windows/amd64
+            archive_os: windows
+            goarch: amd64
+          - runner: windows-11-arm
+            target: windows/arm64
+            archive_os: windows
+            goarch: arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
         with:
-          version: "~> v2"
-          args: release --clean
+          go-version-file: go.mod
+
+      - name: Install Linux desktop libraries
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - name: Build Linux binary
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          go run github.com/wailsapp/wails/v2/cmd/wails@v2.13.0 build \
+            -clean \
+            -nopackage \
+            -trimpath \
+            -platform "${{ matrix.target }}" \
+            -tags webkit2_41 \
+            -ldflags "-s -w -X github.com/ro-ag/ptrack/internal/cli.Version=${version}"
+
+      - name: Build macOS binary
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          go run github.com/wailsapp/wails/v2/cmd/wails@v2.13.0 build \
+            -clean \
+            -nopackage \
+            -trimpath \
+            -platform "${{ matrix.target }}" \
+            -ldflags "-s -w -X github.com/ro-ag/ptrack/internal/cli.Version=${version}"
+
+      - name: Build Windows binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart("v")
+          go run github.com/wailsapp/wails/v2/cmd/wails@v2.13.0 build `
+            -clean `
+            -nopackage `
+            -trimpath `
+            -windowsconsole `
+            -platform "${{ matrix.target }}" `
+            -ldflags "-s -w -X github.com/ro-ag/ptrack/internal/cli.Version=$version"
+
+      - name: Package Unix archive
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          archive="ptrack_${version}_${{ matrix.archive_os }}_${{ matrix.goarch }}"
+          mkdir -p "dist/${archive}"
+          cp build/bin/ptrack README.md LICENSE "dist/${archive}/"
+          tar -C "dist/${archive}" -czf "../${archive}.tar.gz" .
+          rm -rf "dist/${archive}"
+
+      - name: Package Windows archive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart("v")
+          $archive = "ptrack_${version}_${{ matrix.archive_os }}_${{ matrix.goarch }}"
+          New-Item -ItemType Directory -Force -Path "dist/$archive"
+          Copy-Item build/bin/ptrack.exe, README.md, LICENSE -Destination "dist/$archive"
+          Compress-Archive -Path "dist/$archive/*" -DestinationPath "dist/$archive.zip"
+
+      - name: Upload archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.archive_os }}-${{ matrix.goarch }}
+          path: dist/ptrack_*
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download archives
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create checksums
+        shell: bash
+        run: |
+          cd dist
+          sha256sum ptrack_* > checksums.txt
+
+      - name: Extract release notes
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v version="${version}" '
+            $0 ~ "^## \\[" version "\\]" { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          test -s release-notes.md
+
+      - name: Publish GitHub release
+        shell: bash
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            dist/* \
+            --title "P-TRACK ${GITHUB_REF_NAME}" \
+            --notes-file release-notes.md \
+            --verify-tag
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

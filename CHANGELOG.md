@@ -6,10 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Fixed
-- The tag-only release workflow now uses Node.js 24-compatible major versions
-  of checkout, Go setup, and GoReleaser actions, removing Node.js 20 runtime
-  deprecation warnings.
+### Added
+- `ptrack board --gui`, a Wails desktop kanban board with plan switching,
+  drag-and-drop status changes, task creation and renaming, periodic refresh,
+  task memory notes, linked context on cards, a project-memory rail, and
+  transient database access for safe use alongside agents and the CLI.
+
+### Changed
+- Release archives are now built natively with Wails on Linux, macOS, and
+  Windows for amd64 and arm64, so the CLI and desktop GUI ship together.
+- The tag-only release workflow uses Node.js 24-compatible major versions of
+  the official GitHub actions.
 
 ## [0.12.0] - 2026-07-25
 
