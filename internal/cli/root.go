@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -9,6 +10,12 @@ import (
 // RunNoArgs is invoked when `ptrack` is run with no subcommand. main.go may
 // override it (e.g. to launch a TUI) without cli importing the tui package.
 var RunNoArgs func() error = defaultRunNoArgs
+
+// RunGUI is invoked by `ptrack board --gui`. main.go replaces this callback so
+// the CLI package does not need to import the desktop GUI package.
+var RunGUI func(planID uint64) error = func(uint64) error {
+	return errors.New("GUI support is unavailable in this build")
+}
 
 // defaultRunNoArgs prints a hint pointing the user at help and status.
 func defaultRunNoArgs() error {

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "P-TRACK",
+  "outputfilename": "ptrack",
+  "frontend:dir": "frontend",
+  "frontend:install": "",
+  "frontend:build": "",
+  "wailsjsdir": "frontend",
+  "author": {
+    "name": "ro-ag"
+  }
+}

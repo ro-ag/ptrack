@@ -20,6 +20,8 @@ P-TRACK gives one project two complementary interfaces:
 
 - **Humans get a full-screen terminal dashboard.** Run `ptrack` to browse and
   edit the live project state, move work on a board, and perform maintenance.
+- **The kanban board can also run as a desktop GUI.** Run
+  `ptrack board --gui` for a Wails window with drag-and-drop cards.
 - **Agents get small, scriptable commands.** Run `ptrack context` to restore a
   bounded handoff, then query or update only what the current task needs.
 
@@ -32,6 +34,7 @@ holding a long-lived lock.
 - [Install](#install)
 - [Quick start](#quick-start)
 - [The terminal dashboard](#the-terminal-dashboard)
+- [The desktop board](#the-desktop-board)
 - [Organize tasks](#organize-tasks)
 - [Agent workflow](#agent-workflow)
 - [Command reference](#command-reference)
@@ -68,6 +71,7 @@ Now choose the interface that fits the job:
 
 ```sh
 ptrack          # human: open the interactive dashboard
+ptrack board --gui  # human: open the desktop kanban board
 ptrack context  # agent: restore a compact project handoff
 ptrack next     # agent: ask for the single most-actionable task
 ```
@@ -136,6 +140,27 @@ project root, database location, schema, last writer, and backup destination.
 | Milestones | `↑`/`↓` select · `a` add · `e` rename · `x` complete · `o` reopen |
 | Issues | `↑`/`↓` select · `a` add · `e` rename · `c` close · `o` reopen |
 | Item view | `↑`/`↓` scroll · `pgup`/`pgdn` page · `e` edit · `M` move task · `P` convert task to plan · `r` refresh · `enter`/`esc` back |
+
+## The desktop board
+
+Use the Wails GUI when you want the board in a native desktop window:
+
+```sh
+ptrack board --gui
+ptrack board --gui --plan 4
+```
+
+Select a plan from the header, drag cards between Todo, Doing, Blocked, and Done,
+or use the status selector on a card. Add tasks from the board header,
+double-click a card to rename it, or record durable task context with **Memory**.
+Cards surface linked notes, commits, and open issues, while the project-memory
+rail keeps the goal, agent handoff, project status, issues, and recent decisions
+in view. The board refreshes automatically while it is open; press `R` to reload
+immediately after another process changes the project.
+
+Like the terminal dashboard, the GUI opens the database only for each action.
+The CLI and AI agents can therefore keep reading and writing the same project
+without the board retaining bbolt's write lock.
 
 ## Organize tasks
 
@@ -211,7 +236,7 @@ Put `#<task-id>` in a commit message to link the commit to that task.
 | `ptrack hook install` | Install the post-commit hook that records commits. |
 | `ptrack context [--json]` | Print the bounded restore digest. |
 | `ptrack next [--json]` | Print the most-actionable task in the active plan. |
-| `ptrack board [--plan N] [--json]` | Print a plan's tasks grouped by status. |
+| `ptrack board [--plan N] [--json] [--gui]` | Print a kanban board or open it as a Wails desktop GUI. |
 | `ptrack search <term> [--json]` | Search plan and task titles plus note bodies. |
 | `ptrack status [--json]` | Print a compact project overview. |
 | `ptrack projects [--json]` | List projects in the global registry. |
@@ -240,6 +265,15 @@ only when a command is explicitly asked for `--json` output.
 ```sh
 go build ./...
 go test ./...
+```
+
+To produce the native desktop application bundle, install the
+[Wails v2 prerequisites](https://wails.io/docs/gettingstarted/installation/)
+for your platform and run:
+
+```sh
+go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
+wails build
 ```
 
 Architecture and product design notes live in

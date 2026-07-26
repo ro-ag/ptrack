@@ -1,6 +1,7 @@
 # Binaries
 /ptrack
 /dist/
+/build/
 *.exe
 
 # ptrack local store
@@ -10,6 +11,7 @@
 *.test
 *.out
 /vendor/
+/frontend/wailsjs/
 
 # OS/editor
 .DS_Store
