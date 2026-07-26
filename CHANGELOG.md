@@ -6,9 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-07-25
+
 ### Fixed
 - Native release archives are written to the artifact upload directory on
   every runner, and Windows uploads include only the final ZIP file.
+- This release supersedes the v0.13.0 tag, whose workflow stopped before
+  creating a GitHub release.
 
 ## [0.13.0] - 2026-07-25
 
@@ -247,6 +251,7 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
+[0.13.1]: https://github.com/ro-ag/ptrack/releases/tag/v0.13.1
 [0.13.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.13.0
 [0.12.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.12.0
 [0.11.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.11.0
