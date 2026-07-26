@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-07-25
+
 ### Added
 - `ptrack board --gui`, a Wails desktop kanban board with plan switching,
   drag-and-drop status changes, task creation and renaming, periodic refresh,
@@ -241,6 +243,7 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
+[0.13.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.13.0
 [0.12.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.12.0
 [0.11.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.11.0
 [0.10.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.10.0
