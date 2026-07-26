@@ -154,3 +154,28 @@ func TestRenameSetters(t *testing.T) {
 		t.Errorf("rename missing plan want ErrNotFound, got %v", err)
 	}
 }
+
+func TestSetTaskPlan(t *testing.T) {
+	s := openTemp(t)
+	p1, _ := s.AddPlan("one")
+	p2, _ := s.AddPlan("two")
+	tk, _ := s.AddTask(p1.ID, "roam")
+
+	if err := s.SetTaskPlan(tk.ID, p2.ID); err != nil {
+		t.Fatal(err)
+	}
+	gt, _ := s.GetTask(tk.ID)
+	if gt.PlanID != p2.ID {
+		t.Errorf("task plan = %d, want %d", gt.PlanID, p2.ID)
+	}
+	inP2, _ := s.ListTasksByPlan(p2.ID)
+	if len(inP2) != 1 || inP2[0].ID != tk.ID {
+		t.Errorf("moved task not listed under target plan: %+v", inP2)
+	}
+	if err := s.SetTaskPlan(tk.ID, 999); err != ErrNotFound {
+		t.Errorf("move to missing plan want ErrNotFound, got %v", err)
+	}
+	if err := s.SetTaskPlan(999, p2.ID); err != ErrNotFound {
+		t.Errorf("move missing task want ErrNotFound, got %v", err)
+	}
+}

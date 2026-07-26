@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -110,7 +111,7 @@ func TestCommandMenuNavigatesAndExposesMaintenance(t *testing.T) {
 		t.Fatal("? should open the command menu")
 	}
 	view := ansi.Strip(d.View())
-	for _, want := range []string{"P-TRACK", "Command menu", "Board", "Create backup"} {
+	for _, want := range []string{"P-TRACK", "Command menu", "Board", "Edit selected", "Move task", "Convert task to plan", "Create backup"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("menu missing %q:\n%s", want, view)
 		}
@@ -256,6 +257,73 @@ func TestBoardMoveCard(t *testing.T) {
 	if d.boardCol != 1 {
 		t.Errorf("boardCol = %d want 1", d.boardCol)
 	}
+}
+
+func TestMoveTaskToAnotherPlan(t *testing.T) {
+	d, dbPath := newTestModel(t)
+	var taskID, targetID uint64
+	withStore(t, dbPath, func(s *store.Store) {
+		source, _ := s.AddPlan("source")
+		target, _ := s.AddPlan("target")
+		task, _ := s.AddTask(source.ID, "move me")
+		taskID = task.ID
+		targetID = target.ID
+	})
+	_ = d.reload()
+	d.focus = focusTasks
+
+	d = send(t, d, runes("M"))
+	if d.purpose != inputMoveTask {
+		t.Fatalf("purpose = %v, want inputMoveTask", d.purpose)
+	}
+	d = typeAndEnter(t, d, fmt.Sprint(targetID))
+	if !strings.Contains(d.status, "task moved") {
+		t.Errorf("status = %q", d.status)
+	}
+	withStore(t, dbPath, func(s *store.Store) {
+		task, _ := s.GetTask(taskID)
+		if task.PlanID != targetID {
+			t.Errorf("task plan = %d, want %d", task.PlanID, targetID)
+		}
+	})
+}
+
+func TestConvertTaskToPlanRequiresConfirmation(t *testing.T) {
+	d, dbPath := newTestModel(t)
+	var taskID uint64
+	withStore(t, dbPath, func(s *store.Store) {
+		plan, _ := s.AddPlan("source")
+		task, _ := s.AddTask(plan.ID, "new workstream")
+		taskID = task.ID
+	})
+	_ = d.reload()
+	d.focus = focusTasks
+
+	d = send(t, d, runes("P"))
+	if d.purpose != inputConvertTask {
+		t.Fatalf("purpose = %v, want inputConvertTask", d.purpose)
+	}
+	d = typeAndEnter(t, d, "no")
+	withStore(t, dbPath, func(s *store.Store) {
+		if _, err := s.GetTask(taskID); err != nil {
+			t.Errorf("declined conversion removed task: %v", err)
+		}
+	})
+
+	d = send(t, d, runes("P"))
+	d = typeAndEnter(t, d, "yes")
+	if !strings.Contains(d.status, "converted task") {
+		t.Errorf("status = %q", d.status)
+	}
+	withStore(t, dbPath, func(s *store.Store) {
+		if _, err := s.GetTask(taskID); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("converted task still exists: %v", err)
+		}
+		plans, _ := s.ListPlans()
+		if len(plans) != 2 || plans[1].Title != "new workstream" {
+			t.Errorf("plans = %+v", plans)
+		}
+	})
 }
 
 func TestEditGoal(t *testing.T) {

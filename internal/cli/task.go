@@ -177,7 +177,61 @@ func newTaskCmd() *cobra.Command {
 		},
 	}
 
-	cmd.AddCommand(add, list, show, start, done, block, rename)
+	move := &cobra.Command{
+		Use:   "move <id> --plan <plan>",
+		Short: "Move a task to another plan",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := parseID(args[0])
+			if err != nil {
+				return err
+			}
+			planID, err := cmd.Flags().GetUint64("plan")
+			if err != nil {
+				return err
+			}
+			if planID == 0 {
+				return errors.New("pass the target plan with --plan <id>")
+			}
+			s, err := openProject()
+			if err != nil {
+				return err
+			}
+			defer s.Close()
+			if err := s.SetTaskPlan(id, planID); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "task #%d moved to plan %d\n", id, planID)
+			return nil
+		},
+	}
+	move.Flags().Uint64("plan", 0, "target plan id (required)")
+
+	convert := &cobra.Command{
+		Use:     "convert <id>",
+		Aliases: []string{"promote"},
+		Short:   "Convert a task into a plan",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := parseID(args[0])
+			if err != nil {
+				return err
+			}
+			s, err := openProject()
+			if err != nil {
+				return err
+			}
+			defer s.Close()
+			p, err := s.ConvertTaskToPlan(id)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "task #%d converted to plan #%d %s\n", id, p.ID, p.Title)
+			return nil
+		},
+	}
+
+	cmd.AddCommand(add, list, show, start, done, block, rename, move, convert)
 	return cmd
 }
 

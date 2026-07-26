@@ -320,6 +320,131 @@ func (s *Store) SetTaskTitle(id uint64, title string) error {
 	return s.mutateTask(id, func(t *model.Task) { t.Title = title })
 }
 
+// SetTaskPlan moves a task to another existing plan while retaining the task's
+// identity, status, notes, commit links, order, and creation time.
+func (s *Store) SetTaskPlan(id, planID uint64) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		if v := tx.Bucket(bucketPlans).Get(itob(planID)); v == nil {
+			return ErrNotFound
+		}
+		b := tx.Bucket(bucketTasks)
+		var t model.Task
+		if err := getGobNF(b, itob(id), &t); err != nil {
+			return err
+		}
+		t.PlanID = planID
+		t.UpdatedAt = time.Now()
+		return putGob(b, itob(id), t)
+	})
+}
+
+// ConvertTaskToPlan atomically replaces a task with a new plan and returns the
+// plan. The plan retains the task's title and creation time, inherits its
+// current plan's milestone, and receives the task's notes and commits. A done
+// task produces a done plan; every other task status produces an active plan.
+// Issues cannot target plans, so linked issues are retained but unlinked.
+func (s *Store) ConvertTaskToPlan(id uint64) (model.Plan, error) {
+	var p model.Plan
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		tasks := tx.Bucket(bucketTasks)
+		var t model.Task
+		if err := getGobNF(tasks, itob(id), &t); err != nil {
+			return err
+		}
+
+		var parent model.Plan
+		if err := getGobNF(tx.Bucket(bucketPlans), itob(t.PlanID), &parent); err != nil {
+			return err
+		}
+
+		plans := tx.Bucket(bucketPlans)
+		planID, _ := plans.NextSequence()
+		now := time.Now()
+		status := model.PlanActive
+		if t.Status == model.TaskDone {
+			status = model.PlanDone
+		}
+		p = model.Plan{
+			ID:          planID,
+			Title:       t.Title,
+			Status:      status,
+			MilestoneID: parent.MilestoneID,
+			Order:       plans.Stats().KeyN,
+			CreatedAt:   t.CreatedAt,
+			UpdatedAt:   now,
+		}
+		if err := putGob(plans, itob(planID), p); err != nil {
+			return err
+		}
+
+		var notes []model.Note
+		if err := tx.Bucket(bucketNotes).ForEach(func(_, v []byte) error {
+			var n model.Note
+			if err := gobDecode(v, &n); err != nil {
+				return err
+			}
+			if n.Target == model.TargetTask && n.TargetID == id {
+				n.Target = model.TargetPlan
+				n.TargetID = planID
+				notes = append(notes, n)
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		for _, n := range notes {
+			if err := putGob(tx.Bucket(bucketNotes), itob(n.ID), n); err != nil {
+				return err
+			}
+		}
+
+		var commits []model.Commit
+		if err := tx.Bucket(bucketCommits).ForEach(func(_, v []byte) error {
+			var c model.Commit
+			if err := gobDecode(v, &c); err != nil {
+				return err
+			}
+			if c.TaskID == id {
+				c.TaskID = 0
+				c.PlanID = planID
+				commits = append(commits, c)
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		for _, c := range commits {
+			if err := putGob(tx.Bucket(bucketCommits), itob(c.ID), c); err != nil {
+				return err
+			}
+		}
+
+		var issues []model.Issue
+		if err := tx.Bucket(bucketIssues).ForEach(func(_, v []byte) error {
+			var issue model.Issue
+			if err := gobDecode(v, &issue); err != nil {
+				return err
+			}
+			if issue.TaskID == id {
+				issue.TaskID = 0
+				issue.UpdatedAt = now
+				issues = append(issues, issue)
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		for _, issue := range issues {
+			if err := putGob(tx.Bucket(bucketIssues), itob(issue.ID), issue); err != nil {
+				return err
+			}
+		}
+
+		return tasks.Delete(itob(id))
+	})
+	return p, err
+}
+
 func (s *Store) mutateTask(id uint64, fn func(*model.Task)) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketTasks)

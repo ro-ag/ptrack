@@ -8,7 +8,7 @@ Keep goals, plans, tasks, decisions, issues, and commit context alive across
 terminal sessions—without a server or a cloud account.
 
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
-[![Release](https://img.shields.io/badge/release-v0.11.0-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.11.0)
+[![Release](https://img.shields.io/badge/release-v0.12.0-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.12.0)
 [![License](https://img.shields.io/badge/License-Apache--2.0-3DD6A3)](LICENSE)
 [![Storage](https://img.shields.io/badge/Storage-local--first-AFA8FF)](#storage-and-safety)
 
@@ -32,6 +32,7 @@ holding a long-lived lock.
 - [Install](#install)
 - [Quick start](#quick-start)
 - [The terminal dashboard](#the-terminal-dashboard)
+- [Organize tasks](#organize-tasks)
 - [Agent workflow](#agent-workflow)
 - [Command reference](#command-reference)
 - [Storage and safety](#storage-and-safety)
@@ -95,7 +96,7 @@ The five main screens are also available with `1`–`5`:
 
 | Key | Screen | What it is for |
 |---:|---|---|
-| `1` | **Overview** | Browse plans and their tasks; add, rename, activate, complete, or annotate work. |
+| `1` | **Overview** | Browse plans and tasks; add, edit, move, promote, complete, or annotate work. |
 | `2` | **Board** | See the active plan as Todo, Doing, Blocked, and Done columns. |
 | `3` | **Milestones** | Review project checkpoints, their plans, due dates, and task rollups. |
 | `4` | **Issues** | Track problems and bugs by severity and status. |
@@ -130,11 +131,33 @@ project root, database location, schema, last writer, and backup destination.
 |---|---|
 | Launch screen | `enter` dashboard · `1`–`5` jump · `?` menu · `q` quit |
 | Everywhere else | `?` menu · `tab`/`shift+tab` switch · `1`–`5` jump · `g` goal · `m` summary · `r` reload · `B` backup · `q` quit |
-| Overview | `←`/`→` pane · `↑`/`↓` select · `a` add · `e` rename · `u` activate plan · `x` complete plan · `s`/`d`/`b` change task status · `n` note |
-| Board | `←`/`→` column · `↑`/`↓` card · `H`/`L` move card · `a` add · `e` rename · `n` note |
+| Overview | `←`/`→` pane · `↑`/`↓` select · `a` add · `e` edit · `M` move task to plan · `P` convert task to plan · `u` activate plan · `x` complete plan · `s`/`d`/`b` task status · `n` note |
+| Board | `←`/`→` column · `↑`/`↓` card · `H`/`L` change status · `a` add · `e` edit · `M` move to plan · `P` convert to plan · `n` note |
 | Milestones | `↑`/`↓` select · `a` add · `e` rename · `x` complete · `o` reopen |
 | Issues | `↑`/`↓` select · `a` add · `e` rename · `c` close · `o` reopen |
-| Item view | `↑`/`↓` scroll · `pgup`/`pgdn` page · `r` refresh · `enter`/`esc` back |
+| Item view | `↑`/`↓` scroll · `pgup`/`pgdn` page · `e` edit · `M` move task · `P` convert task to plan · `r` refresh · `enter`/`esc` back |
+
+## Organize tasks
+
+Move a task without recreating it:
+
+```sh
+ptrack task move 12 --plan 4
+```
+
+When a task grows into a workstream, convert it into a plan:
+
+```sh
+ptrack task convert 12
+```
+
+Conversion is atomic. The new plan keeps the task's title, creation time,
+milestone, notes, and commits. A done task becomes a done plan; other task
+statuses become an active plan. The original task is removed, and linked issues
+are retained but unlinked because issues cannot target plans.
+
+In the dashboard, select a task and press `M` to move it or `P` to convert it.
+The same actions are available from `?` and from the task's item view.
 
 ## Agent workflow
 
@@ -181,7 +204,7 @@ Put `#<task-id>` in a commit message to link the commit to that task.
 | `ptrack summary show\|set S` | Show or update the rolling context summary. |
 | `ptrack milestone add\|list\|show\|done\|open\|due\|rename` | Manage checkpoints that group plans. |
 | `ptrack plan add\|list\|show\|done\|use\|rename` | Manage plans; `show` includes tasks and notes. |
-| `ptrack task add\|list\|show\|start\|done\|block\|rename` | Manage tasks; `list --status todo,doing,…` filters them. |
+| `ptrack task add\|list\|show\|start\|done\|block\|rename\|move\|convert` | Manage tasks; move them between plans or convert them into plans. |
 | `ptrack issue add\|list\|show\|close\|open\|severity\|rename` | Track issues and bugs, optionally linked to tasks. |
 | `ptrack note add\|list` | Attach or list project, plan, and task notes. |
 | `ptrack commit add\|list\|show\|record` | Browse the recorded git audit trail; `show` prints the diff. |

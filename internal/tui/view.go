@@ -306,7 +306,7 @@ func (d dashboard) viewOverview(w, h int) string {
 	}
 
 	planHints := hintRow(hint("enter", "view"), hint("a", "add"), hint("e", "rename"), hint("u", "activate"), hint("x", "done"))
-	taskHints := hintRow(hint("enter", "view"), hint("a", "add"), hint("s/d/b", "status"), hint("n", "note"))
+	taskHints := hintRow(hint("a/e", "add/edit"), hint("s/d/b", "status"), hint("n", "note"), hint("M", "move"), hint("P", "promote"))
 	left := panel("Plans", len(d.plans), leftW, h, d.focus == focusPlans, planHints, pl.String())
 	right := panel("Tasks", len(tasks), rightW, h, d.focus == focusTasks, taskHints, tk.String())
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
@@ -348,7 +348,7 @@ func (d dashboard) viewBoard(w, h int) string {
 		rendered[i] = panel(taskIcon(boardStatuses[i])+" "+boardTitles[i], len(cols[i]), width, h-1, i == d.boardCol, "", body.String())
 	}
 	left := labelStyle.Render("Board") + dimStyle.Render(fmt.Sprintf("  /  Plan #%d  ", p.ID)) + textStyle.Render(p.Title)
-	hints := hintRow(hint("H/L", "move card"), hint("a", "add"), hint("e", "rename"), hint("n", "note"))
+	hints := hintRow(hint("H/L", "status"), hint("a/e", "add/edit"), hint("n", "note"), hint("M", "plan"), hint("P", "promote"))
 	title := left
 	if pad := w - lipgloss.Width(left) - lipgloss.Width(hints); pad >= 2 {
 		title = left + strings.Repeat(" ", pad) + hints
@@ -533,7 +533,12 @@ func (d dashboard) viewDetail(w, h int) string {
 	if len(lines) > inner {
 		title += fmt.Sprintf("  %d–%d/%d", start+1, end, len(lines))
 	}
-	detailHints := hintRow(hint("↑/↓", "scroll"), hint("pgup/pgdn", "page"), hint("esc", "back"))
+	detailActions := []string{hint("↑/↓", "scroll"), hint("e", "edit")}
+	if d.selectedTask() != nil {
+		detailActions = append(detailActions, hint("M", "move"), hint("P", "to plan"))
+	}
+	detailActions = append(detailActions, hint("esc", "back"))
+	detailHints := hintRow(detailActions...)
 	return panel(title, -1, w, h, true, detailHints, b.String())
 }
 

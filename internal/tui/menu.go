@@ -12,6 +12,9 @@ const (
 	menuMaintenance
 	menuGoal
 	menuSummary
+	menuEdit
+	menuMoveTask
+	menuConvertTask
 	menuReload
 	menuBackup
 )
@@ -32,6 +35,9 @@ var commandMenu = []menuItem{
 	{group: "Navigate", key: "5", title: "Maintenance", description: "Storage health and upkeep", action: menuMaintenance},
 	{group: "Project", key: "g", title: "Edit goal", description: "Update the north star", action: menuGoal},
 	{group: "Project", key: "m", title: "Edit summary", description: "Refresh handoff context", action: menuSummary},
+	{group: "Selected", key: "e", title: "Edit selected", description: "Rename the selected entry", action: menuEdit},
+	{group: "Selected", key: "M", title: "Move task", description: "Move the selected task to another plan", action: menuMoveTask},
+	{group: "Selected", key: "P", title: "Convert task to plan", description: "Promote the selected task", action: menuConvertTask},
 	{group: "Maintain", key: "r", title: "Reload", description: "Read the latest project state", action: menuReload},
 	{group: "Maintain", key: "B", title: "Create backup", description: "Copy the project database", action: menuBackup},
 }
@@ -83,6 +89,17 @@ func (d dashboard) runMenuAction(action menuAction) (tea.Model, tea.Cmd) {
 		return d, d.startInput(inputEditGoal, "Goal:", d.meta.Goal)
 	case menuSummary:
 		return d, d.startInput(inputEditSummary, "Summary:", d.meta.Summary)
+	case menuEdit:
+		if _, _, title, ok := d.renameTarget(); ok {
+			return d, d.startInput(inputRename, "Rename:", title)
+		}
+		d.status = "nothing to edit"
+	case menuMoveTask:
+		d.showDetail = false
+		return d.startMoveTask()
+	case menuConvertTask:
+		d.showDetail = false
+		return d.startConvertTask()
 	case menuReload:
 		d.applyErr(d.reload(), "project reloaded")
 		if d.showDetail {
