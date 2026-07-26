@@ -53,6 +53,13 @@ type goPTYProcess struct {
 	closeErr  error
 }
 
+func (p *goPTYProcess) PID() int {
+	if p.command.Process == nil {
+		return 0
+	}
+	return p.command.Process.Pid
+}
+
 func (p *goPTYProcess) Read(buffer []byte) (int, error) {
 	read, err := p.pty.Read(buffer)
 	return read, normalizePTYReadError(err)

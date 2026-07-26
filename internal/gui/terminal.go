@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"time"
 
+	"github.com/ro-ag/ptrack/internal/agentrun"
 	"github.com/ro-ag/ptrack/internal/terminal"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -20,24 +22,45 @@ type TerminalSession struct {
 }
 
 type TerminalStatus struct {
-	SessionID string                `json:"sessionId"`
-	State     terminal.SessionState `json:"state"`
+	Generation uint64                `json:"generation"`
+	SessionID  string                `json:"sessionId"`
+	State      terminal.SessionState `json:"state"`
 }
 
 type TerminalExit struct {
-	SessionID string                `json:"sessionId"`
-	ExitCode  int                   `json:"exitCode"`
-	State     terminal.SessionState `json:"state"`
-	Error     string                `json:"error,omitempty"`
+	Generation uint64                `json:"generation"`
+	SessionID  string                `json:"sessionId"`
+	ExitCode   int                   `json:"exitCode"`
+	State      terminal.SessionState `json:"state"`
+	Error      string                `json:"error,omitempty"`
+}
+
+type TerminalProfilesV2 struct {
+	Generation uint64             `json:"generation"`
+	Profiles   []terminal.Profile `json:"profiles"`
+}
+
+type TerminalSessionV2 struct {
+	Generation uint64                `json:"generation"`
+	SessionID  string                `json:"sessionId"`
+	ProfileID  string                `json:"profileId"`
+	CWD        string                `json:"cwd"`
+	State      terminal.SessionState `json:"state"`
+	StreamURL  string                `json:"streamUrl"`
 }
 
 type managedTerminalSession struct {
-	SessionID   string
-	ProfileID   string
-	CWD         string
-	State       terminal.SessionState
-	StreamURL   string
-	exitResults <-chan terminal.ExitResult
+	SessionID      string
+	ProfileID      string
+	CWD            string
+	State          terminal.SessionState
+	StreamURL      string
+	ProfileKind    terminal.ProfileKind
+	Provider       string
+	PID            int
+	StartedAt      time.Time
+	LastActivityAt time.Time
+	exitResults    <-chan terminal.ExitResult
 }
 
 type terminalManager interface {
@@ -75,13 +98,19 @@ func (m productionTerminalManager) Create(
 			m.manager.CloseSession(session.ID(), true),
 		)
 	}
+	info := session.Info()
 	return managedTerminalSession{
-		SessionID:   session.ID(),
-		ProfileID:   session.ProfileID(),
-		CWD:         session.CWD(),
-		State:       session.State(),
-		StreamURL:   streamURL,
-		exitResults: session.ExitResults(),
+		SessionID:      session.ID(),
+		ProfileID:      session.ProfileID(),
+		CWD:            session.CWD(),
+		State:          session.State(),
+		StreamURL:      streamURL,
+		ProfileKind:    info.ProfileKind,
+		Provider:       info.Provider,
+		PID:            info.PID,
+		StartedAt:      info.StartedAt,
+		LastActivityAt: info.LastActivityAt,
+		exitResults:    session.ExitResults(),
 	}, nil
 }
 
@@ -95,6 +124,10 @@ func (m productionTerminalManager) Close(sessionID string, force bool) error {
 
 func (m productionTerminalManager) Shutdown(ctx context.Context) error {
 	return m.manager.Shutdown(ctx)
+}
+
+func (m productionTerminalManager) SessionSnapshot(limit int) []terminal.SessionInfo {
+	return m.manager.SessionSnapshot(limit)
 }
 
 func newAppWithTerminal(
@@ -117,39 +150,58 @@ func newAppWithTerminal(
 			wailsruntime.EventsEmit(ctx, name, payload)
 		}
 	}
-	return &App{
-		dbPath:          dbPath,
-		initialPlan:     initialPlan,
-		projectName:     filepath.Base(canonicalRoot),
-		projectRoot:     canonicalRoot,
-		terminals:       manager,
-		emitTerminal:    emitter,
-		startupReady:    make(chan struct{}),
-		shutdownStarted: make(chan struct{}),
-	}, nil
+	app := newWorkspaceCoordinator(nil, emitter)
+	workspace := newWorkspaceContext(workspaceContextConfig{
+		generation:  1,
+		root:        canonicalRoot,
+		dbPath:      dbPath,
+		name:        filepath.Base(canonicalRoot),
+		initialPlan: initialPlan,
+		terminals:   manager,
+	})
+	app.workspace = workspace
+	app.workspaceStatus = WorkspaceOpen
+	app.lastGeneration = 1
+	app.syncLegacyWorkspaceFieldsLocked(workspace)
+	return app, nil
 }
 
 func (a *App) GetTerminalProfiles() ([]terminal.Profile, error) {
-	if err := a.beginTerminalOperation(); err != nil {
-		return nil, err
-	}
-	defer a.terminalOps.Done()
-	if a.terminals == nil {
-		return nil, errors.New("terminal manager is unavailable")
-	}
-	profiles, err := a.terminals.Profiles()
+	result, err := a.GetTerminalProfilesV2(0)
+	return result.Profiles, err
+}
+
+func (a *App) GetTerminalProfilesV2(generation uint64) (TerminalProfilesV2, error) {
+	workspace, manager, release, err := a.beginTerminalOperation(generation, false)
 	if err != nil {
-		return nil, err
+		return TerminalProfilesV2{}, err
 	}
+	defer release()
+	if manager == nil {
+		return TerminalProfilesV2{}, errors.New("terminal manager is unavailable")
+	}
+	profiles, err := manager.Profiles()
+	if err != nil {
+		return TerminalProfilesV2{}, err
+	}
+	copies := safeTerminalProfiles(profiles)
+	return TerminalProfilesV2{
+		Generation: workspace.Generation(),
+		Profiles:   copies,
+	}, nil
+}
+
+func safeTerminalProfiles(profiles []terminal.Profile) []terminal.Profile {
 	copies := make([]terminal.Profile, len(profiles))
 	for index, profile := range profiles {
 		copies[index] = terminal.Profile{
-			ID:   profile.ID,
-			Name: profile.Name,
-			Kind: profile.Kind,
+			ID:       profile.ID,
+			Name:     profile.Name,
+			Kind:     profile.Kind,
+			Provider: profile.Provider,
 		}
 	}
-	return copies, nil
+	return copies
 }
 
 func (a *App) CreateTerminal(
@@ -158,57 +210,129 @@ func (a *App) CreateTerminal(
 	rows int,
 	columns int,
 ) (TerminalSession, error) {
-	if err := a.beginTerminalOperation(); err != nil {
-		return TerminalSession{}, err
-	}
-	defer a.terminalOps.Done()
-	if a.terminals == nil {
-		return TerminalSession{}, errors.New("terminal manager is unavailable")
-	}
-	if cwd == "" {
-		cwd = a.projectRoot
-	}
-	session, err := a.terminals.Create(profileID, cwd, rows, columns)
+	result, err := a.CreateTerminalV2(0, profileID, cwd, rows, columns)
 	if err != nil {
 		return TerminalSession{}, err
 	}
-	result := TerminalSession{
+	return TerminalSession{
+		SessionID: result.SessionID,
+		ProfileID: result.ProfileID,
+		CWD:       result.CWD,
+		State:     result.State,
+		StreamURL: result.StreamURL,
+	}, nil
+}
+
+func (a *App) CreateTerminalV2(
+	generation uint64,
+	profileID string,
+	cwd string,
+	rows int,
+	columns int,
+) (TerminalSessionV2, error) {
+	workspace, manager, release, err := a.beginTerminalOperation(generation, true)
+	if err != nil {
+		return TerminalSessionV2{}, err
+	}
+	defer release()
+	if manager == nil {
+		return TerminalSessionV2{}, errors.New("terminal manager is unavailable")
+	}
+	if cwd == "" {
+		cwd = workspace.root
+	}
+	session, err := manager.Create(profileID, cwd, rows, columns)
+	if err != nil {
+		return TerminalSessionV2{}, err
+	}
+	result := TerminalSessionV2{
+		Generation: workspace.Generation(),
+		SessionID:  session.SessionID,
+		ProfileID:  session.ProfileID,
+		CWD:        session.CWD,
+		State:      session.State,
+		StreamURL:  session.StreamURL,
+	}
+	workspace.recordTerminal(TerminalSession{
 		SessionID: session.SessionID,
 		ProfileID: session.ProfileID,
 		CWD:       session.CWD,
 		State:     session.State,
 		StreamURL: session.StreamURL,
+	})
+	if session.ProfileKind == terminal.ProfileAgent {
+		if registry := workspace.agentRegistry(); registry != nil {
+			if _, registerErr := registry.RegisterLaunched(agentrun.Registration{
+				Profile:    session.ProfileID,
+				Provider:   session.Provider,
+				PID:        session.PID,
+				TerminalID: session.SessionID,
+				CWD:        session.CWD,
+			}); registerErr != nil {
+				workspace.removeTerminal(session.SessionID)
+				closeErr := manager.Close(session.SessionID, true)
+				return TerminalSessionV2{}, errors.Join(registerErr, closeErr)
+			}
+		}
 	}
-	a.publishTerminalStatus(TerminalStatus{SessionID: session.SessionID, State: session.State})
+	a.publishWorkspaceTerminalStatus(workspace, TerminalStatus{
+		Generation: workspace.Generation(),
+		SessionID:  session.SessionID,
+		State:      session.State,
+	})
 	if session.exitResults != nil {
-		a.monitorTerminalExit(session.SessionID, session.exitResults)
+		a.monitorTerminalExit(workspace, session.SessionID, session.exitResults)
 	}
 	return result, nil
 }
 
 func (a *App) ResizeTerminal(sessionID string, rows, columns int) error {
-	if err := a.beginTerminalOperation(); err != nil {
+	return a.ResizeTerminalV2(0, sessionID, rows, columns)
+}
+
+func (a *App) ResizeTerminalV2(
+	generation uint64,
+	sessionID string,
+	rows int,
+	columns int,
+) error {
+	_, manager, release, err := a.beginTerminalOperation(generation, false)
+	if err != nil {
 		return err
 	}
-	defer a.terminalOps.Done()
-	if a.terminals == nil {
+	defer release()
+	if manager == nil {
 		return errors.New("terminal manager is unavailable")
 	}
-	return a.terminals.Resize(sessionID, rows, columns)
+	return manager.Resize(sessionID, rows, columns)
 }
 
 func (a *App) CloseTerminal(sessionID string, force bool) error {
-	if err := a.beginTerminalOperation(); err != nil {
+	return a.CloseTerminalV2(0, sessionID, force)
+}
+
+func (a *App) CloseTerminalV2(
+	generation uint64,
+	sessionID string,
+	force bool,
+) error {
+	workspace, manager, release, err := a.beginTerminalOperation(generation, false)
+	if err != nil {
 		return err
 	}
-	defer a.terminalOps.Done()
-	if a.terminals == nil {
+	defer release()
+	if manager == nil {
 		return errors.New("terminal manager is unavailable")
 	}
-	if err := a.terminals.Close(sessionID, force); err != nil {
+	if err := manager.Close(sessionID, force); err != nil {
 		return err
 	}
-	a.publishTerminalStatus(TerminalStatus{SessionID: sessionID, State: terminal.SessionClosed})
+	workspace.removeTerminal(sessionID)
+	a.publishWorkspaceTerminalStatus(workspace, TerminalStatus{
+		Generation: workspace.Generation(),
+		SessionID:  sessionID,
+		State:      terminal.SessionClosed,
+	})
 	return nil
 }
 
@@ -237,19 +361,39 @@ func (a *App) onShutdown(ctx context.Context) {
 			close(a.shutdownStarted)
 		})
 		a.lifecycleMu.Unlock()
-		a.terminalOps.Wait()
-		if a.terminals != nil {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			_ = a.terminals.Shutdown(shutdownCtx)
-			cancel()
+		a.transitionMu.Lock()
+		a.clearConfirmationLocked()
+		a.workspaceMu.Lock()
+		workspace := a.workspace
+		a.workspace = nil
+		a.syncLegacyWorkspaceFieldsLocked(nil)
+		a.workspaceMu.Unlock()
+		a.transitionMu.Unlock()
+		a.lifecycleMu.Lock()
+		monitorCancel := a.monitorCancel
+		a.lifecycleMu.Unlock()
+		if monitorCancel != nil {
+			monitorCancel()
 		}
+		_ = closeWorkspaceWithTimeout(workspace)
+		waitTimeout := a.shutdownWaitTimeout
+		if waitTimeout <= 0 {
+			waitTimeout = 3 * time.Second
+		}
+		waitForLifecycleGroup(&a.terminalOps, waitTimeout)
+		waitForLifecycleGroup(&a.monitorWG, waitTimeout)
 		a.lifecycleMu.Lock()
 		if a.monitorCancel != nil {
 			a.monitorCancel()
 		}
 		a.lifecycleMu.Unlock()
-		a.monitorWG.Wait()
 	})
+}
+
+func waitForLifecycleGroup(group *lifecycleGroup, timeout time.Duration) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return group.WaitContext(ctx) == nil
 }
 
 func (a *App) publishTerminalStatus(status TerminalStatus) {
@@ -258,6 +402,31 @@ func (a *App) publishTerminalStatus(status TerminalStatus) {
 
 func (a *App) publishTerminalExit(result TerminalExit) {
 	a.emitTerminalEvent("terminal:exit", result)
+}
+
+func (a *App) publishWorkspaceTerminalStatus(
+	workspace *WorkspaceContext,
+	status TerminalStatus,
+) {
+	if a.workspaceIsPublished(workspace) {
+		a.publishTerminalStatus(status)
+	}
+}
+
+func (a *App) publishWorkspaceTerminalExit(
+	workspace *WorkspaceContext,
+	result TerminalExit,
+) {
+	if a.workspaceIsPublished(workspace) {
+		a.publishTerminalExit(result)
+	}
+}
+
+func (a *App) workspaceIsPublished(workspace *WorkspaceContext) bool {
+	a.workspaceMu.RLock()
+	defer a.workspaceMu.RUnlock()
+	return workspace != nil && a.workspace == workspace &&
+		a.workspace.Generation() == workspace.Generation()
 }
 
 func (a *App) emitTerminalEvent(name string, payload any) {
@@ -271,10 +440,13 @@ func (a *App) emitTerminalEvent(name string, payload any) {
 	emitter(ctx, name, payload)
 }
 
-func (a *App) monitorTerminalExit(sessionID string, results <-chan terminal.ExitResult) {
+func (a *App) monitorTerminalExit(
+	workspace *WorkspaceContext,
+	sessionID string,
+	results <-chan terminal.ExitResult,
+) {
 	a.lifecycleMu.Lock()
-	ctx := a.monitorCtx
-	if ctx == nil || a.shuttingDown {
+	if a.wailsContext == nil || a.shuttingDown {
 		a.lifecycleMu.Unlock()
 		return
 	}
@@ -287,33 +459,64 @@ func (a *App) monitorTerminalExit(sessionID string, results <-chan terminal.Exit
 			if !ok {
 				return
 			}
+			workspace.removeTerminal(sessionID)
 			exit := TerminalExit{
-				SessionID: sessionID,
-				ExitCode:  result.ExitCode,
-				State:     result.State,
+				Generation: workspace.Generation(),
+				SessionID:  sessionID,
+				ExitCode:   result.ExitCode,
+				State:      result.State,
 			}
 			if result.Err != nil {
 				exit.Error = result.Err.Error()
 			}
-			a.publishTerminalExit(exit)
-		case <-ctx.Done():
+			if registry := workspace.agentRegistry(); registry != nil {
+				resultText := "exited"
+				if result.Err != nil {
+					resultText = "failed"
+				}
+				registry.RecordTerminalExit(sessionID, result.ExitCode, resultText)
+			}
+			a.publishWorkspaceTerminalExit(workspace, exit)
+		case <-workspace.Context().Done():
 		}
 	}()
 }
 
-func (a *App) beginTerminalOperation() error {
+func (a *App) beginTerminalOperation(
+	expectedGeneration uint64,
+	resourceAdmission bool,
+) (*WorkspaceContext, terminalManager, func(), error) {
 	select {
 	case <-a.startupReady:
 	case <-a.shutdownStarted:
-		return errors.New("terminal lifecycle is shutting down")
+		return nil, nil, nil, errors.New("terminal lifecycle is shutting down")
 	}
 	a.lifecycleMu.Lock()
-	defer a.lifecycleMu.Unlock()
 	if a.shuttingDown {
-		return errors.New("terminal lifecycle is shutting down")
+		a.lifecycleMu.Unlock()
+		return nil, nil, nil, errors.New("terminal lifecycle is shutting down")
 	}
 	a.terminalOps.Add(1)
-	return nil
+	a.lifecycleMu.Unlock()
+
+	workspace, err := a.currentWorkspace(expectedGeneration)
+	if err != nil {
+		a.terminalOps.Done()
+		return nil, nil, nil, err
+	}
+	releaseWorkspace, err := workspace.beginOperation(expectedGeneration, resourceAdmission)
+	if err != nil {
+		a.terminalOps.Done()
+		return nil, nil, nil, err
+	}
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			releaseWorkspace()
+			a.terminalOps.Done()
+		})
+	}
+	return workspace, workspace.terminalManager(), release, nil
 }
 
 var _ terminalManager = productionTerminalManager{}

@@ -11,9 +11,10 @@ import (
 // override it (e.g. to launch a TUI) without cli importing the tui package.
 var RunNoArgs func() error = defaultRunNoArgs
 
-// RunGUI is invoked by `ptrack board --gui`. main.go replaces this callback so
-// the CLI package does not need to import the desktop GUI package.
-var RunGUI func(planID uint64) error = func(uint64) error {
+// RunGUI is invoked by `ptrack gui [PATH]` and the compatible
+// `ptrack board --gui` alias. main.go replaces this callback so the CLI package
+// does not need to import the desktop GUI package.
+var RunGUI func(path string, planID uint64) error = func(string, uint64) error {
 	return errors.New("GUI support is unavailable in this build")
 }
 
@@ -55,6 +56,7 @@ func newRootCmd() *cobra.Command {
 		newNextCmd(),
 		newSearchCmd(),
 		newBoardCmd(),
+		newGUICmd(),
 		newStatusCmd(),
 		newProjectsCmd(),
 		newBackupCmd(),

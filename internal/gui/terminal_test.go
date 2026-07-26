@@ -441,6 +441,26 @@ func TestTerminalShutdownWaitsForInFlightBindingBeforeManagerShutdown(t *testing
 	}
 }
 
+func TestTerminalShutdownWaitsAreBounded(t *testing.T) {
+	app, _ := newTerminalBindingTestApp(t, &fakeGUITerminalManager{}, nil)
+	app.shutdownWaitTimeout = 20 * time.Millisecond
+	app.terminalOps.Add(1)
+	app.monitorWG.Add(1)
+
+	done := make(chan struct{})
+	go func() {
+		app.onShutdown(context.Background())
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("application shutdown blocked on lifecycle wait groups")
+	}
+	app.terminalOps.Done()
+	app.monitorWG.Done()
+}
+
 type fakeGUITerminalManager struct {
 	mu sync.Mutex
 

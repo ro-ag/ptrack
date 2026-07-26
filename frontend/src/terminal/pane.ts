@@ -38,6 +38,7 @@ interface TerminalSession {
 }
 
 interface TerminalExit {
+  generation?: number;
   sessionId: string;
   exitCode: number;
   state: string;
@@ -58,7 +59,13 @@ interface TerminalBackend {
 
 interface MountOptions {
   backend: TerminalBackend;
+  workspaceGeneration?: number;
   showError(error: unknown): void;
+}
+
+export interface TerminalDockHandle {
+  ready: Promise<void>;
+  dispose(): void;
 }
 
 interface PaneResources {
@@ -132,6 +139,7 @@ function nativeClipboard(): {
 class TerminalDock {
   readonly #backend: TerminalBackend;
   readonly #showError: (error: unknown) => void;
+  readonly #workspaceGeneration: number;
   readonly #dock = requiredElement<HTMLElement>("#terminal-dock");
   readonly #body = requiredElement<HTMLElement>("#terminal-body");
   readonly #host = requiredElement<HTMLElement>("#terminal-host");
@@ -174,49 +182,56 @@ class TerminalDock {
   #clipboardWrite: Promise<void> = Promise.resolve();
   #pasteBusy = false;
   #pasteRequest = 0;
+  #disposed = false;
+  #dockDisposers: Array<() => void> = [];
 
   constructor(options: MountOptions) {
     this.#backend = options.backend;
     this.#showError = options.showError;
-    this.#open.addEventListener("click", () =>
+    this.#workspaceGeneration = options.workspaceGeneration ?? 0;
+    this.#listen(this.#open, "click", () =>
       void this.#runOperation(() => this.#openTerminal()),
     );
-    this.#restart.addEventListener("click", () =>
+    this.#listen(this.#restart, "click", () =>
       void this.#runOperation(() => this.#restartTerminal()),
     );
-    this.#close.addEventListener("click", () =>
+    this.#listen(this.#close, "click", () =>
       void this.#runOperation(() => this.#closeTerminal()),
     );
-    this.#separator.addEventListener("pointerdown", (event) => this.#beginDockResize(event));
-    this.#separator.addEventListener("keydown", (event) => this.#resizeDockFromKeyboard(event));
-    this.#pasteForm.addEventListener("submit", (event) => {
+    this.#listen(this.#separator, "pointerdown", (event) =>
+      this.#beginDockResize(event as PointerEvent),
+    );
+    this.#listen(this.#separator, "keydown", (event) =>
+      this.#resizeDockFromKeyboard(event as KeyboardEvent),
+    );
+    this.#listen(this.#pasteForm, "submit", (event) => {
       event.preventDefault();
       this.#finishPasteConfirmation(true);
     });
-    this.#pasteBackdrop.addEventListener("click", () =>
+    this.#listen(this.#pasteBackdrop, "click", () =>
       this.#finishPasteConfirmation(false),
     );
-    this.#pasteCancel.addEventListener("click", () =>
+    this.#listen(this.#pasteCancel, "click", () =>
       this.#finishPasteConfirmation(false),
     );
-    this.#menuCopy.addEventListener("click", () => {
+    this.#listen(this.#menuCopy, "click", () => {
       this.#hideContextMenu();
       void this.#copySelection();
     });
-    this.#menuPaste.addEventListener("click", () => {
+    this.#listen(this.#menuPaste, "click", () => {
       this.#hideContextMenu();
       const resources = this.#resources;
       if (resources) void this.#requestNativePaste(resources);
     });
-    this.#menuSelectAll.addEventListener("click", () => {
+    this.#listen(this.#menuSelectAll, "click", () => {
       this.#hideContextMenu();
       this.#resources?.terminal.selectAll();
       this.#resources?.terminal.focus();
     });
-    this.#contextMenu.addEventListener("keydown", (event) =>
-      this.#navigateContextMenu(event),
+    this.#listen(this.#contextMenu, "keydown", (event) =>
+      this.#navigateContextMenu(event as KeyboardEvent),
     );
-    window.addEventListener("beforeunload", () => this.#teardownPane());
+    this.#listen(window, "beforeunload", () => this.dispose());
     this.#setShortcutLabels();
     this.#setDockHeight(defaultDockHeight);
     this.#renderState();
@@ -225,6 +240,7 @@ class TerminalDock {
   async initialize(): Promise<void> {
     try {
       const profiles = await this.#backend.GetTerminalProfiles();
+      if (this.#disposed) return;
       this.#profile.replaceChildren();
       for (const profile of profiles) {
         const option = document.createElement("option");
@@ -236,13 +252,19 @@ class TerminalDock {
         throw new Error("No installed terminal profiles were discovered");
       }
     } catch (error) {
+      if (this.#disposed) return;
       this.#setState("failed", messageFrom(error));
       this.#showError(error);
     }
   }
 
   async #openTerminal(): Promise<void> {
-    if (this.#state === "opening" || this.#state === "running" || !this.#profile.value) return;
+    if (
+      this.#disposed ||
+      this.#state === "opening" ||
+      this.#state === "running" ||
+      !this.#profile.value
+    ) return;
     this.#teardownPane();
     const generation = ++this.#generation;
     this.#session = null;
@@ -291,7 +313,7 @@ class TerminalDock {
       if (createdSession) {
         await this.#backend.CloseTerminal(createdSession.sessionId, true).catch(() => {});
       }
-      if (generation !== this.#generation) return;
+      if (this.#disposed || generation !== this.#generation) return;
       this.#teardownPane();
       this.#setState("failed", messageFrom(error));
       this.#showError(error);
@@ -305,17 +327,20 @@ class TerminalDock {
   }
 
   async #closeTerminal(): Promise<void> {
-    if (this.#closing) return;
+    if (this.#disposed || this.#closing) return;
+    const generation = this.#generation;
     this.#closing = true;
     this.#invalidatePaste();
     const sessionID = this.#session?.sessionId;
     this.#status.textContent = "Closing…";
     try {
       if (sessionID) await this.#backend.CloseTerminal(sessionID, false);
+      if (this.#disposed || generation !== this.#generation) return;
       this.#teardownPane();
       this.#session = null;
       this.#setState("closed");
     } catch (error) {
+      if (this.#disposed || generation !== this.#generation) return;
       this.#closing = false;
       this.#renderState();
       this.#showError(error);
@@ -323,16 +348,16 @@ class TerminalDock {
   }
 
   async #runOperation(operation: () => Promise<void>): Promise<void> {
-    if (this.#operationBusy) return;
+    if (this.#disposed || this.#operationBusy) return;
     this.#operationBusy = true;
     this.#renderState();
     try {
       await operation();
     } catch (error) {
-      this.#showError(error);
+      if (!this.#disposed) this.#showError(error);
     } finally {
       this.#operationBusy = false;
-      this.#renderState();
+      if (!this.#disposed) this.#renderState();
     }
   }
 
@@ -681,6 +706,10 @@ class TerminalDock {
     resources.eventDisposers.push(
       eventsOn("terminal:exit", (payload: TerminalExit) => {
         if (!payload?.sessionId) return;
+        if (
+          this.#workspaceGeneration !== 0 &&
+          payload.generation !== this.#workspaceGeneration
+        ) return;
         if (this.#session?.sessionId === payload.sessionId) {
           this.#handleExit(payload, generation);
         } else {
@@ -736,6 +765,7 @@ class TerminalDock {
     const elapsed = performance.now() - resources.lastResizeAt;
     const delay = Math.max(0, resizeIntervalMilliseconds - elapsed);
     resources.resizeTimer = window.setTimeout(() => {
+      const generation = this.#generation;
       resources.resizeTimer = null;
       const size = resources.pendingSize;
       const sessionID = this.#session?.sessionId;
@@ -744,8 +774,19 @@ class TerminalDock {
       resources.lastResizeAt = performance.now();
       void this.#backend
         .ResizeTerminal(sessionID, size.rows, size.columns)
-        .catch((error) => this.#showError(error));
-      if (resources.pendingSize) this.#scheduleBackendResize(resources);
+        .catch((error) => {
+          if (
+            !this.#disposed &&
+            generation === this.#generation &&
+            !resources.disposed
+          ) this.#showError(error);
+        });
+      if (
+        !this.#disposed &&
+        generation === this.#generation &&
+        !resources.disposed &&
+        resources.pendingSize
+      ) this.#scheduleBackendResize(resources);
     }, delay);
   }
 
@@ -876,9 +917,39 @@ class TerminalDock {
     event.preventDefault();
     this.#setDockHeight(nextHeight);
   }
+
+  #listen(
+    target: EventTarget,
+    type: string,
+    listener: (event: Event) => void,
+    options?: AddEventListenerOptions | boolean,
+  ): void {
+    const eventListener = listener as EventListener;
+    target.addEventListener(type, eventListener, options);
+    this.#dockDisposers.push(() =>
+      target.removeEventListener(type, eventListener, options),
+    );
+  }
+
+  dispose(): void {
+    if (this.#disposed) return;
+    this.#disposed = true;
+    this.#teardownPane();
+    this.#dragCleanup?.();
+    this.#finishPasteConfirmation(false);
+    this.#hideContextMenu();
+    this.#earlyExit.clear();
+    this.#session = null;
+    for (const dispose of this.#dockDisposers.splice(0)) dispose();
+  }
 }
 
-export async function mountTerminalDock(options: MountOptions): Promise<void> {
+export function mountTerminalDock(
+  options: MountOptions,
+): TerminalDockHandle {
   const dock = new TerminalDock(options);
-  await dock.initialize();
+  return {
+    ready: dock.initialize(),
+    dispose: () => dock.dispose(),
+  };
 }

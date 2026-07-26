@@ -25,7 +25,7 @@ func newBoardCmd() *cobra.Command {
 				if asJSON {
 					return fmt.Errorf("--gui and --json cannot be used together")
 				}
-				return RunGUI(planID)
+				return RunGUI("", planID)
 			}
 			s, err := openProject()
 			if err != nil {

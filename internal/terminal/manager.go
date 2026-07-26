@@ -127,7 +127,7 @@ func (m *Manager) Create(profileID, requestedCWD string, rows, columns int) (*Se
 		startupBufferBytes: defaultStartupBufferBytes,
 		gracefulTimeout:    defaultGracefulTimeout,
 	})
-	session.setMetadata(id, token, profile.ID, cwd)
+	session.setMetadata(id, token, profile.ID, profile.Kind, profile.Provider, cwd)
 	if err := session.start(); err != nil {
 		return nil, err
 	}

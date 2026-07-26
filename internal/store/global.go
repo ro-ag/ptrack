@@ -123,6 +123,41 @@ func (g *Global) ListProjects() ([]model.ProjectRef, error) {
 	return refs, nil
 }
 
+// ListRecentProjects returns at most limit registered projects in most-recent
+// order. A non-positive limit returns an empty list.
+func (g *Global) ListRecentProjects(limit int) ([]model.ProjectRef, error) {
+	if limit <= 0 {
+		return []model.ProjectRef{}, nil
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	refs := make([]model.ProjectRef, 0, limit)
+	err := g.db.View(func(tx *bolt.Tx) error {
+		return tx.Bucket(bucketProjects).ForEach(func(_, value []byte) error {
+			var project model.ProjectRef
+			if err := gobDecode(value, &project); err != nil {
+				return err
+			}
+			if len(refs) == limit &&
+				!project.LastSeen.After(refs[len(refs)-1].LastSeen) {
+				return nil
+			}
+			if len(refs) == limit {
+				refs[len(refs)-1] = project
+			} else {
+				refs = append(refs, project)
+			}
+			sortByLastSeenDesc(refs)
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return refs, nil
+}
+
 // RecordBackup notes that projectPath was backed up to backupPath.
 func (g *Global) RecordBackup(projectPath, backupPath string) error {
 	return g.db.Update(func(tx *bolt.Tx) error {

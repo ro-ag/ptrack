@@ -51,6 +51,25 @@ func TestProjectRegistry(t *testing.T) {
 	}
 }
 
+func TestRecentProjectRegistryIsBounded(t *testing.T) {
+	g := openGlobalTemp(t)
+	for _, name := range []string{"alpha", "beta", "gamma"} {
+		if err := g.RegisterProject(name, t.TempDir()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refs, err := g.ListRecentProjects(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 2 {
+		t.Fatalf("ListRecentProjects = %d want 2", len(refs))
+	}
+	if refs[0].Name != "gamma" || refs[1].Name != "beta" {
+		t.Fatalf("recent order = %#v", refs)
+	}
+}
+
 func TestBackupProject(t *testing.T) {
 	src := filepath.Join(t.TempDir(), ".ptrack", "ptrack.db")
 	if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {

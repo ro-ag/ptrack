@@ -50,6 +50,8 @@ type fakePTYProcess struct {
 	closed         bool
 }
 
+func (p *fakePTYProcess) PID() int { return 31337 }
+
 func newFakePTYProcess() *fakePTYProcess {
 	return &fakePTYProcess{output: bytes.NewReader(nil)}
 }

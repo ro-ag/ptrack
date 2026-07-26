@@ -35,6 +35,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 html,
 body,
 #app {
@@ -212,6 +216,87 @@ select {
   grid-template-columns: 292px minmax(0, 1fr);
 }
 
+.workspace[hidden],
+.workspace-state-screen[hidden] {
+  display: none;
+}
+
+.workspace-state-screen {
+  height: calc(100% - 68px);
+  display: grid;
+  overflow: auto;
+  place-items: center;
+  padding: var(--space-400);
+}
+
+.state-card {
+  width: min(660px, 100%);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, rgba(61, 214, 163, 0.08), transparent 60%),
+    var(--surface);
+  padding: clamp(24px, 5vw, 48px);
+  box-shadow: 0 24px 90px rgba(0, 0, 0, 0.28);
+}
+
+.state-card h2 {
+  margin-bottom: var(--space-100);
+  font-size: clamp(1.5rem, 4vw, 2.25rem);
+  letter-spacing: -0.04em;
+}
+
+.state-detail {
+  max-width: 540px;
+  margin-bottom: var(--space-250);
+  color: var(--text-soft);
+  line-height: 1.55;
+}
+
+.recent-projects-section {
+  margin-top: var(--space-400);
+  border-top: 1px solid var(--line-subtle);
+  padding-top: var(--space-250);
+}
+
+.recent-project-list {
+  display: grid;
+  gap: var(--space-100);
+}
+
+.recent-project {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-150);
+  border: 1px solid var(--line-subtle);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: var(--space-150);
+}
+
+.recent-project-name,
+.recent-project-path {
+  overflow: hidden;
+  margin: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-project-name {
+  color: var(--text-soft);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.recent-project-path {
+  margin-top: 3px;
+  color: var(--faint);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.625rem;
+}
+
 .work-area {
   min-width: 0;
   min-height: 0;
@@ -224,12 +309,15 @@ select {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   border-right: 1px solid var(--line-subtle);
   background:
     linear-gradient(180deg, rgba(42, 167, 161, 0.05), transparent 240px),
     rgba(13, 18, 25, 0.72);
   padding: var(--space-250);
+  scrollbar-color: #364050 transparent;
+  scrollbar-width: thin;
 }
 
 .rail-heading {
@@ -380,11 +468,113 @@ select {
 
 .activity-section {
   min-height: 96px;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   padding-bottom: 0;
+}
+
+.intelligence-section {
+  color: var(--text-soft);
+  font-size: 0.625rem;
+}
+
+.intelligence-section summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.625rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.intelligence-section[open] summary {
+  margin-bottom: var(--space-100);
+}
+
+.intelligence-path {
+  overflow: hidden;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.5625rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.intelligence-meta {
+  margin-bottom: var(--space-100);
+  color: var(--faint);
+  line-height: 1.4;
+}
+
+.intelligence-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.intelligence-pill {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text-soft);
+  background: var(--surface-soft);
+  padding: 3px 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.5625rem;
+}
+
+.intelligence-pill[data-tone="warning"] {
+  border-color: #6f6035;
+  color: var(--doing);
+}
+
+.intelligence-pill[data-tone="error"] {
+  border-color: #754051;
+  color: var(--blocked);
+}
+
+.intelligence-list {
+  display: grid;
+  gap: 6px;
+  margin-top: var(--space-100);
+}
+
+.intelligence-item {
+  min-width: 0;
+  border-left: 2px solid var(--line);
+  padding-left: var(--space-100);
+}
+
+.intelligence-item[data-state="stale"],
+.intelligence-item[data-state="error"] {
+  border-left-color: var(--blocked);
+}
+
+.intelligence-title,
+.intelligence-detail {
+  overflow: hidden;
+  margin: 0;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+}
+
+.intelligence-title {
+  color: var(--text-soft);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.intelligence-detail {
+  color: var(--faint);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.5625rem;
+  overflow-wrap: anywhere;
+}
+
+.workspace[data-snapshot-state="stale"] .board-status {
+  color: var(--doing);
 }
 
 .activity-list {
