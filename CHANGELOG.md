@@ -6,10 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-07-26
+
 ### Fixed
 - Fresh source and release builds now generate Vite assets before Wails binding
   generation, instead of failing because the generated `frontend/dist`
   directory is intentionally absent from version control.
+- This release supersedes the v0.14.0 tag, whose workflow stopped before
+  creating native archives or a GitHub release.
 
 ## [0.14.0] - 2026-07-26
 
@@ -284,6 +288,7 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
+[0.14.1]: https://github.com/ro-ag/ptrack/releases/tag/v0.14.1
 [0.14.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.14.0
 [0.13.1]: https://github.com/ro-ag/ptrack/releases/tag/v0.13.1
 [0.13.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.13.0

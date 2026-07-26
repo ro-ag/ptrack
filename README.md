@@ -8,7 +8,7 @@ Keep goals, plans, tasks, decisions, issues, and commit context alive across
 terminal sessions—without a server or a cloud account.
 
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
-[![Release](https://img.shields.io/badge/release-v0.14.0-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.14.0)
+[![Release](https://img.shields.io/badge/release-v0.14.1-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.14.1)
 [![License](https://img.shields.io/badge/License-Apache--2.0-3DD6A3)](LICENSE)
 [![Storage](https://img.shields.io/badge/Storage-local--first-AFA8FF)](#storage-and-safety)
 
@@ -300,6 +300,10 @@ make build
 The equivalent command, for environments without `make`, is:
 
 ```sh
+cd frontend
+npm ci
+npm run build
+cd ..
 go run github.com/wailsapp/wails/v2/cmd/wails@v2.13.0 build \
   -clean -nopackage -trimpath -windowsconsole
 ```
