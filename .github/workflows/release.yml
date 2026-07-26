@@ -131,7 +131,8 @@ jobs:
           archive="ptrack_${version}_${{ matrix.archive_os }}_${{ matrix.goarch }}"
           mkdir -p "dist/${archive}"
           cp build/bin/ptrack README.md LICENSE "dist/${archive}/"
-          tar -C "dist/${archive}" -czf "../${archive}.tar.gz" .
+          archive_path="${PWD}/dist/${archive}.tar.gz"
+          tar -C "dist/${archive}" -czf "${archive_path}" .
           rm -rf "dist/${archive}"
 
       - name: Package Windows archive
@@ -143,6 +144,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path "dist/$archive"
           Copy-Item build/bin/ptrack.exe, README.md, LICENSE -Destination "dist/$archive"
           Compress-Archive -Path "dist/$archive/*" -DestinationPath "dist/$archive.zip"
+          Remove-Item -Recurse -Force "dist/$archive"
 
       - name: Upload archive
         uses: actions/upload-artifact@v7

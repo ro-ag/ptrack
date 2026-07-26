@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- Native release archives are written to the artifact upload directory on
+  every runner, and Windows uploads include only the final ZIP file.
+
 ## [0.13.0] - 2026-07-25
 
 ### Added
