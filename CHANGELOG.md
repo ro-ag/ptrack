@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-07-26
+
+### Added
+- The desktop board now includes a resizable embedded terminal dock that opens
+  the default login shell or a detected installed-agent profile at the project
+  root, with exit status and restart controls.
+- Terminal I/O uses xterm.js 6 and an authenticated binary loopback WebSocket
+  backed by PTYs, with explicit bounded backpressure, resize propagation, and
+  lifecycle cleanup.
+- Native clipboard copy and paste, selection-aware `Ctrl+C`, platform
+  shortcuts, a terminal context menu, and bounded multiline-paste confirmation
+  with bracketed-paste support.
+
 ### Changed
 - Application builds now require Wails desktop build tags, preventing plain
   `go build` or `go install` from producing a binary with a broken `--gui`
@@ -13,6 +26,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   CLI, TUI, and GUI executable.
 - Installation guidance now directs users to native release archives, which
   always include GUI support.
+
+Clipboard, shortcut, context-menu, restart, and shutdown interactions were
+verified on macOS. Windows and Linux native builds are included, but their PTY,
+clipboard, input, and descendant-process cleanup behavior remains pending
+interactive validation. The broader manual matrix for curses and mouse input,
+IME and Unicode, sustained high-volume output, resize stress, and sleep/wake
+recovery also remains open.
 
 ## [0.13.1] - 2026-07-25
 
@@ -259,6 +279,7 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
+[0.14.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.14.0
 [0.13.1]: https://github.com/ro-ag/ptrack/releases/tag/v0.13.1
 [0.13.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.13.0
 [0.12.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.12.0
