@@ -151,6 +151,8 @@ ptrack board --gui
 ptrack board --gui --plan 4
 ```
 
+![P-TRACK desktop kanban board](docs/assets/gui-board.png)
+
 Select a plan from the header, drag cards between Todo, Doing, Blocked, and Done,
 or use the status selector on a card. Add tasks from the board header,
 double-click a card to rename it, or record durable task context with **Memory**.
@@ -158,6 +160,8 @@ Cards surface linked notes, commits, and open issues, while the project-memory
 rail keeps the goal, agent handoff, project status, issues, and recent decisions
 in view. The board refreshes automatically while it is open; press `R` to reload
 immediately after another process changes the project.
+
+![P-TRACK task-memory dialog](docs/assets/gui-memory.png)
 
 Like the terminal dashboard, the GUI opens the database only for each action.
 The CLI and AI agents can therefore keep reading and writing the same project
