@@ -131,3 +131,14 @@ func TestBoardV2RejectsStaleGeneration(t *testing.T) {
 		t.Fatalf("AddTaskV2 stale generation = %v", err)
 	}
 }
+
+func TestGetBoardV2ResolvesCurrentGenerationForZero(t *testing.T) {
+	app := seedApp(t)
+	response, err := app.GetBoardV2(0, 0)
+	if err != nil {
+		t.Fatalf("GetBoardV2 current generation: %v", err)
+	}
+	if response.Generation != 1 {
+		t.Fatalf("response generation = %d, want current generation 1", response.Generation)
+	}
+}

@@ -171,11 +171,16 @@ func (a *App) GetBoard(planID uint64) (Board, error) {
 }
 
 func (a *App) GetBoardV2(generation, planID uint64) (BoardV2, error) {
-	board, err := a.getBoard(generation, planID)
+	workspace, err := a.currentWorkspace(generation)
 	if err != nil {
 		return BoardV2{}, err
 	}
-	return BoardV2{Generation: generation, Board: board}, nil
+	actualGeneration := workspace.Generation()
+	board, err := a.getBoard(actualGeneration, planID)
+	if err != nil {
+		return BoardV2{}, err
+	}
+	return BoardV2{Generation: actualGeneration, Board: board}, nil
 }
 
 func (a *App) getBoard(expectedGeneration, planID uint64) (Board, error) {
