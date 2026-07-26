@@ -6,6 +6,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-07-26
+
+### Added
+- `ptrack gui [PATH]` is now the canonical desktop command, with the current
+  directory as its default and `ptrack board --gui` retained as a compatible
+  alias.
+- The desktop app now has native project open, switch, and close actions, a
+  welcome screen with recent projects, and confirmation before transitions
+  stop active terminals or registered agent runs.
+- A bounded project overview combines goals, plans, tasks, blockers, issues,
+  notes, recent P-TRACK activity, storage health, terminal sessions, and
+  explicit agent-run registrations.
+- Read-only Git intelligence reports repository state, worktrees, status
+  counts, upstream divergence, remotes, branches, recent commits, unpushed
+  commits, and stale branches using bounded machine-readable Git commands.
+- Explicitly registered agent runs now have stable identities, project and
+  terminal associations, process state, heartbeats, lease expiry, and exit
+  results.
+
+### Changed
+- Project resources are now owned by generation-scoped workspace contexts, so
+  switching or closing cancels pending work and disposes stores, terminal
+  sessions, agent integrations, listeners, sockets, and refresh activity
+  without restarting the app or accepting stale responses.
+
+The project-switching and terminal interaction paths were verified on macOS,
+including active refresh and terminal cleanup. Windows and Linux interaction,
+IME and Unicode input, curses and mouse applications, sustained high-volume
+output, rapid resize and switching stress, and sleep/wake recovery remain in
+the manual acceptance matrix.
+
 ## [0.14.1] - 2026-07-26
 
 ### Fixed
@@ -288,6 +319,7 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
+[0.15.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.15.0
 [0.14.1]: https://github.com/ro-ag/ptrack/releases/tag/v0.14.1
 [0.14.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.14.0
 [0.13.1]: https://github.com/ro-ag/ptrack/releases/tag/v0.13.1
