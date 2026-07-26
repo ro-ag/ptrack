@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- Fresh source and release builds now generate Vite assets before Wails binding
+  generation, instead of failing because the generated `frontend/dist`
+  directory is intentionally absent from version control.
+
 ## [0.14.0] - 2026-07-26
 
 ### Added
