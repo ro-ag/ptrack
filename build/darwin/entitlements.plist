@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+    <!--
+      Hardened-runtime entitlements for signed and notarized releases.
+      WKWebView runs out of process, so no JIT entitlement is needed. The
+      embedded terminal spawns system shells via exec, which the hardened
+      runtime permits; library validation stays enabled so the signed app
+      keeps its full Gatekeeper guarantees. Sign with the Makefile:
+      make sign  (codesign with options runtime and this file)
+    -->
+    <dict>
+        <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+        <true/>
+    </dict>
+</plist>

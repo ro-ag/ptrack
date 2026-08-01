@@ -69,6 +69,14 @@ jobs:
             archive_os: windows
             goarch: arm64
 
+    # Secrets cannot be referenced in step-level `if` conditions, so they are
+    # resolved into job-level environment flags once. SIGNING_ENABLED turns on
+    # Developer ID signing; NOTARY_ENABLED additionally staples Apple
+    # notarization tickets once the App Store Connect API key secrets exist.
+    env:
+      SIGNING_ENABLED: ${{ secrets.APPLE_CERTIFICATE_BASE64 != '' }}
+      NOTARY_ENABLED: ${{ secrets.APPLE_API_KEY != '' }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -111,17 +119,61 @@ jobs:
             -tags webkit2_41 \
             -ldflags "-s -w -X github.com/ro-ag/ptrack/internal/cli.Version=${version}"
 
-      - name: Build macOS binary
+      - name: Build macOS app bundle
         if: runner.os == 'macOS'
         shell: bash
         run: |
           version="${GITHUB_REF_NAME#v}"
           go run github.com/wailsapp/wails/v2/cmd/wails@v2.13.0 build \
             -clean \
-            -nopackage \
             -trimpath \
             -platform "${{ matrix.target }}" \
             -ldflags "-s -w -X github.com/ro-ag/ptrack/internal/cli.Version=${version}"
+          # Stamp the release version into the bundle metadata.
+          app="build/bin/P-TRACK.app"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${version}" "$app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${version}" "$app/Contents/Info.plist"
+
+      - name: Import signing certificate
+        if: runner.os == 'macOS' && env.SIGNING_ENABLED == 'true'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          # Import the Developer ID identity into a throwaway keychain so the
+          # runner's login keychain is never touched.
+          keychain="$RUNNER_TEMP/codesign.keychain-db"
+          echo "$APPLE_CERTIFICATE_BASE64" | base64 -d > "$RUNNER_TEMP/codesign.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security import "$RUNNER_TEMP/codesign.p12" \
+            -k "$keychain" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+          # Let codesign use the key without interactive prompts.
+          security set-key-partition-list -S apple-tool:,apple: \
+            -s -k "$KEYCHAIN_PASSWORD" "$keychain"
+          security list-keychains -d user -s "$keychain" login.keychain-db
+          rm "$RUNNER_TEMP/codesign.p12"
+          security find-identity -v -p codesigning "$keychain"
+
+      - name: Sign app bundle
+        if: runner.os == 'macOS' && env.SIGNING_ENABLED == 'true'
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          codesign --force --options runtime \
+            --entitlements build/darwin/entitlements.plist \
+            --sign "$APPLE_SIGNING_IDENTITY" \
+            --timestamp \
+            "build/bin/P-TRACK.app"
+          codesign --verify --strict --verbose=2 "build/bin/P-TRACK.app"
+          codesign -dv --verbose=2 "build/bin/P-TRACK.app" 2>&1 \
+            | grep -E "^(Identifier|Authority|TeamIdentifier)"
 
       - name: Build Windows binary
         if: runner.os == 'Windows'
@@ -143,10 +195,54 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           archive="ptrack_${version}_${{ matrix.archive_os }}_${{ matrix.goarch }}"
           mkdir -p "dist/${archive}"
-          cp build/bin/ptrack README.md LICENSE "dist/${archive}/"
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            # The CLI binary ships inside the app bundle on macOS.
+            cp "build/bin/P-TRACK.app/Contents/MacOS/ptrack" "dist/${archive}/ptrack"
+          else
+            cp build/bin/ptrack "dist/${archive}/"
+          fi
+          cp README.md LICENSE "dist/${archive}/"
           archive_path="${PWD}/dist/${archive}.tar.gz"
           tar -C "dist/${archive}" -czf "${archive_path}" .
           rm -rf "dist/${archive}"
+
+      - name: Package macOS disk image
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p build/dmg
+          cp -R "build/bin/P-TRACK.app" build/dmg/
+          ln -s /Applications build/dmg/Applications
+          hdiutil create -volname "P-TRACK" -srcfolder build/dmg \
+            -ov -format UDZO "dist/P-TRACK_${version}_darwin_${{ matrix.goarch }}.dmg"
+          rm -rf build/dmg
+          if [ "${SIGNING_ENABLED}" = "true" ]; then
+            codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp \
+              "dist/P-TRACK_${version}_darwin_${{ matrix.goarch }}.dmg"
+          fi
+
+      - name: Notarize disk image
+        if: runner.os == 'macOS' && env.SIGNING_ENABLED == 'true' && env.NOTARY_ENABLED == 'true'
+        shell: bash
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          dmg="dist/P-TRACK_${version}_darwin_${{ matrix.goarch }}.dmg"
+          echo "$APPLE_API_KEY" > "$RUNNER_TEMP/AuthKey.p8"
+          xcrun notarytool submit "$dmg" \
+            --key "$RUNNER_TEMP/AuthKey.p8" \
+            --key-id "$APPLE_API_KEY_ID" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait
+          xcrun stapler staple "$dmg"
+          xcrun stapler validate "$dmg"
+          rm "$RUNNER_TEMP/AuthKey.p8"
 
       - name: Package Windows archive
         if: runner.os == 'Windows'
@@ -163,7 +259,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.archive_os }}-${{ matrix.goarch }}
-          path: dist/ptrack_*
+          path: |
+            dist/ptrack_*
+            dist/P-TRACK_*
           if-no-files-found: error
           retention-days: 1
 
@@ -186,7 +284,7 @@ jobs:
         shell: bash
         run: |
           cd dist
-          sha256sum ptrack_* > checksums.txt
+          sha256sum ptrack_* P-TRACK_* > checksums.txt
 
       - name: Extract release notes
         shell: bash

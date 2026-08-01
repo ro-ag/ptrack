@@ -1,7 +1,11 @@
 # Binaries
 /ptrack
 /dist/
-/build/
+/build/*
+!/build/appicon.png
+!/build/darwin/
+!/build/darwin/**
+!/build/README.md
 *.exe
 
 # ptrack local store

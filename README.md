@@ -1,14 +1,12 @@
 <div align="center">
 
-# P-TRACK
-
-### Persistent project memory for humans and AI agents
+![P-TRACK — persistent project memory for humans and AI agents](assets/brand/banner.png)
 
 Keep goals, plans, tasks, decisions, issues, and commit context alive across
 terminal sessions—without a server or a cloud account.
 
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
-[![Release](https://img.shields.io/badge/release-v0.15.0-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.15.0)
+[![Release](https://img.shields.io/badge/release-v0.16.0-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.16.0)
 [![License](https://img.shields.io/badge/License-Apache--2.0-3DD6A3)](LICENSE)
 [![Storage](https://img.shields.io/badge/Storage-local--first-AFA8FF)](#storage-and-safety)
 
@@ -48,6 +46,13 @@ Download the native archive for your platform from the
 [GitHub releases page](https://github.com/ro-ag/ptrack/releases), then place the
 `ptrack` executable somewhere on your `PATH`. Every release binary includes the
 CLI, terminal dashboard, and Wails desktop GUI.
+
+On macOS you can instead download `P-TRACK_<version>_darwin_<arch>.dmg` and drag
+**P-TRACK.app** into `/Applications`. The app is not signed with a Developer ID
+yet, so on first launch either right-click the app and choose **Open**, or run
+`xattr -dr com.apple.quarantine /Applications/P-TRACK.app`. The same executable
+inside the bundle doubles as the CLI; symlink it onto your `PATH` with
+`ln -s /Applications/P-TRACK.app/Contents/MacOS/ptrack /usr/local/bin/ptrack`.
 
 Do not install P-TRACK with `go install`. Wails requires platform-specific build
 tags, CGO setup, and native linker flags that `go install module@version` cannot
@@ -171,6 +176,14 @@ Cards surface linked notes, commits, and open issues, while the project-memory
 rail keeps the goal, agent handoff, project status, issues, and recent decisions
 in view. The board refreshes automatically while it is open; press `R` to reload
 immediately after another process changes the project.
+
+Registered agent runs keep a bounded on-disk history, so they survive app
+restarts and project switches: a run interrupted by a restart comes back
+marked stale instead of disappearing, and an external agent whose lease is
+still valid resumes heartbeating on its own. Agents integrating over the local
+API should treat the registry descriptor as stale when its hosting process is
+gone — after a crash, wait for a fresh descriptor instead of dialling a dead
+port.
 
 ![P-TRACK task-memory dialog](docs/assets/gui-memory.png)
 
@@ -308,6 +321,38 @@ for your platform, then run:
 make build
 ./build/bin/ptrack version
 ```
+
+On macOS, two more targets produce the branded desktop artifacts:
+
+```sh
+make package   # build/bin/P-TRACK.app — bundle id com.ro-ag.ptrack, version
+               # stamped from git, icon from build/appicon.png
+make dmg       # build/bin/P-TRACK-<version>-macOS-<arch>.dmg with an
+               # /Applications drop link
+```
+
+With a Developer ID identity in the login keychain (`SIGN_IDENTITY` is the
+certificate SHA-1 fingerprint, found via `security find-identity -v -p
+codesigning`):
+
+```sh
+make sign        # Developer ID signature: hardened runtime, entitlements,
+                 # secure timestamp
+make signed-dmg  # signed app + signed disk image (Gatekeeper still warns
+                 # until notarized)
+make release-dmg # full pipeline: sign, DMG, sign, notarize, staple — needs a
+                 # one-time `xcrun notarytool store-credentials ptrack-notarize`
+```
+
+The release workflow runs the same steps on tag pushes: macOS builds are
+signed when the `APPLE_CERTIFICATE_*` secrets exist, and notarized as well
+once the `APPLE_API_*` secrets are added.
+
+Bundle metadata lives in `build/darwin/` (`Info.plist`, `Info.dev.plist`,
+hardened-runtime `entitlements.plist` for future signed releases). Brand
+assets — the icon generator, PNG exports, `AppIcon.icns`, the README banner,
+and a social card — live in [`assets/brand/`](assets/brand/); regenerate them
+with `make icons`.
 
 The equivalent command, for environments without `make`, is:
 

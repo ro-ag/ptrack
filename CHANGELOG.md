@@ -6,6 +6,45 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-08-01
+
+### Added
+- Brand identity: a code-drawn app icon (kanban columns over a track rail in
+  the brand palette), standalone PNG exports, a compiled `AppIcon.icns`, a
+  README banner, and a social card — all reproducible from
+  `assets/brand/generate_icons.py` (`make icons`). The stock Wails icon is
+  gone from the app bundle.
+- macOS app bundles are now properly packaged: `build/darwin/Info.plist` with
+  bundle id `com.ro-ag.ptrack`, display name, developer-tools category, macOS
+  12.0 minimum, and hardened-runtime `entitlements.plist` ready for signed
+  releases. `make package` builds `P-TRACK.app` and `make dmg` builds a disk
+  image with an `/Applications` drop link; the release workflow ships
+  `P-TRACK_<version>_darwin_<arch>.dmg` for both architectures.
+- Developer ID signing: `make sign` / `make signed-dmg` sign locally with the
+  identity fingerprint in `SIGN_IDENTITY`, and the release workflow imports
+  the certificate into a throwaway keychain and signs the app, the disk image,
+  and therefore the CLI binary inside the tarball whenever the
+  `APPLE_CERTIFICATE_*` secrets are present. Notarization (`make release-dmg`
+  and a matching CI step) activates automatically once the `APPLE_API_*`
+  secrets exist.
+- Registered agent runs now persist a bounded on-disk history
+  (`~/.ptrack/runtime/<project>/agent-runs.json`) that survives app restarts
+  and project switches. A launched run interrupted by a restart restores as
+  stale with unknown process state instead of vanishing; an external run keeps
+  its lease, so a still-alive agent resumes heartbeating automatically.
+- The AgentRun integration descriptor now records its hosting process PID, and
+  consumers get a documented recovery path: read the descriptor, treat a dead
+  owner PID as stale, and wait for a fresh descriptor instead of dialling a
+  dead port after a crash.
+
+### Fixed
+- Terminal exit recording now marks every not-yet-exited launched run on the
+  terminal instead of stopping at the first match, so an exited record from a
+  restarted session can never shadow a still-running one.
+- The build assets under `build/` (app icon, darwin plists) are no longer
+  excluded by `.gitignore`; previously they existed only on local machines,
+  so CI could never produce a branded bundle.
+
 ## [0.15.0] - 2026-07-26
 
 ### Added
