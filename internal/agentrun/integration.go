@@ -2,9 +2,7 @@ package agentrun
 
 import (
 	"context"
-	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,6 +33,54 @@ type IntegrationDescriptor struct {
 	URL               string `json:"url"`
 	Generation        uint64 `json:"generation"`
 	RegistrationToken string `json:"registrationToken"`
+	// PID is the process hosting the integration server. Consumers use it for
+	// a fast staleness check: after a crash the descriptor file can outlive
+	// its server, and a dead PID means "do not dial, wait for a fresh
+	// descriptor" instead of discovering connection-refused on a dead port.
+	PID int `json:"pid"`
+}
+
+var (
+	// ErrDescriptorNotFound is returned by ReadIntegrationDescriptor when no
+	// integration server has published a descriptor for the project.
+	ErrDescriptorNotFound = errors.New("AgentRun descriptor not found")
+	// ErrDescriptorStale is returned by ReadIntegrationDescriptor when the
+	// descriptor's owning process is gone (for example after a crash), so the
+	// advertised URL would refuse connections.
+	ErrDescriptorStale = errors.New("AgentRun descriptor is stale")
+)
+
+// ReadIntegrationDescriptor loads the descriptor an integration server
+// published for the given project and verifies its owning process is still
+// alive. It is the documented recovery path for consumers: read, check for
+// ErrDescriptorStale (or ErrDescriptorNotFound), and only then dial the URL.
+// PID reuse can theoretically fool the liveness check; the registration
+// token and generation stay authoritative once a connection is made.
+func ReadIntegrationDescriptor(
+	globalHome string,
+	projectRoot string,
+) (IntegrationDescriptor, error) {
+	runtimeDir, err := RuntimeDir(globalHome, projectRoot)
+	if err != nil {
+		return IntegrationDescriptor{}, err
+	}
+	path := filepath.Join(runtimeDir, "agent-registry.json")
+	contents, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return IntegrationDescriptor{}, ErrDescriptorNotFound
+	}
+	if err != nil {
+		return IntegrationDescriptor{}, fmt.Errorf("read AgentRun descriptor: %w", err)
+	}
+	var descriptor IntegrationDescriptor
+	if err := json.Unmarshal(contents, &descriptor); err != nil {
+		return IntegrationDescriptor{}, fmt.Errorf("decode AgentRun descriptor: %w", err)
+	}
+	if !ProcessAlive(descriptor.PID) {
+		return IntegrationDescriptor{}, fmt.Errorf(
+			"%w: owning process %d is not running", ErrDescriptorStale, descriptor.PID)
+	}
+	return descriptor, nil
 }
 
 type IntegrationServer struct {
@@ -101,6 +147,7 @@ func StartIntegrationServer(
 		URL:               "http://" + listener.Addr().String(),
 		Generation:        config.Generation,
 		RegistrationToken: token,
+		PID:               os.Getpid(),
 	})
 	if err != nil {
 		_ = listener.Close()
@@ -266,12 +313,10 @@ func writeIntegrationDescriptor(
 	globalHome string,
 	descriptor IntegrationDescriptor,
 ) (string, error) {
-	hash := sha256.Sum256([]byte(descriptor.ProjectRoot))
-	runtimeDir := filepath.Join(
-		globalHome,
-		"runtime",
-		hex.EncodeToString(hash[:]),
-	)
+	runtimeDir, err := RuntimeDir(globalHome, descriptor.ProjectRoot)
+	if err != nil {
+		return "", err
+	}
 	if err := preparePrivateRuntimeDir(runtimeDir); err != nil {
 		return "", err
 	}

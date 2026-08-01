@@ -112,6 +112,10 @@ type Config struct {
 	Now           func() time.Time
 	NewTicker     func(time.Duration) Ticker
 	MaxRecords    int
+	// StatePath, when non-empty, mirrors a bounded snapshot of the registry to
+	// disk (see persistence.go) so registered runs survive an app restart.
+	// Empty keeps the registry memory-only.
+	StatePath string
 }
 
 type record struct {
@@ -125,6 +129,7 @@ type Registry struct {
 	now           func() time.Time
 	ticker        Ticker
 	maxRecords    int
+	statePath     string
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -168,10 +173,16 @@ func NewRegistry(config Config) *Registry {
 		now:           now,
 		ticker:        newTicker(sweepInterval),
 		maxRecords:    maxRecords,
+		statePath:     config.StatePath,
 		ctx:           ctx,
 		cancel:        cancel,
 		records:       make(map[string]*record),
 		shutdownDone:  make(chan struct{}),
+	}
+	if registry.statePath != "" {
+		// Best effort: a missing or damaged history must never block startup.
+		// The in-memory registry is authoritative; the file is only a mirror.
+		_ = registry.restoreLocked()
 	}
 	go registry.runSweeper()
 	return registry
@@ -261,6 +272,7 @@ func (r *Registry) register(
 		return Run{}, ErrRegistryFull
 	}
 	r.records[id] = &record{run: run, leaseToken: token}
+	_ = r.saveLocked()
 	return cloneRun(run), nil
 }
 
@@ -334,9 +346,14 @@ func (r *Registry) ExitExternal(id, token string, code int, result string) error
 		return err
 	}
 	r.recordExitLocked(entry, code, result)
+	_ = r.saveLocked()
 	return nil
 }
 
+// RecordTerminalActivity reports activity on a terminal, returning whether a
+// run was updated. At most one launched run is expected to be active per
+// terminal — a terminal session hosts one agent process at a time — so the
+// newest signal is applied to the first still-running match.
 func (r *Registry) RecordTerminalActivity(terminalID string) bool {
 	return r.RecordTerminalActivityAt(terminalID, r.now())
 }
@@ -360,17 +377,29 @@ func (r *Registry) RecordTerminalActivityAt(
 	return false
 }
 
+// RecordTerminalExit records the exit of every not-yet-exited launched run
+// hosted by the terminal, returning whether any launched run matched.
+// Normally a terminal hosts a single launched run, but matching is defensive:
+// iterating all records means an exited record (from, say, a restarted
+// session that reused a terminal ID) can never shadow a still-running one.
 func (r *Registry) RecordTerminalExit(terminalID string, code int, result string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	matched := false
 	for _, entry := range r.records {
-		if entry.run.Kind == RegistrationLaunched &&
-			entry.run.TerminalID == terminalID {
+		if entry.run.Kind != RegistrationLaunched ||
+			entry.run.TerminalID != terminalID {
+			continue
+		}
+		matched = true
+		if entry.run.State != StateExited {
 			r.recordExitLocked(entry, code, result)
-			return true
 		}
 	}
-	return false
+	if matched {
+		_ = r.saveLocked()
+	}
+	return matched
 }
 
 func (r *Registry) recordExitLocked(entry *record, code int, result string) {
@@ -400,6 +429,7 @@ func (r *Registry) SweepExpired() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := r.now()
+	changed := false
 	for _, entry := range r.records {
 		if entry.run.Kind != RegistrationExternal ||
 			entry.run.State == StateExited ||
@@ -410,7 +440,11 @@ func (r *Registry) SweepExpired() {
 			entry.run.State = StateStale
 			entry.run.ProcessState = ProcessUnknown
 			entry.run.LeaseState = LeaseExpired
+			changed = true
 		}
+	}
+	if changed {
+		_ = r.saveLocked()
 	}
 }
 
@@ -458,16 +492,21 @@ func (r *Registry) runSweeper() {
 	}
 }
 
+// Shutdown stops the sweeper and persists the final run-history snapshot.
+// The save error is joined into the result so callers can surface history
+// loss without it masking the shutdown itself.
 func (r *Registry) Shutdown(ctx context.Context) error {
+	var saveErr error
 	r.shutdownOnce.Do(func() {
 		r.mu.Lock()
 		r.closed = true
+		saveErr = r.saveLocked()
 		r.mu.Unlock()
 		r.cancel()
 	})
 	select {
 	case <-r.shutdownDone:
-		return nil
+		return saveErr
 	case <-ctx.Done():
 		return ctx.Err()
 	}

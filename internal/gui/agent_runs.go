@@ -29,8 +29,19 @@ func newWorkspaceAgentResources(
 	root string,
 	globalHome string,
 ) *workspaceAgentResources {
+	// The run history lives next to the integration descriptor so registered
+	// runs survive app restarts and project switches. A failure to resolve
+	// the path (for example an unreadable home) simply disables persistence;
+	// the registry stays fully functional in memory.
+	statePath, err := agentrun.RunHistoryPath(globalHome, root)
+	if err != nil {
+		statePath = ""
+	}
 	return &workspaceAgentResources{
-		registry:   agentrun.NewRegistry(agentrun.Config{ProjectRoot: root}),
+		registry: agentrun.NewRegistry(agentrun.Config{
+			ProjectRoot: root,
+			StatePath:   statePath,
+		}),
 		globalHome: globalHome,
 		root:       root,
 	}
