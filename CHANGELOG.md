@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-08-01
+
+### Changed
+- macOS release disk images are now automatically notarized and stapled by
+  Apple in CI, so downloads install with no Gatekeeper warning. The notarized
+  v0.16.0 disk images were republished as well.
+
 ## [0.16.0] - 2026-08-01
 
 ### Added

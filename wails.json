@@ -13,7 +13,7 @@
   },
   "info": {
     "productName": "P-TRACK",
-    "productVersion": "0.16.0",
+    "productVersion": "0.16.1",
     "companyName": "ro-ag",
     "copyright": "© 2026 ro-ag. Licensed under the Apache License, Version 2.0.",
     "comments": "Persistent project memory for humans and AI agents. https://github.com/ro-ag/ptrack"
