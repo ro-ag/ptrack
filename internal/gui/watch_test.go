@@ -84,6 +84,9 @@ func TestWatchWorkspaceDataDetectsRemoval(t *testing.T) {
 			emits <- struct{}{}
 		})
 	}()
+	// Let the watcher take its baseline fingerprint before the removal,
+	// otherwise a slow runner may only ever observe the file as missing.
+	time.Sleep(100 * time.Millisecond)
 	if err := os.Remove(dbPath); err != nil {
 		t.Fatal(err)
 	}
