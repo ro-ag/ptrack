@@ -30,6 +30,12 @@ func newProjectWorkspaceMenu(app *App) *menu.Menu {
 		app.emitTerminalEvent(projectMenuCloseEvent, nil)
 	})
 	if runtime.GOOS == "darwin" {
+		settings := result.AddSubmenu("Settings")
+		settings.AddText("Install 'ptrack' Shell Command…", nil, func(*menu.CallbackData) {
+			app.InstallShellCommand()
+		})
+	}
+	if runtime.GOOS == "darwin" {
 		result.Append(menu.EditMenu())
 		result.Append(menu.WindowMenu())
 	}

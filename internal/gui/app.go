@@ -37,6 +37,8 @@ type App struct {
 	monitorCancel       context.CancelFunc
 	monitorWG           lifecycleGroup
 	terminalOps         lifecycleGroup
+	watcherCancel       context.CancelFunc
+	watcherGeneration   uint64
 	startupReady        chan struct{}
 	startupOnce         sync.Once
 	shuttingDown        bool
@@ -88,9 +90,11 @@ type WorkspaceMutationResult struct {
 
 // PlanSummary is a selectable plan in the board header.
 type PlanSummary struct {
-	ID       uint64 `json:"id"`
-	Title    string `json:"title"`
-	IsActive bool   `json:"isActive"`
+	ID         uint64 `json:"id"`
+	Title      string `json:"title"`
+	IsActive   bool   `json:"isActive"`
+	TasksTotal int    `json:"tasksTotal"`
+	TasksDone  int    `json:"tasksDone"`
 }
 
 // Column is one task status lane.
@@ -216,10 +220,17 @@ func (a *App) getBoard(expectedGeneration, planID uint64) (Board, error) {
 	if err != nil {
 		return Board{}, err
 	}
-	tasks, err := s.ListTasksByPlan(planID)
+	allTasks, err := s.ListTasks()
 	if err != nil {
 		return Board{}, err
 	}
+	tasks := make([]model.Task, 0, len(allTasks))
+	for _, task := range allTasks {
+		if task.PlanID == planID {
+			tasks = append(tasks, task)
+		}
+	}
+	planProgress := planProgressByPlan(allTasks)
 	notes, err := s.ListNotes()
 	if err != nil {
 		return Board{}, err
@@ -257,11 +268,7 @@ func (a *App) getBoard(expectedGeneration, planID uint64) (Board, error) {
 		OpenIssues: []Issue{},
 	}
 	for _, plan := range plans {
-		board.Plans = append(board.Plans, PlanSummary{
-			ID:       plan.ID,
-			Title:    plan.Title,
-			IsActive: plan.ID == meta.ActivePlan,
-		})
+		board.Plans = append(board.Plans, planSummary(plan, meta.ActivePlan, planProgress))
 	}
 	titles := map[model.TaskStatus]string{
 		model.TaskTodo:    "Todo",

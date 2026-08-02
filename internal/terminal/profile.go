@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -35,6 +36,9 @@ type profileDependencies struct {
 	lookPath func(string) (string, error)
 	getenv   func(string) string
 	goos     string
+	// userShell resolves the login shell from the OS account record. Optional;
+	// used when SHELL is absent from the environment (Finder-launched apps).
+	userShell func() (string, error)
 }
 
 type agentCandidate struct {
@@ -109,9 +113,10 @@ func validateProfile(profile Profile, lookPath func(string) (string, error)) (Pr
 
 func DiscoverProfiles() ([]Profile, error) {
 	return discoverProfiles(profileDependencies{
-		lookPath: exec.LookPath,
-		getenv:   os.Getenv,
-		goos:     runtime.GOOS,
+		lookPath:  exec.LookPath,
+		getenv:    os.Getenv,
+		goos:      runtime.GOOS,
+		userShell: directoryServicesUserShell,
 	})
 }
 
@@ -169,7 +174,26 @@ func discoverDefaultShell(dependencies profileDependencies) (string, []string, e
 		return executable, nil, nil
 	}
 
-	executable := dependencies.getenv("SHELL")
+	executable := ""
+	if dependencies.userShell != nil {
+		// The account record is the authoritative source (same one
+		// Terminal.app uses). $SHELL is not trustworthy here: apps launched
+		// through LaunchServices inherit the *requesting* process's
+		// environment, so a ptrack started via `open` from a bash session
+		// would see SHELL=/bin/bash even for a zsh user.
+		if resolved, err := dependencies.userShell(); err == nil {
+			executable = resolved
+		}
+	}
+	if executable == "" {
+		executable = dependencies.getenv("SHELL")
+	}
+	if executable == "" && dependencies.goos == "darwin" {
+		// zsh has been the macOS default shell since Catalina.
+		if resolved, err := dependencies.lookPath("zsh"); err == nil {
+			executable = resolved
+		}
+	}
 	if executable == "" {
 		var err error
 		executable, err = dependencies.lookPath("sh")
@@ -178,6 +202,24 @@ func discoverDefaultShell(dependencies profileDependencies) (string, []string, e
 		}
 	}
 	return executable, []string{"-l"}, nil
+}
+
+// directoryServicesUserShell reports the current user's login shell as
+// registered in Directory Services (e.g. "/bin/zsh").
+func directoryServicesUserShell() (string, error) {
+	current, err := user.Current()
+	if err != nil {
+		return "", fmt.Errorf("resolve current user: %w", err)
+	}
+	output, err := exec.Command("dscl", ".", "-read", "/Users/"+current.Username, "UserShell").Output()
+	if err != nil {
+		return "", fmt.Errorf("read UserShell from Directory Services: %w", err)
+	}
+	_, shell, ok := strings.Cut(strings.TrimSpace(string(output)), "UserShell: ")
+	if !ok || strings.TrimSpace(shell) == "" {
+		return "", errors.New("UserShell not present in Directory Services record")
+	}
+	return strings.TrimSpace(shell), nil
 }
 
 func buildEnvironment(base []string, overrides map[string]string) ([]string, error) {

@@ -3,248 +3,312 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="dark light" />
     <title>P-TRACK Project Workspace</title>
+    <script>
+      // Apply the stored or OS theme before first paint to avoid a flash.
+      (() => {
+        const stored = localStorage.getItem("ptrack-theme");
+        const theme =
+          stored === "light" || stored === "dark"
+            ? stored
+            : matchMedia("(prefers-color-scheme: light)").matches
+              ? "light"
+              : "dark";
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
     <div id="app">
-      <header class="topbar">
-        <div class="brand">
+      <aside class="sidebar" aria-label="Workspace navigation">
+        <div class="sidebar-top" aria-hidden="true"></div>
+
+        <div class="brand sidebar-brand">
           <span class="brand-mark" aria-hidden="true"></span>
           <div>
             <p class="eyebrow">P-TRACK</p>
             <h1 id="project-name" tabindex="-1">Project workspace</h1>
           </div>
         </div>
-        <div class="toolbar">
-          <label id="plan-picker" class="plan-picker" hidden>
-            <span>Plan</span>
-            <select id="plan-select" aria-label="Select plan"></select>
-          </label>
-          <button id="refresh-button" class="button-secondary" type="button" hidden>
-            Refresh
-          </button>
-          <button id="open-project-button" type="button">Open Project…</button>
+
+        <nav class="sidebar-nav" aria-label="Project views">
           <button
-            id="switch-project-button"
-            class="button-secondary"
+            id="nav-board"
+            class="sidebar-nav-item"
             type="button"
-            hidden
-          >Switch Project…</button>
+            title="Board — ⌘1"
+            aria-current="page"
+            disabled
+          >Board</button>
           <button
-            id="close-project-button"
-            class="button-secondary"
+            id="nav-overview"
+            class="sidebar-nav-item"
             type="button"
-            hidden
-          >Close Project</button>
-        </div>
-      </header>
+            title="Overview — ⌘2"
+            disabled
+          >Overview</button>
+        </nav>
 
-      <section
-        id="workspace-state-screen"
-        class="workspace-state-screen"
-        aria-live="polite"
-      >
-        <div class="state-card">
-          <p id="workspace-state-eyebrow" class="eyebrow">P-TRACK projects</p>
-          <h2 id="workspace-state-heading" tabindex="-1">Choose a project</h2>
-          <p id="workspace-state-detail" class="state-detail">
-            Open a directory containing a P-TRACK project to begin.
-          </p>
-          <button id="state-open-project-button" type="button">Open Project…</button>
-          <div class="recent-projects-section">
-            <div class="section-heading">
-              <p class="section-label">Recent projects</p>
-            </div>
-            <div id="recent-project-list" class="recent-project-list"></div>
+        <div class="sidebar-plans">
+          <div class="section-heading">
+            <p class="section-label">Plans</p>
+            <span id="plan-total" class="section-count">0</span>
           </div>
+          <div id="sidebar-plan-list" class="sidebar-plan-list"></div>
         </div>
-      </section>
+      </aside>
 
-      <main id="workspace" class="workspace" hidden>
-        <aside class="memory-rail" aria-label="Project memory">
-          <div class="rail-heading">
-            <h2>Project memory</h2>
-          </div>
-
-          <section class="memory-section north-star">
-            <p class="section-label">North star</p>
-            <p id="goal" class="goal">Loading project goal…</p>
-          </section>
-
-          <section class="memory-section">
-            <p class="section-label">Agent handoff</p>
-            <p id="summary" class="summary">No rolling handoff yet.</p>
-          </section>
-
-          <section class="memory-section">
-            <p class="section-label">Project status</p>
-            <div id="project-stats" class="stats-grid"></div>
-            <div id="snapshot-bounds" class="intelligence-summary"></div>
-          </section>
-
-          <section class="memory-section">
-            <div class="section-heading">
-              <p class="section-label">Open issues</p>
-              <span id="issue-total" class="section-count">0</span>
-            </div>
-            <div id="issue-list" class="issue-list"></div>
-          </section>
-
-          <section class="memory-section activity-section">
-            <div class="section-heading">
-              <p class="section-label">Recent memory</p>
-              <span class="section-caption">Notes + commits</span>
-            </div>
-            <div id="activity-list" class="activity-list"></div>
+      <div class="canvas">
+        <header class="topbar">
+          <div class="toolbar">
+            <button id="open-project-button" type="button">Open Project…</button>
             <button
-              id="activity-more"
-              class="activity-more"
+              id="switch-project-button"
+              class="button-secondary"
               type="button"
-              aria-label="Show all recent memory"
               hidden
+            >Switch Project…</button>
+            <button
+              id="theme-toggle"
+              class="button-secondary"
+              type="button"
+              aria-label="Toggle color theme"
+            >☾</button>
+            <button
+              id="close-project-button"
+              class="button-secondary"
+              type="button"
+              hidden
+            >Close Project</button>
+          </div>
+        </header>
+
+        <section
+          id="workspace-state-screen"
+          class="workspace-state-screen"
+          aria-live="polite"
+        >
+          <div class="state-card">
+            <p id="workspace-state-eyebrow" class="eyebrow">P-TRACK projects</p>
+            <h2 id="workspace-state-heading" tabindex="-1">Choose a project</h2>
+            <p id="workspace-state-detail" class="state-detail">
+              Open a directory containing a P-TRACK project to begin.
+            </p>
+            <button id="state-open-project-button" type="button">Open Project…</button>
+            <div class="recent-projects-section">
+              <div class="section-heading">
+                <p class="section-label">Recent projects</p>
+              </div>
+              <div id="recent-project-list" class="recent-project-list"></div>
+            </div>
+          </div>
+        </section>
+
+        <main id="workspace" class="workspace" hidden>
+          <div class="work-area">
+            <section class="board-shell">
+              <header class="board-heading">
+                <div class="plan-context">
+                  <p class="eyebrow">Current plan</p>
+                  <div class="title-row">
+                    <h2 id="plan-title">Loading board…</h2>
+                    <span id="plan-progress-label" class="progress-label"></span>
+                  </div>
+                  <div class="progress-track" aria-hidden="true">
+                    <span id="plan-progress" class="progress-value"></span>
+                  </div>
+                </div>
+
+                <div class="board-actions">
+                  <span id="status" class="board-status" aria-live="polite">
+                    Connecting…
+                  </span>
+                  <form id="add-form" class="add-form">
+                    <input
+                      id="task-title"
+                      type="text"
+                      maxlength="240"
+                      autocomplete="off"
+                      placeholder="Task title…"
+                      aria-label="Task title"
+                    />
+                    <button type="submit">Add task</button>
+                  </form>
+                </div>
+              </header>
+
+              <section id="board" class="board" aria-label="Kanban board"></section>
+            </section>
+
+            <section
+              id="terminal-dock"
+              class="terminal-dock"
+              data-state="closed"
+              aria-label="Embedded terminal"
             >
-              Show more…
-            </button>
-          </section>
-
-          <section class="memory-section intelligence-section">
-            <div class="section-heading">
-              <p class="section-label">Repository</p>
-              <span id="git-state" class="section-count">Loading</span>
-            </div>
-            <p id="project-root" class="intelligence-path"></p>
-            <p id="storage-status" class="intelligence-meta"></p>
-            <div id="git-summary" class="intelligence-summary"></div>
-          </section>
-
-          <details class="memory-section intelligence-section">
-            <summary>Remotes and branches</summary>
-            <div id="git-remotes" class="intelligence-list"></div>
-            <div id="git-branches" class="intelligence-list"></div>
-          </details>
-
-          <details class="memory-section intelligence-section">
-            <summary>Recent Git commits</summary>
-            <div id="git-commits" class="intelligence-list"></div>
-          </details>
-
-          <section class="memory-section intelligence-section">
-            <div class="section-heading">
-              <p class="section-label">Active sessions</p>
-              <span id="runtime-total" class="section-count">0</span>
-            </div>
-            <div id="terminal-sessions" class="intelligence-list"></div>
-            <div id="agent-runs" class="intelligence-list"></div>
-          </section>
-
-          <details class="memory-section intelligence-section">
-            <summary>Project blockers and notes</summary>
-            <div id="overview-blockers" class="intelligence-list"></div>
-            <div id="overview-notes" class="intelligence-list"></div>
-          </details>
-        </aside>
-
-        <div class="work-area">
-          <section class="board-shell">
-            <header class="board-heading">
-              <div class="plan-context">
-                <p class="eyebrow">Current plan</p>
-                <div class="title-row">
-                  <h2 id="plan-title">Loading board…</h2>
-                  <span id="plan-progress-label" class="progress-label"></span>
-                </div>
-                <div class="progress-track" aria-hidden="true">
-                  <span id="plan-progress" class="progress-value"></span>
-                </div>
-              </div>
-
-              <div class="board-actions">
-                <span id="status" class="board-status" aria-live="polite">
-                  Connecting…
-                </span>
-                <form id="add-form" class="add-form">
-                  <input
-                    id="task-title"
-                    type="text"
-                    maxlength="240"
-                    autocomplete="off"
-                    placeholder="Task title…"
-                    aria-label="Task title"
-                  />
-                  <button type="submit">Add task</button>
-                </form>
-              </div>
-            </header>
-
-            <section id="board" class="board" aria-label="Kanban board"></section>
-          </section>
-
-          <section
-            id="terminal-dock"
-            class="terminal-dock"
-            data-state="closed"
-            aria-label="Embedded terminal"
-          >
-            <div
-              id="terminal-resize"
-              class="terminal-resize"
-              role="separator"
-              tabindex="0"
-              aria-label="Resize terminal dock"
-              aria-orientation="horizontal"
-              aria-valuemin="180"
-              aria-valuemax="600"
-              aria-valuenow="300"
-            ></div>
-            <header class="terminal-toolbar">
-              <div class="terminal-identity">
-                <span class="terminal-mark" aria-hidden="true">&gt;_</span>
-                <div>
-                  <p class="eyebrow">Terminal</p>
-                  <p id="terminal-title" class="terminal-title">Stopped</p>
-                </div>
-              </div>
-              <span
-                id="terminal-status"
-                class="terminal-status"
-                aria-live="polite"
-              >Closed</span>
-              <label class="terminal-profile-picker">
-                <span>Profile</span>
-                <select id="terminal-profile" aria-label="Terminal profile"></select>
-              </label>
-              <button id="terminal-open" type="button">Open</button>
-              <button
-                id="terminal-restart"
-                class="button-secondary"
-                type="button"
-                hidden
-              >Restart</button>
-              <button
-                id="terminal-close"
-                class="button-secondary"
-                type="button"
-                hidden
-              >Close</button>
-            </header>
-            <div id="terminal-body" class="terminal-body" hidden>
               <div
-                id="terminal-host"
-                class="terminal-host"
-                aria-label="Terminal session"
+                id="terminal-resize"
+                class="terminal-resize"
+                role="separator"
+                tabindex="0"
+                aria-label="Resize terminal dock"
+                aria-orientation="horizontal"
+                aria-valuemin="180"
+                aria-valuemax="600"
+                aria-valuenow="300"
               ></div>
-              <div
-                id="terminal-message"
-                class="terminal-message"
-                data-terminal-overlay
+              <header class="terminal-toolbar">
+                <div class="terminal-identity">
+                  <span class="terminal-mark" aria-hidden="true">&gt;_</span>
+                  <div>
+                    <p class="eyebrow">Terminal</p>
+                    <p id="terminal-title" class="terminal-title">Stopped</p>
+                  </div>
+                </div>
+                <span
+                  id="terminal-status"
+                  class="terminal-status"
+                  aria-live="polite"
+                >Closed</span>
+                <label class="terminal-profile-picker">
+                  <span>Profile</span>
+                  <select id="terminal-profile" aria-label="Terminal profile"></select>
+                </label>
+                <button id="terminal-open" type="button">Open</button>
+                <button
+                  id="terminal-restart"
+                  class="button-secondary"
+                  type="button"
+                  hidden
+                >Restart</button>
+                <button
+                  id="terminal-close"
+                  class="button-secondary"
+                  type="button"
+                  hidden
+                >Close</button>
+              </header>
+              <div id="terminal-body" class="terminal-body" hidden>
+                <div
+                  id="terminal-host"
+                  class="terminal-host"
+                  aria-label="Terminal session"
+                ></div>
+                <div
+                  id="terminal-message"
+                  class="terminal-message"
+                  data-terminal-overlay
+                  hidden
+                ></div>
+              </div>
+            </section>
+          </div>
+        </main>
+
+        <section
+          id="overview-page"
+          class="overview-page"
+          aria-label="Project overview"
+          hidden
+        >
+          <header class="overview-heading">
+            <p class="eyebrow">Project memory</p>
+            <h2>Overview</h2>
+          </header>
+
+          <div class="overview-grid">
+            <section class="memory-section north-star">
+              <p class="section-label">North star</p>
+              <p id="goal" class="goal">Loading project goal…</p>
+            </section>
+
+            <section class="memory-section">
+              <p class="section-label">Agent handoff</p>
+              <p id="summary" class="summary">No rolling handoff yet.</p>
+            </section>
+
+            <section class="memory-section overview-wide">
+              <p class="section-label">Project status</p>
+              <div class="status-layout">
+                <div id="plan-ring" class="plan-ring" role="img" hidden></div>
+                <div id="project-stats" class="stats-grid"></div>
+              </div>
+              <div id="snapshot-bounds" class="intelligence-summary"></div>
+            </section>
+
+            <section class="memory-section overview-wide">
+              <div class="section-heading">
+                <p class="section-label">Activity</p>
+                <span class="section-caption">Notes + commits · 16 weeks</span>
+              </div>
+              <div id="activity-heatmap" class="heatmap"></div>
+            </section>
+
+            <section class="memory-section">
+              <div class="section-heading">
+                <p class="section-label">Open issues</p>
+                <span id="issue-total" class="section-count">0</span>
+              </div>
+              <div id="issue-list" class="issue-list"></div>
+            </section>
+
+            <section class="memory-section activity-section">
+              <div class="section-heading">
+                <p class="section-label">Recent memory</p>
+                <span class="section-caption">Notes + commits</span>
+              </div>
+              <div id="activity-list" class="activity-list"></div>
+              <button
+                id="activity-more"
+                class="activity-more"
+                type="button"
+                aria-label="Show all recent memory"
                 hidden
-              ></div>
-            </div>
-          </section>
-        </div>
-      </main>
+              >
+                Show more…
+              </button>
+            </section>
+
+            <section class="memory-section intelligence-section">
+              <div class="section-heading">
+                <p class="section-label">Repository</p>
+                <span id="git-state" class="section-count">Loading</span>
+              </div>
+              <p id="project-root" class="intelligence-path"></p>
+              <p id="storage-status" class="intelligence-meta"></p>
+              <div id="git-summary" class="intelligence-summary"></div>
+            </section>
+
+            <section class="memory-section intelligence-section">
+              <div class="section-heading">
+                <p class="section-label">Active sessions</p>
+                <span id="runtime-total" class="section-count">0</span>
+              </div>
+              <div id="terminal-sessions" class="intelligence-list"></div>
+              <div id="agent-runs" class="intelligence-list"></div>
+            </section>
+
+            <details class="memory-section intelligence-section">
+              <summary>Remotes and branches</summary>
+              <div id="git-remotes" class="intelligence-list"></div>
+              <div id="git-branches" class="intelligence-list"></div>
+            </details>
+
+            <details class="memory-section intelligence-section">
+              <summary>Recent Git commits</summary>
+              <div id="git-commits" class="intelligence-list"></div>
+            </details>
+
+            <details class="memory-section intelligence-section overview-wide">
+              <summary>Project blockers and notes</summary>
+              <div id="overview-blockers" class="intelligence-list"></div>
+              <div id="overview-notes" class="intelligence-list"></div>
+            </details>
+          </div>
+        </section>
+      </div>
     </div>
 
     <div id="modal" class="modal" hidden>
@@ -453,6 +517,31 @@
         <span>Select all</span>
         <kbd id="terminal-menu-select-all-shortcut"></kbd>
       </button>
+    </div>
+
+    <div id="palette" class="modal palette-modal" hidden>
+      <div class="modal-backdrop" data-close-palette></div>
+      <section
+        class="palette"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Search the project"
+      >
+        <input
+          id="palette-input"
+          type="text"
+          autocomplete="off"
+          placeholder="Search plans, tasks, notes…"
+          aria-label="Search plans, tasks, and notes"
+          aria-controls="palette-results"
+        />
+        <div
+          id="palette-results"
+          class="palette-results"
+          role="listbox"
+          aria-label="Search results"
+        ></div>
+      </section>
     </div>
 
     <div id="toast" class="toast" role="alert" aria-live="assertive" hidden></div>

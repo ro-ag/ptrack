@@ -1,12 +1,18 @@
 import { mountTerminalDock } from "./terminal/pane";
+import { initTheme } from "./theme";
 import {
   RefreshGate,
   RefreshLoop,
   WorkspaceController,
 } from "./workspace/controller";
 import {
+  collapsedLaneStatuses,
+  commandShortcut,
   confirmationCopy,
   focusCycleIndex,
+  groupSearchResults,
+  heatmapWeeks,
+  paletteTarget,
   preserveSectionOnError,
   shortcutIntent,
   workspaceStateCopy,
@@ -21,13 +27,16 @@ const laneColors = {
 };
 const severityColors = {
   low: "var(--text-soft)",
-  medium: "#5fafff",
+  medium: "var(--info)",
   high: "var(--doing)",
   critical: "var(--blocked)",
 };
 
 const elements = {
   workspace: document.querySelector("#workspace"),
+  overviewPage: document.querySelector("#overview-page"),
+  navBoard: document.querySelector("#nav-board"),
+  navOverview: document.querySelector("#nav-overview"),
   stateScreen: document.querySelector("#workspace-state-screen"),
   stateEyebrow: document.querySelector("#workspace-state-eyebrow"),
   stateHeading: document.querySelector("#workspace-state-heading"),
@@ -37,8 +46,8 @@ const elements = {
   board: document.querySelector("#board"),
   projectName: document.querySelector("#project-name"),
   planTitle: document.querySelector("#plan-title"),
-  planPicker: document.querySelector("#plan-picker"),
-  planSelect: document.querySelector("#plan-select"),
+  planTotal: document.querySelector("#plan-total"),
+  planList: document.querySelector("#sidebar-plan-list"),
   planProgress: document.querySelector("#plan-progress"),
   planProgressLabel: document.querySelector("#plan-progress-label"),
   goal: document.querySelector("#goal"),
@@ -53,7 +62,7 @@ const elements = {
   memoryDialogList: document.querySelector("#memory-dialog-list"),
   memoryDialogClose: document.querySelector("#memory-dialog-close"),
   status: document.querySelector("#status"),
-  refresh: document.querySelector("#refresh-button"),
+  themeToggle: document.querySelector("#theme-toggle"),
   openProject: document.querySelector("#open-project-button"),
   switchProject: document.querySelector("#switch-project-button"),
   closeProject: document.querySelector("#close-project-button"),
@@ -100,6 +109,11 @@ const elements = {
   drawerCommitsCount: document.querySelector("#drawer-commits-count"),
   drawerIssues: document.querySelector("#drawer-issues"),
   drawerIssuesCount: document.querySelector("#drawer-issues-count"),
+  palette: document.querySelector("#palette"),
+  paletteInput: document.querySelector("#palette-input"),
+  paletteResults: document.querySelector("#palette-results"),
+  planRing: document.querySelector("#plan-ring"),
+  heatmap: document.querySelector("#activity-heatmap"),
   toast: document.querySelector("#toast"),
 };
 
@@ -111,6 +125,7 @@ const refreshLoop = new RefreshLoop(() => {
 }, 15_000);
 
 let workspaceState = { status: "welcome", generation: 0 };
+let view = "board";
 let snapshot = null;
 let board = null;
 let draggedTask = null;
@@ -130,6 +145,15 @@ let detailRequest = 0;
 let drawerReturnFocus = null;
 let drawerOpenTimer = null;
 let dragJustEndedAt = 0;
+let paletteItems = [];
+let paletteActive = -1;
+let paletteTimer = null;
+let paletteSequence = 0;
+let paletteReturnFocus = null;
+let pendingDetailTaskId = 0;
+let heatmapRequested = false;
+const expandedLanes = new Set();
+const foldedLanes = new Set();
 
 const statusTitles = {
   todo: "Todo",
@@ -279,6 +303,7 @@ function renderMemory() {
     statElement(board.stats.openIssues, "Open issues"),
     statElement(`${board.stats.planTasksDone}/${board.stats.planTasks}`, "Plan done"),
   );
+  renderPlanRing(board.stats.planTasksDone, board.stats.planTasks);
 
   elements.issueTotal.textContent = board.stats.openIssues;
   elements.issues.replaceChildren();
@@ -318,6 +343,118 @@ function renderMemory() {
       elements.memoryDialogList.append(activityElement(activity, true));
     });
     requestAnimationFrame(fitRecentMemory);
+  }
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function svgElement(name, attributes = {}) {
+  const node = document.createElementNS(SVG_NS, name);
+  for (const [key, value] of Object.entries(attributes)) {
+    node.setAttribute(key, value);
+  }
+  return node;
+}
+
+function renderPlanRing(done, total) {
+  elements.planRing.replaceChildren();
+  if (!total) {
+    elements.planRing.hidden = true;
+    return;
+  }
+  elements.planRing.hidden = false;
+  const radius = 34;
+  const circumference = 2 * Math.PI * radius;
+  const fraction = Math.min(1, done / total);
+  const svg = svgElement("svg", {
+    viewBox: "0 0 84 84",
+    class: "plan-ring-svg",
+    "aria-hidden": "true",
+  });
+  svg.append(
+    svgElement("circle", { class: "plan-ring-track", cx: 42, cy: 42, r: radius }),
+    svgElement("circle", {
+      class: "plan-ring-value",
+      cx: 42,
+      cy: 42,
+      r: radius,
+      "stroke-dasharray": `${circumference}`,
+      "stroke-dashoffset": `${circumference * (1 - fraction)}`,
+      transform: "rotate(-90 42 42)",
+    }),
+  );
+  const number = svgElement("text", {
+    class: "plan-ring-number",
+    x: 42,
+    y: 40,
+    "text-anchor": "middle",
+  });
+  number.textContent = `${done}/${total}`;
+  const caption = svgElement("text", {
+    class: "plan-ring-caption",
+    x: 42,
+    y: 54,
+    "text-anchor": "middle",
+  });
+  caption.textContent = "done";
+  svg.append(number, caption);
+  elements.planRing.setAttribute(
+    "aria-label",
+    `Active plan progress: ${done} of ${total} tasks done`,
+  );
+  elements.planRing.append(svg);
+}
+
+function renderHeatmap(days) {
+  elements.heatmap.replaceChildren();
+  if (!days.length) {
+    elements.heatmap.append(emptyMemory("No activity recorded yet."));
+    return;
+  }
+  const columns = heatmapWeeks(days);
+  const cell = 10;
+  const pitch = cell + 2;
+  const width = columns.length * pitch - 2;
+  const height = 7 * pitch - 2;
+  const svg = svgElement("svg", {
+    viewBox: `0 0 ${width} ${height}`,
+    width: width,
+    height: height,
+    class: "heatmap-svg",
+    role: "img",
+    "aria-label": "Daily note and commit activity for the last 16 weeks",
+  });
+  columns.forEach((column, x) => {
+    column.forEach((day, y) => {
+      if (!day.date) return;
+      const rect = svgElement("rect", {
+        class: `heatmap-cell heatmap-level-${day.level}`,
+        x: x * pitch,
+        y: y * pitch,
+        width: cell,
+        height: cell,
+        rx: 2,
+      });
+      const tip = svgElement("title");
+      tip.textContent = `${day.count} ${day.count === 1 ? "item" : "items"} · ${day.date}`;
+      rect.append(tip);
+      svg.append(rect);
+    });
+  });
+  elements.heatmap.append(svg);
+}
+
+// The heatmap is fetched lazily: only once the Overview is shown, and
+// again (forced) after a snapshot reload while it is visible.
+async function loadHeatmap(force = false) {
+  if (workspaceController.state.status !== "open") return;
+  if (heatmapRequested && !force) return;
+  heatmapRequested = true;
+  try {
+    renderHeatmap(await api().GetActivityHeatmapV2(16));
+  } catch (error) {
+    heatmapRequested = false;
+    if (workspaceController.state.status === "open") showError(error);
   }
 }
 
@@ -436,34 +573,84 @@ function cardElement(task) {
   return card;
 }
 
-function columnElement(column) {
+function columnElement(column, collapsed = false) {
   const lane = document.createElement("section");
-  lane.className = "column";
+  lane.className = collapsed ? "column column-collapsed" : "column";
   lane.dataset.status = column.status;
   lane.style.setProperty("--lane-color", laneColors[column.status]);
-  const header = document.createElement("header");
-  header.className = "column-header";
-  const heading = document.createElement("h3");
-  heading.className = "column-title";
-  const dot = document.createElement("span");
-  dot.className = "column-dot";
-  dot.setAttribute("aria-hidden", "true");
-  heading.append(dot, document.createTextNode(column.title));
-  const count = document.createElement("span");
-  count.className = "column-count";
-  count.textContent = column.tasks.length;
-  header.append(heading, count);
-  const cards = document.createElement("div");
-  cards.className = "cards";
-  if (column.tasks.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "empty";
-    empty.textContent = board.planId ? "Drop a task here" : "No active plan";
-    cards.append(empty);
+  if (collapsed) {
+    // Slim rail for an empty lane: rotated title + count, click to expand.
+    lane.setAttribute("role", "button");
+    lane.tabIndex = 0;
+    lane.setAttribute("aria-expanded", "false");
+    lane.setAttribute("aria-label", `${column.title} lane is collapsed. Activate to expand.`);
+    lane.title = `${column.title} · ${column.tasks.length} — click to expand`;
+    const rail = document.createElement("div");
+    rail.className = "column-rail";
+    const heading = document.createElement("h3");
+    heading.className = "column-title";
+    const dot = document.createElement("span");
+    dot.className = "column-dot";
+    dot.setAttribute("aria-hidden", "true");
+    heading.append(dot, document.createTextNode(column.title));
+    const count = document.createElement("span");
+    count.className = "column-count";
+    count.textContent = column.tasks.length;
+    rail.append(heading, count);
+    lane.append(rail);
+    const expand = () => {
+      foldedLanes.delete(column.status);
+      expandedLanes.add(column.status);
+      renderBoard();
+    };
+    lane.addEventListener("click", (event) => {
+      if (Date.now() - dragJustEndedAt < 300) return;
+      event.preventDefault();
+      expand();
+    });
+    lane.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      expand();
+    });
   } else {
-    column.tasks.forEach((task) => cards.append(cardElement(task)));
+    const header = document.createElement("header");
+    header.className = "column-header";
+    const heading = document.createElement("h3");
+    heading.className = "column-title";
+    const dot = document.createElement("span");
+    dot.className = "column-dot";
+    dot.setAttribute("aria-hidden", "true");
+    heading.append(dot, document.createTextNode(column.title));
+    const count = document.createElement("span");
+    count.className = "column-count";
+    count.textContent = column.tasks.length;
+    const fold = document.createElement("button");
+    fold.type = "button";
+    fold.className = "column-fold";
+    fold.textContent = "⌄";
+    fold.title = `Collapse ${column.title} lane`;
+    fold.setAttribute("aria-label", `Collapse ${column.title} lane`);
+    fold.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      expandedLanes.delete(column.status);
+      foldedLanes.add(column.status);
+      renderBoard();
+    });
+    header.append(heading, count, fold);
+    const cards = document.createElement("div");
+    cards.className = "cards";
+    if (column.tasks.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = board.planId ? "Drop a task here" : "No active plan";
+      cards.append(empty);
+    } else {
+      column.tasks.forEach((task) => cards.append(cardElement(task)));
+    }
+    lane.append(header, cards);
   }
-  lane.append(header, cards);
   lane.addEventListener("dragover", (event) => {
     if (!draggedTask || draggedTask.status === column.status) return;
     event.preventDefault();
@@ -483,19 +670,55 @@ function columnElement(column) {
   return lane;
 }
 
+function selectPlan(planId) {
+  // Same selection path the topbar picker used: a snapshot for that plan.
+  void loadSnapshot(planId);
+}
+
+function renderPlanList() {
+  elements.planList.replaceChildren();
+  elements.planTotal.textContent = board.plans.length;
+  board.plans.forEach((plan) => {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "sidebar-plan";
+    if (String(plan.id) === String(board.planId)) {
+      item.classList.add("active");
+      item.setAttribute("aria-current", "true");
+    }
+    item.title = plan.isActive ? `${plan.title} · active plan` : plan.title;
+    const title = document.createElement("span");
+    title.className = "sidebar-plan-title";
+    title.textContent = `#${plan.id} ${plan.title}`;
+    item.append(title);
+    if (plan.isActive) {
+      const dot = document.createElement("span");
+      dot.className = "sidebar-plan-dot";
+      dot.setAttribute("aria-hidden", "true");
+      item.append(dot);
+    }
+    item.addEventListener("click", () => selectPlan(plan.id));
+    if (plan.tasksTotal > 0) {
+      // 2px session progress track; absolutely positioned so the 30px row
+      // height never changes.
+      const track = document.createElement("span");
+      track.className = "sidebar-plan-track";
+      track.setAttribute("aria-hidden", "true");
+      const fill = document.createElement("span");
+      fill.className = "sidebar-plan-fill";
+      fill.style.width = `${Math.round((plan.tasksDone / plan.tasksTotal) * 100)}%`;
+      track.append(fill);
+      item.append(track);
+      item.title = `${item.title} · ${plan.tasksDone}/${plan.tasksTotal} done`;
+    }
+    elements.planList.append(item);
+  });
+}
+
 function renderBoard() {
   elements.projectName.textContent = board.projectName;
   elements.planTitle.textContent = board.planTitle || "No active plan";
-  const selected = String(board.planId);
-  elements.planSelect.replaceChildren();
-  board.plans.forEach((plan) => {
-    const option = document.createElement("option");
-    option.value = plan.id;
-    option.textContent = `${plan.isActive ? "Active · " : ""}#${plan.id} ${plan.title}`;
-    option.selected = String(plan.id) === selected;
-    elements.planSelect.append(option);
-  });
-  elements.planSelect.disabled = board.plans.length === 0;
+  renderPlanList();
   const total = board.stats.planTasks;
   const done = board.stats.planTasksDone;
   const percentage = total ? Math.round((done / total) * 100) : 0;
@@ -503,8 +726,23 @@ function renderBoard() {
   elements.planProgressLabel.textContent = `${done}/${total} done`;
   elements.taskTitle.disabled = board.planId === 0;
   elements.addForm.querySelector("button").disabled = board.planId === 0;
+  const collapsed = new Set(
+    collapsedLaneStatuses(
+      board.columns.map((column) => ({
+        status: column.status,
+        taskCount: column.tasks.length,
+      })),
+      expandedLanes,
+      foldedLanes,
+    ),
+  );
+  elements.board.style.gridTemplateColumns = board.columns
+    .map((column) => (collapsed.has(column.status) ? "48px" : "minmax(214px, 1fr)"))
+    .join(" ");
   elements.board.replaceChildren();
-  board.columns.forEach((column) => elements.board.append(columnElement(column)));
+  board.columns.forEach((column) =>
+    elements.board.append(columnElement(column, collapsed.has(column.status))),
+  );
   renderMemory();
 }
 
@@ -674,6 +912,7 @@ function snapshotDialogIsOpen() {
     !elements.memoryModal.hidden ||
     !elements.confirmModal.hidden ||
     !elements.drawer.hidden ||
+    !elements.palette.hidden ||
     Boolean(
       document.querySelector(
         "#terminal-paste-modal:not([hidden]), #terminal-context-menu:not([hidden])",
@@ -701,7 +940,6 @@ async function loadSnapshot(planId = board?.planId || 0, quiet = false) {
   const ticket = workspaceController.capture();
   const request = ++snapshotSequence;
   activeSnapshotRequest = request;
-  elements.refresh.disabled = true;
   if (!quiet) setStatus("Refreshing project snapshot…");
   try {
     const response = await api().GetWorkspaceSnapshot(ticket.generation, Number(planId));
@@ -714,6 +952,8 @@ async function loadSnapshot(planId = board?.planId || 0, quiet = false) {
     elements.workspace.dataset.snapshotState = "ready";
     renderBoard();
     renderIntelligence();
+    openPendingTaskDetail();
+    if (view === "overview" && heatmapRequested) void loadHeatmap(true);
     const now = new Date(response.capturedAt).toLocaleTimeString([], {
       hour: "numeric",
       minute: "2-digit",
@@ -730,7 +970,6 @@ async function loadSnapshot(planId = board?.planId || 0, quiet = false) {
     showError(error);
   } finally {
     if (activeSnapshotRequest === request) activeSnapshotRequest = null;
-    if (workspaceController.state.status === "open") elements.refresh.disabled = false;
     const rerun = refreshGate.finish();
     if (rerun && workspaceController.state.status === "open") {
       const queuedPlan = queuedSnapshotPlanId || board?.planId || 0;
@@ -827,6 +1066,176 @@ function closeMemoryHistory() {
   elements.memoryModal.hidden = true;
   memoryModalReturnFocus?.focus();
   memoryModalReturnFocus = null;
+}
+
+const paletteKindLabels = {
+  plan: "Plan",
+  task: "Task",
+  note: "Note",
+};
+
+function openPalette() {
+  if (workspaceController.state.status !== "open") return;
+  paletteReturnFocus = document.activeElement;
+  elements.palette.hidden = false;
+  renderPaletteResults();
+  if (elements.paletteInput.value.trim()) void runPaletteSearch();
+  requestAnimationFrame(() => {
+    elements.paletteInput.focus();
+    elements.paletteInput.select();
+  });
+}
+
+function closePalette() {
+  if (elements.palette.hidden) return;
+  window.clearTimeout(paletteTimer);
+  paletteSequence += 1;
+  elements.palette.hidden = true;
+  paletteItems = [];
+  paletteActive = -1;
+  paletteReturnFocus?.focus?.();
+  paletteReturnFocus = null;
+}
+
+function schedulePaletteSearch() {
+  window.clearTimeout(paletteTimer);
+  paletteTimer = window.setTimeout(() => void runPaletteSearch(), 150);
+}
+
+async function runPaletteSearch() {
+  const query = elements.paletteInput.value.trim();
+  const request = ++paletteSequence;
+  if (!query) {
+    paletteItems = [];
+    paletteActive = -1;
+    renderPaletteResults();
+    return;
+  }
+  try {
+    const results = await api().SearchV2(query);
+    if (request !== paletteSequence || elements.palette.hidden) return;
+    paletteItems = results;
+    paletteActive = results.length ? 0 : -1;
+    renderPaletteResults();
+  } catch (error) {
+    if (request !== paletteSequence || elements.palette.hidden) return;
+    showError(error);
+  }
+}
+
+function paletteEmptyState(message) {
+  const empty = document.createElement("div");
+  empty.className = "palette-empty";
+  empty.textContent = message;
+  return empty;
+}
+
+function renderPaletteResults() {
+  elements.paletteResults.replaceChildren();
+  if (!elements.paletteInput.value.trim()) {
+    elements.paletteResults.append(
+      paletteEmptyState("Search across plans, tasks, and memory notes."),
+    );
+    elements.paletteInput.removeAttribute("aria-activedescendant");
+    return;
+  }
+  if (paletteItems.length === 0) {
+    elements.paletteResults.append(paletteEmptyState("No matches."));
+    elements.paletteInput.removeAttribute("aria-activedescendant");
+    return;
+  }
+  let flatIndex = 0;
+  groupSearchResults(paletteItems).forEach((group) => {
+    const section = document.createElement("div");
+    section.className = "palette-group";
+    const label = document.createElement("p");
+    label.className = "palette-group-label";
+    label.textContent = group.label;
+    section.append(label);
+    group.items.forEach((result) => {
+      const index = flatIndex;
+      const option = document.createElement("div");
+      option.className = "palette-option";
+      option.id = `palette-option-${index}`;
+      option.role = "option";
+      option.setAttribute("aria-selected", String(index === paletteActive));
+      if (index === paletteActive) option.classList.add("active");
+      const badge = document.createElement("span");
+      badge.className = "palette-kind";
+      badge.dataset.kind = result.kind;
+      badge.textContent = paletteKindLabels[result.kind] || result.kind;
+      const body = document.createElement("div");
+      body.className = "palette-option-body";
+      const title = document.createElement("p");
+      title.className = "palette-option-title";
+      title.textContent =
+        result.kind === "note" ? result.title : `#${result.id} ${result.title}`;
+      body.append(title);
+      if (result.snippet) {
+        const snippet = document.createElement("p");
+        snippet.className = "palette-option-snippet";
+        snippet.textContent = result.snippet;
+        body.append(snippet);
+      }
+      option.append(badge, body);
+      option.addEventListener("click", () => activatePaletteResult(result));
+      option.addEventListener("mousemove", () => {
+        if (paletteActive !== index) {
+          paletteActive = index;
+          renderPaletteResults();
+        }
+      });
+      section.append(option);
+      flatIndex += 1;
+    });
+    elements.paletteResults.append(section);
+  });
+  const active = elements.paletteResults.querySelector(".palette-option.active");
+  if (active) {
+    elements.paletteInput.setAttribute("aria-activedescendant", active.id);
+    active.scrollIntoView({ block: "nearest" });
+  } else {
+    elements.paletteInput.removeAttribute("aria-activedescendant");
+  }
+}
+
+function movePaletteActive(delta) {
+  if (paletteItems.length === 0) return;
+  paletteActive = focusCycleIndex(
+    paletteItems.length,
+    paletteActive,
+    delta < 0,
+  );
+  renderPaletteResults();
+}
+
+function activatePaletteResult(result) {
+  if (!result) return;
+  const target = paletteTarget(result);
+  closePalette();
+  if (target.view === "overview") {
+    setView("overview");
+    return;
+  }
+  pendingDetailTaskId = target.taskId;
+  setView("board");
+  if (Number(board?.planId) === Number(target.planId)) {
+    openPendingTaskDetail();
+  } else {
+    selectPlan(target.planId);
+  }
+}
+
+// Opens the drawer for a task chosen in the palette once the board for its
+// plan has loaded. Called from the snapshot success path and directly when
+// the task's plan is already selected.
+function openPendingTaskDetail() {
+  if (!pendingDetailTaskId || !board) return;
+  const task = board.columns
+    .flatMap((column) => column.tasks)
+    .find((candidate) => Number(candidate.id) === Number(pendingDetailTaskId));
+  pendingDetailTaskId = 0;
+  if (task) openTaskDetail(task);
 }
 
 function drawerEmptyState(message) {
@@ -1054,24 +1463,53 @@ async function loadRecentProjects() {
   }
 }
 
+function applyView() {
+  const open = workspaceState.status === "open";
+  elements.workspace.hidden = !open || view !== "board";
+  elements.overviewPage.hidden = !open || view !== "overview";
+  elements.navBoard.classList.toggle("active", view === "board");
+  elements.navOverview.classList.toggle("active", view === "overview");
+  if (view === "board") elements.navBoard.setAttribute("aria-current", "page");
+  else elements.navBoard.removeAttribute("aria-current");
+  if (view === "overview") elements.navOverview.setAttribute("aria-current", "page");
+  else elements.navOverview.removeAttribute("aria-current");
+}
+
+function setView(nextView) {
+  view = nextView === "overview" ? "overview" : "board";
+  applyView();
+  if (view === "overview") {
+    requestAnimationFrame(fitRecentMemory);
+    void loadHeatmap();
+  }
+}
+
 function renderWorkspaceState(state, focus = false) {
+  const wasOpen = workspaceState.status === "open";
   workspaceState = state;
   const open = state.status === "open";
-  elements.workspace.hidden = !open;
+  if (open && !wasOpen) view = "board";
+  applyView();
   elements.stateScreen.hidden = open;
-  elements.planPicker.hidden = !open;
-  elements.refresh.hidden = !open;
+  elements.navBoard.disabled = !open;
+  elements.navOverview.disabled = !open;
   elements.switchProject.hidden = !open;
   elements.closeProject.hidden = !open;
   elements.openProject.hidden = open;
   elements.workspace.removeAttribute("aria-busy");
   elements.workspace.inert = false;
-  elements.refresh.disabled = false;
+  elements.overviewPage.removeAttribute("aria-busy");
+  elements.overviewPage.inert = false;
   elements.switchProject.disabled = false;
   elements.closeProject.disabled = false;
 
   if (open) {
     elements.projectName.textContent = state.project?.name || "Project workspace";
+    if (!wasOpen) {
+      elements.planTotal.textContent = "0";
+      elements.planList.replaceChildren(emptyMemory("Loading plans…"));
+    }
+    void loadRecentProjects();
     void ensureTerminalDock(state.generation);
     if (focus) requestAnimationFrame(() => elements.projectName.focus());
     return;
@@ -1081,9 +1519,13 @@ function renderWorkspaceState(state, focus = false) {
   activeSnapshotRequest = null;
   disposeTerminalDock();
   closeTaskDetail();
+  closePalette();
+  heatmapRequested = false;
   board = null;
   snapshot = null;
   elements.projectName.textContent = "Project workspace";
+  elements.planTotal.textContent = "0";
+  elements.planList.replaceChildren(emptyMemory("No project open."));
   const copy = workspaceStateCopy(state.status, state.error);
   elements.stateEyebrow.textContent = copy.eyebrow;
   elements.stateHeading.textContent = copy.heading;
@@ -1108,6 +1550,8 @@ function publishBackendState(state, transition, focus = false, keepInert = false
   if (state.status === "open" && keepInert) {
     elements.workspace.inert = true;
     elements.workspace.setAttribute("aria-busy", "true");
+    elements.overviewPage.inert = true;
+    elements.overviewPage.setAttribute("aria-busy", "true");
   }
   if (state.status === "open" && !keepInert) void loadSnapshot(0);
   return true;
@@ -1118,7 +1562,8 @@ function beginWorkspaceTransition() {
   if (workspaceState.status === "open") {
     elements.workspace.inert = true;
     elements.workspace.setAttribute("aria-busy", "true");
-    elements.refresh.disabled = true;
+    elements.overviewPage.inert = true;
+    elements.overviewPage.setAttribute("aria-busy", "true");
     elements.switchProject.disabled = true;
     elements.closeProject.disabled = true;
     setStatus("Preparing project transition…");
@@ -1299,7 +1744,7 @@ function boardShortcutIsBlocked(event) {
 
 function trapModalFocus(event) {
   if (event.key !== "Tab") return;
-  const modal = [elements.confirmModal, elements.modal, elements.memoryModal, elements.drawer].find(
+  const modal = [elements.palette, elements.confirmModal, elements.modal, elements.memoryModal, elements.drawer].find(
     (candidate) => !candidate.hidden,
   );
   if (!modal) return;
@@ -1328,13 +1773,51 @@ function registerNativeProjectActions() {
     eventsOn("workspace:open-requested", () => void requestOpenProject()),
     eventsOn("workspace:switch-requested", () => void requestOpenProject()),
     eventsOn("workspace:close-requested", () => void requestCloseProject()),
+    eventsOn("workspace:data-changed", () =>
+      void loadSnapshot(board?.planId || 0, true),
+    ),
   );
 }
 
-elements.refresh.addEventListener("click", () => void loadSnapshot());
-elements.planSelect.addEventListener("change", () =>
-  void loadSnapshot(elements.planSelect.value),
-);
+elements.navBoard.addEventListener("click", () => setView("board"));
+elements.navOverview.addEventListener("click", () => setView("overview"));
+
+window.addEventListener("focus", () => {
+  if (workspaceController.state.status !== "open") return;
+  void loadSnapshot(board?.planId || 0, true);
+});
+
+elements.paletteInput.addEventListener("input", schedulePaletteSearch);
+elements.paletteInput.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    movePaletteActive(event.key === "ArrowDown" ? 1 : -1);
+  } else if (event.key === "Enter") {
+    event.preventDefault();
+    activatePaletteResult(paletteItems[paletteActive]);
+  } else if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    closePalette();
+  }
+});
+document.querySelectorAll("[data-close-palette]").forEach((element) => {
+  element.addEventListener("click", closePalette);
+});
+
+const themeController = initTheme({
+  root: document.documentElement,
+  storage: localStorage,
+  media: matchMedia("(prefers-color-scheme: light)"),
+  onChange: (theme) => {
+    // Show the theme a click switches to: sun in dark mode, moon in light.
+    elements.themeToggle.textContent = theme === "dark" ? "☀" : "☾";
+    elements.themeToggle.title =
+      theme === "dark" ? "Switch to light theme" : "Switch to dark theme";
+  },
+});
+elements.themeToggle.addEventListener("click", () => themeController.toggle());
+
 elements.openProject.addEventListener("click", () => void requestOpenProject());
 elements.switchProject.addEventListener("click", () => void requestOpenProject());
 elements.closeProject.addEventListener("click", () => void requestCloseProject());
@@ -1428,6 +1911,32 @@ document.addEventListener("keydown", (event) => {
   ) {
     closeTaskDetail();
   }
+  const command = commandShortcut({
+    key: event.key,
+    composing: event.isComposing,
+    meta: event.metaKey,
+    ctrl: event.ctrlKey,
+    alt: event.altKey,
+    shift: event.shiftKey,
+    repeat: event.repeat,
+    prevented: event.defaultPrevented,
+  });
+  if (command === "palette") {
+    // ⌘K works globally, even while typing in an input.
+    event.preventDefault();
+    if (elements.palette.hidden) openPalette();
+    else closePalette();
+    return;
+  }
+  if (command && !boardShortcutIsBlocked(event)) {
+    event.preventDefault();
+    if (command === "board") setView("board");
+    if (command === "overview") setView("overview");
+    if (command === "addTask") {
+      setView("board");
+      elements.taskTitle.focus();
+    }
+  }
   const shortcut = shortcutIntent({
     key: event.key,
     composing: event.isComposing,
@@ -1450,7 +1959,7 @@ document.addEventListener("keydown", (event) => {
 
 if ("ResizeObserver" in window) {
   new ResizeObserver(() => requestAnimationFrame(fitRecentMemory)).observe(
-    document.querySelector(".memory-rail"),
+    elements.activity,
   );
 }
 

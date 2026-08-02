@@ -6,6 +6,59 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-08-02
+
+### Added
+- Command palette (⌘K): search across plans, tasks, and notes with grouped
+  results; activating a result jumps to the plan, opens the task's detail
+  drawer, or heads to the relevant Overview section.
+- Keyboard shortcuts: ⌘1 Board, ⌘2 Overview, ⌘N new task, ⌘K palette.
+- Progress visuals: activity heatmap (16 weeks of notes + commits) and a
+  plan progress ring on the Overview, plus per-plan progress bars in the
+  sidebar plan list. Hand-rolled SVG, theme-aware, no chart library.
+- Live refresh: the workspace reloads itself when the project database
+  changes on disk (CLI or another agent) and when the window regains focus;
+  the manual Refresh button is gone.
+- Empty kanban lanes collapse into slim rails so populated lanes get the
+  space; click a rail to expand it back.
+- Canvas-sheet workspace layout: a flush navigation sidebar (brand, Board /
+  Overview links, the project's plan list, recent projects) with the content
+  on a rounded, elevated canvas. The plan picker moved from the topbar into
+  the sidebar as a scrollable list.
+- Overview page: a dedicated full-width view holding the project memory —
+  North star, Agent handoff, Project status (compact stat tiles), Open
+  issues, Recent memory, and the repository intelligence cards — so the
+  board gets the whole canvas.
+- Light theme for the desktop workspace, with a topbar toggle (☀/☾) that
+  persists the choice; without an explicit choice the app follows the macOS
+  appearance live.
+- The window titlebar now blends into the workspace: transparent, full-size
+  content with inset traffic lights instead of the detached default bar. The
+  topbar itself is a slim 44px strip with compact, low-key controls; the
+  brand block moved out of it into the sidebar.
+- Settings ▸ "Install 'ptrack' Shell Command…" in the desktop app adds the
+  app's own binary directory to PATH in ~/.zprofile (idempotent, marked
+  block), so the `ptrack` CLI works in new terminal sessions without a
+  separate install.
+
+### Fixed
+- The built-in terminal now starts the user's real login shell (zsh with
+  their rc files, colors, and prompt) instead of a bare `sh`. The account's
+  UserShell record is read from Directory Services and takes priority over
+  the SHELL variable, which apps launched through LaunchServices inherit
+  from the *requesting* process rather than the user.
+- Overview page cards no longer let long issue titles and memory entries
+  bleed into neighboring cards, and Recent memory items no longer overlap:
+  list items shrink and clip correctly, and the two-line detail clamp no
+  longer relies on -webkit-line-clamp, which mis-measures in grid
+  containers.
+- Launching the installed app from Finder or the Dock actually opens the
+  desktop GUI now. The bundle's entry point is a launcher script that always
+  runs `ptrack gui`; the previous stdio sniffing misread the /dev/null
+  descriptors launchd attaches as a usable terminal and silently exited.
+  Invoking the `ptrack` binary directly with no subcommand is unchanged and
+  stays the terminal dashboard.
+
 ## [0.17.0] - 2026-08-02
 
 ### Added

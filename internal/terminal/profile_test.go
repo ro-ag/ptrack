@@ -434,6 +434,92 @@ func failingLookPath(string) (string, error) {
 	return "", errors.New("executable not found")
 }
 
+func TestDiscoverProfilesUsesAccountShellWhenEnvMissing(t *testing.T) {
+	recorded := filepath.Join(t.TempDir(), "zsh")
+	dependencies := profileDependencies{
+		goos:      "darwin",
+		getenv:    func(string) string { return "" },
+		lookPath:  failingLookPath,
+		userShell: func() (string, error) { return recorded, nil },
+	}
+
+	profiles, err := discoverProfiles(dependencies)
+	if err != nil {
+		t.Fatalf("discoverProfiles: %v", err)
+	}
+	shell := profileForExecutable(t, profiles, recorded)
+	if shell.Kind != ProfileShell {
+		t.Fatalf("account shell profile kind = %q, want %q", shell.Kind, ProfileShell)
+	}
+	if !reflect.DeepEqual(shell.Args, []string{"-l"}) {
+		t.Fatalf("account shell args = %#v, want login shell", shell.Args)
+	}
+}
+
+func TestDiscoverProfilesAccountShellWinsOverInheritedEnv(t *testing.T) {
+	recorded := filepath.Join(t.TempDir(), "zsh")
+	inherited := filepath.Join(t.TempDir(), "bash")
+	dependencies := profileDependencies{
+		goos: "darwin",
+		getenv: func(name string) string {
+			if name == "SHELL" {
+				return inherited
+			}
+			return ""
+		},
+		lookPath:  failingLookPath,
+		userShell: func() (string, error) { return recorded, nil },
+	}
+
+	profiles, err := discoverProfiles(dependencies)
+	if err != nil {
+		t.Fatalf("discoverProfiles: %v", err)
+	}
+	profileForExecutable(t, profiles, recorded)
+}
+
+func TestDiscoverProfilesPrefersZshOverShWhenAccountLookupFails(t *testing.T) {
+	zsh := filepath.Join(t.TempDir(), "zsh")
+	dependencies := profileDependencies{
+		goos:   "darwin",
+		getenv: func(string) string { return "" },
+		lookPath: func(name string) (string, error) {
+			if name == "zsh" {
+				return zsh, nil
+			}
+			return "", errors.New("executable not found")
+		},
+		userShell: func() (string, error) { return "", errors.New("no directory services") },
+	}
+
+	profiles, err := discoverProfiles(dependencies)
+	if err != nil {
+		t.Fatalf("discoverProfiles: %v", err)
+	}
+	profileForExecutable(t, profiles, zsh)
+}
+
+func TestDiscoverProfilesStillFallsBackToSh(t *testing.T) {
+	sh := filepath.Join(t.TempDir(), "sh")
+	dependencies := profileDependencies{
+		goos:   "darwin",
+		getenv: func(string) string { return "" },
+		lookPath: func(name string) (string, error) {
+			if name == "sh" {
+				return sh, nil
+			}
+			return "", errors.New("executable not found")
+		},
+		userShell: func() (string, error) { return "", errors.New("no directory services") },
+	}
+
+	profiles, err := discoverProfiles(dependencies)
+	if err != nil {
+		t.Fatalf("discoverProfiles: %v", err)
+	}
+	profileForExecutable(t, profiles, sh)
+}
+
 func profileForExecutable(t *testing.T, profiles []Profile, executable string) Profile {
 	t.Helper()
 	for _, profile := range profiles {

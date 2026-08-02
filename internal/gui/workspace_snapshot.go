@@ -283,6 +283,11 @@ func boundedTrackingSnapshot(
 	if err != nil {
 		return TrackingSnapshot{}, err
 	}
+	allTasks, err := s.ListTasks()
+	if err != nil {
+		return TrackingSnapshot{}, err
+	}
+	planProgress := planProgressByPlan(allTasks)
 	notes, err := s.RecentNotesBounded(snapshotNoteLimit)
 	if err != nil {
 		return TrackingSnapshot{}, err
@@ -316,6 +321,7 @@ func boundedTrackingSnapshot(
 		commits.Items,
 		issues.Items,
 		associations,
+		planProgress,
 	)
 	blockerCards := make([]Task, 0, len(blockers.Items))
 	for _, blocker := range blockers.Items {
@@ -370,6 +376,7 @@ func buildBoundedBoard(
 	commits []model.Commit,
 	issues []model.Issue,
 	associations store.TaskAssociations,
+	planProgress map[uint64]store.TaskProgress,
 ) Board {
 	board := Board{
 		ProjectName: projectName,
@@ -392,11 +399,7 @@ func buildBoundedBoard(
 		OpenIssues: []Issue{},
 	}
 	for _, plan := range plans {
-		board.Plans = append(board.Plans, PlanSummary{
-			ID:       plan.ID,
-			Title:    plan.Title,
-			IsActive: plan.ID == meta.ActivePlan,
-		})
+		board.Plans = append(board.Plans, planSummary(plan, meta.ActivePlan, planProgress))
 	}
 	titles := map[model.TaskStatus]string{
 		model.TaskTodo:    "Todo",
@@ -470,5 +473,35 @@ func snapshotBound(shown, total int) BoundedSnapshot {
 		Shown: shown,
 		Total: total,
 		More:  max(0, total-shown),
+	}
+}
+
+// planProgressByPlan groups per-plan task totals in one pass over all tasks.
+// Done means status done, matching store.PlanTaskProgress.
+func planProgressByPlan(tasks []model.Task) map[uint64]store.TaskProgress {
+	progress := make(map[uint64]store.TaskProgress)
+	for _, task := range tasks {
+		entry := progress[task.PlanID]
+		entry.Total++
+		if task.Status == model.TaskDone {
+			entry.Done++
+		}
+		progress[task.PlanID] = entry
+	}
+	return progress
+}
+
+func planSummary(
+	plan model.Plan,
+	activePlan uint64,
+	progress map[uint64]store.TaskProgress,
+) PlanSummary {
+	entry := progress[plan.ID]
+	return PlanSummary{
+		ID:         plan.ID,
+		Title:      plan.Title,
+		IsActive:   plan.ID == activePlan,
+		TasksTotal: entry.Total,
+		TasksDone:  entry.Done,
 	}
 }

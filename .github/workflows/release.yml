@@ -129,6 +129,10 @@ jobs:
             -trimpath \
             -platform "${{ matrix.target }}" \
             -ldflags "-s -w -X github.com/ro-ag/ptrack/internal/cli.Version=${version}"
+          # Install the launcher entry point (runs `ptrack gui`); the bundle's
+          # CFBundleExecutable points at it, so the app cannot start without it.
+          cp build/darwin/launcher "build/bin/P-TRACK.app/Contents/MacOS/P-TRACK"
+          chmod +x "build/bin/P-TRACK.app/Contents/MacOS/P-TRACK"
           # Stamp the release version into the bundle metadata.
           app="build/bin/P-TRACK.app"
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${version}" "$app/Contents/Info.plist"

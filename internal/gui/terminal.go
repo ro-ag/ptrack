@@ -351,6 +351,12 @@ func (a *App) onStartup(ctx context.Context) {
 	a.startupOnce.Do(func() {
 		close(a.startupReady)
 	})
+	a.workspaceMu.RLock()
+	workspace := a.workspace
+	a.workspaceMu.RUnlock()
+	if workspace != nil {
+		a.startWorkspaceWatcher(workspace)
+	}
 }
 
 func (a *App) onShutdown(ctx context.Context) {
@@ -376,6 +382,7 @@ func (a *App) onShutdown(ctx context.Context) {
 			monitorCancel()
 		}
 		_ = closeWorkspaceWithTimeout(workspace)
+		a.stopWorkspaceWatcher()
 		waitTimeout := a.shutdownWaitTimeout
 		if waitTimeout <= 0 {
 			waitTimeout = 3 * time.Second

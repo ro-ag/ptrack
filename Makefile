@@ -34,9 +34,13 @@ build: frontend-install frontend-build
 
 # macOS app bundle: build/bin/P-TRACK.app with the branded icon and the
 # Info.plist from build/darwin/. The bundle version is stamped from git so
-# local builds never silently inherit the version pinned in wails.json.
+# local builds never silently inherit the version pinned in wails.json. The
+# bundle's entry point is the launcher script (build/darwin/launcher), which
+# always runs `ptrack gui`; the Wails binary stays available as the plain CLI.
 package: frontend-install frontend-build
 	$(WAILS) build -clean -trimpath
+	cp build/darwin/launcher "$(APP)/Contents/MacOS/P-TRACK"
+	chmod +x "$(APP)/Contents/MacOS/P-TRACK"
 	/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $(VERSION)" "$(APP)/Contents/Info.plist"
 	/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(VERSION)" "$(APP)/Contents/Info.plist"
 	@echo "Built $(APP) (version $(VERSION))"

@@ -213,6 +213,7 @@ func (a *App) OpenProject(path, confirmationToken string) (WorkspaceChangeResult
 	a.syncLegacyWorkspaceFieldsLocked(candidate)
 	state := a.workspaceStateLocked()
 	a.workspaceMu.Unlock()
+	a.startWorkspaceWatcher(candidate)
 
 	if old != nil {
 		closeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -290,6 +291,7 @@ func (a *App) CloseProject(confirmationToken string) (WorkspaceChangeResult, err
 	a.syncLegacyWorkspaceFieldsLocked(nil)
 	closedState := a.workspaceStateLocked()
 	a.workspaceMu.Unlock()
+	a.stopWorkspaceWatcher()
 	closeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	closeErr := current.Close(closeCtx)
 	cancel()

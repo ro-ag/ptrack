@@ -9,6 +9,7 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/mac"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -55,8 +56,13 @@ func Run(startPath string, initialPlan uint64, assets fs.FS) error {
 		},
 		AssetServer: &assetserver.Options{Assets: assets},
 		Menu:        newProjectWorkspaceMenu(app),
-		Bind:        []interface{}{app},
-		OnStartup:   app.onStartup,
-		OnShutdown:  app.onShutdown,
+		Mac: &mac.Options{
+			TitleBar:             mac.TitleBarHiddenInset(),
+			WebviewIsTransparent: false,
+			WindowIsTranslucent:  true,
+		},
+		Bind:       []interface{}{app},
+		OnStartup:  app.onStartup,
+		OnShutdown: app.onShutdown,
 	})
 }

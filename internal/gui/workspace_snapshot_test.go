@@ -139,6 +139,61 @@ func TestWorkspaceSnapshotSupportsProjectWithoutActivePlan(t *testing.T) {
 	}
 }
 
+func TestPlanSummariesCarryPerPlanTaskProgress(t *testing.T) {
+	app := seedApp(t)
+	s, err := store.Open(app.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := s.AddPlan("CLI polish")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doneTask, err := s.AddTask(other.ID, "Ship search")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetTaskStatus(doneTask.ID, model.TaskDone); err != nil {
+		t.Fatal(err)
+	}
+	openTask, err := s.AddTask(other.ID, "Polish help text")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = openTask
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	assertProgress := func(plans []PlanSummary) {
+		t.Helper()
+		if len(plans) != 2 {
+			t.Fatalf("plans = %#v, want the seeded and added plans", plans)
+		}
+		if plans[0].TasksTotal != 2 || plans[0].TasksDone != 0 || !plans[0].IsActive {
+			t.Fatalf("active plan summary = %#v, want 2 tasks, 0 done", plans[0])
+		}
+		if plans[1].TasksTotal != 2 || plans[1].TasksDone != 1 || plans[1].IsActive {
+			t.Fatalf("second plan summary = %#v, want 2 tasks, 1 done", plans[1])
+		}
+	}
+
+	board, err := app.GetBoard(0)
+	if err != nil {
+		t.Fatalf("GetBoard: %v", err)
+	}
+	assertProgress(board.Plans)
+
+	app.gitSnapshots = fakeGitSnapshotter{
+		snapshot: gitinfo.Snapshot{State: gitinfo.RepositoryNotFound},
+	}
+	snapshot, err := app.GetWorkspaceSnapshot(1, 0)
+	if err != nil {
+		t.Fatalf("GetWorkspaceSnapshot: %v", err)
+	}
+	assertProgress(snapshot.Tracking.Board.Plans)
+}
+
 func TestWorkspaceSnapshotRejectsStaleGeneration(t *testing.T) {
 	app := seedApp(t)
 	if _, err := app.GetWorkspaceSnapshot(2, 0); !errors.Is(err, errStaleWorkspaceGeneration) {
