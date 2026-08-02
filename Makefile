@@ -57,9 +57,16 @@ dmg: package
 	@echo "Built $(DMG)"
 
 # Sign the app bundle with the Developer ID identity (hardened runtime,
-# entitlements, secure timestamp). Works locally with the identity in your
+# entitlements, secure timestamp). The ptrack binary gets its own signature
+# first: the bundle's main executable is the launcher script, and the notary
+# validates each binary individually. Works locally with the identity in your
 # login keychain; the first run may ask for key access — choose Always Allow.
 sign: package
+	codesign --force --options runtime \
+		--entitlements "$(ENTITLEMENTS)" \
+		--sign "$(SIGN_IDENTITY)" \
+		--timestamp \
+		"$(APP)/Contents/MacOS/ptrack"
 	codesign --force --options runtime \
 		--entitlements "$(ENTITLEMENTS)" \
 		--sign "$(SIGN_IDENTITY)" \

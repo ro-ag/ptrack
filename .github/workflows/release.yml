@@ -170,13 +170,22 @@ jobs:
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
+          app="build/bin/P-TRACK.app"
+          # The bundle's main executable is the launcher script, so the
+          # notary checks the ptrack binary's own signature: sign the binary
+          # first, then the bundle as a whole.
           codesign --force --options runtime \
             --entitlements build/darwin/entitlements.plist \
             --sign "$APPLE_SIGNING_IDENTITY" \
             --timestamp \
-            "build/bin/P-TRACK.app"
-          codesign --verify --strict --verbose=2 "build/bin/P-TRACK.app"
-          codesign -dv --verbose=2 "build/bin/P-TRACK.app" 2>&1 \
+            "$app/Contents/MacOS/ptrack"
+          codesign --force --options runtime \
+            --entitlements build/darwin/entitlements.plist \
+            --sign "$APPLE_SIGNING_IDENTITY" \
+            --timestamp \
+            "$app"
+          codesign --verify --strict --verbose=2 "$app"
+          codesign -dv --verbose=2 "$app/Contents/MacOS/ptrack" 2>&1 \
             | grep -E "^(Identifier|Authority|TeamIdentifier)"
 
       - name: Build Windows binary
