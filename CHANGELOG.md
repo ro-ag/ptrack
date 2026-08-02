@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-08-02
+
 ### Added
 - Task detail drawer in the desktop workspace: clicking a board card (or
   pressing Enter on it) opens a side panel with the task's notes, linked
