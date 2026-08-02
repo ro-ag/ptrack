@@ -308,6 +308,69 @@
       </section>
     </div>
 
+    <div id="task-drawer" class="modal" hidden>
+      <div class="modal-backdrop" data-close-drawer></div>
+      <aside
+        class="drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="drawer-title"
+      >
+        <header class="drawer-header">
+          <div class="drawer-heading">
+            <p id="drawer-eyebrow" class="eyebrow">Task</p>
+            <h2 id="drawer-title">Task detail</h2>
+            <div class="drawer-meta">
+              <span id="drawer-status" class="drawer-status-badge" data-status="todo">
+                Todo
+              </span>
+              <span id="drawer-updated" class="drawer-updated"></span>
+            </div>
+          </div>
+          <button
+            id="drawer-close"
+            class="dialog-close"
+            type="button"
+            aria-label="Close task detail"
+          >
+            Close
+          </button>
+        </header>
+        <div class="drawer-actions">
+          <select id="drawer-status-select" aria-label="Task status"></select>
+          <button id="drawer-rename" class="button-secondary" type="button">
+            Rename
+          </button>
+          <button id="drawer-memory" class="button-secondary" type="button">
+            Record memory
+          </button>
+        </div>
+        <div id="drawer-body" class="drawer-body">
+          <section class="drawer-section">
+            <div class="section-heading">
+              <p class="section-label">Notes</p>
+              <span id="drawer-notes-count" class="section-count">0</span>
+            </div>
+            <div id="drawer-notes" class="drawer-list"></div>
+          </section>
+          <section class="drawer-section">
+            <div class="section-heading">
+              <p class="section-label">Commits</p>
+              <span id="drawer-commits-count" class="section-count">0</span>
+            </div>
+            <div id="drawer-commits" class="drawer-list"></div>
+          </section>
+          <section class="drawer-section">
+            <div class="section-heading">
+              <p class="section-label">Issues</p>
+              <span id="drawer-issues-count" class="section-count">0</span>
+            </div>
+            <div id="drawer-issues" class="drawer-list"></div>
+          </section>
+        </div>
+      </aside>
+    </div>
+
     <div id="workspace-confirm-modal" class="modal" hidden>
       <div class="modal-backdrop"></div>
       <section

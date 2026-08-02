@@ -6,6 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Task detail drawer in the desktop workspace: clicking a board card (or
+  pressing Enter on it) opens a side panel with the task's notes, linked
+  commits, and linked issues, plus status, rename, and record-memory actions.
+  Backed by a new `GetTaskDetailV2` GUI binding.
+
+### Changed
+- Premium visual overhaul of the desktop workspace: layered elevation and
+  shadows, frosted-glass topbar and drawer, lane-tinted board columns,
+  hover-lifting cards, refined controls, custom scrollbars, entrance
+  animations, and a `prefers-reduced-motion` fallback.
+
+### Fixed
+- Launching the app bundle from Finder or the Dock now opens the desktop GUI.
+  Previously a no-argument launch always tried to start the terminal
+  dashboard, which silently exited without a controlling terminal.
+
 ## [0.16.1] - 2026-08-01
 
 ### Changed

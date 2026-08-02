@@ -30,8 +30,14 @@ func main() {
 		return gui.Run(path, planID, assets)
 	}
 	// `ptrack` with no subcommand launches the dashboard; outside a project it
-	// prints a friendly getting-started hint instead of a bare error.
+	// prints a friendly getting-started hint instead of a bare error. When the
+	// process was started without a controlling terminal — double-clicking the
+	// app bundle from Finder or the Dock — a TUI can never render, so open the
+	// desktop GUI instead.
 	cli.RunNoArgs = func() error {
+		if !hasInteractiveTerminal() {
+			return cli.RunGUI("", 0)
+		}
 		err := tui.Run()
 		if errors.Is(err, store.ErrNoProject) {
 			fmt.Print(cli.NoProjectHint())
@@ -43,4 +49,17 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// hasInteractiveTerminal reports whether stdin and stdout are both character
+// devices. Finder/Dock launches attach neither, so the desktop GUI is the only
+// usable interface in that case.
+func hasInteractiveTerminal() bool {
+	for _, file := range []*os.File{os.Stdin, os.Stdout} {
+		info, err := file.Stat()
+		if err != nil || info.Mode()&os.ModeCharDevice == 0 {
+			return false
+		}
+	}
+	return true
 }

@@ -85,6 +85,21 @@ const elements = {
   agentRuns: document.querySelector("#agent-runs"),
   blockers: document.querySelector("#overview-blockers"),
   notes: document.querySelector("#overview-notes"),
+  drawer: document.querySelector("#task-drawer"),
+  drawerEyebrow: document.querySelector("#drawer-eyebrow"),
+  drawerTitle: document.querySelector("#drawer-title"),
+  drawerStatus: document.querySelector("#drawer-status"),
+  drawerUpdated: document.querySelector("#drawer-updated"),
+  drawerClose: document.querySelector("#drawer-close"),
+  drawerStatusSelect: document.querySelector("#drawer-status-select"),
+  drawerRename: document.querySelector("#drawer-rename"),
+  drawerMemory: document.querySelector("#drawer-memory"),
+  drawerNotes: document.querySelector("#drawer-notes"),
+  drawerNotesCount: document.querySelector("#drawer-notes-count"),
+  drawerCommits: document.querySelector("#drawer-commits"),
+  drawerCommitsCount: document.querySelector("#drawer-commits-count"),
+  drawerIssues: document.querySelector("#drawer-issues"),
+  drawerIssuesCount: document.querySelector("#drawer-issues-count"),
   toast: document.querySelector("#toast"),
 };
 
@@ -110,6 +125,18 @@ let terminalGeneration = 0;
 let snapshotSequence = 0;
 let activeSnapshotRequest = null;
 let queuedSnapshotPlanId = 0;
+let detailTask = null;
+let detailRequest = 0;
+let drawerReturnFocus = null;
+let drawerOpenTimer = null;
+let dragJustEndedAt = 0;
+
+const statusTitles = {
+  todo: "Todo",
+  doing: "Doing",
+  blocked: "Blocked",
+  done: "Done",
+};
 
 function api() {
   const backend = window.go?.gui?.App;
@@ -321,7 +348,11 @@ function cardElement(task) {
   const dragZone = document.createElement("div");
   dragZone.className = "card-drag-zone";
   dragZone.draggable = true;
-  dragZone.setAttribute("aria-label", `Task #${task.id}: ${task.title}. Drag to change status.`);
+  dragZone.tabIndex = 0;
+  dragZone.setAttribute(
+    "aria-label",
+    `Task #${task.id}: ${task.title}. Drag to change status, press Enter for details.`,
+  );
   const meta = document.createElement("div");
   meta.className = "card-meta";
   const identity = document.createElement("span");
@@ -349,7 +380,28 @@ function cardElement(task) {
     if (task.issueCount) context.append(contextChip(task.issueCount, "issue", "issue-chip"));
     dragZone.append(context);
   }
-  dragZone.addEventListener("dblclick", () => openRename(task));
+  dragZone.addEventListener("click", () => {
+    // A click that ends a drag, or the first click of a double-click rename,
+    // must not open the drawer.
+    if (Date.now() - dragJustEndedAt < 300) return;
+    window.clearTimeout(drawerOpenTimer);
+    drawerOpenTimer = window.setTimeout(() => {
+      drawerOpenTimer = null;
+      openTaskDetail(task);
+    }, 240);
+  });
+  dragZone.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    window.clearTimeout(drawerOpenTimer);
+    drawerOpenTimer = null;
+    openTaskDetail(task);
+  });
+  dragZone.addEventListener("dblclick", () => {
+    window.clearTimeout(drawerOpenTimer);
+    drawerOpenTimer = null;
+    openRename(task);
+  });
   dragZone.addEventListener("dragstart", (event) => {
     draggedTask = task;
     event.dataTransfer.effectAllowed = "move";
@@ -358,6 +410,7 @@ function cardElement(task) {
   });
   dragZone.addEventListener("dragend", () => {
     draggedTask = null;
+    dragJustEndedAt = Date.now();
     card.classList.remove("dragging");
     document.querySelectorAll(".drag-over").forEach((node) => node.classList.remove("drag-over"));
   });
@@ -620,6 +673,7 @@ function snapshotDialogIsOpen() {
     !elements.modal.hidden ||
     !elements.memoryModal.hidden ||
     !elements.confirmModal.hidden ||
+    !elements.drawer.hidden ||
     Boolean(
       document.querySelector(
         "#terminal-paste-modal:not([hidden]), #terminal-context-menu:not([hidden])",
@@ -694,6 +748,17 @@ async function runMutation(operation, progress, failed) {
     const result = await operation(ticket.generation);
     if (result?.generation && !workspaceController.accepts(ticket, result.generation)) return;
     await loadSnapshot(board.planId);
+    if (detailTask && !elements.drawer.hidden) {
+      // Sync from the fresh snapshot, then reload the full detail.
+      const fresh = board?.columns
+        ?.flatMap((column) => column.tasks)
+        .find((task) => Number(task.id) === Number(detailTask.id));
+      if (fresh) {
+        detailTask = fresh;
+        renderDrawerTask(fresh);
+      }
+      void loadTaskDetail(detailTask);
+    }
   } catch (error) {
     if (ticket.epoch === workspaceController.capture().epoch) {
       showError(error);
@@ -762,6 +827,166 @@ function closeMemoryHistory() {
   elements.memoryModal.hidden = true;
   memoryModalReturnFocus?.focus();
   memoryModalReturnFocus = null;
+}
+
+function drawerEmptyState(message) {
+  const empty = document.createElement("div");
+  empty.className = "drawer-empty";
+  empty.textContent = message;
+  return empty;
+}
+
+function renderDrawerTask(task) {
+  elements.drawerEyebrow.textContent = `Task · #${task.id}`;
+  elements.drawerTitle.textContent = task.title;
+  elements.drawerStatus.dataset.status = task.status;
+  elements.drawerStatus.textContent = statusTitles[task.status] || task.status;
+  elements.drawerUpdated.textContent = task.updatedAt
+    ? `updated ${relativeTime(task.updatedAt)}`
+    : "";
+  elements.drawerStatusSelect.replaceChildren();
+  statuses.forEach((status) => {
+    const option = document.createElement("option");
+    option.value = status;
+    option.textContent = statusTitles[status];
+    option.selected = status === task.status;
+    elements.drawerStatusSelect.append(option);
+  });
+}
+
+function renderDrawerLoading() {
+  elements.drawerNotesCount.textContent = "…";
+  elements.drawerCommitsCount.textContent = "…";
+  elements.drawerIssuesCount.textContent = "…";
+  elements.drawerNotes.replaceChildren(drawerEmptyState("Loading notes…"));
+  elements.drawerCommits.replaceChildren(drawerEmptyState("Loading commits…"));
+  elements.drawerIssues.replaceChildren(drawerEmptyState("Loading issues…"));
+}
+
+function drawerNoteElement(note) {
+  const item = document.createElement("article");
+  item.className = "drawer-note";
+  const body = document.createElement("p");
+  body.className = "drawer-note-body";
+  body.textContent = note.body;
+  const meta = document.createElement("span");
+  meta.className = "drawer-item-meta";
+  meta.textContent = relativeTime(note.occurredAt);
+  item.append(body, meta);
+  return item;
+}
+
+function drawerCommitElement(commit) {
+  const item = document.createElement("article");
+  item.className = "drawer-commit";
+  const row = document.createElement("p");
+  row.className = "drawer-commit-title";
+  const sha = document.createElement("span");
+  sha.className = "drawer-sha";
+  sha.textContent = commit.sha.slice(0, 8);
+  row.append(sha, document.createTextNode(commit.subject));
+  const meta = document.createElement("span");
+  meta.className = "drawer-item-meta";
+  meta.textContent = relativeTime(commit.occurredAt);
+  item.append(row, meta);
+  return item;
+}
+
+function drawerIssueElement(issue) {
+  const item = document.createElement("article");
+  item.className = "drawer-issue";
+  item.style.setProperty(
+    "--issue-color",
+    severityColors[issue.severity] || "var(--muted)",
+  );
+  const title = document.createElement("p");
+  title.className = "drawer-issue-title";
+  title.textContent = issue.title;
+  const meta = document.createElement("span");
+  meta.className = "drawer-item-meta";
+  meta.textContent = `${issue.severity} · issue #${issue.id}`;
+  item.append(title, meta);
+  return item;
+}
+
+function renderDrawerSections(detail) {
+  elements.drawerNotesCount.textContent = detail.notes.length;
+  elements.drawerCommitsCount.textContent = detail.commits.length;
+  elements.drawerIssuesCount.textContent = detail.issues.length;
+  elements.drawerNotes.replaceChildren();
+  if (detail.notes.length === 0) {
+    elements.drawerNotes.append(
+      drawerEmptyState("No memory recorded yet. Use “Record memory” to capture a decision."),
+    );
+  } else {
+    detail.notes.forEach((note) => elements.drawerNotes.append(drawerNoteElement(note)));
+  }
+  elements.drawerCommits.replaceChildren();
+  if (detail.commits.length === 0) {
+    elements.drawerCommits.append(
+      drawerEmptyState("No commits linked to this task yet."),
+    );
+  } else {
+    detail.commits.forEach((commit) =>
+      elements.drawerCommits.append(drawerCommitElement(commit)),
+    );
+  }
+  elements.drawerIssues.replaceChildren();
+  if (detail.issues.length === 0) {
+    elements.drawerIssues.append(drawerEmptyState("No issues linked to this task."));
+  } else {
+    detail.issues.forEach((issue) =>
+      elements.drawerIssues.append(drawerIssueElement(issue)),
+    );
+  }
+}
+
+async function loadTaskDetail(task) {
+  const request = ++detailRequest;
+  const ticket = workspaceController.capture();
+  try {
+    const detail = await api().GetTaskDetailV2(ticket.generation, Number(task.id));
+    if (
+      request !== detailRequest ||
+      !detailTask ||
+      Number(detailTask.id) !== Number(task.id) ||
+      !workspaceController.accepts(ticket, Number(detail.generation))
+    ) {
+      return;
+    }
+    detailTask = detail.task;
+    renderDrawerTask(detail.task);
+    renderDrawerSections(detail);
+  } catch (error) {
+    if (request !== detailRequest) return;
+    if (ticket.epoch !== workspaceController.capture().epoch) return;
+    showError(error);
+    closeTaskDetail();
+  }
+}
+
+function openTaskDetail(task) {
+  if (workspaceController.state.status !== "open") return;
+  detailTask = task;
+  drawerReturnFocus = document.activeElement;
+  renderDrawerTask(task);
+  renderDrawerLoading();
+  elements.drawer.hidden = false;
+  requestAnimationFrame(() => elements.drawerClose.focus());
+  void loadTaskDetail(task);
+}
+
+function closeTaskDetail() {
+  if (elements.drawer.hidden) return;
+  elements.drawer.hidden = true;
+  detailRequest += 1;
+  const taskId = detailTask?.id;
+  detailTask = null;
+  const card =
+    taskId &&
+    document.querySelector(`.card[data-task-id="${taskId}"] .card-drag-zone`);
+  (card || drawerReturnFocus)?.focus?.();
+  drawerReturnFocus = null;
 }
 
 function showWorkspaceConfirmation(action, resources) {
@@ -855,6 +1080,7 @@ function renderWorkspaceState(state, focus = false) {
   snapshotSequence += 1;
   activeSnapshotRequest = null;
   disposeTerminalDock();
+  closeTaskDetail();
   board = null;
   snapshot = null;
   elements.projectName.textContent = "Project workspace";
@@ -1073,7 +1299,7 @@ function boardShortcutIsBlocked(event) {
 
 function trapModalFocus(event) {
   if (event.key !== "Tab") return;
-  const modal = [elements.confirmModal, elements.modal, elements.memoryModal].find(
+  const modal = [elements.confirmModal, elements.modal, elements.memoryModal, elements.drawer].find(
     (candidate) => !candidate.hidden,
   );
   if (!modal) return;
@@ -1170,6 +1396,20 @@ document.querySelectorAll("[data-close-memory-modal]").forEach((element) => {
   element.addEventListener("click", closeMemoryHistory);
 });
 elements.memoryDialogClose.addEventListener("click", closeMemoryHistory);
+document.querySelectorAll("[data-close-drawer]").forEach((element) => {
+  element.addEventListener("click", closeTaskDetail);
+});
+elements.drawerClose.addEventListener("click", closeTaskDetail);
+elements.drawerStatusSelect.addEventListener("change", () => {
+  if (!detailTask) return;
+  void moveTask(detailTask.id, elements.drawerStatusSelect.value);
+});
+elements.drawerRename.addEventListener("click", () => {
+  if (detailTask) openRename(detailTask);
+});
+elements.drawerMemory.addEventListener("click", () => {
+  if (detailTask) openMemory(detailTask);
+});
 
 document.addEventListener("keydown", (event) => {
   trapModalFocus(event);
@@ -1180,6 +1420,14 @@ document.addEventListener("keydown", (event) => {
   }
   if (event.key === "Escape" && !elements.modal.hidden) closeDialog();
   if (event.key === "Escape" && !elements.memoryModal.hidden) closeMemoryHistory();
+  if (
+    event.key === "Escape" &&
+    !elements.drawer.hidden &&
+    elements.modal.hidden &&
+    elements.memoryModal.hidden
+  ) {
+    closeTaskDetail();
+  }
   const shortcut = shortcutIntent({
     key: event.key,
     composing: event.isComposing,
