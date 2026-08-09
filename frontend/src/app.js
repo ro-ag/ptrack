@@ -1,6 +1,15 @@
 import { mountTerminalDock } from "./terminal/pane";
 import { initTheme } from "./theme";
 import {
+  clampSidebarWidth,
+  defaultSidebarWidth,
+  sidebarHiddenStorageKey,
+  sidebarMaximumWidth,
+  sidebarWidthFromKey,
+  sidebarWidthStorageKey,
+  storedSidebarWidth,
+} from "./workspace/layout";
+import {
   RefreshGate,
   RefreshLoop,
   WorkspaceController,
@@ -33,6 +42,10 @@ const severityColors = {
 };
 
 const elements = {
+  app: document.querySelector("#app"),
+  sidebar: document.querySelector("#sidebar"),
+  sidebarResize: document.querySelector("#sidebar-resize"),
+  sidebarToggle: document.querySelector("#sidebar-toggle"),
   workspace: document.querySelector("#workspace"),
   overviewPage: document.querySelector("#overview-page"),
   navBoard: document.querySelector("#nav-board"),
@@ -145,6 +158,9 @@ let detailRequest = 0;
 let drawerReturnFocus = null;
 let drawerOpenTimer = null;
 let dragJustEndedAt = 0;
+let sidebarWidth = defaultSidebarWidth;
+let sidebarHidden = false;
+let sidebarDragCleanup = null;
 let paletteItems = [];
 let paletteActive = -1;
 let paletteTimer = null;
@@ -154,6 +170,102 @@ let pendingDetailTaskId = 0;
 let heatmapRequested = false;
 const expandedLanes = new Set();
 const foldedLanes = new Set();
+
+function readLayoutPreference(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeLayoutPreference(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // The layout remains usable when WebView storage is unavailable.
+  }
+}
+
+function setSidebarWidth(width, persist = true) {
+  sidebarWidth = clampSidebarWidth(width, window.innerWidth);
+  const maximum = sidebarMaximumWidth(window.innerWidth);
+  elements.app.style.setProperty("--sidebar-width", `${sidebarWidth}px`);
+  elements.sidebarResize.setAttribute("aria-valuemax", String(maximum));
+  elements.sidebarResize.setAttribute("aria-valuenow", String(sidebarWidth));
+  if (persist) writeLayoutPreference(sidebarWidthStorageKey, String(sidebarWidth));
+}
+
+function setSidebarHidden(hidden, persist = true) {
+  sidebarHidden = Boolean(hidden);
+  elements.sidebar.hidden = sidebarHidden;
+  elements.sidebarResize.hidden = sidebarHidden;
+  elements.app.dataset.sidebarHidden = String(sidebarHidden);
+  elements.sidebarToggle.setAttribute("aria-expanded", String(!sidebarHidden));
+  const label = sidebarHidden
+    ? "Show project sidebar"
+    : "Hide project sidebar";
+  elements.sidebarToggle.setAttribute("aria-label", label);
+  elements.sidebarToggle.title = label;
+  if (persist) {
+    writeLayoutPreference(sidebarHiddenStorageKey, String(sidebarHidden));
+  }
+}
+
+function beginSidebarResize(event) {
+  if (sidebarHidden || event.button !== 0) return;
+  event.preventDefault();
+  sidebarDragCleanup?.();
+  const startX = event.clientX;
+  const startWidth = sidebarWidth;
+  const pointerID = event.pointerId;
+  const move = (moveEvent) => {
+    if (moveEvent.pointerId !== pointerID) return;
+    setSidebarWidth(startWidth + moveEvent.clientX - startX, false);
+  };
+  const cleanup = () => {
+    elements.sidebarResize.removeEventListener("pointermove", move);
+    elements.sidebarResize.removeEventListener("pointerup", finish);
+    elements.sidebarResize.removeEventListener("pointercancel", finish);
+    elements.sidebarResize.removeEventListener("lostpointercapture", finish);
+    if (elements.sidebarResize.hasPointerCapture(pointerID)) {
+      elements.sidebarResize.releasePointerCapture(pointerID);
+    }
+    if (sidebarDragCleanup === cleanup) sidebarDragCleanup = null;
+  };
+  const finish = (finishEvent) => {
+    if (
+      finishEvent.type !== "lostpointercapture" &&
+      finishEvent.pointerId !== pointerID
+    ) return;
+    cleanup();
+    writeLayoutPreference(sidebarWidthStorageKey, String(sidebarWidth));
+  };
+  sidebarDragCleanup = cleanup;
+  elements.sidebarResize.setPointerCapture(pointerID);
+  elements.sidebarResize.addEventListener("pointermove", move);
+  elements.sidebarResize.addEventListener("pointerup", finish);
+  elements.sidebarResize.addEventListener("pointercancel", finish);
+  elements.sidebarResize.addEventListener("lostpointercapture", finish);
+}
+
+function resizeSidebarFromKeyboard(event) {
+  if (sidebarHidden) return;
+  const nextWidth = sidebarWidthFromKey(sidebarWidth, event.key, window.innerWidth);
+  if (nextWidth === null) return;
+  event.preventDefault();
+  setSidebarWidth(nextWidth);
+}
+
+function initializeSidebarLayout() {
+  sidebarWidth = storedSidebarWidth(
+    readLayoutPreference(sidebarWidthStorageKey),
+    window.innerWidth,
+  );
+  sidebarHidden = readLayoutPreference(sidebarHiddenStorageKey) === "true";
+  setSidebarWidth(sidebarWidth, false);
+  setSidebarHidden(sidebarHidden, false);
+}
 
 const statusTitles = {
   todo: "Todo",
@@ -1779,6 +1891,14 @@ function registerNativeProjectActions() {
   );
 }
 
+initializeSidebarLayout();
+elements.sidebarToggle.addEventListener("click", () => {
+  setSidebarHidden(!sidebarHidden);
+});
+elements.sidebarResize.addEventListener("pointerdown", beginSidebarResize);
+elements.sidebarResize.addEventListener("keydown", resizeSidebarFromKeyboard);
+window.addEventListener("resize", () => setSidebarWidth(sidebarWidth, false));
+
 elements.navBoard.addEventListener("click", () => setView("board"));
 elements.navOverview.addEventListener("click", () => setView("overview"));
 
@@ -1964,6 +2084,7 @@ if ("ResizeObserver" in window) {
 }
 
 window.addEventListener("beforeunload", () => {
+  sidebarDragCleanup?.();
   refreshLoop.dispose();
   disposeTerminalDock();
   nativeEventDisposers.splice(0).forEach((dispose) => dispose());

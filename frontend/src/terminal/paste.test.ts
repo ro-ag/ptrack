@@ -3,8 +3,19 @@ import { describe, expect, it, vi } from "vitest";
 import {
   commitClipboardPaste,
   prepareClipboardPaste,
+  terminalTextToBytes,
   terminalShortcutAction,
 } from "./paste";
+
+describe("terminalTextToBytes", () => {
+  it("encodes non-ASCII input as UTF-8 without splitting graphemes", () => {
+    const input = "λ → e\u0301 👩🏽‍💻";
+    const bytes = terminalTextToBytes(input);
+
+    expect(Array.from(bytes.slice(0, 2))).toEqual([0xce, 0xbb]);
+    expect(new TextDecoder().decode(bytes)).toBe(input);
+  });
+});
 
 describe("prepareClipboardPaste", () => {
   it.each([
@@ -187,6 +198,37 @@ describe("terminalShortcutAction", () => {
     expect(
       terminalShortcutAction(key("F10", { shiftKey: true }), "windows", false),
     ).toBe("context-menu");
+  });
+
+  it("maps terminal search, zoom, and macOS clear without stealing readline Ctrl+F", () => {
+    expect(terminalShortcutAction(key("f", { metaKey: true }), "mac", false)).toBe(
+      "search",
+    );
+    expect(
+      terminalShortcutAction(
+        key("f", { ctrlKey: true, shiftKey: true }),
+        "linux",
+        false,
+      ),
+    ).toBe("search");
+    expect(terminalShortcutAction(key("f", { ctrlKey: true }), "linux", false)).toBe(
+      null,
+    );
+    expect(terminalShortcutAction(key("+", { metaKey: true }), "mac", false)).toBe(
+      "zoom-in",
+    );
+    expect(terminalShortcutAction(key("-", { ctrlKey: true }), "windows", false)).toBe(
+      "zoom-out",
+    );
+    expect(terminalShortcutAction(key("0", { ctrlKey: true }), "linux", false)).toBe(
+      "zoom-reset",
+    );
+    expect(terminalShortcutAction(key("k", { metaKey: true }), "mac", false)).toBe(
+      "clear",
+    );
+    expect(terminalShortcutAction(key("k", { ctrlKey: true }), "linux", false)).toBe(
+      null,
+    );
   });
 
   it("leaves control commands, navigation, and function keys to xterm", () => {

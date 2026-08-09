@@ -49,6 +49,7 @@ type agentCandidate struct {
 }
 
 var supportedAgentCandidates = []agentCandidate{
+	{id: "agent-agy", name: "Agy", provider: "agy", executable: "agy"},
 	{id: "agent-claude", name: "Claude Code", provider: "claude", executable: "claude"},
 	{id: "agent-codex", name: "Codex", provider: "codex", executable: "codex"},
 	{id: "agent-gemini", name: "Gemini", provider: "gemini", executable: "gemini"},
@@ -142,7 +143,7 @@ func discoverProfiles(dependencies profileDependencies) ([]Profile, error) {
 
 	profiles := []Profile{shell}
 	for _, candidate := range supportedAgentCandidates {
-		executable, lookupErr := dependencies.lookPath(candidate.executable)
+		executable, lookupErr := discoverAgentExecutable(candidate.executable, dependencies)
 		if lookupErr != nil {
 			continue
 		}
@@ -159,6 +160,33 @@ func discoverProfiles(dependencies profileDependencies) ([]Profile, error) {
 		profiles = append(profiles, profile)
 	}
 	return profiles, nil
+}
+
+func discoverAgentExecutable(name string, dependencies profileDependencies) (string, error) {
+	executable, err := dependencies.lookPath(name)
+	if err == nil {
+		return executable, nil
+	}
+	if dependencies.goos != "darwin" {
+		return "", err
+	}
+
+	candidates := []string{
+		filepath.Join("/opt/homebrew/bin", name),
+		filepath.Join("/usr/local/bin", name),
+	}
+	if home := dependencies.getenv("HOME"); home != "" {
+		candidates = append(candidates,
+			filepath.Join(home, ".local", "bin", name),
+			filepath.Join(home, ".opencode", "bin", name),
+		)
+	}
+	for _, candidate := range candidates {
+		if executable, lookupErr := dependencies.lookPath(candidate); lookupErr == nil {
+			return executable, nil
+		}
+	}
+	return "", err
 }
 
 func discoverDefaultShell(dependencies profileDependencies) (string, []string, error) {
@@ -249,6 +277,10 @@ func buildEnvironmentForOS(base []string, overrides map[string]string, goos stri
 		}
 		set(key, value)
 	}
+	// Desktop launchers and parent automation tools may set NO_COLOR for their
+	// own logs. Do not leak that policy into an interactive PTY. A profile can
+	// still opt out explicitly through its environment overrides below.
+	delete(values, normalize("NO_COLOR"))
 
 	set("TERM", "xterm-256color")
 	set("COLORTERM", "truecolor")
@@ -258,6 +290,18 @@ func buildEnvironmentForOS(base []string, overrides map[string]string, goos stri
 			return nil, fmt.Errorf("unsafe environment override %q", key)
 		}
 		set(key, value)
+	}
+	if locale := defaultUTF8Locale(goos); locale != "" {
+		hasLocale := false
+		for _, key := range []string{"LC_ALL", "LC_CTYPE", "LANG"} {
+			if value, ok := values[normalize(key)]; ok && value.value != "" {
+				hasLocale = true
+				break
+			}
+		}
+		if !hasLocale {
+			set("LANG", locale)
+		}
 	}
 
 	keys := make([]string, 0, len(values))
@@ -271,6 +315,17 @@ func buildEnvironmentForOS(base []string, overrides map[string]string, goos stri
 		environment = append(environment, value.key+"="+value.value)
 	}
 	return environment, nil
+}
+
+func defaultUTF8Locale(goos string) string {
+	switch goos {
+	case "darwin":
+		return "en_US.UTF-8"
+	case "windows":
+		return ""
+	default:
+		return "C.UTF-8"
+	}
 }
 
 func splitInheritedEnvironment(entry, goos string) (string, string, bool) {

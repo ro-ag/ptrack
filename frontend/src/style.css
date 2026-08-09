@@ -313,21 +313,60 @@ button:disabled {
 /* ------------------------------------------------------------- app shell */
 
 #app {
+  --sidebar-width: 248px;
   display: grid;
-  grid-template-columns: 248px minmax(0, 1fr);
+  grid-template-columns: var(--sidebar-width) 5px minmax(0, 1fr);
   background:
     var(--body-glow-1),
     var(--body-glow-2),
     var(--night);
 }
 
+#app[data-sidebar-hidden="true"] {
+  grid-template-columns: 0 0 minmax(0, 1fr);
+}
+
 .sidebar {
+  grid-column: 1;
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
   background: var(--sidebar-bg);
   padding: 0 var(--space-150) var(--space-200);
+}
+
+.sidebar-resize {
+  grid-column: 2;
+  position: relative;
+  z-index: 8;
+  min-width: 5px;
+  min-height: 0;
+  cursor: ew-resize;
+  touch-action: none;
+  --wails-draggable: no-drag;
+}
+
+.sidebar-resize::after {
+  position: absolute;
+  inset: 52px 1px 16px;
+  border-radius: 999px;
+  background: transparent;
+  content: "";
+  transition:
+    background 150ms var(--ease),
+    box-shadow 150ms var(--ease);
+}
+
+.sidebar-resize:hover::after,
+.sidebar-resize:focus-visible::after {
+  background: var(--accent);
+  box-shadow: 0 0 10px rgba(var(--accent-rgb), 0.45);
+}
+
+.sidebar-resize:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 
 /* Empty drag strip that sits under the inset traffic-light buttons. */
@@ -499,6 +538,7 @@ button:disabled {
 
 
 .canvas {
+  grid-column: 3;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -519,7 +559,7 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: var(--space-300);
+  gap: var(--space-100);
   padding: 0 var(--space-150);
   border-bottom: 1px solid var(--line-subtle);
   background: var(--topbar-bg);
@@ -539,6 +579,7 @@ button:disabled {
 
 .brand,
 .toolbar,
+.panel-controls,
 .title-row,
 .section-heading {
   display: flex;
@@ -586,6 +627,59 @@ h1 {
   flex: 0 0 auto;
   gap: var(--space-100);
   --wails-draggable: no-drag;
+}
+
+.panel-controls {
+  flex: 0 0 auto;
+  gap: 3px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 9px;
+  background: var(--fill-subtle);
+  padding: 2px;
+  --wails-draggable: no-drag;
+}
+
+.panel-toggle {
+  width: 28px;
+  min-width: 28px;
+  min-height: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  color: var(--muted);
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
+}
+
+.panel-toggle:hover,
+.panel-toggle:focus-visible {
+  color: var(--text);
+  background: var(--fill-strong);
+  box-shadow: none;
+}
+
+.panel-toggle[aria-pressed="true"],
+.panel-toggle[aria-expanded="false"] {
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.12);
+}
+
+.panel-toggle:disabled {
+  cursor: default;
+  opacity: 0.32;
+}
+
+.panel-toggle svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.35;
 }
 
 select {
@@ -707,6 +801,19 @@ select option {
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
   overflow: hidden;
+}
+
+.work-area[data-board-hidden="true"],
+.work-area[data-terminal-hidden="true"] {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.work-area[data-board-hidden="true"] .board-shell {
+  display: none;
+}
+
+.work-area[data-terminal-hidden="true"] .terminal-dock {
+  display: none;
 }
 
 .memory-section {
@@ -2213,6 +2320,15 @@ button.modal-backdrop:active {
   box-shadow: none;
 }
 
+.work-area[data-board-hidden="true"] .terminal-dock {
+  height: 100%;
+  border-top: 0;
+}
+
+.work-area[data-board-hidden="true"] .terminal-resize {
+  display: none;
+}
+
 .terminal-resize {
   position: absolute;
   z-index: 2;
@@ -2316,9 +2432,92 @@ button.modal-backdrop:active {
   font-size: 0.75rem;
 }
 
+.terminal-unicode-setting {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.terminal-unicode-setting input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
 .terminal-toolbar button {
   min-height: 32px;
   padding: 5px var(--space-150);
+}
+
+.terminal-tools {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.terminal-toolbar .terminal-tool-button,
+.terminal-toolbar .terminal-zoom-reset {
+  min-height: 30px;
+  height: 30px;
+  border: 0;
+  border-right: 1px solid var(--line-subtle);
+  border-radius: 0;
+  color: var(--muted);
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+}
+
+.terminal-toolbar .terminal-tool-button {
+  width: 30px;
+}
+
+.terminal-toolbar .terminal-zoom-reset {
+  width: 45px;
+  font-size: 0.625rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.terminal-toolbar .terminal-tool-button:last-child {
+  border-right: 0;
+}
+
+.terminal-toolbar .terminal-tool-button:hover:not(:disabled),
+.terminal-toolbar .terminal-tool-button:focus-visible,
+.terminal-toolbar .terminal-zoom-reset:hover:not(:disabled),
+.terminal-toolbar .terminal-zoom-reset:focus-visible {
+  color: var(--text);
+  background: var(--fill-strong);
+  box-shadow: none;
+}
+
+.terminal-toolbar .terminal-tool-button:disabled,
+.terminal-toolbar .terminal-zoom-reset:disabled {
+  cursor: default;
+  color: var(--faint);
+  opacity: 0.5;
+}
+
+.terminal-tool-button svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.35;
 }
 
 .terminal-body {
@@ -2326,6 +2525,70 @@ button.modal-backdrop:active {
   min-height: 0;
   flex: 1 1 auto;
   overflow: hidden;
+}
+
+.terminal-search {
+  position: absolute;
+  z-index: 4;
+  top: var(--space-100);
+  right: var(--space-200);
+  width: min(430px, calc(100% - 32px));
+  display: flex;
+  align-items: center;
+  gap: var(--space-050);
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--menu-bg);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  padding: var(--space-050);
+  box-shadow: var(--highlight-inset), var(--shadow-2);
+  animation: dialog-in 140ms var(--ease);
+}
+
+.terminal-search input {
+  min-height: 30px;
+  height: 30px;
+  flex: 1 1 auto;
+  border: 0;
+  border-radius: 6px;
+  padding: 4px var(--space-100);
+  font-size: 0.75rem;
+  box-shadow: none;
+}
+
+.terminal-search input:focus-visible {
+  box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.55);
+}
+
+.terminal-search-results {
+  min-width: 68px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.625rem;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.terminal-search .terminal-search-button {
+  min-height: 30px;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--muted);
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.875rem;
+}
+
+.terminal-search .terminal-search-button:hover,
+.terminal-search .terminal-search-button:focus-visible {
+  color: var(--text);
+  background: var(--fill-strong);
+  box-shadow: none;
 }
 
 .terminal-host {
@@ -2436,6 +2699,12 @@ button.modal-backdrop:active {
   font-size: 0.625rem;
 }
 
+.terminal-context-separator {
+  height: 1px;
+  margin: var(--space-050);
+  background: var(--line-subtle);
+}
+
 /* ------------------------------------------------------------- animations */
 
 @keyframes fade-in {
@@ -2491,11 +2760,19 @@ button.modal-backdrop:active {
   .board-status {
     display: none;
   }
+
+  .terminal-profile-picker {
+    min-width: 150px;
+  }
+
+  .terminal-profile-picker > span {
+    display: none;
+  }
 }
 
 @media (max-width: 960px) {
   #app {
-    grid-template-columns: 200px minmax(0, 1fr);
+    grid-template-columns: var(--sidebar-width) 5px minmax(0, 1fr);
   }
 
   .overview-grid {
@@ -2504,5 +2781,9 @@ button.modal-backdrop:active {
 
   .board {
     grid-template-columns: repeat(4, minmax(220px, 1fr));
+  }
+
+  .terminal-unicode-setting span {
+    display: none;
   }
 }
