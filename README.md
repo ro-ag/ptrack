@@ -6,7 +6,7 @@ Keep goals, plans, tasks, decisions, issues, and commit context alive across
 terminal sessions—without a server or a cloud account.
 
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
-[![Release](https://img.shields.io/badge/release-v0.17.0-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.17.0)
+[![Release](https://img.shields.io/badge/release-v0.19.0-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.19.0)
 [![License](https://img.shields.io/badge/License-Apache--2.0-3DD6A3)](LICENSE)
 [![Storage](https://img.shields.io/badge/Storage-local--first-AFA8FF)](#storage-and-safety)
 
@@ -48,10 +48,9 @@ Download the native archive for your platform from the
 CLI, terminal dashboard, and Wails desktop GUI.
 
 On macOS you can instead download `P-TRACK_<version>_darwin_<arch>.dmg` and drag
-**P-TRACK.app** into `/Applications`. The app is not signed with a Developer ID
-yet, so on first launch either right-click the app and choose **Open**, or run
-`xattr -dr com.apple.quarantine /Applications/P-TRACK.app`. The same executable
-inside the bundle doubles as the CLI; symlink it onto your `PATH` with
+**P-TRACK.app** into `/Applications`. Release disk images are Developer ID-signed,
+notarized, and stapled by the tag workflow. The same executable inside the
+bundle doubles as the CLI; symlink it onto your `PATH` with
 `ln -s /Applications/P-TRACK.app/Contents/MacOS/ptrack /usr/local/bin/ptrack`.
 
 Do not install P-TRACK with `go install`. Wails requires platform-specific build
