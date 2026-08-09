@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -186,8 +187,10 @@ func TestValidateProfileReturnsDeepCopyWithoutMutatingCaller(t *testing.T) {
 func TestDiscoverProfilesDeterministicallyFindsLoginShellAndInstalledAgents(t *testing.T) {
 	shell := filepath.Join(t.TempDir(), "zsh")
 	installed := map[string]string{
+		"agy":    filepath.Join(t.TempDir(), "agy"),
 		"claude": filepath.Join(t.TempDir(), "claude"),
 		"codex":  filepath.Join(t.TempDir(), "codex"),
+		"gemini": filepath.Join(t.TempDir(), "gemini"),
 	}
 	dependencies := profileDependencies{
 		goos: "darwin",
@@ -216,14 +219,16 @@ func TestDiscoverProfilesDeterministicallyFindsLoginShellAndInstalledAgents(t *t
 	if !reflect.DeepEqual(first, second) {
 		t.Fatalf("discovery is not deterministic:\nfirst:  %#v\nsecond: %#v", first, second)
 	}
-	if len(first) != 3 {
-		t.Fatalf("got %d profiles, want login shell plus two installed agents: %#v", len(first), first)
+	if len(first) != 5 {
+		t.Fatalf("got %d profiles, want login shell plus four installed agents: %#v", len(first), first)
 	}
 
 	wantExecutables := map[string]ProfileKind{
 		shell:               ProfileShell,
+		installed["agy"]:    ProfileAgent,
 		installed["claude"]: ProfileAgent,
 		installed["codex"]:  ProfileAgent,
+		installed["gemini"]: ProfileAgent,
 	}
 	seenIDs := make(map[string]bool)
 	for _, profile := range first {
@@ -253,6 +258,35 @@ func TestDiscoverProfilesDeterministicallyFindsLoginShellAndInstalledAgents(t *t
 	shellProfile := profileForExecutable(t, first, shell)
 	if !reflect.DeepEqual(shellProfile.Args, []string{"-l"}) {
 		t.Fatalf("login shell args = %#v, want []string{\"-l\"}", shellProfile.Args)
+	}
+}
+
+func TestDiscoverProfilesFindsHomebrewAgentOutsideDesktopPATH(t *testing.T) {
+	shell := filepath.Join(t.TempDir(), "zsh")
+	gemini := filepath.Join("/opt/homebrew/bin", "gemini")
+	dependencies := profileDependencies{
+		goos: "darwin",
+		getenv: func(name string) string {
+			if name == "SHELL" {
+				return shell
+			}
+			return ""
+		},
+		lookPath: func(name string) (string, error) {
+			if name == gemini {
+				return gemini, nil
+			}
+			return "", os.ErrNotExist
+		},
+	}
+
+	profiles, err := discoverProfiles(dependencies)
+	if err != nil {
+		t.Fatalf("discoverProfiles: %v", err)
+	}
+	profile := profileForExecutable(t, profiles, gemini)
+	if profile.ID != "agent-gemini" || profile.Provider != "gemini" {
+		t.Fatalf("unexpected Gemini profile: %#v", profile)
 	}
 }
 
@@ -287,6 +321,7 @@ func TestDiscoverProfilesUsesWindowsCommandProcessorWithoutUnixLoginFlag(t *test
 func TestBuildEnvironmentAppliesTerminalDefaults(t *testing.T) {
 	base := []string{
 		"PATH=/usr/bin",
+		"NO_COLOR=1",
 		"TERM=vt100",
 		"COLORTERM=",
 		"TERM_PROGRAM=another-terminal",
@@ -306,11 +341,93 @@ func TestBuildEnvironmentAppliesTerminalDefaults(t *testing.T) {
 		"TERM_PROGRAM": "P-TRACK",
 		"UNCHANGED":    "value",
 	}
+	if locale := defaultUTF8Locale(runtime.GOOS); locale != "" {
+		want["LANG"] = locale
+	}
 	if !reflect.DeepEqual(values, want) {
 		t.Fatalf("environment values:\ngot:  %#v\nwant: %#v", values, want)
 	}
 	if !reflect.DeepEqual(base, wantBase) {
 		t.Fatalf("buildEnvironment mutated base:\ngot:  %#v\nwant: %#v", base, wantBase)
+	}
+}
+
+func TestBuildEnvironmentDropsInheritedColorSuppressionButAllowsOverride(t *testing.T) {
+	got, err := buildEnvironmentForOS([]string{"NO_COLOR=1"}, nil, "darwin")
+	if err != nil {
+		t.Fatalf("buildEnvironmentForOS: %v", err)
+	}
+	if _, ok := environmentValues(t, got)["NO_COLOR"]; ok {
+		t.Fatal("inherited NO_COLOR leaked into interactive terminal")
+	}
+
+	got, err = buildEnvironmentForOS(nil, map[string]string{"NO_COLOR": "1"}, "darwin")
+	if err != nil {
+		t.Fatalf("buildEnvironmentForOS with override: %v", err)
+	}
+	if value := environmentValues(t, got)["NO_COLOR"]; value != "1" {
+		t.Fatalf("explicit NO_COLOR = %q, want 1", value)
+	}
+}
+
+func TestBuildEnvironmentProvidesUTF8LocaleWhenDesktopEnvironmentHasNone(t *testing.T) {
+	tests := []struct {
+		goos string
+		want string
+	}{
+		{goos: "darwin", want: "en_US.UTF-8"},
+		{goos: "linux", want: "C.UTF-8"},
+	}
+	for _, test := range tests {
+		t.Run(test.goos, func(t *testing.T) {
+			got, err := buildEnvironmentForOS([]string{"PATH=/usr/bin"}, nil, test.goos)
+			if err != nil {
+				t.Fatalf("buildEnvironmentForOS: %v", err)
+			}
+			if locale := environmentValues(t, got)["LANG"]; locale != test.want {
+				t.Fatalf("LANG = %q, want %q", locale, test.want)
+			}
+		})
+	}
+}
+
+func TestBuildEnvironmentPreservesInheritedOrExplicitLocale(t *testing.T) {
+	tests := []struct {
+		name      string
+		base      []string
+		overrides map[string]string
+		wantKey   string
+		wantValue string
+	}{
+		{
+			name:      "inherited character locale",
+			base:      []string{"LC_CTYPE=ja_JP.UTF-8"},
+			wantKey:   "LC_CTYPE",
+			wantValue: "ja_JP.UTF-8",
+		},
+		{
+			name:      "profile language override",
+			overrides: map[string]string{"LANG": "fr_FR.UTF-8"},
+			wantKey:   "LANG",
+			wantValue: "fr_FR.UTF-8",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := buildEnvironmentForOS(test.base, test.overrides, "darwin")
+			if err != nil {
+				t.Fatalf("buildEnvironmentForOS: %v", err)
+			}
+			values := environmentValues(t, got)
+			if values[test.wantKey] != test.wantValue {
+				t.Fatalf("%s = %q, want %q", test.wantKey, values[test.wantKey], test.wantValue)
+			}
+			if test.wantKey != "LANG" {
+				if _, ok := values["LANG"]; ok {
+					t.Fatalf("unexpected fallback LANG alongside %s: %#v", test.wantKey, values)
+				}
+			}
+		})
 	}
 }
 

@@ -6,6 +6,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Independent panel controls can hide the sidebar, board, or terminal. Hiding
+  the board expands the embedded terminal to the full workspace height, while
+  the sidebar can be resized with either a pointer or the keyboard and keeps
+  its width across launches.
+- The embedded terminal now searches its 25,000-line scrollback, persists font
+  zoom, and exposes clear and emulator-reset actions through compact toolbar,
+  keyboard, and context-menu controls.
+- Agy joins the detected agent profiles, and macOS profile discovery also
+  checks common Homebrew, local-bin, and OpenCode locations for Agy, Claude,
+  Codex, Gemini, and other supported agents.
+- A design note records the deferred cgo-free Tauri, Rust `native-ipc`, and
+  `libghostty-vt` migration boundary.
+
+### Fixed
+- Embedded shells preserve ANSI and truecolor output even when the desktop
+  launcher inherited `NO_COLOR`, and receive a UTF-8 locale when none was set.
+- Modern Unicode 15 grapheme and emoji cell widths are enabled by default in
+  the embedded terminal and can be disabled with a persisted compatibility
+  setting.
+- Terminal rendering now falls back cleanly after WebGL context loss and makes
+  bounded attempts to restore accelerated rendering.
+
 ## [0.18.0] - 2026-08-02
 
 ### Added

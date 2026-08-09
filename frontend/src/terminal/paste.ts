@@ -1,5 +1,6 @@
 const maximumInputFrameBytes = 64 * 1024;
 const defaultPreviewCharacters = 4_096;
+const utf8Encoder = new TextEncoder();
 
 export type TerminalPlatform = "mac" | "windows" | "linux";
 export type TerminalShortcutAction =
@@ -7,6 +8,11 @@ export type TerminalShortcutAction =
   | "paste"
   | "select-all"
   | "context-menu"
+  | "search"
+  | "zoom-in"
+  | "zoom-out"
+  | "zoom-reset"
+  | "clear"
   | "ignore";
 
 interface ShortcutEvent {
@@ -31,6 +37,10 @@ export function binaryStringToBytes(input: string): Uint8Array {
     bytes[index] = input.charCodeAt(index) & 0xff;
   }
   return bytes;
+}
+
+export function terminalTextToBytes(input: string): Uint8Array {
+  return utf8Encoder.encode(input);
 }
 
 export function splitTerminalInput(input: Uint8Array): Uint8Array[] {
@@ -98,6 +108,32 @@ export function terminalShortcutAction(
     event.ctrlKey &&
     event.shiftKey &&
     !event.metaKey;
+  const zoomModifier =
+    platform === "mac"
+      ? event.metaKey && !event.ctrlKey
+      : event.ctrlKey && !event.metaKey;
+
+  if (
+    key === "f" &&
+    ((platform === "mac" && zoomModifier && !event.shiftKey) ||
+      (platform !== "mac" && zoomModifier && event.shiftKey))
+  ) {
+    return "search";
+  }
+  if (zoomModifier) {
+    if (event.key === "+" || event.key === "=") return "zoom-in";
+    if (event.key === "-" && !event.shiftKey) return "zoom-out";
+    if (event.key === "0" && !event.shiftKey) return "zoom-reset";
+  }
+  if (
+    platform === "mac" &&
+    key === "k" &&
+    event.metaKey &&
+    !event.ctrlKey &&
+    !event.shiftKey
+  ) {
+    return "clear";
+  }
 
   if (
     (event.key === "ContextMenu" &&

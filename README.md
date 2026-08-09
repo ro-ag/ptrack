@@ -193,7 +193,18 @@ an interactive PTY-backed shell. Copy, paste, selection-aware `Ctrl+C`,
 platform shortcuts, and the right-click terminal menu use the native clipboard.
 Multiline text is held behind a bounded review dialog and sent through xterm's
 bracketed-paste behavior only after confirmation. Exited sessions show their
-status and can be restarted without reopening the board.
+status and can be restarted without reopening the board. Search the 25,000-line
+scrollback with `⌘F` on macOS or `Ctrl+Shift+F` elsewhere, change the persisted
+font size from the toolbar or standard zoom shortcuts, and clear or reset the
+emulator without stopping its shell. WebGL rendering retries after a lost GPU
+context and keeps xterm's built-in renderer as its fallback.
+
+The top-right panel controls can independently hide the project sidebar, board,
+or terminal; hiding the board gives the terminal the full workspace height
+without restarting its session. The sidebar remains pointer- and
+keyboard-resizable. **Modern Unicode** enables Unicode 15 grapheme and emoji
+cell-width handling by default; turn it off from the terminal toolbar to return
+to xterm's built-in compatibility mode.
 
 Clipboard, shortcut, context-menu, restart, and shutdown interactions have been
 verified on macOS. Windows and Linux archives include the native implementation,
@@ -366,7 +377,9 @@ go run github.com/wailsapp/wails/v2/cmd/wails@v2.13.0 build \
 ```
 
 Architecture and product design notes live in
-[`docs/superpowers/`](docs/superpowers/).
+[`docs/superpowers/`](docs/superpowers/). The deferred cgo-free Tauri host,
+`native-ipc` runner, and libghostty-vt migration is captured separately in
+[`docs/tauri-rust-recode.md`](docs/tauri-rust-recode.md).
 
 ## License
 

@@ -22,7 +22,7 @@
   </head>
   <body>
     <div id="app">
-      <aside class="sidebar" aria-label="Workspace navigation">
+      <aside id="sidebar" class="sidebar" aria-label="Workspace navigation">
         <div class="sidebar-top" aria-hidden="true"></div>
 
         <div class="brand sidebar-brand">
@@ -60,6 +60,18 @@
         </div>
       </aside>
 
+      <div
+        id="sidebar-resize"
+        class="sidebar-resize"
+        role="separator"
+        tabindex="0"
+        aria-label="Resize project sidebar"
+        aria-orientation="vertical"
+        aria-valuemin="180"
+        aria-valuemax="420"
+        aria-valuenow="248"
+      ></div>
+
       <div class="canvas">
         <header class="topbar">
           <div class="toolbar">
@@ -82,6 +94,52 @@
               type="button"
               hidden
             >Close Project</button>
+          </div>
+          <div class="panel-controls" role="group" aria-label="Panel visibility">
+            <button
+              id="sidebar-toggle"
+              class="panel-toggle"
+              type="button"
+              aria-controls="sidebar"
+              aria-expanded="true"
+              aria-label="Hide project sidebar"
+              title="Hide project sidebar"
+            >
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <rect x="1.5" y="2" width="13" height="12" rx="2"></rect>
+                <path d="M5.5 2v12"></path>
+              </svg>
+            </button>
+            <button
+              id="board-panel-toggle"
+              class="panel-toggle"
+              type="button"
+              aria-controls="board"
+              aria-pressed="false"
+              aria-label="Hide board panel"
+              title="Hide board panel"
+              disabled
+            >
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <rect x="1.5" y="2" width="13" height="12" rx="2"></rect>
+                <path d="M1.5 7h13"></path>
+              </svg>
+            </button>
+            <button
+              id="terminal-panel-toggle"
+              class="panel-toggle"
+              type="button"
+              aria-controls="terminal-dock"
+              aria-pressed="false"
+              aria-label="Hide terminal panel"
+              title="Hide terminal panel"
+              disabled
+            >
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <rect x="1.5" y="2" width="13" height="12" rx="2"></rect>
+                <path d="M1.5 9h13"></path>
+              </svg>
+            </button>
           </div>
         </header>
 
@@ -176,6 +234,72 @@
                   <span>Profile</span>
                   <select id="terminal-profile" aria-label="Terminal profile"></select>
                 </label>
+                <label
+                  class="terminal-unicode-setting"
+                  title="Use experimental Unicode 15 grapheme and emoji cell widths"
+                >
+                  <input
+                    id="terminal-modern-unicode"
+                    type="checkbox"
+                    aria-label="Modern Unicode support"
+                    checked
+                  />
+                  <span>Modern Unicode</span>
+                </label>
+                <div class="terminal-tools" role="group" aria-label="Terminal tools">
+                  <button
+                    id="terminal-search-open"
+                    class="terminal-tool-button"
+                    type="button"
+                    aria-label="Search terminal output"
+                    title="Search terminal output"
+                    disabled
+                  >
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <circle cx="6.75" cy="6.75" r="4.25"></circle>
+                      <path d="m10 10 3.5 3.5"></path>
+                    </svg>
+                  </button>
+                  <button
+                    id="terminal-zoom-out"
+                    class="terminal-tool-button"
+                    type="button"
+                    aria-label="Decrease terminal font size"
+                    title="Decrease terminal font size"
+                    disabled
+                  >−</button>
+                  <button
+                    id="terminal-zoom-reset"
+                    class="terminal-zoom-reset"
+                    type="button"
+                    aria-label="Reset terminal font size"
+                    title="Reset terminal font size"
+                    disabled
+                  >100%</button>
+                  <button
+                    id="terminal-zoom-in"
+                    class="terminal-tool-button"
+                    type="button"
+                    aria-label="Increase terminal font size"
+                    title="Increase terminal font size"
+                    disabled
+                  >+</button>
+                  <button
+                    id="terminal-clear"
+                    class="terminal-tool-button"
+                    type="button"
+                    aria-label="Clear terminal buffer"
+                    title="Clear terminal buffer"
+                    disabled
+                  >
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="M3 4.5h10"></path>
+                      <path d="M6 2.5h4"></path>
+                      <path d="m4.5 4.5.5 9h6l.5-9"></path>
+                      <path d="M7 7v4M9 7v4"></path>
+                    </svg>
+                  </button>
+                </div>
                 <button id="terminal-open" type="button">Open</button>
                 <button
                   id="terminal-restart"
@@ -191,6 +315,48 @@
                 >Close</button>
               </header>
               <div id="terminal-body" class="terminal-body" hidden>
+                <form
+                  id="terminal-search"
+                  class="terminal-search"
+                  role="search"
+                  data-terminal-overlay
+                  hidden
+                >
+                  <input
+                    id="terminal-search-input"
+                    type="search"
+                    autocomplete="off"
+                    spellcheck="false"
+                    placeholder="Search terminal output"
+                    aria-label="Search terminal output"
+                  />
+                  <span
+                    id="terminal-search-results"
+                    class="terminal-search-results"
+                    aria-live="polite"
+                  ></span>
+                  <button
+                    id="terminal-search-previous"
+                    class="terminal-search-button"
+                    type="button"
+                    aria-label="Previous terminal search result"
+                    title="Previous result · Shift+Enter"
+                  >↑</button>
+                  <button
+                    id="terminal-search-next"
+                    class="terminal-search-button"
+                    type="submit"
+                    aria-label="Next terminal search result"
+                    title="Next result · Enter"
+                  >↓</button>
+                  <button
+                    id="terminal-search-close"
+                    class="terminal-search-button"
+                    type="button"
+                    aria-label="Close terminal search"
+                    title="Close terminal search · Escape"
+                  >×</button>
+                </form>
                 <div
                   id="terminal-host"
                   class="terminal-host"
@@ -516,6 +682,19 @@
       <button id="terminal-menu-select-all" type="button" role="menuitem">
         <span>Select all</span>
         <kbd id="terminal-menu-select-all-shortcut"></kbd>
+      </button>
+      <div class="terminal-context-separator" role="separator"></div>
+      <button id="terminal-menu-search" type="button" role="menuitem">
+        <span>Search output</span>
+        <kbd id="terminal-menu-search-shortcut"></kbd>
+      </button>
+      <button id="terminal-menu-clear" type="button" role="menuitem">
+        <span>Clear buffer</span>
+        <kbd id="terminal-menu-clear-shortcut"></kbd>
+      </button>
+      <button id="terminal-menu-reset" type="button" role="menuitem">
+        <span>Reset terminal state</span>
+        <kbd></kbd>
       </button>
     </div>
 

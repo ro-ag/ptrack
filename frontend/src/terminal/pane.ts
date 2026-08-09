@@ -1,5 +1,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
+import type { ISearchResultChangeEvent } from "@xterm/addon-search";
+import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
@@ -13,6 +15,7 @@ import {
   commitClipboardPaste,
   prepareClipboardPaste,
   splitTerminalInput,
+  terminalTextToBytes,
   terminalShortcutAction,
 } from "./paste";
 import type {
@@ -20,6 +23,20 @@ import type {
   TerminalPlatform,
   TerminalShortcutAction,
 } from "./paste";
+import {
+  clampTerminalFontSize,
+  defaultTerminalFontSize,
+  minimumTerminalFontSize,
+  maximumTerminalFontSize,
+  readTerminalFontSize,
+  terminalZoomLabel,
+  writeTerminalFontSize,
+} from "./preferences";
+import { terminalSearchResultLabel } from "./search";
+import {
+  readModernUnicodeSetting,
+  writeModernUnicodeSetting,
+} from "./unicode";
 
 type DockState = "closed" | "opening" | "running" | "exited" | "failed";
 
@@ -71,12 +88,17 @@ export interface TerminalDockHandle {
 interface PaneResources {
   terminal: Terminal;
   fit: FitAddon;
+  search: SearchAddon;
+  unicode: UnicodeGraphemesAddon | null;
+  webgl: WebglAddon | null;
   client: TerminalStreamClient | null;
   observer: ResizeObserver | null;
   subscriptions: IDisposable[];
   eventDisposers: Array<() => void>;
   animationFrame: number | null;
   resizeTimer: number | null;
+  webglRecoveryTimer: number | null;
+  webglRecoveryAttempts: number;
   pendingSize: { rows: number; columns: number } | null;
   lastResizeAt: number;
   disposed: boolean;
@@ -85,6 +107,8 @@ interface PaneResources {
 const minimumDockHeight = 180;
 const defaultDockHeight = 300;
 const resizeIntervalMilliseconds = 100;
+const terminalFontSizeStep = 1;
+const maximumWebglRecoveryAttempts = 3;
 
 function requiredElement<T extends HTMLElement>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -141,15 +165,37 @@ class TerminalDock {
   readonly #showError: (error: unknown) => void;
   readonly #workspaceGeneration: number;
   readonly #dock = requiredElement<HTMLElement>("#terminal-dock");
+  readonly #workArea = requiredElement<HTMLElement>(".work-area");
   readonly #body = requiredElement<HTMLElement>("#terminal-body");
   readonly #host = requiredElement<HTMLElement>("#terminal-host");
   readonly #message = requiredElement<HTMLElement>("#terminal-message");
   readonly #status = requiredElement<HTMLElement>("#terminal-status");
   readonly #title = requiredElement<HTMLElement>("#terminal-title");
   readonly #profile = requiredElement<HTMLSelectElement>("#terminal-profile");
+  readonly #modernUnicode = requiredElement<HTMLInputElement>(
+    "#terminal-modern-unicode",
+  );
   readonly #open = requiredElement<HTMLButtonElement>("#terminal-open");
   readonly #restart = requiredElement<HTMLButtonElement>("#terminal-restart");
   readonly #close = requiredElement<HTMLButtonElement>("#terminal-close");
+  readonly #searchOpen = requiredElement<HTMLButtonElement>("#terminal-search-open");
+  readonly #searchForm = requiredElement<HTMLFormElement>("#terminal-search");
+  readonly #searchInput = requiredElement<HTMLInputElement>("#terminal-search-input");
+  readonly #searchResults = requiredElement<HTMLElement>("#terminal-search-results");
+  readonly #searchPrevious = requiredElement<HTMLButtonElement>(
+    "#terminal-search-previous",
+  );
+  readonly #searchClose = requiredElement<HTMLButtonElement>("#terminal-search-close");
+  readonly #zoomOut = requiredElement<HTMLButtonElement>("#terminal-zoom-out");
+  readonly #zoomReset = requiredElement<HTMLButtonElement>("#terminal-zoom-reset");
+  readonly #zoomIn = requiredElement<HTMLButtonElement>("#terminal-zoom-in");
+  readonly #clear = requiredElement<HTMLButtonElement>("#terminal-clear");
+  readonly #boardToggle = requiredElement<HTMLButtonElement>(
+    "#board-panel-toggle",
+  );
+  readonly #terminalToggle = requiredElement<HTMLButtonElement>(
+    "#terminal-panel-toggle",
+  );
   readonly #separator = requiredElement<HTMLElement>("#terminal-resize");
   readonly #pasteModal = requiredElement<HTMLElement>("#terminal-paste-modal");
   readonly #pasteForm = requiredElement<HTMLFormElement>("#terminal-paste-form");
@@ -168,12 +214,19 @@ class TerminalDock {
   readonly #menuSelectAll = requiredElement<HTMLButtonElement>(
     "#terminal-menu-select-all",
   );
+  readonly #menuSearch = requiredElement<HTMLButtonElement>("#terminal-menu-search");
+  readonly #menuClear = requiredElement<HTMLButtonElement>("#terminal-menu-clear");
+  readonly #menuReset = requiredElement<HTMLButtonElement>("#terminal-menu-reset");
 
   #state: DockState = "closed";
   #session: TerminalSession | null = null;
   #resources: PaneResources | null = null;
   #generation = 0;
   #dockHeight = defaultDockHeight;
+  #boardHidden = false;
+  #terminalHidden = false;
+  #modernUnicodeEnabled = true;
+  #fontSize = defaultTerminalFontSize;
   #earlyExit = new Map<string, TerminalExit>();
   #closing = false;
   #operationBusy = false;
@@ -198,6 +251,48 @@ class TerminalDock {
     this.#listen(this.#close, "click", () =>
       void this.#runOperation(() => this.#closeTerminal()),
     );
+    this.#listen(this.#boardToggle, "click", () =>
+      this.#setBoardHidden(!this.#boardHidden),
+    );
+    this.#listen(this.#terminalToggle, "click", () =>
+      this.#setTerminalHidden(!this.#terminalHidden),
+    );
+    this.#terminalToggle.disabled = false;
+    this.#modernUnicodeEnabled = readModernUnicodeSetting(localStorage);
+    this.#modernUnicode.checked = this.#modernUnicodeEnabled;
+    this.#listen(this.#modernUnicode, "change", () =>
+      this.#setModernUnicode(this.#modernUnicode.checked),
+    );
+    this.#fontSize = readTerminalFontSize(localStorage);
+    this.#renderZoomState();
+    this.#listen(this.#searchOpen, "click", () => this.#openSearch());
+    this.#listen(this.#zoomOut, "click", () =>
+      this.#setFontSize(this.#fontSize - terminalFontSizeStep),
+    );
+    this.#listen(this.#zoomReset, "click", () =>
+      this.#setFontSize(defaultTerminalFontSize),
+    );
+    this.#listen(this.#zoomIn, "click", () =>
+      this.#setFontSize(this.#fontSize + terminalFontSizeStep),
+    );
+    this.#listen(this.#clear, "click", () => this.#clearBuffer());
+    this.#listen(this.#searchForm, "submit", (event) => {
+      event.preventDefault();
+      this.#findNext();
+    });
+    this.#listen(this.#searchInput, "input", () => this.#updateSearch(true));
+    this.#listen(this.#searchInput, "keydown", (event) => {
+      const keyEvent = event as KeyboardEvent;
+      if (keyEvent.key === "Escape") {
+        keyEvent.preventDefault();
+        this.#closeSearch();
+      } else if (keyEvent.key === "Enter" && keyEvent.shiftKey) {
+        keyEvent.preventDefault();
+        this.#findPrevious();
+      }
+    });
+    this.#listen(this.#searchPrevious, "click", () => this.#findPrevious());
+    this.#listen(this.#searchClose, "click", () => this.#closeSearch());
     this.#listen(this.#separator, "pointerdown", (event) =>
       this.#beginDockResize(event as PointerEvent),
     );
@@ -228,12 +323,25 @@ class TerminalDock {
       this.#resources?.terminal.selectAll();
       this.#resources?.terminal.focus();
     });
+    this.#listen(this.#menuSearch, "click", () => {
+      this.#hideContextMenu();
+      this.#openSearch();
+    });
+    this.#listen(this.#menuClear, "click", () => {
+      this.#hideContextMenu();
+      this.#clearBuffer();
+    });
+    this.#listen(this.#menuReset, "click", () => {
+      this.#hideContextMenu();
+      this.#resetTerminal();
+    });
     this.#listen(this.#contextMenu, "keydown", (event) =>
       this.#navigateContextMenu(event as KeyboardEvent),
     );
     this.#listen(window, "beforeunload", () => this.dispose());
     this.#setShortcutLabels();
     this.#setDockHeight(defaultDockHeight);
+    this.#renderPanelVisibility();
     this.#renderState();
   }
 
@@ -279,6 +387,7 @@ class TerminalDock {
       if (generation !== this.#generation) return;
       const resources = this.#createRenderer(generation);
       this.#resources = resources;
+      this.#renderState();
       this.#fit(resources, false);
       this.#registerSessionEvents(resources, generation);
 
@@ -361,6 +470,113 @@ class TerminalDock {
     }
   }
 
+  #openSearch(): void {
+    const resources = this.#resources;
+    if (!resources || resources.disposed) return;
+    this.#hideContextMenu();
+    this.#searchForm.hidden = false;
+    this.#searchInput.focus();
+    this.#searchInput.select();
+    if (this.#searchInput.value) this.#updateSearch(false);
+  }
+
+  #closeSearch(focusTerminal = true): void {
+    this.#searchForm.hidden = true;
+    this.#searchResults.textContent = "";
+    const resources = this.#resources;
+    if (!resources || resources.disposed) return;
+    resources.search.clearDecorations();
+    if (focusTerminal) resources.terminal.focus();
+  }
+
+  #searchOptions(incremental: boolean) {
+    return {
+      incremental,
+      decorations: {
+        matchBackground: "#26483e",
+        matchBorder: "#3dd6a3",
+        matchOverviewRuler: "#3dd6a3",
+        activeMatchBackground: "#7a5f1f",
+        activeMatchBorder: "#ffd75f",
+        activeMatchColorOverviewRuler: "#ffd75f",
+      },
+    };
+  }
+
+  #updateSearch(incremental: boolean): void {
+    const resources = this.#resources;
+    if (!resources || resources.disposed) return;
+    const query = this.#searchInput.value;
+    if (!query) {
+      resources.search.clearDecorations();
+      this.#searchResults.textContent = "";
+      return;
+    }
+    const found = resources.search.findNext(
+      query,
+      this.#searchOptions(incremental),
+    );
+    if (!found) this.#searchResults.textContent = "No results";
+  }
+
+  #findNext(): void {
+    this.#updateSearch(false);
+    this.#searchInput.focus();
+  }
+
+  #findPrevious(): void {
+    const resources = this.#resources;
+    const query = this.#searchInput.value;
+    if (!resources || resources.disposed || !query) return;
+    const found = resources.search.findPrevious(query, this.#searchOptions(false));
+    if (!found) this.#searchResults.textContent = "No results";
+    this.#searchInput.focus();
+  }
+
+  #renderSearchResults(result: ISearchResultChangeEvent): void {
+    this.#searchResults.textContent = terminalSearchResultLabel(
+      result,
+      this.#searchInput.value.length > 0,
+    );
+  }
+
+  #setFontSize(fontSize: number): void {
+    this.#fontSize = clampTerminalFontSize(fontSize);
+    writeTerminalFontSize(localStorage, this.#fontSize);
+    this.#renderZoomState();
+    const resources = this.#resources;
+    if (!resources || resources.disposed) return;
+    resources.terminal.options.fontSize = this.#fontSize;
+    this.#fit(resources, true);
+    resources.terminal.focus();
+  }
+
+  #renderZoomState(): void {
+    this.#zoomReset.textContent = terminalZoomLabel(this.#fontSize);
+    this.#zoomReset.disabled = !this.#resources;
+    this.#zoomOut.disabled =
+      !this.#resources || this.#fontSize <= minimumTerminalFontSize;
+    this.#zoomIn.disabled =
+      !this.#resources || this.#fontSize >= maximumTerminalFontSize;
+  }
+
+  #clearBuffer(): void {
+    const resources = this.#resources;
+    if (!resources || resources.disposed) return;
+    this.#closeSearch(false);
+    resources.terminal.clear();
+    resources.terminal.focus();
+  }
+
+  #resetTerminal(): void {
+    const resources = this.#resources;
+    if (!resources || resources.disposed) return;
+    this.#closeSearch(false);
+    resources.terminal.reset();
+    this.#fit(resources, true);
+    resources.terminal.focus();
+  }
+
   #configureTerminalInput(resources: PaneResources): void {
     resources.terminal.attachCustomKeyEventHandler((event) => {
       if (event.isComposing) return true;
@@ -415,9 +631,14 @@ class TerminalDock {
         event.preventDefault();
         this.#hideContextMenu();
         resources.terminal.focus();
+      } else if (!this.#searchForm.hidden) {
+        event.preventDefault();
+        this.#closeSearch();
       }
     };
     const dismiss = () => this.#hideContextMenu();
+    const recoverRenderer = () =>
+      this.#scheduleWebglRecovery(resources, this.#generation);
 
     this.#host.addEventListener("paste", interceptPaste, true);
     this.#host.addEventListener("mousedown", interceptRightMouseDown, true);
@@ -426,6 +647,8 @@ class TerminalDock {
     document.addEventListener("keydown", dismissOnKey);
     window.addEventListener("blur", dismiss);
     window.addEventListener("resize", dismiss);
+    window.addEventListener("focus", recoverRenderer);
+    document.addEventListener("visibilitychange", recoverRenderer);
     resources.eventDisposers.push(() => {
       this.#host.removeEventListener("paste", interceptPaste, true);
       this.#host.removeEventListener("mousedown", interceptRightMouseDown, true);
@@ -434,6 +657,8 @@ class TerminalDock {
       document.removeEventListener("keydown", dismissOnKey);
       window.removeEventListener("blur", dismiss);
       window.removeEventListener("resize", dismiss);
+      window.removeEventListener("focus", recoverRenderer);
+      document.removeEventListener("visibilitychange", recoverRenderer);
     });
   }
 
@@ -450,6 +675,16 @@ class TerminalDock {
     } else if (action === "context-menu") {
       const bounds = this.#host.getBoundingClientRect();
       this.#showContextMenu(bounds.left + 24, bounds.top + 24, resources);
+    } else if (action === "search") {
+      this.#openSearch();
+    } else if (action === "zoom-out") {
+      this.#setFontSize(this.#fontSize - terminalFontSizeStep);
+    } else if (action === "zoom-reset") {
+      this.#setFontSize(defaultTerminalFontSize);
+    } else if (action === "zoom-in") {
+      this.#setFontSize(this.#fontSize + terminalFontSizeStep);
+    } else if (action === "clear") {
+      this.#clearBuffer();
     }
   }
 
@@ -578,7 +813,14 @@ class TerminalDock {
     const height = this.#contextMenu.offsetHeight;
     this.#contextMenu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - width - 8))}px`;
     this.#contextMenu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - height - 8))}px`;
-    [this.#menuCopy, this.#menuPaste, this.#menuSelectAll]
+    [
+      this.#menuCopy,
+      this.#menuPaste,
+      this.#menuSelectAll,
+      this.#menuSearch,
+      this.#menuClear,
+      this.#menuReset,
+    ]
       .find((button) => !button.disabled)
       ?.focus();
   }
@@ -594,9 +836,14 @@ class TerminalDock {
       this.#resources?.terminal.focus();
       return;
     }
-    const buttons = [this.#menuCopy, this.#menuPaste, this.#menuSelectAll].filter(
-      (button) => !button.disabled,
-    );
+    const buttons = [
+      this.#menuCopy,
+      this.#menuPaste,
+      this.#menuSelectAll,
+      this.#menuSearch,
+      this.#menuClear,
+      this.#menuReset,
+    ].filter((button) => !button.disabled);
     const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
     let next = current;
     if (event.key === "ArrowDown") next = (current + 1) % buttons.length;
@@ -611,21 +858,42 @@ class TerminalDock {
   #setShortcutLabels(): void {
     const labels =
       platform() === "mac"
-        ? { copy: "⌘C", paste: "⌘V", selectAll: "⌘A" }
-        : { copy: "Ctrl+Shift+C", paste: "Ctrl+V", selectAll: "Ctrl+Shift+A" };
+        ? {
+            copy: "⌘C",
+            paste: "⌘V",
+            selectAll: "⌘A",
+            search: "⌘F",
+            clear: "⌘K",
+          }
+        : {
+            copy: "Ctrl+Shift+C",
+            paste: "Ctrl+V",
+            selectAll: "Ctrl+Shift+A",
+            search: "Ctrl+Shift+F",
+            clear: "",
+          };
     requiredElement<HTMLElement>("#terminal-menu-copy-shortcut").textContent =
       labels.copy;
     requiredElement<HTMLElement>("#terminal-menu-paste-shortcut").textContent =
       labels.paste;
     requiredElement<HTMLElement>("#terminal-menu-select-all-shortcut").textContent =
       labels.selectAll;
+    requiredElement<HTMLElement>("#terminal-menu-search-shortcut").textContent =
+      labels.search;
+    requiredElement<HTMLElement>("#terminal-menu-clear-shortcut").textContent =
+      labels.clear;
   }
 
   #createRenderer(generation: number): PaneResources {
     this.#host.replaceChildren();
     const terminal = new Terminal({
+      allowProposedApi: true,
       cursorBlink: true,
-      scrollback: 10_000,
+      fontFamily:
+        '"SFMono-Regular", "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "DejaVu Sans Mono", "Apple Color Emoji", "Segoe UI Emoji", monospace',
+      fontSize: this.#fontSize,
+      rescaleOverlappingGlyphs: true,
+      scrollback: 25_000,
       theme: {
         background: "#090d12",
         foreground: "#e6e9f0",
@@ -635,7 +903,13 @@ class TerminalDock {
     });
     const fit = new FitAddon();
     terminal.loadAddon(fit);
-    terminal.loadAddon(new SearchAddon());
+    let unicode: UnicodeGraphemesAddon | null = null;
+    if (this.#modernUnicodeEnabled) {
+      unicode = new UnicodeGraphemesAddon();
+      terminal.loadAddon(unicode);
+    }
+    const search = new SearchAddon();
+    terminal.loadAddon(search);
     terminal.loadAddon(
       new WebLinksAddon((event, uri) => {
         const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
@@ -649,12 +923,17 @@ class TerminalDock {
     const resources: PaneResources = {
       terminal,
       fit,
+      search,
+      unicode,
+      webgl: null,
       client: null,
       observer: null,
       subscriptions: [],
       eventDisposers: [],
       animationFrame: null,
       resizeTimer: null,
+      webglRecoveryTimer: null,
+      webglRecoveryAttempts: 0,
       pendingSize: null,
       lastResizeAt: 0,
       disposed: false,
@@ -663,7 +942,7 @@ class TerminalDock {
     this.#configureTerminalInput(resources);
     resources.subscriptions.push(
       terminal.onData((data) => {
-        const bytes = new TextEncoder().encode(data);
+        const bytes = terminalTextToBytes(data);
         for (const chunk of splitTerminalInput(bytes)) resources.client?.sendInput(chunk);
       }),
       terminal.onBinary((data) => {
@@ -674,6 +953,7 @@ class TerminalDock {
       terminal.onTitleChange((title) => {
         if (generation === this.#generation && title) this.#title.textContent = title;
       }),
+      search.onDidChangeResults((result) => this.#renderSearchResults(result)),
     );
 
     if ("ResizeObserver" in window) {
@@ -687,19 +967,51 @@ class TerminalDock {
       resources.observer.observe(this.#host);
     }
 
+    this.#attachWebgl(resources, generation);
+    return resources;
+  }
+
+  #attachWebgl(resources: PaneResources, generation: number): void {
+    if (
+      resources.disposed ||
+      resources.webgl ||
+      generation !== this.#generation
+    ) return;
     try {
       const webgl = new WebglAddon();
-      terminal.loadAddon(webgl);
+      resources.terminal.loadAddon(webgl);
+      resources.webgl = webgl;
+      resources.webglRecoveryAttempts = 0;
       const contextLoss = webgl.onContextLoss(() => {
         contextLoss.dispose();
+        if (resources.webgl === webgl) resources.webgl = null;
         webgl.dispose();
-        if (!resources.disposed) terminal.refresh(0, terminal.rows - 1);
+        if (resources.disposed || generation !== this.#generation) return;
+        resources.terminal.refresh(0, resources.terminal.rows - 1);
+        this.#scheduleWebglRecovery(resources, generation);
       });
       resources.subscriptions.push(contextLoss);
     } catch {
-      // Xterm's DOM renderer remains active.
+      this.#scheduleWebglRecovery(resources, generation);
     }
-    return resources;
+  }
+
+  #scheduleWebglRecovery(resources: PaneResources, generation: number): void {
+    if (
+      resources.disposed ||
+      resources.webgl ||
+      resources.webglRecoveryTimer !== null ||
+      resources.webglRecoveryAttempts >= maximumWebglRecoveryAttempts ||
+      generation !== this.#generation ||
+      this.#terminalHidden ||
+      document.visibilityState === "hidden"
+    ) return;
+    const delay = 250 * 2 ** resources.webglRecoveryAttempts;
+    resources.webglRecoveryTimer = window.setTimeout(() => {
+      resources.webglRecoveryTimer = null;
+      resources.webglRecoveryAttempts += 1;
+      this.#attachWebgl(resources, generation);
+    }, delay);
   }
 
   #registerSessionEvents(resources: PaneResources, generation: number): void {
@@ -797,20 +1109,26 @@ class TerminalDock {
     this.#hideContextMenu();
     const resources = this.#resources;
     if (!resources || resources.disposed) return;
+    this.#closeSearch(false);
     resources.disposed = true;
     resources.client?.close();
     resources.observer?.disconnect();
     if (resources.animationFrame !== null) cancelAnimationFrame(resources.animationFrame);
     if (resources.resizeTimer !== null) window.clearTimeout(resources.resizeTimer);
+    if (resources.webglRecoveryTimer !== null) {
+      window.clearTimeout(resources.webglRecoveryTimer);
+    }
     for (const dispose of resources.eventDisposers.splice(0)) dispose();
     for (const subscription of resources.subscriptions.splice(0)) subscription.dispose();
     resources.terminal.dispose();
     this.#host.replaceChildren();
     this.#resources = null;
+    this.#renderZoomState();
   }
 
   #setState(state: DockState, detail = ""): void {
     if (state !== "running") this.#invalidatePaste();
+    if (state === "closed") this.#setBoardHidden(false);
     this.#state = state;
     this.#message.textContent = detail;
     this.#message.hidden = detail === "";
@@ -831,6 +1149,12 @@ class TerminalDock {
     this.#open.hidden = this.#state !== "closed";
     this.#restart.hidden = this.#state !== "exited" && this.#state !== "failed";
     this.#close.hidden = this.#state === "closed" || this.#state === "failed";
+    this.#boardToggle.disabled = this.#state === "closed" || !this.#resources;
+    const terminalActionsDisabled = !this.#resources;
+    this.#searchOpen.disabled = terminalActionsDisabled;
+    this.#zoomReset.disabled = terminalActionsDisabled;
+    this.#clear.disabled = terminalActionsDisabled;
+    this.#renderZoomState();
     this.#open.disabled = this.#operationBusy;
     this.#restart.disabled = this.#operationBusy;
     this.#close.disabled = this.#operationBusy;
@@ -839,10 +1163,75 @@ class TerminalDock {
     if (this.#state === "closed") {
       this.#title.textContent = "Stopped";
     }
+    this.#renderPanelVisibility();
   }
 
   #selectedProfileName(): string {
     return this.#profile.selectedOptions[0]?.textContent || "Terminal";
+  }
+
+  #setBoardHidden(hidden: boolean): void {
+    this.#boardHidden = hidden && this.#state !== "closed" && Boolean(this.#resources);
+    if (this.#boardHidden) this.#terminalHidden = false;
+    this.#renderPanelVisibility();
+  }
+
+  #setTerminalHidden(hidden: boolean): void {
+    this.#terminalHidden = hidden;
+    if (this.#terminalHidden) this.#boardHidden = false;
+    this.#renderPanelVisibility();
+  }
+
+  #renderPanelVisibility(): void {
+    this.#workArea.dataset.boardHidden = String(this.#boardHidden);
+    this.#workArea.dataset.terminalHidden = String(this.#terminalHidden);
+    this.#boardToggle.setAttribute("aria-pressed", String(this.#boardHidden));
+    this.#terminalToggle.setAttribute("aria-pressed", String(this.#terminalHidden));
+    const boardLabel = this.#boardHidden ? "Show board panel" : "Hide board panel";
+    const terminalLabel = this.#terminalHidden
+      ? "Show terminal panel"
+      : "Hide terminal panel";
+    this.#boardToggle.setAttribute("aria-label", boardLabel);
+    this.#boardToggle.title = boardLabel;
+    this.#terminalToggle.setAttribute("aria-label", terminalLabel);
+    this.#terminalToggle.title = terminalLabel;
+    this.#separator.tabIndex = this.#boardHidden || this.#terminalHidden ? -1 : 0;
+    if (this.#boardHidden || this.#terminalHidden) this.#dragCleanup?.();
+    const resources = this.#resources;
+    if (!resources || resources.disposed || this.#terminalHidden) return;
+    if (resources.animationFrame !== null) cancelAnimationFrame(resources.animationFrame);
+    resources.animationFrame = requestAnimationFrame(() => {
+      resources.animationFrame = null;
+      this.#fit(resources, true);
+      this.#scheduleWebglRecovery(resources, this.#generation);
+      resources.terminal.focus();
+    });
+  }
+
+  #setModernUnicode(enabled: boolean): void {
+    const resources = this.#resources;
+    try {
+      if (resources && enabled && !resources.unicode) {
+        const unicode = new UnicodeGraphemesAddon();
+        resources.terminal.loadAddon(unicode);
+        resources.unicode = unicode;
+      } else if (resources && !enabled && resources.unicode) {
+        resources.unicode.dispose();
+        resources.unicode = null;
+      }
+    } catch (error) {
+      this.#modernUnicode.checked = this.#modernUnicodeEnabled;
+      this.#showError(error);
+      return;
+    }
+
+    this.#modernUnicodeEnabled = enabled;
+    this.#modernUnicode.checked = enabled;
+    writeModernUnicodeSetting(localStorage, enabled);
+    if (resources && !resources.disposed) {
+      resources.terminal.refresh(0, resources.terminal.rows - 1);
+      resources.terminal.focus();
+    }
   }
 
   #maximumDockHeight(): number {
@@ -935,6 +1324,13 @@ class TerminalDock {
     if (this.#disposed) return;
     this.#disposed = true;
     this.#teardownPane();
+    this.#boardHidden = false;
+    this.#terminalHidden = false;
+    this.#renderPanelVisibility();
+    this.#boardToggle.disabled = true;
+    this.#terminalToggle.disabled = true;
+    this.#searchOpen.disabled = true;
+    this.#clear.disabled = true;
     this.#dragCleanup?.();
     this.#finishPasteConfirmation(false);
     this.#hideContextMenu();
