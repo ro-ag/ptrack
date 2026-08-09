@@ -462,6 +462,7 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
+[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.19.0...HEAD
 [0.19.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.19.0
 [0.18.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.18.0
 [0.17.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.17.0
