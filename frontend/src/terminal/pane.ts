@@ -981,6 +981,7 @@ class TerminalDock {
       const webgl = new WebglAddon();
       resources.terminal.loadAddon(webgl);
       resources.webgl = webgl;
+      resources.webglRecoveryAttempts = 0;
       const contextLoss = webgl.onContextLoss(() => {
         contextLoss.dispose();
         if (resources.webgl === webgl) resources.webgl = null;
