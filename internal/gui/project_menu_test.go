@@ -49,4 +49,29 @@ func TestProjectWorkspaceMenuExposesLifecycleActions(t *testing.T) {
 			t.Fatalf("event %d = %q, want %q", index, events[index], want)
 		}
 	}
+
+	var settingsMenu *menu.Menu
+	for _, item := range applicationMenu.Items {
+		if item.Label == "Settings" {
+			settingsMenu = item.SubMenu
+			break
+		}
+	}
+	if settingsMenu == nil {
+		t.Fatal("Settings menu is missing")
+	}
+	foundCapabilities := false
+	for _, item := range settingsMenu.Items {
+		if item.Label == "Network Capabilities…" {
+			foundCapabilities = true
+			item.Click(&menu.CallbackData{MenuItem: item})
+			break
+		}
+	}
+	if !foundCapabilities {
+		t.Fatal("Network Capabilities menu item is missing")
+	}
+	if got := events[len(events)-1]; got != capabilitiesMenuEvent {
+		t.Fatalf("capabilities event = %q, want %q", got, capabilitiesMenuEvent)
+	}
 }

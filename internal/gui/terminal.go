@@ -71,6 +71,10 @@ type terminalManager interface {
 	Shutdown(context.Context) error
 }
 
+type terminalEnvironmentManager interface {
+	CreateWithEnv(profileID, cwd string, rows, columns int, environment map[string]string) (managedTerminalSession, error)
+}
+
 type terminalEventEmitter func(context.Context, string, any)
 
 type productionTerminalManager struct {
@@ -88,6 +92,24 @@ func (m productionTerminalManager) Create(
 	columns int,
 ) (managedTerminalSession, error) {
 	session, err := m.manager.Create(profileID, cwd, rows, columns)
+	return m.wrapSession(session, err)
+}
+
+func (m productionTerminalManager) CreateWithEnv(
+	profileID string,
+	cwd string,
+	rows int,
+	columns int,
+	environment map[string]string,
+) (managedTerminalSession, error) {
+	session, err := m.manager.CreateWithEnv(profileID, cwd, rows, columns, environment)
+	return m.wrapSession(session, err)
+}
+
+func (m productionTerminalManager) wrapSession(
+	session *terminal.Session,
+	err error,
+) (managedTerminalSession, error) {
 	if err != nil {
 		return managedTerminalSession{}, err
 	}
@@ -241,9 +263,47 @@ func (a *App) CreateTerminalV2(
 	if cwd == "" {
 		cwd = workspace.root
 	}
-	session, err := manager.Create(profileID, cwd, rows, columns)
+	var capabilityToken string
+	if broker := workspace.capabilityBroker(); broker != nil {
+		isAgent, profileErr := terminalProfileIsAgent(manager, profileID)
+		if profileErr != nil {
+			return TerminalSessionV2{}, profileErr
+		}
+		if isAgent {
+			capabilityToken, err = broker.IssueSessionToken(profileID)
+			if err != nil {
+				return TerminalSessionV2{}, err
+			}
+		}
+	}
+	var session managedTerminalSession
+	if capabilityToken != "" {
+		environmentManager, ok := manager.(terminalEnvironmentManager)
+		if !ok {
+			workspace.capabilityBroker().RevokeToken(capabilityToken)
+			return TerminalSessionV2{}, errors.New("terminal manager cannot inject capability identity")
+		}
+		session, err = environmentManager.CreateWithEnv(profileID, cwd, rows, columns, map[string]string{
+			"PTRACK_CAPABILITY_TOKEN":      capabilityToken,
+			"PTRACK_CAPABILITY_PROJECT":    workspace.root,
+			"PTRACK_CAPABILITY_GENERATION": fmt.Sprint(workspace.Generation()),
+			"PTRACK_CAPABILITY_PROFILE":    profileID,
+		})
+	} else {
+		session, err = manager.Create(profileID, cwd, rows, columns)
+	}
 	if err != nil {
+		if capabilityToken != "" {
+			workspace.capabilityBroker().RevokeToken(capabilityToken)
+		}
 		return TerminalSessionV2{}, err
+	}
+	if capabilityToken != "" {
+		if err := workspace.capabilityBroker().BindSession(capabilityToken, session.SessionID); err != nil {
+			workspace.capabilityBroker().RevokeToken(capabilityToken)
+			closeErr := manager.Close(session.SessionID, true)
+			return TerminalSessionV2{}, errors.Join(err, closeErr)
+		}
 	}
 	result := TerminalSessionV2{
 		Generation: workspace.Generation(),
@@ -270,6 +330,9 @@ func (a *App) CreateTerminalV2(
 				CWD:        session.CWD,
 			}); registerErr != nil {
 				workspace.removeTerminal(session.SessionID)
+				if broker := workspace.capabilityBroker(); broker != nil {
+					broker.RevokeSession(session.SessionID)
+				}
 				closeErr := manager.Close(session.SessionID, true)
 				return TerminalSessionV2{}, errors.Join(registerErr, closeErr)
 			}
@@ -323,6 +386,11 @@ func (a *App) CloseTerminalV2(
 	defer release()
 	if manager == nil {
 		return errors.New("terminal manager is unavailable")
+	}
+	// Revoke the broker identity before asking the PTY manager to close. A
+	// failed or delayed process close must never leave network authority live.
+	if broker := workspace.capabilityBroker(); broker != nil {
+		broker.RevokeSession(sessionID)
 	}
 	if err := manager.Close(sessionID, force); err != nil {
 		return err
@@ -467,6 +535,9 @@ func (a *App) monitorTerminalExit(
 				return
 			}
 			workspace.removeTerminal(sessionID)
+			if broker := workspace.capabilityBroker(); broker != nil {
+				broker.RevokeSession(sessionID)
+			}
 			exit := TerminalExit{
 				Generation: workspace.Generation(),
 				SessionID:  sessionID,
@@ -487,6 +558,19 @@ func (a *App) monitorTerminalExit(
 		case <-workspace.Context().Done():
 		}
 	}()
+}
+
+func terminalProfileIsAgent(manager terminalManager, profileID string) (bool, error) {
+	profiles, err := manager.Profiles()
+	if err != nil {
+		return false, fmt.Errorf("resolve terminal profile for capability identity: %w", err)
+	}
+	for _, profile := range profiles {
+		if profile.ID == profileID {
+			return profile.Kind == terminal.ProfileAgent, nil
+		}
+	}
+	return false, fmt.Errorf("terminal profile %q is unavailable", profileID)
 }
 
 func (a *App) beginTerminalOperation(

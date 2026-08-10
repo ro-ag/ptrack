@@ -111,9 +111,19 @@ func (r *workspaceAgentResources) Shutdown(ctx context.Context) error {
 
 func (w *WorkspaceContext) activate() error {
 	if resources, ok := w.agents.(interface{ Activate(uint64) error }); ok {
+		if err := resources.Activate(w.Generation()); err != nil {
+			return err
+		}
+	}
+	if resources, ok := w.capabilities.(interface{ Activate(uint64) error }); ok {
 		return resources.Activate(w.Generation())
 	}
 	return nil
+}
+
+func (w *WorkspaceContext) capabilityBroker() workspaceCapabilityBroker {
+	broker, _ := w.capabilities.(workspaceCapabilityBroker)
+	return broker
 }
 
 func (w *WorkspaceContext) agentRegistry() workspaceAgentRegistry {

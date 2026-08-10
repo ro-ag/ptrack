@@ -49,6 +49,13 @@
             title="Overview — ⌘2"
             disabled
           >Overview</button>
+          <button
+            id="nav-settings"
+            class="sidebar-nav-item"
+            type="button"
+            title="Capabilities — ⌘3"
+            disabled
+          >Capabilities</button>
         </nav>
 
         <div class="sidebar-plans">
@@ -472,6 +479,132 @@
               <div id="overview-blockers" class="intelligence-list"></div>
               <div id="overview-notes" class="intelligence-list"></div>
             </details>
+          </div>
+        </section>
+
+        <section
+          id="settings-page"
+          class="settings-page"
+          aria-label="Capability settings"
+          hidden
+        >
+          <header class="overview-heading settings-heading">
+            <div>
+              <p class="eyebrow">Deny by default</p>
+              <h2>Network capabilities</h2>
+              <p class="settings-intro">
+                Grants apply only to p-track broker tools for one project and agent profile.
+                Normal terminal processes are not an OS-level network sandbox.
+              </p>
+            </div>
+            <button id="capability-new" type="button">Add capability</button>
+          </header>
+
+          <div class="settings-grid">
+            <section class="memory-section capability-editor">
+              <div class="section-heading">
+                <p id="capability-editor-title" class="section-label">New capability</p>
+                <button id="capability-clear" class="button-secondary" type="button">Clear</button>
+              </div>
+              <form id="capability-form" class="capability-form">
+                <input id="capability-id" type="hidden" value="0" />
+                <label>Name <input id="capability-name" required maxlength="128" /></label>
+                <label>Agent profile <input id="capability-profile" required value="agent-codex" /></label>
+                <label>Kind
+                  <select id="capability-kind">
+                    <option value="http">HTTP</option>
+                    <option value="git">Git</option>
+                    <option value="ssh">SSH</option>
+                  </select>
+                </label>
+                <div class="capability-row">
+                  <label>Approval minutes <input id="capability-duration" type="number" min="1" max="43200" value="60" /></label>
+                  <label>Timeout seconds <input id="capability-timeout" type="number" min="1" max="300" value="30" /></label>
+                  <label>Max response bytes <input id="capability-response-limit" type="number" min="1" value="4194304" /></label>
+                </div>
+                <div class="capability-row">
+                  <label>Max request bytes <input id="capability-request-limit" type="number" min="1" value="1048576" /></label>
+                  <label>Max output bytes <input id="capability-output-limit" type="number" min="1" value="1048576" /></label>
+                  <label>Concurrency <input id="capability-concurrency" type="number" min="1" max="8" value="1" /></label>
+                </div>
+                <div class="capability-row">
+                  <label>Redirects <input id="capability-redirects" type="number" min="0" max="10" value="3" /></label>
+                  <label>Audit records <input id="capability-audit-retain" type="number" min="0" max="1000" value="100" /></label>
+                  <label class="capability-check"><input id="capability-audit" type="checkbox" checked /> Audit metadata</label>
+                </div>
+
+                <fieldset id="capability-http-fields" class="capability-scope-fields">
+                  <legend>HTTP scope</legend>
+                  <label>Base URL <input id="capability-http-url" placeholder="https://api.example.com/v1" /></label>
+                  <label>Allowed methods <input id="capability-http-methods" value="GET" placeholder="GET, POST" /></label>
+                  <label>Path prefixes <textarea id="capability-http-paths" rows="2" placeholder="/v1"></textarea></label>
+                </fieldset>
+
+                <fieldset id="capability-git-fields" class="capability-scope-fields" hidden>
+                  <legend>Git scope</legend>
+                  <div class="capability-row">
+                    <label>Remote name <input id="capability-git-name" value="origin" /></label>
+                    <label>Remote URL <input id="capability-git-url" placeholder="https://example.com/org/repo.git" /></label>
+                    <label>SSH capability ID <input id="capability-git-ssh-id" type="number" min="0" value="0" /></label>
+                  </div>
+                  <label>Operations <input id="capability-git-operations" value="status, fetch" placeholder="status, fetch, pull, push" /></label>
+                  <label>Branches <input id="capability-git-branches" value="main" /></label>
+                  <label>Exact refspecs <textarea id="capability-git-refspecs" rows="2"></textarea></label>
+                  <div class="capability-checks">
+                    <label><input id="capability-git-tags" type="checkbox" /> Tag writes</label>
+                    <label><input id="capability-git-force" type="checkbox" /> Force-with-lease</label>
+                    <label><input id="capability-git-delete" type="checkbox" /> Ref deletion</label>
+                  </div>
+                </fieldset>
+
+                <fieldset id="capability-ssh-fields" class="capability-scope-fields" hidden>
+                  <legend>SSH scope</legend>
+                  <div class="capability-row">
+                    <label>Alias <input id="capability-ssh-alias" /></label>
+                    <label>Host <input id="capability-ssh-host" placeholder="host.example.com" /></label>
+                    <label>Port <input id="capability-ssh-port" type="number" min="1" max="65535" value="22" /></label>
+                    <label>User <input id="capability-ssh-user" /></label>
+                  </div>
+                  <label>Pinned host public key <textarea id="capability-ssh-key" rows="2" placeholder="ssh-ed25519 AAAA…"></textarea></label>
+                  <label>Exact remote commands <textarea id="capability-ssh-commands" rows="2"></textarea></label>
+                  <div class="capability-checks">
+                    <label><input id="capability-ssh-git" type="checkbox" /> Git-over-SSH</label>
+                    <label><input id="capability-ssh-upload" type="checkbox" /> Upload</label>
+                    <label><input id="capability-ssh-download" type="checkbox" /> Download</label>
+                    <label title="Interactive shells cannot be transported safely through the broker"><input id="capability-ssh-shell" type="checkbox" disabled /> Interactive shell unavailable</label>
+                  </div>
+                  <div class="capability-row">
+                    <label>Upload local roots <input id="capability-ssh-upload-local" placeholder="dist" /></label>
+                    <label>Upload remote roots <input id="capability-ssh-upload-remote" placeholder="/srv/app" /></label>
+                    <label>Download local roots <input id="capability-ssh-download-local" placeholder="artifacts" /></label>
+                    <label>Download remote roots <input id="capability-ssh-download-remote" placeholder="/srv/artifacts" /></label>
+                  </div>
+                  <label>Local forward targets <input id="capability-ssh-local-forward" placeholder="db.internal:5432" /></label>
+                  <label>Remote forward targets <input id="capability-ssh-remote-forward" placeholder="localhost:8080" /></label>
+                </fieldset>
+
+                <div class="capability-editor-actions">
+                  <button id="capability-preview" class="button-secondary" type="button">Preview scope</button>
+                  <button id="capability-test" class="button-secondary" type="button">Test connection</button>
+                  <button id="capability-save" type="submit">Save draft</button>
+                </div>
+              </form>
+              <div id="capability-preview-result" class="capability-preview" hidden>
+                <p class="section-label">Effective approved scope</p>
+                <code id="capability-effective-scope"></code>
+                <p id="capability-risk-summary" class="settings-warning"></p>
+                <p id="capability-diagnostic" class="intelligence-meta"></p>
+              </div>
+            </section>
+
+            <section class="memory-section capability-list-section">
+              <div class="section-heading">
+                <p class="section-label">Project capabilities</p>
+                <span id="capability-total" class="section-count">0</span>
+              </div>
+              <div id="capability-list" class="capability-list"></div>
+              <div id="capability-audit-list" class="capability-audit-list" hidden></div>
+            </section>
           </div>
         </section>
       </div>

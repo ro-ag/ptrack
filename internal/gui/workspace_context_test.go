@@ -109,16 +109,18 @@ func TestWorkspaceContextCloseCallerCanTimeOutThenObserveEventualCleanup(t *test
 func TestWorkspaceContextCloseJoinsResourceErrors(t *testing.T) {
 	terminalErr := errors.New("terminal cleanup")
 	agentErr := errors.New("agent cleanup")
+	capabilityErr := errors.New("capability cleanup")
 	workspace := newWorkspaceContext(workspaceContextConfig{
-		generation: 1,
-		root:       t.TempDir(),
-		dbPath:     "test.db",
-		terminals:  &countingWorkspaceTerminalManager{shutdownErr: terminalErr},
-		agents:     fakeWorkspaceAgentResource{shutdownErr: agentErr},
+		generation:   1,
+		root:         t.TempDir(),
+		dbPath:       "test.db",
+		terminals:    &countingWorkspaceTerminalManager{shutdownErr: terminalErr},
+		agents:       fakeWorkspaceAgentResource{shutdownErr: agentErr},
+		capabilities: fakeWorkspaceAgentResource{shutdownErr: capabilityErr},
 	})
 	err := workspace.Close(context.Background())
-	if !errors.Is(err, terminalErr) || !errors.Is(err, agentErr) {
-		t.Fatalf("Close error = %v, want joined terminal and agent errors", err)
+	if !errors.Is(err, terminalErr) || !errors.Is(err, agentErr) || !errors.Is(err, capabilityErr) {
+		t.Fatalf("Close error = %v, want joined terminal, agent, and capability errors", err)
 	}
 }
 

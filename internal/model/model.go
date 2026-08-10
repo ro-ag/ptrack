@@ -23,6 +23,9 @@ type IssueStatus string
 // Severity ranks an Issue's importance.
 type Severity string
 
+// CapabilityKind identifies the host service controlled by a capability.
+type CapabilityKind string
+
 const (
 	// PlanActive marks a plan currently being worked on.
 	PlanActive PlanStatus = "active"
@@ -62,7 +65,19 @@ const (
 	SeverityMedium   Severity = "medium"
 	SeverityHigh     Severity = "high"
 	SeverityCritical Severity = "critical"
+
+	// CapabilityHTTP grants a bounded HTTP request scope.
+	CapabilityHTTP CapabilityKind = "http"
+	// CapabilityGit grants bounded operations against one configured Git remote.
+	CapabilityGit CapabilityKind = "git"
+	// CapabilitySSH grants bounded SSH operations against one pinned host.
+	CapabilitySSH CapabilityKind = "ssh"
 )
+
+// CapabilityModelVersion is the version of the capability record contract.
+// It is independent of the project database format so records can be rejected
+// or migrated individually in the future.
+const CapabilityModelVersion uint = 1
 
 // Meta is the singleton per-project record: the north-star goal, a rolling
 // context summary maintained across sessions, and the currently active plan.
@@ -147,6 +162,114 @@ type Note struct {
 	TargetID  uint64
 	Body      string
 	CreatedAt time.Time
+}
+
+// CapabilityLimits bounds host work even after a capability has been enabled.
+// Missing byte/time/concurrency values receive safe defaults during
+// normalization. A zero redirect limit is an explicit deny-all-redirects
+// policy.
+type CapabilityLimits struct {
+	TimeoutSeconds   int   `json:"timeout_seconds"`
+	MaxRequestBytes  int64 `json:"max_request_bytes"`
+	MaxResponseBytes int64 `json:"max_response_bytes"`
+	MaxOutputBytes   int64 `json:"max_output_bytes"`
+	MaxRedirects     int   `json:"max_redirects"`
+	MaxConcurrent    int   `json:"max_concurrent"`
+}
+
+// CapabilityAuditPolicy controls bounded metadata retention. Audit records
+// never contain request/response bodies, headers, credentials, terminal
+// contents, or raw secret-bearing arguments.
+type CapabilityAuditPolicy struct {
+	Enabled    bool `json:"enabled"`
+	RetainLast int  `json:"retain_last"`
+}
+
+// HTTPScope grants methods and path prefixes beneath one normalized base URL.
+type HTTPScope struct {
+	BaseURL      string   `json:"base_url"`
+	Methods      []string `json:"methods"`
+	PathPrefixes []string `json:"path_prefixes"`
+}
+
+// GitScope grants named operations against one exact normalized remote URL.
+type GitScope struct {
+	RemoteName      string   `json:"remote_name"`
+	RemoteURL       string   `json:"remote_url"`
+	Operations      []string `json:"operations"`
+	Branches        []string `json:"branches"`
+	Refspecs        []string `json:"refspecs"`
+	AllowTags       bool     `json:"allow_tags"`
+	AllowForcePush  bool     `json:"allow_force_push"`
+	AllowDeleteRefs bool     `json:"allow_delete_refs"`
+}
+
+// SSHScope grants access to one host identity. HostKey is a known_hosts-style
+// public key (for example "ssh-ed25519 AAAA...") used with strict checking.
+// High-risk operations remain independent and false by default. The
+// interactive-shell field is reserved for a future duplex broker transport;
+// current normalization rejects it.
+type SSHScope struct {
+	Alias                 string   `json:"alias"`
+	Host                  string   `json:"host"`
+	Port                  uint16   `json:"port"`
+	User                  string   `json:"user"`
+	HostKey               string   `json:"host_key"`
+	AllowGit              bool     `json:"allow_git"`
+	RemoteCommands        []string `json:"remote_commands"`
+	AllowUpload           bool     `json:"allow_upload"`
+	AllowDownload         bool     `json:"allow_download"`
+	UploadRoots           []string `json:"upload_roots"`
+	DownloadRoots         []string `json:"download_roots"`
+	UploadRemoteRoots     []string `json:"upload_remote_roots"`
+	DownloadRemoteRoots   []string `json:"download_remote_roots"`
+	AllowInteractiveShell bool     `json:"allow_interactive_shell"`
+	LocalForwardTargets   []string `json:"local_forward_targets"`
+	RemoteForwardTargets  []string `json:"remote_forward_targets"`
+}
+
+// Capability is a project-local, agent-profile-scoped host grant. A record is
+// usable only when Enabled is true, its approval has not expired, its profile
+// exactly matches the caller, and the kind-specific scope authorizes the
+// requested operation.
+type Capability struct {
+	ID                      uint64                `json:"id"`
+	ModelVersion            uint                  `json:"model_version"`
+	Revision                uint64                `json:"revision"`
+	Name                    string                `json:"name"`
+	Kind                    CapabilityKind        `json:"kind"`
+	AgentProfile            string                `json:"agent_profile"`
+	Enabled                 bool                  `json:"enabled"`
+	ApprovalDurationSeconds int64                 `json:"approval_duration_seconds"`
+	ApprovedAt              time.Time             `json:"approved_at"`
+	ExpiresAt               time.Time             `json:"expires_at"`
+	ScopeDigest             string                `json:"scope_digest"`
+	Limits                  CapabilityLimits      `json:"limits"`
+	Audit                   CapabilityAuditPolicy `json:"audit"`
+	HTTP                    *HTTPScope            `json:"http,omitempty"`
+	Git                     *GitScope             `json:"git,omitempty"`
+	SSH                     *SSHScope             `json:"ssh,omitempty"`
+	CreatedAt               time.Time             `json:"created_at"`
+	UpdatedAt               time.Time             `json:"updated_at"`
+}
+
+// CapabilityAudit is deliberately metadata-only. Target is the normalized,
+// non-secret scope target (host, remote, or HTTP origin). Diagnostic detail stays
+// transient; only an allowlisted error class may be persisted.
+type CapabilityAudit struct {
+	ID             uint64         `json:"id"`
+	CapabilityID   uint64         `json:"capability_id"`
+	AgentProfile   string         `json:"agent_profile"`
+	Kind           CapabilityKind `json:"kind"`
+	Operation      string         `json:"operation"`
+	Target         string         `json:"target"`
+	Success        bool           `json:"success"`
+	ErrorClass     string         `json:"error_class"`
+	DurationMillis int64          `json:"duration_millis"`
+	RequestBytes   int64          `json:"request_bytes"`
+	ResponseBytes  int64          `json:"response_bytes"`
+	Redirects      int            `json:"redirects"`
+	CreatedAt      time.Time      `json:"created_at"`
 }
 
 // ProjectRef is a global-registry entry pointing at a known project directory.

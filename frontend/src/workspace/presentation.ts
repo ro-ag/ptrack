@@ -128,7 +128,7 @@ export function shortcutIntent(
 // input, a modal, or the terminal.
 export function commandShortcut(
   input: ShortcutInput,
-): "palette" | "board" | "overview" | "addTask" | null {
+): "palette" | "board" | "overview" | "settings" | "addTask" | null {
   if (
     input.composing ||
     input.repeat ||
@@ -141,6 +141,7 @@ export function commandShortcut(
   if (input.shift) return null;
   if (key === "1") return "board";
   if (key === "2") return "overview";
+  if (key === "3") return "settings";
   if (key === "n") return "addTask";
   return null;
 }
