@@ -43,7 +43,7 @@ func Run(startPath string, initialPlan uint64, assets fs.FS) error {
 	defer app.onShutdown(context.Background())
 
 	return wails.Run(&options.App{
-		Title:     "P-TRACK Project Workspace",
+		Title:     "p-track Project Workspace",
 		Width:     1440,
 		Height:    900,
 		MinWidth:  880,

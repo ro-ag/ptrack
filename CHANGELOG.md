@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- The product display name is consistently styled as `p-track` across the
+  desktop app, CLI prose, documentation, terminal environment, and release
+  artifacts. The all-caps form remains reserved for terminal wordmark artwork.
+
 ## [0.19.0] - 2026-08-09
 
 ### Added
@@ -121,9 +126,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - macOS app bundles are now properly packaged: `build/darwin/Info.plist` with
   bundle id `com.ro-ag.ptrack`, display name, developer-tools category, macOS
   12.0 minimum, and hardened-runtime `entitlements.plist` ready for signed
-  releases. `make package` builds `P-TRACK.app` and `make dmg` builds a disk
-  image with an `/Applications` drop link; the release workflow ships
-  `P-TRACK_<version>_darwin_<arch>.dmg` for both architectures.
+  releases. `make package` builds the macOS app bundle and `make dmg` builds a
+  disk image with an `/Applications` drop link for both architectures.
 - Developer ID signing: `make sign` / `make signed-dmg` sign locally with the
   identity fingerprint in `SIGN_IDENTITY`, and the release workflow imports
   the certificate into a throwaway keychain and signs the app, the disk image,
@@ -159,7 +163,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   welcome screen with recent projects, and confirmation before transitions
   stop active terminals or registered agent runs.
 - A bounded project overview combines goals, plans, tasks, blockers, issues,
-  notes, recent P-TRACK activity, storage health, terminal sessions, and
+  notes, recent p-track activity, storage health, terminal sessions, and
   explicit agent-run registrations.
 - Read-only Git intelligence reports repository state, worktrees, status
   counts, upstream divergence, remotes, branches, recent commits, unpushed
@@ -257,7 +261,7 @@ recovery also remains open.
 ## [0.11.0] - 2026-07-17
 
 ### Added
-- A focused launch screen for bare `ptrack`, featuring the P-TRACK Unicode
+- A focused launch screen for bare `ptrack`, featuring the p-track Unicode
   block wordmark, a compact narrow-terminal fallback, and direct shortcuts to
   the dashboard, numbered screens, command menu, and quit action.
 - A keyboard-driven command menu (`?`) that makes navigation, goal and summary
@@ -274,7 +278,7 @@ recovery also remains open.
   and Maintenance.
 - The README has been reorganized around human and agent workflows, with a
   complete keyboard map, command reference, and storage guide.
-- CLI help and the no-project hint now use the P-TRACK product identity and
+- CLI help and the no-project hint now use the p-track product identity and
   clearer getting-started language.
 
 ### Fixed

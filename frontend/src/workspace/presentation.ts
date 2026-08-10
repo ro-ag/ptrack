@@ -12,9 +12,9 @@ export function workspaceStateCopy(
 ): WorkspaceCopy {
   const copy: Record<WorkspaceStatus, WorkspaceCopy> = {
     welcome: {
-      eyebrow: "P-TRACK projects",
+      eyebrow: "p-track projects",
       heading: "Choose a project",
-      detail: "Open a directory containing a P-TRACK project to begin.",
+      detail: "Open a directory containing a p-track project to begin.",
     },
     loading: {
       eyebrow: "Project workspace",

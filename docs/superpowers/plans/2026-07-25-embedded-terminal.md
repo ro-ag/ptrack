@@ -1,4 +1,4 @@
-# P-TRACK Embedded Terminal Implementation Plan
+# p-track Embedded Terminal Implementation Plan
 
 > Execute this plan task by task. Use test-first implementation for the Go
 > session/transport layer and pure workspace-state logic. Stop after the Stage A
@@ -123,13 +123,13 @@ executable, argument array, environment array, CWD, rows, and columns.
 - [ ] Add built-in profile discovery for the platform's default shell and
   installed supported agent executables. Discovery reports only tools already
   present on `PATH`.
-- [ ] Define a P-TRACK-owned PTY/process interface and fake implementation for
+- [ ] Define a p-track-owned PTY/process interface and fake implementation for
   deterministic tests.
 - [ ] Implement the adapter with `github.com/aymanbagabas/go-pty` v0.2.3.
 - [ ] Set `TERM=xterm-256color`, `COLORTERM=truecolor`, and
-  `TERM_PROGRAM=P-TRACK` unless the profile explicitly supplies a safe
+  `TERM_PROGRAM=p-track` unless the profile explicitly supplies a safe
   override.
-- [ ] Resolve the default CWD to the P-TRACK project root; reject missing or
+- [ ] Resolve the default CWD to the p-track project root; reject missing or
   non-directory CWD values.
 - [ ] Ensure profile launches call `Command(executable, args...)` directly
   rather than invoking a shell wrapper.

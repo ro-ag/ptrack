@@ -1,4 +1,4 @@
-# P-TRACK Project Workspace Implementation Plan
+# p-track Project Workspace Implementation Plan
 
 **Date:** 2026-07-26
 **Design:** `../specs/2026-07-26-project-workspace-design.md`
@@ -259,7 +259,7 @@
 
 Exercise:
 
-- launch in and outside a P-TRACK project;
+- launch in and outside a p-track project;
 - native Open/Switch selection and cancel;
 - recent-project keyboard navigation;
 - close/switch with running terminal and AgentRun confirmation;

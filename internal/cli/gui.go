@@ -7,7 +7,7 @@ import "github.com/spf13/cobra"
 func newGUICmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "gui [PATH]",
-		Short: "Open the P-TRACK desktop project workspace",
+		Short: "Open the p-track desktop project workspace",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			path := ""

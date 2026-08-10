@@ -284,7 +284,7 @@ func buildEnvironmentForOS(base []string, overrides map[string]string, goos stri
 
 	set("TERM", "xterm-256color")
 	set("COLORTERM", "truecolor")
-	set("TERM_PROGRAM", "P-TRACK")
+	set("TERM_PROGRAM", "p-track")
 	for key, value := range overrides {
 		if !safeEnvironmentEntry(key, value) {
 			return nil, fmt.Errorf("unsafe environment override %q", key)

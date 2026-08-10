@@ -28,8 +28,8 @@ func defaultRunNoArgs() error {
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "ptrack",
-		Short: "P-TRACK keeps project plans alive across human and AI sessions",
-		Long: "P-TRACK keeps project plans alive across human and AI sessions. It stores\n" +
+		Short: "p-track keeps project plans alive across human and AI sessions",
+		Long: "p-track keeps project plans alive across human and AI sessions. It stores\n" +
 			"goals, plans, tasks, issues, milestones, notes, and commit context in an embedded\n" +
 			"bbolt database so a fresh agent can reload project context. Every subcommand is\n" +
 			"non-interactive and exits non-zero on error.",

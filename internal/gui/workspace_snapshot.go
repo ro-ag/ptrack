@@ -228,10 +228,10 @@ func inspectProjectStorage(dbPath string, meta model.Meta) ProjectStorage {
 		storage.SizeBytes = info.Size()
 	case errors.Is(err, os.ErrNotExist):
 		storage.Status = SnapshotError
-		storage.Error = "P-TRACK database is missing"
+		storage.Error = "p-track database is missing"
 	default:
 		storage.Status = SnapshotError
-		storage.Error = "P-TRACK database status is unavailable"
+		storage.Error = "p-track database status is unavailable"
 	}
 	return storage
 }

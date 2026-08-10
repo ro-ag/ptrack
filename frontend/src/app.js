@@ -864,8 +864,8 @@ function renderIntelligence() {
   elements.projectRoot.textContent = project.root;
   const storage = project.storage;
   elements.storageStatus.textContent = storage.exists
-    ? `P-TRACK format v${storage.formatVersion} · ${compactBytes(storage.sizeBytes)} · writer ${storage.lastWriteVersion || "unknown"}`
-    : storage.error || "P-TRACK storage unavailable";
+    ? `p-track format v${storage.formatVersion} · ${compactBytes(storage.sizeBytes)} · writer ${storage.lastWriteVersion || "unknown"}`
+    : storage.error || "p-track storage unavailable";
   elements.snapshotBounds.replaceChildren();
   for (const [label, bound] of Object.entries(tracking.bounds || {})) {
     elements.snapshotBounds.append(
@@ -1149,7 +1149,7 @@ function openRename(task) {
 function openMemory(task) {
   dialogMode = "memory";
   editingTask = task;
-  elements.dialogEyebrow.textContent = "P-TRACK memory";
+  elements.dialogEyebrow.textContent = "p-track memory";
   elements.dialogHeading.textContent = `Record context for task #${task.id}`;
   elements.dialogLabel.textContent = "Decision or observation";
   elements.dialogLabel.htmlFor = "dialog-note";

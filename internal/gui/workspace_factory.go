@@ -87,7 +87,7 @@ func (a *App) PickProjectDirectory() (string, error) {
 	}
 	return wailsruntime.OpenDirectoryDialog(ctx, wailsruntime.OpenDialogOptions{
 		DefaultDirectory:     defaultDirectory,
-		Title:                "Open P-TRACK Project",
+		Title:                "Open p-track Project",
 		CanCreateDirectories: false,
 		ResolvesAliases:      true,
 	})

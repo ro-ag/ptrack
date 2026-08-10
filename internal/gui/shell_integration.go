@@ -10,7 +10,7 @@ import (
 )
 
 // Managed block markers in ~/.zprofile. Everything between them belongs to
-// P-TRACK and is rewritten or detected as a whole, so repeated installs are
+// p-track and is rewritten or detected as a whole, so repeated installs are
 // idempotent and never duplicate the PATH entry.
 const (
 	shellPathMarkerBegin = "# >>> ptrack cli >>>"
@@ -92,7 +92,7 @@ func ensureShellPath(profile, binDir string) (bool, error) {
 		block.WriteString("\n")
 	}
 	block.WriteString(shellPathMarkerBegin + "\n")
-	block.WriteString("# Added by P-TRACK: makes the `ptrack` CLI available in new terminal sessions.\n")
+	block.WriteString("# Added by p-track: makes the `ptrack` CLI available in new terminal sessions.\n")
 	block.WriteString(fmt.Sprintf("export PATH=\"$PATH:%s\"\n", binDir))
 	block.WriteString(shellPathMarkerEnd + "\n")
 	file, err := os.OpenFile(profile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)

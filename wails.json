@@ -1,6 +1,6 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "P-TRACK",
+  "name": "p-track",
   "outputfilename": "ptrack",
   "frontend:dir": "frontend",
   "frontend:install": "npm ci",
@@ -12,7 +12,7 @@
     "name": "ro-ag"
   },
   "info": {
-    "productName": "P-TRACK",
+    "productName": "p-track",
     "productVersion": "0.19.0",
     "companyName": "ro-ag",
     "copyright": "© 2026 ro-ag. Licensed under the Apache License, Version 2.0.",

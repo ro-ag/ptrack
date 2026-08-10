@@ -20,7 +20,7 @@ becoming a public plug-in system.
 Tauri WebView
     | commands and ordered channels
     v
-Rust P-TRACK host
+Rust p-track host
     |- project/application services
     |- PTY and shell ownership
     |- presentation and renderer ownership
@@ -58,7 +58,7 @@ Services should move to Rust only when the move has a measured benefit.
 
 The first integration targets `libghostty-vt`, not an assumed embeddable
 Ghostty GUI widget. The library supplies terminal parsing, Unicode behavior,
-input encoding, terminal state, and renderer state; P-TRACK still owns drawing,
+input encoding, terminal state, and renderer state; p-track still owns drawing,
 window integration, selection UI, search UI, clipboard policy, IME, and
 accessibility.
 
@@ -105,7 +105,7 @@ boundary; it does not make arbitrary ABIs or native UI surfaces portable.
 
 Keep both changing dependencies behind narrow adapters: the `native-ipc`
 vNext session API is pre-1.0, and the libghostty API is not yet versioned.
-Protocol fixtures and compatibility tests should protect P-TRACK from changes
+Protocol fixtures and compatibility tests should protect p-track from changes
 on either side. The current Go/Wails build remains the production fallback
 until the Tauri host passes the complete desktop and terminal acceptance
 matrix.
