@@ -105,13 +105,17 @@ func notePlanID(note model.Note) uint64 {
 }
 
 func searchNoteTitle(note model.Note) string {
+	prefix := ""
+	if note.Kind != "" {
+		prefix = strings.ToUpper(string(note.Kind[:1])) + string(note.Kind[1:]) + " · "
+	}
 	switch note.Target {
 	case model.TargetPlan:
-		return "Plan note"
+		return prefix + "Plan note"
 	case model.TargetTask:
-		return "Task note"
+		return prefix + "Task note"
 	default:
-		return "Project note"
+		return prefix + "Project note"
 	}
 }
 

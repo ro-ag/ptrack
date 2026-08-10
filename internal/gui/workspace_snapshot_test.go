@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"testing"
 
 	"github.com/ro-ag/ptrack/internal/gitinfo"
@@ -112,7 +111,7 @@ func TestWorkspaceSnapshotTaskAssociationsAreNotLimitedToRecentActivity(t *testi
 }
 
 func TestWorkspaceSnapshotSupportsProjectWithoutActivePlan(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "ptrack.db")
+	dbPath := projectTestDBPath(t)
 	s, err := store.Open(dbPath)
 	if err != nil {
 		t.Fatalf("open store: %v", err)

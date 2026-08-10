@@ -53,6 +53,12 @@ type WorkspaceContext struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
+	// associationMu serializes terminal/AgentRun association transactions and
+	// authoritative runtime snapshots. It is intentionally separate from mu:
+	// association operations may call into independently locked resource
+	// managers and must never expose a half-updated linked pair.
+	associationMu   sync.Mutex
+	taskTransitions *taskTransitionChallengeRegistry
 
 	mu                 sync.Mutex
 	closing            bool
@@ -95,6 +101,7 @@ func newWorkspaceContext(config workspaceContextConfig) *WorkspaceContext {
 		operationsDone:   make(chan struct{}),
 		closeDone:        make(chan struct{}),
 		terminalSessions: make(map[string]TerminalSession),
+		taskTransitions:  newTaskTransitionChallengeRegistry(nil),
 	}
 }
 
@@ -238,6 +245,12 @@ func (w *WorkspaceContext) resourceRevisionValue() uint64 {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.resourceRevision
+}
+
+func (w *WorkspaceContext) pendingResourceAdmissions() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.resourceOperations
 }
 
 // Close starts teardown once. Each caller independently waits for completion

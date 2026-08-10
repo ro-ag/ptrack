@@ -191,6 +191,13 @@
                   <span id="status" class="board-status" aria-live="polite">
                     Connecting…
                   </span>
+                  <button
+                    id="plan-launch-agent"
+                    class="button-secondary"
+                    type="button"
+                    aria-label="Launch an installed agent for the selected plan"
+                    disabled
+                  >Launch agent</button>
                   <form id="add-form" class="add-form">
                     <input
                       id="task-title"
@@ -346,6 +353,22 @@
                     </svg>
                   </button>
                 </div>
+                <button
+                  id="terminal-link-context"
+                  class="button-secondary"
+                  type="button"
+                  aria-label="Link terminal context"
+                  title="Link terminal context"
+                  disabled
+                >Link context</button>
+                <button
+                  id="terminal-writeback"
+                  class="button-secondary"
+                  type="button"
+                  aria-label="Write terminal memory back to project"
+                  title="Write memory back"
+                  disabled
+                >Write back</button>
                 <button id="terminal-open" type="button">Open</button>
                 <button
                   id="terminal-restart"
@@ -499,11 +522,13 @@
 
             <section class="memory-section intelligence-section">
               <div class="section-heading">
-                <p class="section-label">Active sessions</p>
+                <p class="section-label">Runtime state</p>
                 <span id="runtime-total" class="section-count">0</span>
               </div>
-              <div id="terminal-sessions" class="intelligence-list"></div>
-              <div id="agent-runs" class="intelligence-list"></div>
+              <p class="intelligence-meta">Terminal sessions</p>
+              <div id="terminal-sessions" class="intelligence-list" aria-label="Terminal sessions"></div>
+              <p class="intelligence-meta">Agent runs</p>
+              <div id="agent-runs" class="intelligence-list" aria-label="Agent runs"></div>
             </section>
 
             <details class="memory-section intelligence-section">
@@ -750,8 +775,18 @@
           <button id="drawer-memory" class="button-secondary" type="button">
             Record memory
           </button>
+          <button id="drawer-launch-agent" class="button-secondary" type="button">
+            Launch agent
+          </button>
         </div>
         <div id="drawer-body" class="drawer-body">
+          <section class="drawer-section">
+            <div class="section-heading">
+              <p class="section-label">Linked runtime</p>
+              <span id="drawer-runtime-count" class="section-count">0</span>
+            </div>
+            <div id="drawer-runtime" class="drawer-list"></div>
+          </section>
           <section class="drawer-section">
             <div class="section-heading">
               <p class="section-label">Notes</p>
@@ -775,6 +810,193 @@
           </section>
         </div>
       </aside>
+    </div>
+
+    <div id="agent-launch-modal" class="modal" hidden>
+      <button
+        class="modal-backdrop"
+        type="button"
+        data-close-agent-launch
+        tabindex="-1"
+        aria-label="Cancel agent launch"
+      ></button>
+      <form
+        id="agent-launch-form"
+        class="dialog agent-launch-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="agent-launch-heading"
+        aria-describedby="agent-launch-detail agent-launch-message"
+      >
+        <p class="eyebrow">Linked terminal</p>
+        <h2 id="agent-launch-heading">Launch installed agent</h2>
+        <p id="agent-launch-detail" class="agent-launch-detail"></p>
+        <label for="agent-launch-profile">Installed agent profile</label>
+        <select id="agent-launch-profile" disabled></select>
+        <p id="agent-launch-message" class="dialog-help" aria-live="polite">
+          Discovering installed agent profiles…
+        </p>
+        <div class="dialog-actions">
+          <button
+            id="agent-launch-cancel"
+            class="button-secondary"
+            type="button"
+          >Cancel</button>
+          <button id="agent-launch-submit" type="submit" disabled>
+            Launch in new tab
+          </button>
+        </div>
+      </form>
+    </div>
+
+    <div id="terminal-association-modal" class="modal" hidden>
+      <button
+        class="modal-backdrop"
+        type="button"
+        data-close-terminal-association
+        tabindex="-1"
+        aria-label="Cancel terminal context change"
+      ></button>
+      <form
+        id="terminal-association-form"
+        class="dialog agent-launch-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="terminal-association-heading"
+        aria-describedby="terminal-association-detail terminal-association-message"
+      >
+        <p class="eyebrow">Active terminal tab</p>
+        <h2 id="terminal-association-heading">Link terminal context</h2>
+        <p id="terminal-association-detail" class="agent-launch-detail"></p>
+        <label for="terminal-association-target">Plan or task</label>
+        <select id="terminal-association-target" disabled></select>
+        <p
+          id="terminal-association-message"
+          class="dialog-help"
+          aria-live="polite"
+        >Choose the selected plan or one of its tasks.</p>
+        <div class="dialog-actions">
+          <button
+            id="terminal-association-detach"
+            class="button-secondary"
+            type="button"
+            disabled
+          >Detach</button>
+          <button
+            id="terminal-association-cancel"
+            class="button-secondary"
+            type="button"
+          >Cancel</button>
+          <button id="terminal-association-submit" type="submit" disabled>
+            Save link
+          </button>
+        </div>
+      </form>
+    </div>
+
+    <div id="terminal-writeback-modal" class="modal" hidden>
+      <button
+        class="modal-backdrop"
+        type="button"
+        data-close-terminal-writeback
+        tabindex="-1"
+        aria-label="Cancel terminal memory write-back"
+      ></button>
+      <form
+        id="terminal-writeback-form"
+        class="dialog terminal-writeback-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="terminal-writeback-heading"
+        aria-describedby="terminal-writeback-target terminal-writeback-message"
+      >
+        <p class="eyebrow">Active terminal tab</p>
+        <h2 id="terminal-writeback-heading">Write memory back</h2>
+        <p id="terminal-writeback-target" class="agent-launch-detail"></p>
+        <label for="terminal-writeback-kind">Memory type</label>
+        <select id="terminal-writeback-kind">
+          <option value="decision">Decision</option>
+          <option value="blocker">Blocker</option>
+          <option value="handoff">Handoff</option>
+          <option value="summary">Project rolling summary</option>
+        </select>
+        <label for="terminal-writeback-content">Memory written by you</label>
+        <textarea
+          id="terminal-writeback-content"
+          rows="8"
+          maxlength="4000"
+          autocomplete="off"
+          spellcheck="true"
+          placeholder="Enter a bounded summary, decision, blocker, or handoff…"
+        ></textarea>
+        <p
+          id="terminal-writeback-message"
+          class="dialog-help"
+          aria-live="polite"
+        >Enter memory, then preview its authoritative destination.</p>
+        <section id="terminal-writeback-preview" class="writeback-preview" hidden>
+          <strong id="terminal-writeback-preview-target"></strong>
+          <p id="terminal-writeback-preview-content"></p>
+        </section>
+        <label
+          id="terminal-writeback-summary-warning"
+          class="writeback-summary-warning"
+          hidden
+        >
+          <input id="terminal-writeback-summary-confirm" type="checkbox" />
+          Replace the entire project rolling summary with this preview.
+        </label>
+        <div class="dialog-actions">
+          <button
+            id="terminal-writeback-cancel"
+            class="button-secondary"
+            type="button"
+          >Cancel</button>
+          <button id="terminal-writeback-preview-button" type="submit">
+            Preview
+          </button>
+          <button id="terminal-writeback-save" type="button" disabled>
+            Write memory
+          </button>
+        </div>
+      </form>
+    </div>
+
+    <div id="task-transition-modal" class="modal" hidden>
+      <button
+        class="modal-backdrop"
+        type="button"
+        data-close-task-transition
+        tabindex="-1"
+        aria-label="Cancel task status change"
+      ></button>
+      <form
+        id="task-transition-form"
+        class="dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="task-transition-heading"
+        aria-describedby="task-transition-detail task-transition-message"
+      >
+        <p class="eyebrow">Active linked resources</p>
+        <h2 id="task-transition-heading">Confirm task status change</h2>
+        <p id="task-transition-detail" class="dialog-help"></p>
+        <p
+          id="task-transition-message"
+          class="dialog-help"
+          aria-live="polite"
+        >Confirm to change only this task's status.</p>
+        <div class="dialog-actions">
+          <button
+            id="task-transition-cancel"
+            class="button-secondary"
+            type="button"
+          >Cancel</button>
+          <button id="task-transition-submit" type="submit">
+            Confirm status change
+          </button>
+        </div>
+      </form>
     </div>
 
     <div id="workspace-confirm-modal" class="modal" hidden>

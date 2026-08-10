@@ -10,6 +10,9 @@ const (
 	// workspaceDataChangedEvent tells the frontend the project database was
 	// written (by any process) and open views should reload.
 	workspaceDataChangedEvent = "workspace:data-changed"
+	// workspaceRuntimeChangedEvent tells the frontend that generation-scoped
+	// terminal or AgentRun association/lifecycle state changed.
+	workspaceRuntimeChangedEvent = "workspace:runtime-changed"
 
 	workspaceWatchInterval = 2 * time.Second
 	workspaceWatchDebounce = 500 * time.Millisecond

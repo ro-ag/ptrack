@@ -55,4 +55,55 @@ describe("RefreshGate", () => {
     expect(gate.tryBegin()).toBe(true);
     expect(gate.finish()).toBe(false);
   });
+
+  it("lets exact refresh callers await an occupied gate", async () => {
+    const gate = new RefreshGate();
+    expect(gate.tryBegin()).toBe(true);
+    let idle = false;
+    const waiting = gate.whenIdle().then(() => { idle = true; });
+    await Promise.resolve();
+    expect(idle).toBe(false);
+    gate.finish();
+    await waiting;
+    expect(idle).toBe(true);
+
+    expect(gate.tryBegin()).toBe(true);
+    const resetWaiting = gate.whenIdle();
+    gate.reset();
+    await expect(resetWaiting).resolves.toBeUndefined();
+  });
+
+  it("keeps exact waiters behind a queued follow-up", async () => {
+    const gate = new RefreshGate();
+    expect(gate.tryBegin()).toBe(true);
+    expect(gate.tryBegin(true)).toBe(false);
+    let idle = false;
+    const waiting = gate.whenIdle().then(() => { idle = true; });
+    expect(gate.finish()).toBe(true);
+    await Promise.resolve();
+    expect(idle).toBe(false);
+
+    let gapIdle = false;
+    const gapWaiting = gate.whenIdle().then(() => { gapIdle = true; });
+    await Promise.resolve();
+    expect(gapIdle).toBe(false);
+    expect(gate.tryBegin()).toBe(true);
+    expect(gate.finish()).toBe(false);
+    await waiting;
+    await gapWaiting;
+    expect(idle).toBe(true);
+    expect(gapIdle).toBe(true);
+  });
+
+  it("cancels a stranded queued handoff when the workspace leaves open", async () => {
+    const gate = new RefreshGate();
+    expect(gate.tryBegin()).toBe(true);
+    expect(gate.tryBegin(true)).toBe(false);
+    expect(gate.finish()).toBe(true);
+    let idle = false;
+    const waiting = gate.whenIdle().then(() => { idle = true; });
+    gate.cancelQueued();
+    await waiting;
+    expect(idle).toBe(true);
+  });
 });

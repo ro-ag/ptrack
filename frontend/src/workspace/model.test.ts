@@ -116,6 +116,33 @@ describe("workspace model", () => {
     })).toBe(false);
   });
 
+  it("allows only versioned authority-free tab association pointers", () => {
+    const workspace = createWorkspace(sequentialIds());
+    workspace.tabs[0].association = { version: 1, planId: 2, taskId: 9 };
+    expect(isWorkspace(workspace)).toBe(true);
+
+    for (const association of [
+      { version: 2, planId: 2 },
+      { version: 1, taskId: 9 },
+      { version: 1, planId: 0 },
+      { version: 1, planId: 2, taskId: Number.MAX_SAFE_INTEGER + 1 },
+      { version: 1, planId: 2, generation: 7 },
+      { version: 1, planId: 2, sessionId: "live" },
+    ]) {
+      expect(isWorkspace({
+        ...workspace,
+        tabs: [{ ...workspace.tabs[0], association }],
+      })).toBe(false);
+    }
+
+    const normalized = normalizeWorkspace({
+      ...workspace,
+      tabs: [{ ...workspace.tabs[0], association: { version: 2, planId: 2 } }],
+    }, sequentialIds());
+    expect(normalized.tabs[0].association).toBeUndefined();
+    expect(isWorkspace(normalized)).toBe(true);
+  });
+
   it("enforces tab, pane, and depth limits during normalization", () => {
     const tabs = Array.from({ length: maximumWorkspaceTabs + 4 }, (_, index) => ({
       id: `tab-input-${index}`,

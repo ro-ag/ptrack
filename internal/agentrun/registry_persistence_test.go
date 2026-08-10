@@ -1,6 +1,7 @@
 package agentrun
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/ro-ag/ptrack/internal/association"
 )
 
 func TestRunHistorySurvivesRestart(t *testing.T) {
@@ -192,5 +195,92 @@ func TestRunHistoryBoundedByMaxRecords(t *testing.T) {
 		if state.Runs[i-1].Run.LastActivityAt.Before(state.Runs[i].Run.LastActivityAt) {
 			t.Fatal("history is not sorted by last activity descending")
 		}
+	}
+}
+
+func TestRunHistoryMigratesV1DetachedAndNeverPersistsLiveAssociation(t *testing.T) {
+	projectRoot := t.TempDir()
+	statePath := filepath.Join(t.TempDir(), "agent-runs.json")
+	legacy := []byte(`{
+  "version": 1,
+  "savedAt": "2026-08-01T12:00:00Z",
+  "runs": [{
+    "run": {
+      "id": "legacy-run",
+      "profile": "wrapper",
+      "provider": "external",
+      "projectRoot": "` + projectRoot + `",
+      "planId": 2,
+      "taskId": 9,
+      "cwd": "` + projectRoot + `",
+      "state": "running",
+      "processState": "unknown",
+      "leaseState": "active",
+      "registrationKind": "external",
+      "lastActivityAt": "2026-08-01T12:00:00Z",
+      "lastHeartbeatAt": "2026-08-01T12:00:00Z"
+    },
+    "leaseToken": "legacy-lease"
+  }]
+}`)
+	if err := os.WriteFile(statePath, legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(Config{ProjectRoot: projectRoot, StatePath: statePath})
+	snapshot := registry.Snapshot(1)
+	if len(snapshot) != 1 || snapshot[0].ID != "legacy-run" || snapshot[0].Association != nil {
+		t.Fatalf("migrated snapshot = %#v", snapshot)
+	}
+	host, err := association.NewHost(projectRoot, 8, registryAssociationCatalog{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Associate("legacy-run", host, association.PointerV1{
+		Version: association.VersionV1, PlanID: 2, TaskID: 9,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(persisted, []byte("association")) ||
+		bytes.Contains(persisted, []byte("planId")) ||
+		bytes.Contains(persisted, []byte("taskId")) {
+		t.Fatalf("history persisted live association: %s", persisted)
+	}
+	var state persistedRegistryState
+	if err := json.Unmarshal(persisted, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.Version != 2 {
+		t.Fatalf("migrated history version = %d, want 2", state.Version)
+	}
+}
+
+func TestRunHistoryRejectsRecordsOutsideCurrentProject(t *testing.T) {
+	projectRoot := t.TempDir()
+	statePath := filepath.Join(t.TempDir(), "agent-runs.json")
+	state := persistedRegistryState{
+		Version: persistedStateVersion,
+		Runs: []persistedRecord{
+			{Run: Run{ID: "wrong-root", ProjectRoot: t.TempDir(), CWD: projectRoot}},
+			{Run: Run{ID: "wrong-cwd", ProjectRoot: projectRoot, CWD: t.TempDir()}},
+		},
+	}
+	contents, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statePath, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(Config{ProjectRoot: projectRoot, StatePath: statePath})
+	t.Cleanup(func() { _ = registry.Shutdown(context.Background()) })
+	if snapshot := registry.Snapshot(10); len(snapshot) != 0 {
+		t.Fatalf("restored cross-project records: %#v", snapshot)
 	}
 }

@@ -1,4 +1,4 @@
-//go:build bindings || (desktop && (production || dev))
+//go:build desktop && (production || dev)
 
 // Command ptrack persists AI planning state across sessions.
 package main

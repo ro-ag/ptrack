@@ -14,6 +14,10 @@ type TaskStatus string
 // NoteTarget names what a Note is attached to.
 type NoteTarget string
 
+// MemoryKind identifies durable memory written back explicitly from a live,
+// host-associated terminal. The zero value is retained for legacy notes.
+type MemoryKind string
+
 // MilestoneStatus is the lifecycle state of a Milestone.
 type MilestoneStatus string
 
@@ -49,6 +53,16 @@ const (
 	TargetPlan NoteTarget = "plan"
 	// TargetTask attaches a note to a task.
 	TargetTask NoteTarget = "task"
+
+	// MemoryDecision records a durable choice and its rationale.
+	MemoryDecision MemoryKind = "decision"
+	// MemoryBlocker records an obstacle without changing task lifecycle state.
+	MemoryBlocker MemoryKind = "blocker"
+	// MemoryHandoff records bounded context intended for a later session.
+	MemoryHandoff MemoryKind = "handoff"
+	// MemorySummary replaces the project rolling summary. Summary is a
+	// write-back command kind and is never stored as a Note.Kind.
+	MemorySummary MemoryKind = "summary"
 
 	// MilestoneOpen marks a milestone still being worked toward.
 	MilestoneOpen MilestoneStatus = "open"
@@ -160,6 +174,7 @@ type Note struct {
 	ID        uint64
 	Target    NoteTarget
 	TargetID  uint64
+	Kind      MemoryKind
 	Body      string
 	CreatedAt time.Time
 }

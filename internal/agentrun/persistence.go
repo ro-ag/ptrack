@@ -31,7 +31,7 @@ import (
 //     the regular lease sweep marks it stale within one lease duration.
 
 const (
-	persistedStateVersion = 1
+	persistedStateVersion = 2
 	runHistoryFileName    = "agent-runs.json"
 )
 
@@ -214,7 +214,8 @@ func (r *Registry) restoreLocked() error {
 
 	for _, persisted := range state.Runs {
 		run := persisted.Run
-		if run.ID == "" {
+		if run.ID == "" || filepath.Clean(run.ProjectRoot) != r.projectRoot ||
+			!pathWithin(r.projectRoot, filepath.Clean(run.CWD)) {
 			continue
 		}
 		if run.Kind == RegistrationLaunched && run.State != StateExited {
@@ -222,7 +223,13 @@ func (r *Registry) restoreLocked() error {
 			run.State = StateStale
 			run.ProcessState = ProcessUnknown
 		}
-		r.records[run.ID] = &record{run: run, leaseToken: persisted.LeaseToken}
+		// Associations are live, generation-scoped host state. Version 1 history
+		// may contain legacy planId/taskId fields; JSON decoding ignores them and
+		// every restored run is deliberately detached for the new generation.
+		run.Association = nil
+		r.records[run.ID] = &record{
+			run: run, leaseToken: persisted.LeaseToken, lifecycleRevision: 1,
+		}
 	}
 	return nil
 }
@@ -237,8 +244,10 @@ func (r *Registry) saveLocked() error {
 	}
 	runs := make([]persistedRecord, 0, len(r.records))
 	for _, entry := range r.records {
+		persistedRun := cloneRun(entry.run)
+		persistedRun.Association = nil
 		runs = append(runs, persistedRecord{
-			Run:        cloneRun(entry.run),
+			Run:        persistedRun,
 			LeaseToken: entry.leaseToken,
 		})
 	}

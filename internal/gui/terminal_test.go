@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ro-ag/ptrack/internal/association"
 	"github.com/ro-ag/ptrack/internal/terminal"
 )
 
@@ -748,11 +749,15 @@ type fakeGUITerminalManager struct {
 	closeErrors map[string]error
 	closeHook   func(string, bool)
 
-	shutdownCalls    int
-	shutdownErr      error
-	shutdownCalled   chan struct{}
-	createStartOnce  sync.Once
-	shutdownCallOnce sync.Once
+	shutdownCalls        int
+	shutdownErr          error
+	shutdownCalled       chan struct{}
+	createStartOnce      sync.Once
+	shutdownCallOnce     sync.Once
+	association          *association.AssociationV1
+	associationErr       error
+	associationCommitErr error
+	closedSessions       map[string]bool
 }
 
 func (m *fakeGUITerminalManager) Profiles() ([]terminal.Profile, error) {
@@ -823,10 +828,190 @@ func (m *fakeGUITerminalManager) Close(sessionID string, force bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.closes = append(m.closes, terminalCloseCall{sessionID: sessionID, force: force})
+	if m.closedSessions == nil {
+		m.closedSessions = make(map[string]bool)
+	}
+	m.closedSessions[sessionID] = true
 	if m.closeHook != nil {
 		m.closeHook(sessionID, force)
 	}
 	return m.closeErrors[sessionID]
+}
+
+func (m *fakeGUITerminalManager) Associate(
+	sessionID string,
+	host *association.Host,
+	pointer association.PointerV1,
+) (association.AssociationV1, error) {
+	m.mu.Lock()
+	if m.associationErr != nil {
+		err := m.associationErr
+		m.mu.Unlock()
+		return association.AssociationV1{}, err
+	}
+	previous := m.association
+	m.mu.Unlock()
+	next, err := host.Bind(sessionID, pointer, previous)
+	if err != nil {
+		return association.AssociationV1{}, err
+	}
+	m.mu.Lock()
+	m.association = &next
+	m.mu.Unlock()
+	return next, nil
+}
+
+func (m *fakeGUITerminalManager) PrepareAssociationChange(
+	sessionID string,
+	host *association.Host,
+	pointer association.PointerV1,
+	expectedRevision uint64,
+) (terminal.AssociationChange, error) {
+	m.mu.Lock()
+	if sessionID == "" || m.closedSessions[sessionID] ||
+		(m.createResult.SessionID != "" && m.createResult.SessionID != sessionID) ||
+		(m.createResult.SessionID == sessionID && m.createResult.State != terminal.SessionRunning) {
+		m.mu.Unlock()
+		return terminal.AssociationChange{}, terminal.ErrSessionNotFound
+	}
+	var previous *association.AssociationV1
+	if m.association != nil {
+		copy := *m.association
+		previous = &copy
+	}
+	if (previous == nil && expectedRevision != 0) ||
+		(previous != nil && previous.Revision != expectedRevision) {
+		m.mu.Unlock()
+		return terminal.AssociationChange{}, association.ErrStaleAssociation
+	}
+	m.mu.Unlock()
+	next, err := host.Bind(sessionID, pointer, previous)
+	if err != nil {
+		return terminal.AssociationChange{}, err
+	}
+	return terminal.AssociationChange{
+		SessionID: sessionID,
+		Previous:  previous,
+		Next:      next,
+	}, nil
+}
+
+func (m *fakeGUITerminalManager) CommitAssociationChange(
+	change terminal.AssociationChange,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.associationCommitErr != nil {
+		return m.associationCommitErr
+	}
+	if m.closedSessions[change.SessionID] ||
+		!fakeAssociationsEqual(m.association, change.Previous) {
+		return association.ErrStaleAssociation
+	}
+	next := change.Next
+	m.association = &next
+	return nil
+}
+
+func (m *fakeGUITerminalManager) RollbackAssociationChange(
+	change terminal.AssociationChange,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !fakeAssociationsEqual(m.association, &change.Next) {
+		return association.ErrStaleAssociation
+	}
+	if change.Previous == nil {
+		m.association = nil
+	} else {
+		previous := *change.Previous
+		m.association = &previous
+	}
+	return nil
+}
+
+func (m *fakeGUITerminalManager) SessionInfo(
+	sessionID string,
+) (terminal.SessionInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if sessionID == "" || m.closedSessions[sessionID] ||
+		m.createResult.SessionID != sessionID {
+		return terminal.SessionInfo{}, terminal.ErrSessionNotFound
+	}
+	info := terminal.SessionInfo{
+		ID:          sessionID,
+		ProfileID:   m.createResult.ProfileID,
+		ProfileKind: m.createResult.ProfileKind,
+		Provider:    m.createResult.Provider,
+		PID:         m.createResult.PID,
+		CWD:         m.createResult.CWD,
+		State:       m.createResult.State,
+	}
+	if m.association != nil {
+		copy := *m.association
+		info.Association = &copy
+	}
+	return info, nil
+}
+
+func (m *fakeGUITerminalManager) WithLiveAssociation(
+	sessionID string,
+	expectedRevision uint64,
+	use func(association.AssociationV1) error,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if sessionID == "" || m.closedSessions[sessionID] ||
+		m.createResult.SessionID != sessionID ||
+		m.createResult.State != terminal.SessionRunning || m.association == nil ||
+		m.association.Revision != expectedRevision {
+		return association.ErrStaleAssociation
+	}
+	copy := *m.association
+	return use(copy)
+}
+
+func (m *fakeGUITerminalManager) WithExactSessionSnapshot(
+	maximum int,
+	use func([]terminal.SessionInfo) error,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if maximum <= 0 || use == nil {
+		return errors.New("exact terminal snapshot callback and limit are required")
+	}
+	snapshot := []terminal.SessionInfo{}
+	if m.createResult.SessionID != "" &&
+		!m.closedSessions[m.createResult.SessionID] {
+		info := terminal.SessionInfo{
+			ID:          m.createResult.SessionID,
+			ProfileID:   m.createResult.ProfileID,
+			ProfileKind: m.createResult.ProfileKind,
+			Provider:    m.createResult.Provider,
+			PID:         m.createResult.PID,
+			CWD:         m.createResult.CWD,
+			State:       m.createResult.State,
+		}
+		if m.association != nil {
+			copy := *m.association
+			info.Association = &copy
+		}
+		snapshot = append(snapshot, info)
+	}
+	if len(snapshot) > maximum {
+		return terminal.ErrSnapshotLimit
+	}
+	return use(snapshot)
+}
+
+func fakeAssociationsEqual(
+	left, right *association.AssociationV1,
+) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func (m *fakeGUITerminalManager) Shutdown(context.Context) error {
@@ -869,22 +1054,33 @@ type terminalCreateCall struct {
 
 type fakeWorkspaceCapabilityBroker struct {
 	token             string
+	issueErr          error
+	bindErr           error
+	issuedProfiles    []string
 	boundToken        string
 	boundSession      string
 	revokedTokens     []string
 	revokedSessions   []string
+	revokeTokenHook   func(string)
 	revokeSessionHook func(string)
 }
 
-func (b *fakeWorkspaceCapabilityBroker) IssueSessionToken(string) (string, error) {
-	return b.token, nil
+func (b *fakeWorkspaceCapabilityBroker) IssueSessionToken(profile string) (string, error) {
+	b.issuedProfiles = append(b.issuedProfiles, profile)
+	return b.token, b.issueErr
 }
 func (b *fakeWorkspaceCapabilityBroker) BindSession(token, sessionID string) error {
+	if b.bindErr != nil {
+		return b.bindErr
+	}
 	b.boundToken, b.boundSession = token, sessionID
 	return nil
 }
 func (b *fakeWorkspaceCapabilityBroker) RevokeToken(token string) {
 	b.revokedTokens = append(b.revokedTokens, token)
+	if b.revokeTokenHook != nil {
+		b.revokeTokenHook(token)
+	}
 }
 func (b *fakeWorkspaceCapabilityBroker) RevokeSession(sessionID string) {
 	b.revokedSessions = append(b.revokedSessions, sessionID)

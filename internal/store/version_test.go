@@ -77,6 +77,42 @@ func TestRejectNewerFormat(t *testing.T) {
 	}
 }
 
+func TestMigrateV4AddsWritebackReceiptsAndPreservesLegacyNotes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ptrack.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddNote(model.TargetProject, 0, "legacy v4 note"); err != nil {
+		t.Fatal(err)
+	}
+	setFormat(t, s, 4)
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	meta, _ := s.GetMeta()
+	if meta.FormatVersion != CurrentFormat {
+		t.Fatalf("format = %d want %d", meta.FormatVersion, CurrentFormat)
+	}
+	notes, _ := s.ListNotes()
+	if len(notes) != 1 || notes[0].Body != "legacy v4 note" || notes[0].Kind != "" {
+		t.Fatalf("legacy notes = %#v", notes)
+	}
+	if err := s.db.View(func(tx *bolt.Tx) error {
+		if tx.Bucket(bucketMemoryWritebacks) == nil {
+			t.Fatal("write-back receipt bucket was not created")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCounts(t *testing.T) {
 	s := openTemp(t)
 	p1, _ := s.AddPlan("a")

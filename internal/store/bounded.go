@@ -16,6 +16,16 @@ type Bounded[T any] struct {
 	More  int `json:"more"`
 }
 
+// ScanBounded is a deterministic newest-first hard scan. At most ScanLimit
+// records are decoded, and Truncated reports that at least one older record
+// was deliberately not inspected.
+type ScanBounded[T any] struct {
+	Items     []T
+	Scanned   int
+	ScanLimit int
+	Truncated bool
+}
+
 type TaskProgress struct {
 	Total int `json:"total"`
 	Done  int `json:"done"`
@@ -211,6 +221,40 @@ func (s *Store) RecentCommitsBounded(limit int) (Bounded[model.Commit], error) {
 
 func (s *Store) ListOpenIssuesBounded(limit int) (Bounded[model.Issue], error) {
 	return s.ListOpenIssuesBoundedContext(context.Background(), limit)
+}
+
+// ListOpenIssuesScanBounded returns open issues found among at most scanLimit
+// newest issue records. Unlike ListOpenIssuesBounded, it intentionally does
+// not traverse older records to compute an exact open-issue total.
+func (s *Store) ListOpenIssuesScanBounded(
+	scanLimit int,
+) (ScanBounded[model.Issue], error) {
+	if err := validateBoundedLimit(scanLimit); err != nil {
+		return ScanBounded[model.Issue]{}, err
+	}
+	result := ScanBounded[model.Issue]{
+		Items:     make([]model.Issue, 0, scanLimit),
+		ScanLimit: scanLimit,
+	}
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(bucketIssues)
+		cursor := bucket.Cursor()
+		_, value := cursor.Last()
+		for value != nil && result.Scanned < scanLimit {
+			result.Scanned++
+			var issue model.Issue
+			if err := gobDecode(value, &issue); err != nil {
+				return err
+			}
+			if issue.Status == model.IssueOpen {
+				result.Items = append(result.Items, issue)
+			}
+			_, value = cursor.Prev()
+		}
+		result.Truncated = value != nil
+		return nil
+	})
+	return result, err
 }
 
 func (s *Store) ListOpenIssuesBoundedContext(

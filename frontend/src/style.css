@@ -1957,6 +1957,22 @@ textarea::placeholder {
   margin-top: var(--space-100);
 }
 
+.card-linked-runtime {
+  align-self: flex-start;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-soft);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 3px 7px;
+}
+
+.card-linked-runtime[data-state="live"] {
+  border-color: color-mix(in srgb, var(--info) 55%, var(--border));
+  color: var(--info);
+}
+
 .context-chip {
   color: var(--muted);
   padding: 0;
@@ -1977,7 +1993,7 @@ textarea::placeholder {
 
 .card-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) repeat(3, auto);
   align-items: center;
   gap: var(--space-050);
   border-top: 1px solid var(--line-subtle);
@@ -2164,6 +2180,24 @@ button.modal-backdrop:active {
   justify-content: flex-end;
   gap: var(--space-100);
   margin-top: var(--space-250);
+}
+
+.agent-launch-dialog select {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--text);
+  background: var(--control-solid-bg);
+  padding: 6px var(--space-100);
+}
+
+.agent-launch-detail {
+  overflow-wrap: anywhere;
+  margin: calc(-1 * var(--space-150)) 0 var(--space-250);
+  color: var(--text-soft);
+  font-size: 0.8125rem;
+  line-height: 1.45;
 }
 
 /* ---------------------------------------------------- command palette */
@@ -2387,7 +2421,7 @@ button.modal-backdrop:active {
 .drawer-actions {
   display: grid;
   flex: 0 0 auto;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) repeat(3, auto);
   align-items: center;
   gap: var(--space-100);
   border-bottom: 1px solid var(--line-subtle);
@@ -2949,6 +2983,35 @@ button.modal-backdrop:active {
 
 .terminal-toolbar .terminal-tool-button:last-child {
   border-right: 0;
+}
+
+.terminal-writeback-dialog {
+  width: min(36rem, calc(100vw - 2rem));
+}
+
+.terminal-writeback-dialog textarea {
+  width: 100%;
+  resize: vertical;
+}
+
+.writeback-preview {
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--surface-raised);
+}
+
+.writeback-preview p {
+  margin: 0.4rem 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.writeback-summary-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  color: var(--blocked);
 }
 
 .terminal-toolbar .terminal-tool-button:hover:not(:disabled),

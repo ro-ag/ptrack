@@ -9,8 +9,12 @@ import {
   groupSearchResults,
   heatLevel,
   heatmapWeeks,
+  linkedTaskRuntimePresentation,
   paletteTarget,
   preserveSectionOnError,
+  runtimeAssociationLabel,
+  runtimeCountLabel,
+  runtimeEventIsCurrent,
   shortcutIntent,
   workspaceStateCopy,
 } from "./presentation";
@@ -47,6 +51,54 @@ describe("workspace presentation policy", () => {
     expect(confirmationCopy("switch", 0, 0, 1).detail).toContain(
       "0 active terminals",
     );
+  });
+
+  it("presents linked task state without conflating terminals and agents", () => {
+    expect(linkedTaskRuntimePresentation({
+      terminals: 1,
+      liveTerminals: 1,
+      agents: 2,
+      liveAgents: 1,
+      terminalBackedRuns: 1,
+      externalRuns: 1,
+    })).toEqual({
+      compact: "Live · 1T 2A",
+      detail: "1 terminal · 2 agents · 2 live · 1 historical",
+      state: "live",
+    });
+    expect(linkedTaskRuntimePresentation({
+      terminals: 1,
+      agents: 1,
+    })?.state).toBe("historical");
+    expect(linkedTaskRuntimePresentation(undefined)).toBeNull();
+    expect(linkedTaskRuntimePresentation({ truncated: true })).toEqual({
+      compact: "Runtime capped",
+      detail: "Linked runtime may be omitted because the project candidate bound was reached",
+      state: "historical",
+    });
+  });
+
+  it("labels exact runtime targets and separate live resource counts", () => {
+    expect(runtimeAssociationLabel({ planId: 2, taskId: 9 })).toBe(
+      "plan #2 · task #9",
+    );
+    expect(runtimeAssociationLabel({ planId: 2 })).toBe("plan #2");
+    expect(runtimeAssociationLabel({})).toBe("project");
+    expect(runtimeAssociationLabel(null)).toBe("unlinked");
+    expect(runtimeCountLabel(
+      [{ live: true }, { live: false }],
+      [{ live: true }, { live: false }, { live: false }],
+    )).toEqual({
+      compact: "1T · 1A",
+      detail: "1/2 live terminals · 1/3 live agents",
+    });
+  });
+
+  it("accepts runtime refresh events only for the open generation", () => {
+    expect(runtimeEventIsCurrent(7, 7, true)).toBe(true);
+    expect(runtimeEventIsCurrent(6, 7, true)).toBe(false);
+    expect(runtimeEventIsCurrent(7, 7, false)).toBe(false);
+    expect(runtimeEventIsCurrent("not-a-generation", 7, true)).toBe(false);
   });
 
   it("cycles focus in both directions", () => {

@@ -135,3 +135,16 @@ func TestBoard(t *testing.T) {
 		}
 	}
 }
+
+func TestTypedMemoryMarkdownLabel(t *testing.T) {
+	got := noteMarkdown(NoteLine{
+		ID: 1, Target: "task", TargetID: 9, Kind: "handoff", Body: "resume here",
+	})
+	if got != "[handoff] (task #9) resume here" {
+		t.Fatalf("typed note markdown = %q", got)
+	}
+	legacy := noteMarkdown(NoteLine{ID: 2, Target: "project", Body: "legacy"})
+	if legacy != "(project) legacy" {
+		t.Fatalf("legacy note markdown = %q", legacy)
+	}
+}
