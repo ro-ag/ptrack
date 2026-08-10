@@ -30,6 +30,34 @@ type Profile struct {
 	Env        map[string]string `json:"env"`
 }
 
+// SortProfiles puts the safe default shell first, followed by other shells
+// and then agents. IDs and names make discovery and map-backed manager results
+// deterministic across processes.
+func SortProfiles(profiles []Profile) {
+	rank := func(profile Profile) int {
+		if profile.Kind == ProfileShell && profile.ID == "shell-default" {
+			return 0
+		}
+		if profile.Kind == ProfileShell {
+			return 1
+		}
+		return 2
+	}
+	sort.Slice(profiles, func(left, right int) bool {
+		leftRank, rightRank := rank(profiles[left]), rank(profiles[right])
+		if leftRank != rightRank {
+			return leftRank < rightRank
+		}
+		if profiles[left].ID != profiles[right].ID {
+			return profiles[left].ID < profiles[right].ID
+		}
+		if profiles[left].Name != profiles[right].Name {
+			return profiles[left].Name < profiles[right].Name
+		}
+		return profiles[left].Provider < profiles[right].Provider
+	})
+}
+
 var stableProfileID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 type profileDependencies struct {
@@ -358,6 +386,12 @@ func resolveCWD(projectRoot, requested string) (string, error) {
 		return "", fmt.Errorf("working directory %q is not a directory", absolute)
 	}
 	return filepath.Clean(absolute), nil
+}
+
+// ResolveCWD validates and canonicalizes a terminal working directory without
+// creating a session or reading terminal runtime state.
+func ResolveCWD(projectRoot, requested string) (string, error) {
+	return resolveCWD(projectRoot, requested)
 }
 
 func cloneProfile(profile Profile) Profile {

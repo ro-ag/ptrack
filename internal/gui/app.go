@@ -46,6 +46,8 @@ type App struct {
 	shutdownSignalOnce  sync.Once
 	shutdownOnce        sync.Once
 	shutdownWaitTimeout time.Duration
+	terminalAttachLease time.Duration
+	terminalAttachAfter func(time.Duration) <-chan time.Time
 
 	workspaceMu       sync.RWMutex
 	workspace         *WorkspaceContext

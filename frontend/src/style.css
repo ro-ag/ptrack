@@ -2543,8 +2543,8 @@ button.modal-backdrop:active {
   box-shadow: var(--dock-shadow);
 }
 
-.terminal-dock[data-state="closed"] {
-  height: 46px;
+.terminal-dock[data-state="closed"][data-layout-interactive="false"] {
+  height: 84px;
   box-shadow: none;
 }
 
@@ -2589,15 +2589,205 @@ button.modal-backdrop:active {
   box-shadow: none;
 }
 
+.terminal-tab-row {
+  min-height: 38px;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  gap: var(--space-050);
+  overflow: hidden;
+  border-bottom: 1px solid var(--line-subtle);
+  background: var(--surface-soft);
+  padding: 4px var(--space-100);
+  --wails-draggable: no-drag;
+}
+
+.terminal-tabs {
+  min-width: 0;
+  display: flex;
+  flex: 1 1 auto;
+  gap: 3px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.terminal-tab-item {
+  min-width: 0;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+}
+
+.terminal-tab,
+.terminal-tab-action,
+.terminal-new-tab,
+.terminal-reset-workspace {
+  min-height: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 0;
+  color: var(--muted);
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+.terminal-tab {
+  width: 130px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  padding: 0 var(--space-100);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.terminal-tab-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.terminal-tab-indicator {
+  width: 1em;
+  flex: 0 0 auto;
+  color: var(--faint);
+  text-align: center;
+}
+
+.terminal-tab[data-indicator="failed"] .terminal-tab-indicator {
+  color: var(--blocked);
+}
+
+.terminal-tab[data-indicator="completed"] .terminal-tab-indicator,
+.terminal-tab[data-indicator="running"] .terminal-tab-indicator {
+  color: var(--done);
+}
+
+.terminal-tab[data-indicator="exited"] .terminal-tab-indicator {
+  color: var(--info);
+}
+
+.terminal-tab[data-indicator="activity"] .terminal-tab-indicator {
+  color: var(--accent-strong);
+}
+
+.terminal-tab[data-indicator="opening"] .terminal-tab-indicator {
+  color: var(--doing);
+}
+
+.terminal-tab[data-indicator="waiting"] .terminal-tab-indicator {
+  color: var(--todo);
+}
+
+.terminal-tab[data-unread="true"] .terminal-tab-indicator {
+  text-shadow: 0 0 8px currentColor;
+}
+
+.terminal-tab[aria-selected="true"] {
+  color: var(--text);
+  background: var(--fill-strong);
+  box-shadow: inset 0 -2px var(--accent);
+}
+
+.terminal-tab-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+}
+
+.terminal-tab-action {
+  width: 25px;
+  border-left: 1px solid var(--line-subtle);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.6875rem;
+}
+
+.terminal-tab-action:first-child {
+  border-left: 0;
+}
+
+.terminal-tab:hover:not(:disabled),
+.terminal-tab:focus-visible,
+.terminal-tab-action:hover:not(:disabled),
+.terminal-tab-action:focus-visible,
+.terminal-new-tab:hover:not(:disabled),
+.terminal-new-tab:focus-visible,
+.terminal-reset-workspace:hover:not(:disabled),
+.terminal-reset-workspace:focus-visible {
+  color: var(--text);
+  background: var(--fill-strong);
+  box-shadow: none;
+}
+
+.terminal-tab-action:disabled,
+.terminal-new-tab:disabled {
+  cursor: default;
+  color: var(--faint);
+  opacity: 0.45;
+}
+
+.terminal-reset-workspace:disabled {
+  cursor: default;
+  color: var(--faint);
+  opacity: 0.45;
+}
+
+.terminal-tab-rename {
+  width: 160px;
+  height: 28px;
+  border: 0;
+  border-radius: 0;
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+  padding: 0 var(--space-100);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.6875rem;
+}
+
+.terminal-tab-rename[aria-invalid="true"] {
+  outline-color: var(--blocked);
+}
+
+.terminal-new-tab {
+  width: 30px;
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 1rem;
+}
+
+.terminal-reset-workspace {
+  width: 30px;
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 0.875rem;
+}
+
 .terminal-toolbar {
   min-height: 46px;
   display: flex;
   flex: 0 0 auto;
   align-items: center;
   gap: var(--space-100);
+  overflow-x: auto;
   padding: 5px var(--space-150);
   border-bottom: 1px solid var(--line-subtle);
   background: var(--surface);
+  scrollbar-width: thin;
   --wails-draggable: no-drag;
 }
 
@@ -2651,6 +2841,36 @@ button.modal-backdrop:active {
   padding-left: var(--space-100);
   font-size: 0.6875rem;
   font-weight: 700;
+}
+
+.terminal-cwd-picker {
+  min-width: 180px;
+  max-width: 260px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-050);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  padding-left: var(--space-100);
+  font-size: 0.6875rem;
+  font-weight: 700;
+}
+
+.terminal-cwd-picker span {
+  white-space: nowrap;
+}
+
+.terminal-cwd-picker input {
+  min-width: 80px;
+  height: 30px;
+  flex: 1 1 auto;
+  border: 0;
+  background: transparent;
+  padding: 0 var(--space-100);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.6875rem;
 }
 
 .terminal-profile-picker select {
@@ -2820,10 +3040,129 @@ button.modal-backdrop:active {
 }
 
 .terminal-host {
+  position: relative;
   width: 100%;
   height: 100%;
   overflow: hidden;
   padding: var(--space-100) var(--space-150);
+}
+
+.terminal-split-tab-panel {
+  position: absolute;
+  inset: var(--space-100) var(--space-150);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.terminal-split-node {
+  --split-ratio: 50%;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  overflow: hidden;
+}
+
+.terminal-split-horizontal {
+  grid-template-columns: minmax(0, var(--split-ratio)) 5px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.terminal-split-vertical {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, var(--split-ratio)) 5px minmax(0, 1fr);
+}
+
+.terminal-split-separator {
+  position: relative;
+  z-index: 2;
+  min-width: 0;
+  min-height: 0;
+  background: var(--line);
+  touch-action: none;
+  user-select: none;
+}
+
+.terminal-split-horizontal > .terminal-split-separator {
+  cursor: col-resize;
+}
+
+.terminal-split-vertical > .terminal-split-separator {
+  cursor: row-resize;
+}
+
+.terminal-split-separator:hover,
+.terminal-split-separator:focus-visible {
+  background: rgba(var(--accent-rgb), 0.72);
+}
+
+.terminal-split-leaf {
+  min-width: 120px;
+  min-height: 72px;
+  display: grid;
+  grid-template-rows: 24px minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: var(--terminal-bg);
+}
+
+.terminal-split-leaf[data-selected="true"] {
+  border-color: rgba(var(--accent-rgb), 0.72);
+  box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.18);
+}
+
+.terminal-split-leaf-chrome {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-bottom: 1px solid var(--line);
+  background: var(--fill);
+  padding: 2px 3px;
+}
+
+.terminal-split-leaf-chrome button {
+  min-width: 0;
+  min-height: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 3px;
+  padding: 0 5px;
+  box-shadow: none;
+  font-size: 0.5625rem;
+  white-space: nowrap;
+}
+
+.terminal-split-leaf-chrome button:disabled {
+  cursor: default;
+}
+
+.terminal-split-leaf-select {
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--text-soft);
+  background: transparent;
+  text-align: left;
+  text-overflow: ellipsis;
+}
+
+.terminal-split-leaf[data-selected="true"] .terminal-split-leaf-select {
+  color: var(--text);
+}
+
+.terminal-split-leaf-mount {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: var(--space-050);
+}
+
+.terminal-pane-host {
+  width: 100%;
+  height: 100%;
 }
 
 .terminal-host .xterm {
@@ -2853,6 +3192,14 @@ button.modal-backdrop:active {
 
 .terminal-paste-dialog {
   width: min(680px, calc(100% - 40px));
+}
+
+.terminal-termination-dialog {
+  width: min(480px, calc(100% - 40px));
+}
+
+.terminal-termination-dialog .dialog-help {
+  margin: var(--space-150) 0 var(--space-200);
 }
 
 .terminal-paste-dialog h2 {

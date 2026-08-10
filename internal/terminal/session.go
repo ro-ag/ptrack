@@ -65,6 +65,7 @@ type Session struct {
 
 	startupOutput []byte
 	attached      bool
+	attachExpired bool
 	attachSignal  chan struct{}
 	liveOutput    chan []byte
 	closingSignal chan struct{}
@@ -221,11 +222,33 @@ func (s *Session) ExitResults() <-chan ExitResult {
 	return s.exitResults
 }
 
+// AttachmentSignal is closed when the terminal stream claims this session.
+// It is intentionally read-only so lifecycle owners can bound how long an
+// unattached process is allowed to retain resources.
+func (s *Session) AttachmentSignal() <-chan struct{} {
+	return s.attachSignal
+}
+
+// ExpireUnattached atomically competes with the first stream attachment. The
+// caller that receives true owns cleanup of the unclaimed session.
+func (s *Session) ExpireUnattached() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.attached || s.attachExpired || s.state == SessionClosing || s.state == SessionClosed {
+		return false
+	}
+	s.attachExpired = true
+	return true
+}
+
 func (s *Session) attachOutput() ([]byte, <-chan []byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.attached {
 		return nil, nil, errors.New("terminal output is already attached")
+	}
+	if s.attachExpired {
+		return nil, nil, errors.New("terminal output attachment lease expired")
 	}
 	if s.state == SessionFailed || s.state == SessionClosed {
 		return nil, nil, fmt.Errorf("attach terminal output in state %q", s.state)

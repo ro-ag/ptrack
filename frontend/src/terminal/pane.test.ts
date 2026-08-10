@@ -155,6 +155,42 @@ describe("TerminalStreamClient", () => {
     ]);
   });
 
+  it("reports only valid nonempty bounded output frames without exposing bytes", () => {
+    const onOutput = vi.fn();
+    const validSocket = new FakeWebSocket();
+    const validClient = new TerminalStreamClient({
+      createWebSocket: () => validSocket,
+      writeOutput: vi.fn(),
+      onStateChange: vi.fn(),
+      onOutput,
+    });
+    validClient.connect("ws://127.0.0.1/terminal/session");
+    validSocket.open();
+    validSocket.receive(new Uint8Array([1, 2, 3]).buffer);
+    expect(onOutput).toHaveBeenCalledOnce();
+    expect(onOutput).toHaveBeenCalledWith(3);
+
+    for (const invalid of [
+      "not binary",
+      new ArrayBuffer(0),
+      new Uint8Array(512 * 1024 + 1).buffer,
+    ]) {
+      const socket = new FakeWebSocket();
+      const invalidOutput = vi.fn();
+      const client = new TerminalStreamClient({
+        createWebSocket: () => socket,
+        writeOutput: vi.fn(),
+        onStateChange: vi.fn(),
+        onOutput: invalidOutput,
+      });
+      client.connect("ws://127.0.0.1/terminal/session");
+      socket.open();
+      socket.receive(invalid);
+      expect(invalidOutput).not.toHaveBeenCalled();
+      expect(client.state).toBe("error");
+    }
+  });
+
   it("sends terminal input as binary only while the stream is open", () => {
     const socket = new FakeWebSocket();
     const client = new TerminalStreamClient({

@@ -220,6 +220,7 @@ let confirmReturnFocus = null;
 let confirmResolve = null;
 let terminalHandle = null;
 let terminalGeneration = 0;
+let terminalProjectRoot = "";
 let snapshotSequence = 0;
 let activeSnapshotRequest = null;
 let queuedSnapshotPlanId = 0;
@@ -2171,6 +2172,7 @@ function applyView() {
   else elements.navOverview.removeAttribute("aria-current");
   if (view === "settings") elements.navSettings.setAttribute("aria-current", "page");
   else elements.navSettings.removeAttribute("aria-current");
+  terminalHandle?.setVisible(open && view === "board");
 }
 
 function setView(nextView) {
@@ -2212,7 +2214,7 @@ function renderWorkspaceState(state, focus = false) {
       elements.planList.replaceChildren(emptyMemory("Loading plans…"));
     }
     void loadRecentProjects();
-    void ensureTerminalDock(state.generation);
+    void ensureTerminalDock(state.generation, state.project.root);
     if (focus) requestAnimationFrame(() => elements.projectName.focus());
     return;
   }
@@ -2393,6 +2395,11 @@ function generationTerminalBackend(generation) {
         await api().CreateTerminalV2(generation, profileID, cwd, rows, columns),
       );
     },
+    async ValidateTerminalCWDs(cwds) {
+      return assertGeneration(
+        await api().ValidateTerminalCWDsV2(generation, cwds),
+      ).results;
+    },
     ResizeTerminal(sessionID, rows, columns) {
       return api().ResizeTerminalV2(generation, sessionID, rows, columns);
     },
@@ -2402,17 +2409,24 @@ function generationTerminalBackend(generation) {
   };
 }
 
-async function ensureTerminalDock(generation) {
-  if (terminalHandle && terminalGeneration === generation) return;
+async function ensureTerminalDock(generation, projectRoot) {
+  if (
+    terminalHandle &&
+    terminalGeneration === generation &&
+    terminalProjectRoot === projectRoot
+  ) return;
   disposeTerminalDock();
   terminalGeneration = generation;
+  terminalProjectRoot = projectRoot;
   try {
     const handle = mountTerminalDock({
       backend: generationTerminalBackend(generation),
       workspaceGeneration: generation,
+      projectRoot,
       showError,
     });
     terminalHandle = handle;
+    handle.setVisible(workspaceState.status === "open" && view === "board");
     await handle.ready;
     const current = workspaceController.state;
     if (
@@ -2436,6 +2450,7 @@ function disposeTerminalDock() {
   terminalHandle?.dispose();
   terminalHandle = null;
   terminalGeneration = 0;
+  terminalProjectRoot = "";
 }
 
 function boardShortcutIsBlocked(event) {
