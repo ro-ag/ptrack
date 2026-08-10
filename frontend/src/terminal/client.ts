@@ -16,6 +16,7 @@ interface TerminalStreamClientOptions {
   createWebSocket(url: string): WebSocketLike;
   writeOutput(bytes: Uint8Array, done: () => void): void;
   onStateChange(state: StreamState): void;
+  onOutput?(byteLength: number): void;
 }
 
 const outputWindowBytes = 512 * 1024;
@@ -58,6 +59,7 @@ export class TerminalStreamClient {
       this.#fail();
       return;
     }
+    this.#options.onOutput?.(output.byteLength);
     this.#bufferedBytes += output.byteLength;
     this.#queue.push(output);
     this.#writeNext();

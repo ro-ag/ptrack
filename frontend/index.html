@@ -224,6 +224,34 @@
                 aria-valuemax="600"
                 aria-valuenow="300"
               ></div>
+              <div id="terminal-tab-row" class="terminal-tab-row">
+                <div
+                  id="terminal-tabs"
+                  class="terminal-tabs"
+                  role="tablist"
+                  aria-label="Terminal tabs"
+                ></div>
+                <div
+                  id="terminal-tab-actions"
+                  class="terminal-tab-actions"
+                  role="toolbar"
+                  aria-label="Active terminal tab actions"
+                ></div>
+                <button
+                  id="terminal-new-tab"
+                  class="terminal-new-tab"
+                  type="button"
+                  aria-label="New terminal tab"
+                  title="New terminal tab"
+                >+</button>
+                <button
+                  id="terminal-reset-workspace"
+                  class="terminal-reset-workspace"
+                  type="button"
+                  aria-label="Reset terminal workspace for this project"
+                  title="Reset terminal workspace for this project"
+                >↺</button>
+              </div>
               <header class="terminal-toolbar">
                 <div class="terminal-identity">
                   <span class="terminal-mark" aria-hidden="true">&gt;_</span>
@@ -240,6 +268,16 @@
                 <label class="terminal-profile-picker">
                   <span>Profile</span>
                   <select id="terminal-profile" aria-label="Terminal profile"></select>
+                </label>
+                <label class="terminal-cwd-picker">
+                  <span>Working directory</span>
+                  <input
+                    id="terminal-cwd"
+                    type="text"
+                    aria-label="Terminal working directory"
+                    placeholder="Project root"
+                    spellcheck="false"
+                  />
                 </label>
                 <label
                   class="terminal-unicode-setting"
@@ -321,7 +359,11 @@
                   hidden
                 >Close</button>
               </header>
-              <div id="terminal-body" class="terminal-body" hidden>
+              <div
+                id="terminal-body"
+                class="terminal-body"
+                hidden
+              >
                 <form
                   id="terminal-search"
                   class="terminal-search"
@@ -794,6 +836,40 @@
           <button id="terminal-paste-confirm" type="submit">Paste text</button>
         </div>
       </form>
+    </div>
+
+    <div
+      id="terminal-termination-modal"
+      class="modal"
+      data-terminal-overlay
+      hidden
+    >
+      <button
+        id="terminal-termination-backdrop"
+        class="modal-backdrop"
+        type="button"
+        tabindex="-1"
+        aria-label="Cancel terminal close"
+      ></button>
+      <section
+        class="dialog terminal-termination-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="terminal-termination-heading"
+        aria-describedby="terminal-termination-detail"
+      >
+        <p class="eyebrow">Terminal safety</p>
+        <h2 id="terminal-termination-heading">Terminate live terminals?</h2>
+        <p id="terminal-termination-detail" class="dialog-help"></p>
+        <div class="dialog-actions">
+          <button
+            id="terminal-termination-cancel"
+            class="button-secondary"
+            type="button"
+          >Cancel</button>
+          <button id="terminal-termination-confirm" type="button">Terminate</button>
+        </div>
+      </section>
     </div>
 
     <div

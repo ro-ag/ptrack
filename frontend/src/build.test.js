@@ -23,7 +23,36 @@ describe("production asset layout", () => {
     expect(existsSync(resolve(distRoot, "style.css"))).toBe(true);
 
     const index = readFileSync(indexPath, "utf8");
+    const app = readFileSync(resolve(distRoot, "app.js"), "utf8");
+    const styles = readFileSync(resolve(distRoot, "style.css"), "utf8");
     expect(index).toContain('src="/app.js"');
     expect(index).toContain('href="/style.css"');
+    expect(index).toMatch(/id="terminal-tabs"[\s\S]*role="tablist"/);
+    expect(index).not.toMatch(/id="terminal-tabs"[^>]*aria-live/);
+    expect(index).toMatch(
+      /<div[^>]*id="terminal-tabs"[^>]*role="tablist"[^>]*>\s*<\/div>/,
+    );
+    expect(index).toMatch(
+      /<div[^>]*id="terminal-tab-actions"[^>]*role="toolbar"[^>]*aria-label="Active terminal tab actions"[^>]*>\s*<\/div>/,
+    );
+    expect(index).not.toMatch(/id="terminal-body"[^>]*role=/);
+    expect(app).toContain("terminal-tab-panel-");
+    expect(app).toContain("tabpanel");
+    expect(app).toContain("aria-controls");
+    expect(app).toContain("aria-labelledby");
+    expect(app).toContain("setVisible");
+    expect(index).toContain('id="terminal-cwd"');
+    expect(index).toContain('id="terminal-reset-workspace"');
+    expect(index).toMatch(
+      /id="terminal-termination-modal"[\s\S]*aria-modal="true"[\s\S]*>Terminate<\/button>/,
+    );
+    expect(styles).toContain(".terminal-tab-indicator");
+    expect(styles).toMatch(/\[data-indicator=(?:"failed"|failed)\]/);
+    expect(styles).toMatch(/\[data-unread=(?:"true"|true)\]/);
+    expect(styles).toContain(".terminal-split-node");
+    expect(styles).toContain("touch-action:none");
+    expect(styles).toMatch(
+      /data-state=(?:"closed"|closed)\]\[data-layout-interactive=(?:"false"|false)\]/,
+    );
   });
 });

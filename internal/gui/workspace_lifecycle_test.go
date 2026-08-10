@@ -85,6 +85,13 @@ func TestWorkspaceCoordinatorRequiresFencedConfirmationAndCanCancel(t *testing.T
 	if err := app.CancelWorkspaceChange(result.ConfirmationToken); err != nil {
 		t.Fatalf("CancelWorkspaceChange: %v", err)
 	}
+	if got := workspace.activeResourceSummary().Terminals; got != 1 {
+		t.Fatalf("active terminals after cancel = %d, want 1", got)
+	}
+	manager := workspace.terminals.(*countingWorkspaceTerminalManager)
+	if got := manager.shutdownCount(); got != 0 {
+		t.Fatalf("terminal shutdown calls after cancel = %d, want 0", got)
+	}
 	release, err := workspace.beginOperation(1, true)
 	if err != nil {
 		t.Fatalf("resource admission after cancel: %v", err)

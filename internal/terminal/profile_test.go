@@ -40,6 +40,25 @@ func TestValidateProfileAcceptsStableIdentityAndKnownKinds(t *testing.T) {
 	}
 }
 
+func TestSortProfilesUsesDeterministicShellFirstOrder(t *testing.T) {
+	profiles := []Profile{
+		{ID: "agent-z", Name: "Agent Z", Kind: ProfileAgent},
+		{ID: "shell-z", Name: "Z shell", Kind: ProfileShell},
+		{ID: "agent-a", Name: "Agent A", Kind: ProfileAgent},
+		{ID: "shell-default", Name: "Default shell", Kind: ProfileShell},
+		{ID: "shell-a", Name: "A shell", Kind: ProfileShell},
+	}
+	SortProfiles(profiles)
+	got := make([]string, 0, len(profiles))
+	for _, profile := range profiles {
+		got = append(got, profile.ID)
+	}
+	want := []string{"shell-default", "shell-a", "shell-z", "agent-a", "agent-z"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("sorted profile IDs = %v, want %v", got, want)
+	}
+}
+
 func TestValidateProfileRejectsMissingIdentityAndUnknownKind(t *testing.T) {
 	executable := filepath.Join(t.TempDir(), "terminal")
 	tests := []struct {

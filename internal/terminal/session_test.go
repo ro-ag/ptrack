@@ -158,6 +158,69 @@ func TestSessionStartFailureTransitionsToFailed(t *testing.T) {
 	}
 }
 
+func TestSessionAttachmentLeaseAttachAndExpiryHaveOneWinner(t *testing.T) {
+	t.Run("attachment cancels expiry", func(t *testing.T) {
+		session := newSession(StartRequest{}, testSessionDependencies(&sessionTestFactory{}))
+		if _, _, err := session.attachOutput(); err != nil {
+			t.Fatalf("attach output: %v", err)
+		}
+		select {
+		case <-session.AttachmentSignal():
+		default:
+			t.Fatal("attachment signal was not closed")
+		}
+		if session.ExpireUnattached() {
+			t.Fatal("expiry won after attachment")
+		}
+	})
+
+	t.Run("expiry rejects later attachment", func(t *testing.T) {
+		session := newSession(StartRequest{}, testSessionDependencies(&sessionTestFactory{}))
+		if !session.ExpireUnattached() {
+			t.Fatal("first expiry did not claim session")
+		}
+		if session.ExpireUnattached() {
+			t.Fatal("second expiry claimed session again")
+		}
+		if _, _, err := session.attachOutput(); err == nil {
+			t.Fatal("attachment succeeded after lease expiry")
+		}
+		select {
+		case <-session.AttachmentSignal():
+			t.Fatal("expiry incorrectly reported a stream attachment")
+		default:
+		}
+	})
+
+	t.Run("concurrent race has exactly one winner", func(t *testing.T) {
+		for range 100 {
+			session := newSession(StartRequest{}, testSessionDependencies(&sessionTestFactory{}))
+			start := make(chan struct{})
+			results := make(chan bool, 2)
+			go func() {
+				<-start
+				_, _, err := session.attachOutput()
+				results <- err == nil
+			}()
+			go func() {
+				<-start
+				results <- session.ExpireUnattached()
+			}()
+			close(start)
+			winners := 0
+			if <-results {
+				winners++
+			}
+			if <-results {
+				winners++
+			}
+			if winners != 1 {
+				t.Fatalf("attachment/expiry winners = %d, want exactly 1", winners)
+			}
+		}
+	})
+}
+
 func TestSessionPassesRequestedStartDataToPTY(t *testing.T) {
 	process := newControlledPTYProcess()
 	factory := &sessionTestFactory{process: process}

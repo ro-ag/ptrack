@@ -50,6 +50,29 @@ func TestGetTerminalProfilesReturnsSafeMetadataAndPropagatesError(t *testing.T) 
 	}
 }
 
+func TestGetTerminalProfilesOrdersShellDefaultBeforeAgentInput(t *testing.T) {
+	manager := &fakeGUITerminalManager{
+		profiles: []terminal.Profile{
+			{ID: "agent-codex", Name: "Codex", Kind: terminal.ProfileAgent},
+			{ID: "shell-z", Name: "Z shell", Kind: terminal.ProfileShell},
+			{ID: "shell-default", Name: "Default shell", Kind: terminal.ProfileShell},
+		},
+	}
+	app, _ := newTerminalBindingTestApp(t, manager, nil)
+	profiles, err := app.GetTerminalProfiles()
+	if err != nil {
+		t.Fatalf("GetTerminalProfiles: %v", err)
+	}
+	got := make([]string, 0, len(profiles))
+	for _, profile := range profiles {
+		got = append(got, profile.ID)
+	}
+	want := []string{"shell-default", "shell-z", "agent-codex"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("safe profile order = %v, want %v", got, want)
+	}
+}
+
 func TestCreateTerminalWaitsForStartupBeforeCreatingAndEmitting(t *testing.T) {
 	manager := &fakeGUITerminalManager{
 		createResult: managedTerminalSession{
@@ -234,6 +257,132 @@ func TestAgentTerminalReceivesHostMintedCapabilityIdentityAndRevokesOnClose(t *t
 	}
 }
 
+func TestTerminalAttachmentLeaseExpiresUnclaimedSessionAfterRevocation(t *testing.T) {
+	attach := make(chan struct{})
+	timer := make(chan time.Time, 1)
+	var expireMu sync.Mutex
+	expired := false
+	order := make(chan string, 2)
+	closed := make(chan struct{})
+	manager := &fakeGUITerminalManager{
+		profiles: []terminal.Profile{{ID: "agent-codex", Name: "Codex", Kind: terminal.ProfileAgent}},
+		createResult: managedTerminalSession{
+			SessionID: "unclaimed", ProfileID: "agent-codex", ProfileKind: terminal.ProfileAgent,
+			CWD: t.TempDir(), State: terminal.SessionRunning, attachSignal: attach,
+			expireUnattached: func() bool {
+				expireMu.Lock()
+				defer expireMu.Unlock()
+				if expired {
+					return false
+				}
+				expired = true
+				return true
+			},
+		},
+		closeHook: func(string, bool) {
+			order <- "close"
+			close(closed)
+		},
+	}
+	app, _ := newTerminalBindingTestApp(t, manager, nil)
+	app.terminalAttachLease = time.Minute
+	app.terminalAttachAfter = func(time.Duration) <-chan time.Time { return timer }
+	broker := &fakeWorkspaceCapabilityBroker{
+		token:             "host-minted-token",
+		revokeSessionHook: func(string) { order <- "revoke" },
+	}
+	app.workspace.capabilities = broker
+
+	if _, err := app.CreateTerminal("agent-codex", "", 24, 80); err != nil {
+		t.Fatalf("CreateTerminal: %v", err)
+	}
+	timer <- time.Now()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("unclaimed terminal lease did not close session")
+	}
+	waitContext, cancelWait := context.WithTimeout(context.Background(), time.Second)
+	defer cancelWait()
+	if err := app.terminalOps.WaitContext(waitContext); err != nil {
+		t.Fatalf("wait for terminal lease cleanup: %v", err)
+	}
+	if first, second := <-order, <-order; first != "revoke" || second != "close" {
+		t.Fatalf("lease cleanup order = %q then %q, want revoke then close", first, second)
+	}
+	if call := manager.lastClose(); call.sessionID != "unclaimed" || !call.force {
+		t.Fatalf("lease close = %#v, want forced unclaimed close", call)
+	}
+	if got := app.workspace.activeResourceSummary().Terminals; got != 0 {
+		t.Fatalf("active terminals after lease expiry = %d, want 0", got)
+	}
+	manager.mu.Lock()
+	closeCalls := len(manager.closes)
+	manager.mu.Unlock()
+	if closeCalls != 1 {
+		t.Fatalf("lease close calls = %d, want exactly 1", closeCalls)
+	}
+}
+
+func TestTerminalAttachmentCancelsLeaseAndWorkspaceShutdownOwnsUnclaimedCleanup(t *testing.T) {
+	t.Run("attachment cancels", func(t *testing.T) {
+		attach := make(chan struct{})
+		close(attach)
+		timer := make(chan time.Time, 1)
+		manager := &fakeGUITerminalManager{
+			profiles: []terminal.Profile{{ID: "shell-default", Name: "Shell", Kind: terminal.ProfileShell}},
+			createResult: managedTerminalSession{
+				SessionID: "attached", ProfileID: "shell-default", State: terminal.SessionRunning,
+				attachSignal: attach, expireUnattached: func() bool { t.Fatal("attached session expired"); return false },
+			},
+		}
+		app, _ := newTerminalBindingTestApp(t, manager, nil)
+		app.terminalAttachAfter = func(time.Duration) <-chan time.Time { return timer }
+		if _, err := app.CreateTerminal("shell-default", "", 24, 80); err != nil {
+			t.Fatalf("CreateTerminal: %v", err)
+		}
+		waitContext, cancelWait := context.WithTimeout(context.Background(), time.Second)
+		defer cancelWait()
+		if err := app.terminalOps.WaitContext(waitContext); err != nil {
+			t.Fatalf("wait for attachment lease cancellation: %v", err)
+		}
+		timer <- time.Now()
+		manager.mu.Lock()
+		defer manager.mu.Unlock()
+		if len(manager.closes) != 0 {
+			t.Fatalf("attached session lease closes = %v", manager.closes)
+		}
+	})
+
+	t.Run("workspace shutdown owns cleanup", func(t *testing.T) {
+		attach := make(chan struct{})
+		timer := make(chan time.Time, 1)
+		manager := &fakeGUITerminalManager{
+			profiles: []terminal.Profile{{ID: "shell-default", Name: "Shell", Kind: terminal.ProfileShell}},
+			createResult: managedTerminalSession{
+				SessionID: "unclaimed", ProfileID: "shell-default", State: terminal.SessionRunning,
+				attachSignal: attach, expireUnattached: func() bool { t.Fatal("shutdown session expired"); return false },
+			},
+		}
+		app, _ := newTerminalBindingTestApp(t, manager, nil)
+		app.terminalAttachAfter = func(time.Duration) <-chan time.Time { return timer }
+		if _, err := app.CreateTerminal("shell-default", "", 24, 80); err != nil {
+			t.Fatalf("CreateTerminal: %v", err)
+		}
+		app.onShutdown(context.Background())
+		timer <- time.Now()
+		app.onShutdown(context.Background())
+		manager.mu.Lock()
+		defer manager.mu.Unlock()
+		if len(manager.closes) != 0 {
+			t.Fatalf("frontend per-session closes during shutdown = %v", manager.closes)
+		}
+		if manager.shutdownCalls != 1 {
+			t.Fatalf("manager shutdown calls = %d, want 1", manager.shutdownCalls)
+		}
+	})
+}
+
 func TestCapabilityIdentityFailsClosedWhenProfileMetadataIsUnavailable(t *testing.T) {
 	profilesErr := errors.New("profile discovery failed")
 	manager := &fakeGUITerminalManager{
@@ -300,8 +449,40 @@ func TestTerminalSessionJSONContainsOnlySafeOpaqueMetadata(t *testing.T) {
 	}
 }
 
+func TestValidateTerminalCWDsV2IsBoundedAndDoesNotCreateSessions(t *testing.T) {
+	manager := &fakeGUITerminalManager{}
+	app, projectRoot := newTerminalBindingTestApp(t, manager, nil)
+	valid := filepath.Join(projectRoot, "saved")
+	if err := os.Mkdir(valid, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	revision := app.workspace.resourceRevisionValue()
+	result, err := app.ValidateTerminalCWDsV2(0, []string{"", valid, filepath.Join(projectRoot, "missing")})
+	if err != nil {
+		t.Fatalf("ValidateTerminalCWDsV2: %v", err)
+	}
+	if len(result.Results) != 3 || result.Results[0].CWD != "" || !result.Results[0].Valid {
+		t.Fatalf("validation results = %#v", result.Results)
+	}
+	if !result.Results[1].Valid || result.Results[1].CWD != valid || result.Results[2].Valid {
+		t.Fatalf("validation results = %#v", result.Results)
+	}
+	if len(manager.creates) != 0 || len(manager.closes) != 0 {
+		t.Fatalf("CWD validation touched terminal sessions: creates=%d closes=%d", len(manager.creates), len(manager.closes))
+	}
+	if got := app.workspace.resourceRevisionValue(); got != revision {
+		t.Fatalf("read-only CWD validation changed resource revision: got %d want %d", got, revision)
+	}
+	if _, err := app.ValidateTerminalCWDsV2(0, []string{valid, valid}); err == nil {
+		t.Fatal("duplicate CWD validation did not fail")
+	}
+	if _, err := app.ValidateTerminalCWDsV2(0, make([]string, 97)); err == nil {
+		t.Fatal("oversized CWD validation did not fail")
+	}
+}
+
 func TestResizeAndCloseTerminalDelegateOrderingForceAndErrors(t *testing.T) {
-	invalidSessionErr := errors.New("session not found")
+	invalidSessionErr := terminal.ErrSessionNotFound
 	resizeErr := errors.New("resize failed")
 	closeErr := errors.New("close failed")
 	manager := &fakeGUITerminalManager{
@@ -340,14 +521,45 @@ func TestResizeAndCloseTerminalDelegateOrderingForceAndErrors(t *testing.T) {
 	if err := app.ResizeTerminal("missing", 24, 80); !errors.Is(err, invalidSessionErr) {
 		t.Fatalf("invalid resize error = %v, want %v", err, invalidSessionErr)
 	}
-	if err := app.CloseTerminal("missing", false); !errors.Is(err, invalidSessionErr) {
-		t.Fatalf("invalid close error = %v, want %v", err, invalidSessionErr)
+	if err := app.CloseTerminal("missing", false); err != nil {
+		t.Fatalf("missing close should be idempotent: %v", err)
 	}
 	if err := app.ResizeTerminal("broken", 24, 80); !errors.Is(err, resizeErr) {
 		t.Fatalf("resize manager error = %v, want %v", err, resizeErr)
 	}
 	if err := app.CloseTerminal("broken", true); !errors.Is(err, closeErr) {
 		t.Fatalf("close manager error = %v, want %v", err, closeErr)
+	}
+}
+
+func TestCloseTerminalNotFoundIsIdempotentAndRevokesBeforeEveryClose(t *testing.T) {
+	var order []string
+	manager := &fakeGUITerminalManager{
+		closeErrors: map[string]error{"missing": terminal.ErrSessionNotFound},
+		closeHook: func(string, bool) {
+			order = append(order, "close")
+		},
+	}
+	app, _ := newTerminalBindingTestApp(t, manager, nil)
+	broker := &fakeWorkspaceCapabilityBroker{
+		revokeSessionHook: func(string) {
+			order = append(order, "revoke")
+		},
+	}
+	app.workspace.capabilities = broker
+
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := app.CloseTerminal("missing", false); err != nil {
+			t.Fatalf("CloseTerminal attempt %d: %v", attempt+1, err)
+		}
+	}
+
+	wantOrder := []string{"revoke", "close", "revoke", "close"}
+	if !reflect.DeepEqual(order, wantOrder) {
+		t.Fatalf("close ordering = %v, want %v", order, wantOrder)
+	}
+	if len(manager.closes) != 2 || len(broker.revokedSessions) != 2 {
+		t.Fatalf("repeated close calls = %d, revocations = %d, want 2 each", len(manager.closes), len(broker.revokedSessions))
 	}
 }
 
@@ -534,6 +746,7 @@ type fakeGUITerminalManager struct {
 
 	closes      []terminalCloseCall
 	closeErrors map[string]error
+	closeHook   func(string, bool)
 
 	shutdownCalls    int
 	shutdownErr      error
@@ -610,6 +823,9 @@ func (m *fakeGUITerminalManager) Close(sessionID string, force bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.closes = append(m.closes, terminalCloseCall{sessionID: sessionID, force: force})
+	if m.closeHook != nil {
+		m.closeHook(sessionID, force)
+	}
 	return m.closeErrors[sessionID]
 }
 
@@ -652,11 +868,12 @@ type terminalCreateCall struct {
 }
 
 type fakeWorkspaceCapabilityBroker struct {
-	token           string
-	boundToken      string
-	boundSession    string
-	revokedTokens   []string
-	revokedSessions []string
+	token             string
+	boundToken        string
+	boundSession      string
+	revokedTokens     []string
+	revokedSessions   []string
+	revokeSessionHook func(string)
 }
 
 func (b *fakeWorkspaceCapabilityBroker) IssueSessionToken(string) (string, error) {
@@ -671,6 +888,9 @@ func (b *fakeWorkspaceCapabilityBroker) RevokeToken(token string) {
 }
 func (b *fakeWorkspaceCapabilityBroker) RevokeSession(sessionID string) {
 	b.revokedSessions = append(b.revokedSessions, sessionID)
+	if b.revokeSessionHook != nil {
+		b.revokeSessionHook(sessionID)
+	}
 }
 func (b *fakeWorkspaceCapabilityBroker) RevokeCapability(uint64)        {}
 func (b *fakeWorkspaceCapabilityBroker) Shutdown(context.Context) error { return nil }

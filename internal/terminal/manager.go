@@ -79,6 +79,7 @@ func (m *Manager) Profiles() []Profile {
 	for _, profile := range m.profiles {
 		profiles = append(profiles, cloneProfile(profile))
 	}
+	SortProfiles(profiles)
 	return profiles
 }
 

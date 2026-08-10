@@ -27,6 +27,17 @@ type TerminalStatus struct {
 	State      terminal.SessionState `json:"state"`
 }
 
+type TerminalCWDValidation struct {
+	Requested string `json:"requested"`
+	CWD       string `json:"cwd"`
+	Valid     bool   `json:"valid"`
+}
+
+type TerminalCWDValidationsV2 struct {
+	Generation uint64                  `json:"generation"`
+	Results    []TerminalCWDValidation `json:"results"`
+}
+
 type TerminalExit struct {
 	Generation uint64                `json:"generation"`
 	SessionID  string                `json:"sessionId"`
@@ -50,17 +61,19 @@ type TerminalSessionV2 struct {
 }
 
 type managedTerminalSession struct {
-	SessionID      string
-	ProfileID      string
-	CWD            string
-	State          terminal.SessionState
-	StreamURL      string
-	ProfileKind    terminal.ProfileKind
-	Provider       string
-	PID            int
-	StartedAt      time.Time
-	LastActivityAt time.Time
-	exitResults    <-chan terminal.ExitResult
+	SessionID        string
+	ProfileID        string
+	CWD              string
+	State            terminal.SessionState
+	StreamURL        string
+	ProfileKind      terminal.ProfileKind
+	Provider         string
+	PID              int
+	StartedAt        time.Time
+	LastActivityAt   time.Time
+	exitResults      <-chan terminal.ExitResult
+	attachSignal     <-chan struct{}
+	expireUnattached func() bool
 }
 
 type terminalManager interface {
@@ -122,17 +135,19 @@ func (m productionTerminalManager) wrapSession(
 	}
 	info := session.Info()
 	return managedTerminalSession{
-		SessionID:      session.ID(),
-		ProfileID:      session.ProfileID(),
-		CWD:            session.CWD(),
-		State:          session.State(),
-		StreamURL:      streamURL,
-		ProfileKind:    info.ProfileKind,
-		Provider:       info.Provider,
-		PID:            info.PID,
-		StartedAt:      info.StartedAt,
-		LastActivityAt: info.LastActivityAt,
-		exitResults:    session.ExitResults(),
+		SessionID:        session.ID(),
+		ProfileID:        session.ProfileID(),
+		CWD:              session.CWD(),
+		State:            session.State(),
+		StreamURL:        streamURL,
+		ProfileKind:      info.ProfileKind,
+		Provider:         info.Provider,
+		PID:              info.PID,
+		StartedAt:        info.StartedAt,
+		LastActivityAt:   info.LastActivityAt,
+		exitResults:      session.ExitResults(),
+		attachSignal:     session.AttachmentSignal(),
+		expireUnattached: session.ExpireUnattached,
 	}, nil
 }
 
@@ -223,6 +238,7 @@ func safeTerminalProfiles(profiles []terminal.Profile) []terminal.Profile {
 			Provider: profile.Provider,
 		}
 	}
+	terminal.SortProfiles(copies)
 	return copies
 }
 
@@ -242,6 +258,49 @@ func (a *App) CreateTerminal(
 		CWD:       result.CWD,
 		State:     result.State,
 		StreamURL: result.StreamURL,
+	}, nil
+}
+
+func (a *App) ValidateTerminalCWDsV2(
+	generation uint64,
+	requested []string,
+) (TerminalCWDValidationsV2, error) {
+	workspace, _, release, err := a.beginTerminalOperation(generation, false)
+	if err != nil {
+		return TerminalCWDValidationsV2{}, err
+	}
+	defer release()
+	if len(requested) > 96 {
+		return TerminalCWDValidationsV2{}, errors.New("too many terminal working directories")
+	}
+	seen := make(map[string]struct{}, len(requested))
+	results := make([]TerminalCWDValidation, 0, len(requested))
+	for _, value := range requested {
+		if len(value) > 4096 {
+			return TerminalCWDValidationsV2{}, errors.New("terminal working directory is too long")
+		}
+		if _, duplicate := seen[value]; duplicate {
+			return TerminalCWDValidationsV2{}, errors.New("terminal working directories must be unique")
+		}
+		seen[value] = struct{}{}
+		if value == "" {
+			results = append(results, TerminalCWDValidation{Requested: value, CWD: value, Valid: true})
+			continue
+		}
+		cwd, resolveErr := terminal.ResolveCWD(workspace.root, value)
+		valid := resolveErr == nil && len(cwd) <= 4096
+		if !valid {
+			cwd = ""
+		}
+		results = append(results, TerminalCWDValidation{
+			Requested: value,
+			CWD:       cwd,
+			Valid:     valid,
+		})
+	}
+	return TerminalCWDValidationsV2{
+		Generation: workspace.Generation(),
+		Results:    results,
 	}, nil
 }
 
@@ -346,7 +405,56 @@ func (a *App) CreateTerminalV2(
 	if session.exitResults != nil {
 		a.monitorTerminalExit(workspace, session.SessionID, session.exitResults)
 	}
+	a.monitorTerminalAttachmentLease(workspace, manager, session)
 	return result, nil
+}
+
+func (a *App) monitorTerminalAttachmentLease(
+	workspace *WorkspaceContext,
+	manager terminalManager,
+	session managedTerminalSession,
+) {
+	if session.attachSignal == nil || session.expireUnattached == nil {
+		return
+	}
+	timeout := a.terminalAttachLease
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	after := a.terminalAttachAfter
+	if after == nil {
+		after = time.After
+	}
+	a.terminalOps.Add(1)
+	go func() {
+		defer a.terminalOps.Done()
+		select {
+		case <-session.attachSignal:
+			return
+		case <-workspace.Context().Done():
+			return
+		case <-after(timeout):
+			if !session.expireUnattached() {
+				return
+			}
+		}
+
+		// Capability revocation must precede even a failed or delayed process
+		// close so an unattached agent cannot retain network authority.
+		if broker := workspace.capabilityBroker(); broker != nil {
+			broker.RevokeSession(session.SessionID)
+		}
+		// CloseSession transfers this ID out of manager ownership before it
+		// waits for process teardown, including error returns. The lease still
+		// has to remove the GUI record so shutdown/retry cannot treat it as live.
+		_ = manager.Close(session.SessionID, true)
+		workspace.removeTerminal(session.SessionID)
+		a.publishWorkspaceTerminalStatus(workspace, TerminalStatus{
+			Generation: workspace.Generation(),
+			SessionID:  session.SessionID,
+			State:      terminal.SessionClosed,
+		})
+	}()
 }
 
 func (a *App) ResizeTerminal(sessionID string, rows, columns int) error {
@@ -392,7 +500,8 @@ func (a *App) CloseTerminalV2(
 	if broker := workspace.capabilityBroker(); broker != nil {
 		broker.RevokeSession(sessionID)
 	}
-	if err := manager.Close(sessionID, force); err != nil {
+	if err := manager.Close(sessionID, force); err != nil &&
+		!errors.Is(err, terminal.ErrSessionNotFound) {
 		return err
 	}
 	workspace.removeTerminal(sessionID)
