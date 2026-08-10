@@ -48,6 +48,18 @@ func TestGobRoundTrip(t *testing.T) {
 	if got := gobRoundTrip(t, ref); !reflect.DeepEqual(got, ref) {
 		t.Errorf("ref mismatch: got %+v want %+v", got, ref)
 	}
+
+	capability := Capability{
+		ID: 7, ModelVersion: CapabilityModelVersion, Name: "origin", Kind: CapabilityGit,
+		AgentProfile: "agent-codex", Enabled: true, ApprovedAt: now, ExpiresAt: now.Add(time.Hour),
+		Limits:    CapabilityLimits{TimeoutSeconds: 30, MaxOutputBytes: 1 << 20},
+		Audit:     CapabilityAuditPolicy{Enabled: true, RetainLast: 100},
+		Git:       &GitScope{RemoteURL: "https://example.com/acme/repo.git", Operations: []string{"status", "fetch"}},
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if got := gobRoundTrip(t, capability); !reflect.DeepEqual(got, capability) {
+		t.Errorf("capability mismatch: got %+v want %+v", got, capability)
+	}
 }
 
 func TestTaskStatusOpen(t *testing.T) {

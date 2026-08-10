@@ -16,9 +16,9 @@ import (
 var ErrNotFound = errors.New("not found")
 
 // CurrentFormat is the on-disk schema version this build writes and understands.
-// v2 adds the milestones and issues buckets and Plan.MilestoneID; v3 adds the
-// commits bucket.
-const CurrentFormat uint = 3
+// v2 adds milestones/issues, v3 adds commits, and v4 adds project capability
+// grants plus their bounded metadata audit trail.
+const CurrentFormat uint = 4
 
 // WriterVersion is the ptrack semver recorded on writes for diagnostics. main
 // sets it from the resolved CLI version; it defaults to "dev".
@@ -36,14 +36,16 @@ func (e ErrFormatTooNew) Error() string {
 }
 
 var (
-	bucketMeta       = []byte("meta")
-	bucketPlans      = []byte("plans")
-	bucketTasks      = []byte("tasks")
-	bucketNotes      = []byte("notes")
-	bucketMilestones = []byte("milestones")
-	bucketIssues     = []byte("issues")
-	bucketCommits    = []byte("commits")
-	keyMeta          = []byte("meta")
+	bucketMeta             = []byte("meta")
+	bucketPlans            = []byte("plans")
+	bucketTasks            = []byte("tasks")
+	bucketNotes            = []byte("notes")
+	bucketMilestones       = []byte("milestones")
+	bucketIssues           = []byte("issues")
+	bucketCommits          = []byte("commits")
+	bucketCapabilities     = []byte("capabilities")
+	bucketCapabilityAudits = []byte("capability_audits")
+	keyMeta                = []byte("meta")
 )
 
 // Store is a handle to one project's bbolt database.
@@ -71,7 +73,7 @@ func (s *Store) Close() error { return s.db.Close() }
 
 func (s *Store) init() error {
 	return s.db.Update(func(tx *bolt.Tx) error {
-		for _, b := range [][]byte{bucketMeta, bucketPlans, bucketTasks, bucketNotes, bucketMilestones, bucketIssues, bucketCommits} {
+		for _, b := range [][]byte{bucketMeta, bucketPlans, bucketTasks, bucketNotes, bucketMilestones, bucketIssues, bucketCommits, bucketCapabilities, bucketCapabilityAudits} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
@@ -115,6 +117,8 @@ func migrateMeta(m *model.Meta) {
 	// v1 -> v2: milestones/issues buckets are created by init; Plan.MilestoneID
 	//           defaults to 0. Nothing to transform.
 	// v2 -> v3: commits bucket is created by init. Nothing to transform.
+	// v3 -> v4: capability and audit buckets are created by init. Nothing to
+	//           transform because existing projects begin with no grants.
 	_ = m
 }
 

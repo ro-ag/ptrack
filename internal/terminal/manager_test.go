@@ -145,6 +145,35 @@ func TestManagerSessionSnapshotIncludesOwnedProcessMetadata(t *testing.T) {
 	}
 }
 
+func TestManagerCreateWithEnvInjectsHostValuesBeforeLaunch(t *testing.T) {
+	root := t.TempDir()
+	process := newManagerFakeProcess()
+	factory := newManagerFakeFactory(managerStartOutcome{process: process})
+	manager := newManagerForTest(t, root, factory)
+	cleanupManager(t, manager, process)
+	if _, err := manager.CreateWithEnv("agent", "", 24, 80, map[string]string{
+		"PTRACK_CAPABILITY_TOKEN": "opaque-token",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	starts := factory.recordedStarts()
+	if len(starts) != 1 || !containsEnvironment(starts[0].Env, "PTRACK_CAPABILITY_TOKEN=opaque-token") {
+		t.Fatalf("start environment = %v", starts)
+	}
+	if _, err := manager.CreateWithEnv("agent", "", 24, 80, map[string]string{"BAD=KEY": "x"}); err == nil {
+		t.Fatal("unsafe per-launch environment accepted")
+	}
+}
+
+func containsEnvironment(environment []string, wanted string) bool {
+	for _, entry := range environment {
+		if entry == wanted {
+			return true
+		}
+	}
+	return false
+}
+
 func TestManagerCreateFailureIsCleanedUpAndNotRetained(t *testing.T) {
 	projectRoot := t.TempDir()
 	startError := errors.New("start failed")

@@ -27,27 +27,29 @@ type workspaceCloseTimeouts struct {
 }
 
 type workspaceContextConfig struct {
-	generation  uint64
-	root        string
-	dbPath      string
-	name        string
-	initialPlan uint64
-	terminals   workspaceShutdowner
-	agents      workspaceShutdowner
-	timeouts    workspaceCloseTimeouts
+	generation   uint64
+	root         string
+	dbPath       string
+	name         string
+	initialPlan  uint64
+	terminals    workspaceShutdowner
+	agents       workspaceShutdowner
+	capabilities workspaceShutdowner
+	timeouts     workspaceCloseTimeouts
 }
 
 // WorkspaceContext owns every resource associated with one published project
 // generation. It never retains an open project store.
 type WorkspaceContext struct {
-	generation  uint64
-	root        string
-	dbPath      string
-	name        string
-	initialPlan uint64
-	terminals   workspaceShutdowner
-	agents      workspaceShutdowner
-	timeouts    workspaceCloseTimeouts
+	generation   uint64
+	root         string
+	dbPath       string
+	name         string
+	initialPlan  uint64
+	terminals    workspaceShutdowner
+	agents       workspaceShutdowner
+	capabilities workspaceShutdowner
+	timeouts     workspaceCloseTimeouts
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -86,6 +88,7 @@ func newWorkspaceContext(config workspaceContextConfig) *WorkspaceContext {
 		initialPlan:      config.initialPlan,
 		terminals:        config.terminals,
 		agents:           config.agents,
+		capabilities:     config.capabilities,
 		timeouts:         config.timeouts,
 		ctx:              ctx,
 		cancel:           cancel,
@@ -281,6 +284,7 @@ func (w *WorkspaceContext) runClose() {
 	}{
 		{name: "terminal", timeout: w.timeouts.terminals, value: w.terminals},
 		{name: "agent", timeout: w.timeouts.agents, value: w.agents},
+		{name: "capability", timeout: w.timeouts.agents, value: w.capabilities},
 	}
 	results := make(chan resourceResult, len(resources))
 	var wait sync.WaitGroup

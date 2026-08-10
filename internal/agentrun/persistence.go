@@ -63,6 +63,118 @@ func RuntimeDir(globalHome, projectRoot string) (string, error) {
 	return filepath.Join(absHome, "runtime", hex.EncodeToString(hash[:])), nil
 }
 
+// PublishRuntimeJSON atomically writes a private JSON descriptor in the
+// per-project runtime directory. It lets sibling host services reuse the same
+// Unix permission and Windows ACL guarantees as AgentRun descriptors.
+func PublishRuntimeJSON(globalHome, projectRoot, name string, value any) (string, error) {
+	if filepath.Base(name) != name || name == "." || name == "" {
+		return "", errors.New("runtime descriptor name must be a base name")
+	}
+	directory, err := RuntimeDir(globalHome, projectRoot)
+	if err != nil {
+		return "", err
+	}
+	if err := preparePrivateRuntimeDir(directory); err != nil {
+		return "", err
+	}
+	unlock, err := lockPrivateDescriptor(directory)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = unlock() }()
+	token, err := randomOpaqueValue()
+	if err != nil {
+		return "", err
+	}
+	temporary := filepath.Join(directory, "."+name+"-"+token)
+	file, err := openPrivateDescriptor(temporary)
+	if err != nil {
+		return "", err
+	}
+	encodeErr := json.NewEncoder(file).Encode(value)
+	syncErr := file.Sync()
+	closeErr := file.Close()
+	if err := errors.Join(encodeErr, syncErr, closeErr); err != nil {
+		_ = os.Remove(temporary)
+		return "", err
+	}
+	path := filepath.Join(directory, name)
+	if err := replacePrivateDescriptor(temporary, path); err != nil {
+		_ = os.Remove(temporary)
+		return "", err
+	}
+	if err := securePublishedDescriptor(path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// RemoveRuntimeFile removes one named per-project runtime descriptor.
+func RemoveRuntimeFile(globalHome, projectRoot, name string) error {
+	if filepath.Base(name) != name || name == "." || name == "" {
+		return errors.New("runtime descriptor name must be a base name")
+	}
+	directory, err := RuntimeDir(globalHome, projectRoot)
+	if err != nil {
+		return err
+	}
+	err = os.Remove(filepath.Join(directory, name))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
+// RemoveRuntimeJSONIfEqual removes one descriptor only when it is still the
+// exact value published by the caller. The descriptor lock makes the compare
+// and remove atomic with respect to PublishRuntimeJSON, so an older workspace
+// generation cannot remove a replacement generation's locator.
+func RemoveRuntimeJSONIfEqual(globalHome, projectRoot, name string, expected any) error {
+	if filepath.Base(name) != name || name == "." || name == "" {
+		return errors.New("runtime descriptor name must be a base name")
+	}
+	directory, err := RuntimeDir(globalHome, projectRoot)
+	if err != nil {
+		return err
+	}
+	unlock, err := lockPrivateDescriptor(directory)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = unlock() }()
+
+	expectedJSON, err := json.Marshal(expected)
+	if err != nil {
+		return err
+	}
+	contents, err := os.ReadFile(filepath.Join(directory, name))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var actualJSON json.RawMessage
+	if err := json.Unmarshal(contents, &actualJSON); err != nil || !jsonEqual(actualJSON, expectedJSON) {
+		return nil
+	}
+	err = os.Remove(filepath.Join(directory, name))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
+func jsonEqual(left, right []byte) bool {
+	var leftValue, rightValue any
+	if json.Unmarshal(left, &leftValue) != nil || json.Unmarshal(right, &rightValue) != nil {
+		return false
+	}
+	leftJSON, leftErr := json.Marshal(leftValue)
+	rightJSON, rightErr := json.Marshal(rightValue)
+	return leftErr == nil && rightErr == nil && string(leftJSON) == string(rightJSON)
+}
+
 // RunHistoryPath returns the run-history file location for a project.
 func RunHistoryPath(globalHome, projectRoot string) (string, error) {
 	dir, err := RuntimeDir(globalHome, projectRoot)

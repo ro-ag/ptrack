@@ -201,6 +201,57 @@ func TestCreateTerminalPassesExplicitCWDAndRejectsInvalidProfile(t *testing.T) {
 	}
 }
 
+func TestAgentTerminalReceivesHostMintedCapabilityIdentityAndRevokesOnClose(t *testing.T) {
+	manager := &fakeGUITerminalManager{
+		profiles: []terminal.Profile{{ID: "agent-codex", Name: "Codex", Kind: terminal.ProfileAgent}},
+		createResult: managedTerminalSession{
+			SessionID: "session-1", ProfileID: "agent-codex", ProfileKind: terminal.ProfileAgent,
+			CWD: t.TempDir(), State: terminal.SessionRunning,
+		},
+	}
+	app, projectRoot := newTerminalBindingTestApp(t, manager, nil)
+	projectRoot, _ = filepath.EvalSymlinks(projectRoot)
+	broker := &fakeWorkspaceCapabilityBroker{token: "host-minted-token"}
+	app.workspace.capabilities = broker
+	if _, err := app.CreateTerminal("agent-codex", "", 24, 80); err != nil {
+		t.Fatal(err)
+	}
+	call := manager.lastCreate()
+	if call.environment["PTRACK_CAPABILITY_TOKEN"] != "host-minted-token" ||
+		call.environment["PTRACK_CAPABILITY_PROFILE"] != "agent-codex" ||
+		call.environment["PTRACK_CAPABILITY_PROJECT"] != projectRoot ||
+		call.environment["PTRACK_CAPABILITY_GENERATION"] != "1" {
+		t.Fatalf("capability environment = %#v", call.environment)
+	}
+	if broker.boundToken != "host-minted-token" || broker.boundSession != "session-1" {
+		t.Fatalf("bound identity = %q / %q", broker.boundToken, broker.boundSession)
+	}
+	if err := app.CloseTerminal("session-1", true); err != nil {
+		t.Fatal(err)
+	}
+	if len(broker.revokedSessions) != 1 || broker.revokedSessions[0] != "session-1" {
+		t.Fatalf("revoked sessions = %v", broker.revokedSessions)
+	}
+}
+
+func TestCapabilityIdentityFailsClosedWhenProfileMetadataIsUnavailable(t *testing.T) {
+	profilesErr := errors.New("profile discovery failed")
+	manager := &fakeGUITerminalManager{
+		profilesErr: profilesErr,
+		createResult: managedTerminalSession{
+			SessionID: "must-not-start", ProfileID: "agent-codex",
+		},
+	}
+	app, _ := newTerminalBindingTestApp(t, manager, nil)
+	app.workspace.capabilities = &fakeWorkspaceCapabilityBroker{token: "unused"}
+	if _, err := app.CreateTerminal("agent-codex", "", 24, 80); !errors.Is(err, profilesErr) {
+		t.Fatalf("CreateTerminal error = %v, want %v", err, profilesErr)
+	}
+	if len(manager.creates) != 0 {
+		t.Fatalf("terminal was launched despite missing identity metadata: %v", manager.creates)
+	}
+}
+
 func TestTerminalSessionJSONContainsOnlySafeOpaqueMetadata(t *testing.T) {
 	manager := &fakeGUITerminalManager{
 		createResult: managedTerminalSession{
@@ -310,12 +361,17 @@ func TestCloseTerminalDoesNotEmitFalseClosingStateOnManagerError(t *testing.T) {
 		events = append(events, name)
 	})
 	app, _ := newTerminalBindingTestApp(t, manager, emitter)
+	broker := &fakeWorkspaceCapabilityBroker{}
+	app.workspace.capabilities = broker
 
 	if err := app.CloseTerminal("broken", false); !errors.Is(err, closeErr) {
 		t.Fatalf("CloseTerminal error = %v, want %v", err, closeErr)
 	}
 	if len(events) != 0 {
 		t.Fatalf("failed close emitted events: %#v", events)
+	}
+	if len(broker.revokedSessions) != 1 || broker.revokedSessions[0] != "broken" {
+		t.Fatalf("failed close left broker identity active: %v", broker.revokedSessions)
 	}
 }
 
@@ -523,6 +579,22 @@ func (m *fakeGUITerminalManager) Create(
 	return m.createResult, nil
 }
 
+func (m *fakeGUITerminalManager) CreateWithEnv(
+	profileID string,
+	cwd string,
+	rows int,
+	columns int,
+	environment map[string]string,
+) (managedTerminalSession, error) {
+	result, err := m.Create(profileID, cwd, rows, columns)
+	m.mu.Lock()
+	if len(m.creates) > 0 {
+		m.creates[len(m.creates)-1].environment = environment
+	}
+	m.mu.Unlock()
+	return result, err
+}
+
 func (m *fakeGUITerminalManager) Resize(sessionID string, rows, columns int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -572,11 +644,36 @@ func (m *fakeGUITerminalManager) lastClose() terminalCloseCall {
 }
 
 type terminalCreateCall struct {
-	profileID string
-	cwd       string
-	rows      int
-	columns   int
+	profileID   string
+	cwd         string
+	rows        int
+	columns     int
+	environment map[string]string
 }
+
+type fakeWorkspaceCapabilityBroker struct {
+	token           string
+	boundToken      string
+	boundSession    string
+	revokedTokens   []string
+	revokedSessions []string
+}
+
+func (b *fakeWorkspaceCapabilityBroker) IssueSessionToken(string) (string, error) {
+	return b.token, nil
+}
+func (b *fakeWorkspaceCapabilityBroker) BindSession(token, sessionID string) error {
+	b.boundToken, b.boundSession = token, sessionID
+	return nil
+}
+func (b *fakeWorkspaceCapabilityBroker) RevokeToken(token string) {
+	b.revokedTokens = append(b.revokedTokens, token)
+}
+func (b *fakeWorkspaceCapabilityBroker) RevokeSession(sessionID string) {
+	b.revokedSessions = append(b.revokedSessions, sessionID)
+}
+func (b *fakeWorkspaceCapabilityBroker) RevokeCapability(uint64)        {}
+func (b *fakeWorkspaceCapabilityBroker) Shutdown(context.Context) error { return nil }
 
 type terminalResizeCall struct {
 	sessionID string

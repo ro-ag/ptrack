@@ -70,6 +70,7 @@ describe("workspace presentation policy", () => {
     expect(commandShortcut({ key: "K", ctrl: true })).toBe("palette");
     expect(commandShortcut({ key: "1", meta: true })).toBe("board");
     expect(commandShortcut({ key: "2", meta: true })).toBe("overview");
+    expect(commandShortcut({ key: "3", meta: true })).toBe("settings");
     expect(commandShortcut({ key: "n", meta: true })).toBe("addTask");
   });
 

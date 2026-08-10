@@ -1,6 +1,16 @@
 import { mountTerminalDock } from "./terminal/pane";
 import { initTheme } from "./theme";
 import {
+  canEnableCapability,
+  canStartCapabilitySave,
+  capabilityResponseIsCurrent,
+  capabilityRiskGrants,
+  capabilityStateLabel,
+  diagnosticLabel,
+  gitCapabilityNeedsSSH,
+  splitCapabilityList,
+} from "./capabilities/presentation";
+import {
   clampSidebarWidth,
   defaultSidebarWidth,
   sidebarHiddenStorageKey,
@@ -48,8 +58,10 @@ const elements = {
   sidebarToggle: document.querySelector("#sidebar-toggle"),
   workspace: document.querySelector("#workspace"),
   overviewPage: document.querySelector("#overview-page"),
+  settingsPage: document.querySelector("#settings-page"),
   navBoard: document.querySelector("#nav-board"),
   navOverview: document.querySelector("#nav-overview"),
+  navSettings: document.querySelector("#nav-settings"),
   stateScreen: document.querySelector("#workspace-state-screen"),
   stateEyebrow: document.querySelector("#workspace-state-eyebrow"),
   stateHeading: document.querySelector("#workspace-state-heading"),
@@ -127,6 +139,64 @@ const elements = {
   paletteResults: document.querySelector("#palette-results"),
   planRing: document.querySelector("#plan-ring"),
   heatmap: document.querySelector("#activity-heatmap"),
+  capabilityNew: document.querySelector("#capability-new"),
+  capabilityClear: document.querySelector("#capability-clear"),
+  capabilityForm: document.querySelector("#capability-form"),
+  capabilityEditorTitle: document.querySelector("#capability-editor-title"),
+  capabilityID: document.querySelector("#capability-id"),
+  capabilityName: document.querySelector("#capability-name"),
+  capabilityProfile: document.querySelector("#capability-profile"),
+  capabilityKind: document.querySelector("#capability-kind"),
+  capabilityDuration: document.querySelector("#capability-duration"),
+  capabilityTimeout: document.querySelector("#capability-timeout"),
+  capabilityResponseLimit: document.querySelector("#capability-response-limit"),
+  capabilityRequestLimit: document.querySelector("#capability-request-limit"),
+  capabilityOutputLimit: document.querySelector("#capability-output-limit"),
+  capabilityConcurrency: document.querySelector("#capability-concurrency"),
+  capabilityRedirects: document.querySelector("#capability-redirects"),
+  capabilityAuditRetain: document.querySelector("#capability-audit-retain"),
+  capabilityAudit: document.querySelector("#capability-audit"),
+  capabilityHTTPFields: document.querySelector("#capability-http-fields"),
+  capabilityHTTPURL: document.querySelector("#capability-http-url"),
+  capabilityHTTPMethods: document.querySelector("#capability-http-methods"),
+  capabilityHTTPPaths: document.querySelector("#capability-http-paths"),
+  capabilityGitFields: document.querySelector("#capability-git-fields"),
+  capabilityGitName: document.querySelector("#capability-git-name"),
+  capabilityGitURL: document.querySelector("#capability-git-url"),
+  capabilityGitSSHID: document.querySelector("#capability-git-ssh-id"),
+  capabilityGitOperations: document.querySelector("#capability-git-operations"),
+  capabilityGitBranches: document.querySelector("#capability-git-branches"),
+  capabilityGitRefspecs: document.querySelector("#capability-git-refspecs"),
+  capabilityGitTags: document.querySelector("#capability-git-tags"),
+  capabilityGitForce: document.querySelector("#capability-git-force"),
+  capabilityGitDelete: document.querySelector("#capability-git-delete"),
+  capabilitySSHFields: document.querySelector("#capability-ssh-fields"),
+  capabilitySSHAlias: document.querySelector("#capability-ssh-alias"),
+  capabilitySSHHost: document.querySelector("#capability-ssh-host"),
+  capabilitySSHPort: document.querySelector("#capability-ssh-port"),
+  capabilitySSHUser: document.querySelector("#capability-ssh-user"),
+  capabilitySSHKey: document.querySelector("#capability-ssh-key"),
+  capabilitySSHCommands: document.querySelector("#capability-ssh-commands"),
+  capabilitySSHGit: document.querySelector("#capability-ssh-git"),
+  capabilitySSHUpload: document.querySelector("#capability-ssh-upload"),
+  capabilitySSHDownload: document.querySelector("#capability-ssh-download"),
+  capabilitySSHShell: document.querySelector("#capability-ssh-shell"),
+  capabilitySSHUploadLocal: document.querySelector("#capability-ssh-upload-local"),
+  capabilitySSHUploadRemote: document.querySelector("#capability-ssh-upload-remote"),
+  capabilitySSHDownloadLocal: document.querySelector("#capability-ssh-download-local"),
+  capabilitySSHDownloadRemote: document.querySelector("#capability-ssh-download-remote"),
+  capabilitySSHLocalForward: document.querySelector("#capability-ssh-local-forward"),
+  capabilitySSHRemoteForward: document.querySelector("#capability-ssh-remote-forward"),
+  capabilityPreviewButton: document.querySelector("#capability-preview"),
+  capabilityTestButton: document.querySelector("#capability-test"),
+  capabilitySaveButton: document.querySelector("#capability-save"),
+  capabilityPreviewResult: document.querySelector("#capability-preview-result"),
+  capabilityEffectiveScope: document.querySelector("#capability-effective-scope"),
+  capabilityRiskSummary: document.querySelector("#capability-risk-summary"),
+  capabilityDiagnostic: document.querySelector("#capability-diagnostic"),
+  capabilityTotal: document.querySelector("#capability-total"),
+  capabilityList: document.querySelector("#capability-list"),
+  capabilityAuditList: document.querySelector("#capability-audit-list"),
   toast: document.querySelector("#toast"),
 };
 
@@ -168,6 +238,14 @@ let paletteSequence = 0;
 let paletteReturnFocus = null;
 let pendingDetailTaskId = 0;
 let heatmapRequested = false;
+let capabilityViews = [];
+let capabilityPreview = null;
+let capabilityRequest = 0;
+let capabilityFormRevision = 0;
+let capabilityPreviewRequest = 0;
+let capabilityTestRequest = 0;
+let capabilityAuditRequest = 0;
+let capabilitySaveInFlight = false;
 const expandedLanes = new Set();
 const foldedLanes = new Set();
 
@@ -1575,25 +1653,534 @@ async function loadRecentProjects() {
   }
 }
 
+function numberValue(element, fallback = 0) {
+  const value = Number(element.value);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function capabilityDraftFromForm() {
+  const kind = elements.capabilityKind.value;
+  const draft = {
+    id: numberValue(elements.capabilityID),
+    model_version: 1,
+    name: elements.capabilityName.value.trim(),
+    kind,
+    agent_profile: elements.capabilityProfile.value.trim(),
+    approval_duration_seconds: Math.round(
+      numberValue(elements.capabilityDuration, 60) * 60,
+    ),
+    limits: {
+      timeout_seconds: numberValue(elements.capabilityTimeout, 30),
+      max_request_bytes: numberValue(elements.capabilityRequestLimit, 1048576),
+      max_response_bytes: numberValue(
+        elements.capabilityResponseLimit,
+        4194304,
+      ),
+      max_output_bytes: numberValue(elements.capabilityOutputLimit, 1048576),
+      max_redirects: numberValue(elements.capabilityRedirects, 3),
+      max_concurrent: numberValue(elements.capabilityConcurrency, 1),
+    },
+    audit: {
+      enabled: elements.capabilityAudit.checked,
+      retain_last: numberValue(elements.capabilityAuditRetain, 100),
+    },
+  };
+  if (kind === "http") {
+    draft.http = {
+      base_url: elements.capabilityHTTPURL.value.trim(),
+      methods: splitCapabilityList(elements.capabilityHTTPMethods.value),
+      path_prefixes: splitCapabilityList(elements.capabilityHTTPPaths.value),
+    };
+  } else if (kind === "git") {
+    draft.git = {
+      remote_name: elements.capabilityGitName.value.trim(),
+      remote_url: elements.capabilityGitURL.value.trim(),
+      operations: splitCapabilityList(elements.capabilityGitOperations.value),
+      branches: splitCapabilityList(elements.capabilityGitBranches.value),
+      refspecs: splitCapabilityList(elements.capabilityGitRefspecs.value),
+      allow_tags: elements.capabilityGitTags.checked,
+      allow_force_push: elements.capabilityGitForce.checked,
+      allow_delete_refs: elements.capabilityGitDelete.checked,
+    };
+  } else if (kind === "ssh") {
+    draft.ssh = {
+      alias: elements.capabilitySSHAlias.value.trim(),
+      host: elements.capabilitySSHHost.value.trim(),
+      port: numberValue(elements.capabilitySSHPort, 22),
+      user: elements.capabilitySSHUser.value.trim(),
+      host_key: elements.capabilitySSHKey.value.trim(),
+      allow_git: elements.capabilitySSHGit.checked,
+      remote_commands: splitCapabilityList(elements.capabilitySSHCommands.value),
+      allow_upload: elements.capabilitySSHUpload.checked,
+      allow_download: elements.capabilitySSHDownload.checked,
+      upload_roots: splitCapabilityList(elements.capabilitySSHUploadLocal.value),
+      upload_remote_roots: splitCapabilityList(
+        elements.capabilitySSHUploadRemote.value,
+      ),
+      download_roots: splitCapabilityList(
+        elements.capabilitySSHDownloadLocal.value,
+      ),
+      download_remote_roots: splitCapabilityList(
+        elements.capabilitySSHDownloadRemote.value,
+      ),
+      allow_interactive_shell: elements.capabilitySSHShell.checked,
+      local_forward_targets: splitCapabilityList(
+        elements.capabilitySSHLocalForward.value,
+      ),
+      remote_forward_targets: splitCapabilityList(
+        elements.capabilitySSHRemoteForward.value,
+      ),
+    };
+  }
+  return draft;
+}
+
+function syncCapabilityScopeFields() {
+  const kind = elements.capabilityKind.value;
+  elements.capabilityHTTPFields.hidden = kind !== "http";
+  elements.capabilityGitFields.hidden = kind !== "git";
+  elements.capabilitySSHFields.hidden = kind !== "ssh";
+}
+
+function invalidateCapabilityForm() {
+  capabilityFormRevision += 1;
+  invalidateCapabilityResponses();
+  capabilityPreview = null;
+  elements.capabilityPreviewResult.hidden = true;
+  elements.capabilityAuditList.hidden = true;
+}
+
+function invalidateCapabilityResponses() {
+  capabilityPreviewRequest += 1;
+  capabilityTestRequest += 1;
+  capabilityAuditRequest += 1;
+}
+
+function resetCapabilityForm() {
+  invalidateCapabilityForm();
+  elements.capabilityForm.reset();
+  elements.capabilityID.value = "0";
+  elements.capabilityEditorTitle.textContent = "New capability";
+  elements.capabilityPreviewResult.hidden = true;
+  elements.capabilityAuditList.hidden = true;
+  capabilityPreview = null;
+  syncCapabilityScopeFields();
+  elements.capabilityName.focus();
+}
+
+function setInputValue(element, value) {
+  element.value = value ?? "";
+}
+
+function fillCapabilityForm(view) {
+  invalidateCapabilityForm();
+  const capability = view.capability;
+  const limits = capability.limits || {};
+  const audit = capability.audit || {};
+  setInputValue(elements.capabilityID, capability.id);
+  setInputValue(elements.capabilityName, capability.name);
+  setInputValue(elements.capabilityProfile, capability.agent_profile);
+  setInputValue(elements.capabilityKind, capability.kind);
+  setInputValue(
+    elements.capabilityDuration,
+    Math.max(1, Math.round(capability.approval_duration_seconds / 60)),
+  );
+  setInputValue(elements.capabilityTimeout, limits.timeout_seconds);
+  setInputValue(elements.capabilityRequestLimit, limits.max_request_bytes);
+  setInputValue(elements.capabilityResponseLimit, limits.max_response_bytes);
+  setInputValue(elements.capabilityOutputLimit, limits.max_output_bytes);
+  setInputValue(elements.capabilityRedirects, limits.max_redirects);
+  setInputValue(elements.capabilityConcurrency, limits.max_concurrent);
+  elements.capabilityAudit.checked = Boolean(audit.enabled);
+  setInputValue(elements.capabilityAuditRetain, audit.retain_last);
+
+  const http = capability.http || {};
+  setInputValue(elements.capabilityHTTPURL, http.base_url);
+  setInputValue(elements.capabilityHTTPMethods, (http.methods || []).join(", "));
+  setInputValue(elements.capabilityHTTPPaths, (http.path_prefixes || []).join("\n"));
+
+  const git = capability.git || {};
+  setInputValue(elements.capabilityGitName, git.remote_name);
+  setInputValue(elements.capabilityGitURL, git.remote_url);
+  setInputValue(elements.capabilityGitSSHID, 0);
+  setInputValue(elements.capabilityGitOperations, (git.operations || []).join(", "));
+  setInputValue(elements.capabilityGitBranches, (git.branches || []).join(", "));
+  setInputValue(elements.capabilityGitRefspecs, (git.refspecs || []).join("\n"));
+  elements.capabilityGitTags.checked = Boolean(git.allow_tags);
+  elements.capabilityGitForce.checked = Boolean(git.allow_force_push);
+  elements.capabilityGitDelete.checked = Boolean(git.allow_delete_refs);
+
+  const ssh = capability.ssh || {};
+  setInputValue(elements.capabilitySSHAlias, ssh.alias);
+  setInputValue(elements.capabilitySSHHost, ssh.host);
+  setInputValue(elements.capabilitySSHPort, ssh.port || 22);
+  setInputValue(elements.capabilitySSHUser, ssh.user);
+  setInputValue(elements.capabilitySSHKey, ssh.host_key);
+  setInputValue(elements.capabilitySSHCommands, (ssh.remote_commands || []).join("\n"));
+  elements.capabilitySSHGit.checked = Boolean(ssh.allow_git);
+  elements.capabilitySSHUpload.checked = Boolean(ssh.allow_upload);
+  elements.capabilitySSHDownload.checked = Boolean(ssh.allow_download);
+  elements.capabilitySSHShell.checked = Boolean(ssh.allow_interactive_shell);
+  setInputValue(elements.capabilitySSHUploadLocal, (ssh.upload_roots || []).join(", "));
+  setInputValue(
+    elements.capabilitySSHUploadRemote,
+    (ssh.upload_remote_roots || []).join(", "),
+  );
+  setInputValue(
+    elements.capabilitySSHDownloadLocal,
+    (ssh.download_roots || []).join(", "),
+  );
+  setInputValue(
+    elements.capabilitySSHDownloadRemote,
+    (ssh.download_remote_roots || []).join(", "),
+  );
+  setInputValue(
+    elements.capabilitySSHLocalForward,
+    (ssh.local_forward_targets || []).join(", "),
+  );
+  setInputValue(
+    elements.capabilitySSHRemoteForward,
+    (ssh.remote_forward_targets || []).join(", "),
+  );
+
+  elements.capabilityEditorTitle.textContent = `Edit capability #${capability.id}`;
+  elements.capabilityAuditList.hidden = true;
+  syncCapabilityScopeFields();
+  showCapabilityPreview(view);
+  elements.capabilityName.focus();
+}
+
+function showCapabilityPreview(view, diagnostic = null) {
+  capabilityPreview = view;
+  elements.capabilityPreviewResult.hidden = false;
+  elements.capabilityEffectiveScope.textContent =
+    view?.effective_scope || "No effective scope available.";
+  const grants = capabilityRiskGrants(view?.capability);
+  elements.capabilityRiskSummary.textContent = grants.length
+    ? `High-risk grants: ${grants.join(", ")}.`
+    : "No write or interactive grants are in this scope.";
+  elements.capabilityDiagnostic.textContent = diagnosticLabel(diagnostic);
+}
+
+function capabilityEmpty(message) {
+  const empty = document.createElement("div");
+  empty.className = "capability-empty";
+  empty.textContent = message;
+  return empty;
+}
+
+function capabilityButton(label, action, disabled = false) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "button-secondary";
+  button.textContent = label;
+  button.disabled = disabled;
+  button.addEventListener("click", action);
+  return button;
+}
+
+async function runCapabilityAction(operation, progress, failed) {
+  if (workspaceController.state.status !== "open") return null;
+  invalidateCapabilityResponses();
+  const ticket = workspaceController.capture();
+  setStatus(progress);
+  try {
+    const result = await operation(ticket.generation);
+    if (!workspaceController.accepts(ticket, Number(result?.generation || 0))) {
+      return null;
+    }
+    await loadCapabilities();
+    setStatus("Capability settings ready");
+    return result;
+  } catch (error) {
+    if (ticket.epoch === workspaceController.capture().epoch) {
+      showError(error);
+      setStatus(failed);
+    }
+    return null;
+  }
+}
+
+async function enableCapability(view) {
+  const digest = view.capability.scope_digest;
+  if (!canEnableCapability(view, digest)) return;
+  const confirmed = window.confirm(
+    `Enable this exact scope for ${view.capability.agent_profile}?\n\n${view.effective_scope}`,
+  );
+  if (!confirmed) return;
+  await runCapabilityAction(
+    (generation) =>
+      api().EnableCapabilityV2(generation, Number(view.capability.id), digest),
+    `Enabling capability #${view.capability.id}…`,
+    `Could not enable capability #${view.capability.id}`,
+  );
+}
+
+async function loadCapabilityAudits(view) {
+  if (workspaceController.state.status !== "open") return;
+  const request = ++capabilityAuditRequest;
+  const ticket = workspaceController.capture();
+  try {
+    const result = await api().GetCapabilityAuditsV2(
+      ticket.generation,
+      Number(view.capability.id),
+      25,
+    );
+    if (
+      request !== capabilityAuditRequest ||
+      !workspaceController.accepts(ticket, Number(result.generation))
+    ) return;
+    elements.capabilityAuditList.replaceChildren();
+    const heading = document.createElement("p");
+    heading.className = "section-label";
+    heading.textContent = `Recent audit metadata · #${view.capability.id}`;
+    elements.capabilityAuditList.append(heading);
+    if (!result.audits?.length) {
+      elements.capabilityAuditList.append(capabilityEmpty("No audit records."));
+    } else {
+      result.audits.forEach((audit) => {
+        const item = document.createElement("div");
+        item.className = "capability-audit-item";
+        const outcome = audit.success ? "allowed" : `denied · ${audit.error_class}`;
+        item.textContent = `${audit.operation} · ${audit.target} · ${outcome} · ${audit.duration_millis} ms · ${relativeTime(audit.created_at)}`;
+        elements.capabilityAuditList.append(item);
+      });
+    }
+    elements.capabilityAuditList.hidden = false;
+  } catch (error) {
+    if (
+      request === capabilityAuditRequest &&
+      ticket.epoch === workspaceController.capture().epoch
+    ) showError(error);
+  }
+}
+
+async function testCapability() {
+  const draft = capabilityDraftFromForm();
+  const sshID = numberValue(elements.capabilityGitSSHID);
+  if (gitCapabilityNeedsSSH(draft) && sshID <= 0) {
+    setStatus("Select a separate approved SSH capability ID before testing Git over SSH");
+    elements.capabilityGitSSHID.focus();
+    return;
+  }
+  if (workspaceController.state.status !== "open") return;
+  const request = ++capabilityTestRequest;
+  const revision = capabilityFormRevision;
+  const ticket = workspaceController.capture();
+  setStatus("Testing connection without changing remote state…");
+  try {
+    const result = await api().TestCapabilityV2(ticket.generation, draft, sshID);
+    if (
+      !capabilityResponseIsCurrent(
+        request, capabilityTestRequest, revision, capabilityFormRevision,
+      ) || !workspaceController.accepts(ticket, Number(result.generation))
+    ) return;
+    showCapabilityPreview(capabilityPreview || { capability: draft }, result.diagnostic);
+    setStatus(diagnosticLabel(result.diagnostic));
+  } catch (error) {
+    if (
+      capabilityResponseIsCurrent(
+        request, capabilityTestRequest, revision, capabilityFormRevision,
+      ) && ticket.epoch === workspaceController.capture().epoch
+    ) {
+      showError(error);
+      setStatus("Connection test failed");
+    }
+  }
+}
+
+function renderCapabilities() {
+  elements.capabilityTotal.textContent = String(capabilityViews.length);
+  elements.capabilityList.replaceChildren();
+  if (!capabilityViews.length) {
+    elements.capabilityList.append(
+      capabilityEmpty("No capabilities. Broker tools are denied by default."),
+    );
+    return;
+  }
+  capabilityViews.forEach((view) => {
+    const capability = view.capability;
+    const card = document.createElement("article");
+    card.className = "capability-card";
+    const heading = document.createElement("div");
+    heading.className = "capability-card-heading";
+    const title = document.createElement("div");
+    const name = document.createElement("h3");
+    name.textContent = capability.name;
+    const metadata = document.createElement("p");
+    metadata.className = "intelligence-meta";
+    metadata.textContent = `${capability.kind.toUpperCase()} · ${capability.agent_profile} · revision ${capability.revision}`;
+    title.append(name, metadata);
+    const state = document.createElement("span");
+    state.className = "capability-state";
+    state.dataset.state = view.state;
+    state.textContent = capabilityStateLabel(view.state);
+    heading.append(title, state);
+
+    const scope = document.createElement("code");
+    scope.className = "capability-card-scope";
+    scope.textContent = view.effective_scope || view.error || "Invalid scope";
+    const grants = capabilityRiskGrants(capability);
+    const risk = document.createElement("p");
+    risk.className = grants.length ? "settings-warning" : "intelligence-meta";
+    risk.textContent = grants.length
+      ? `High-risk grants: ${grants.join(", ")}`
+      : "Read-only or connection-only scope";
+
+    const actions = document.createElement("div");
+    actions.className = "capability-card-actions";
+    actions.append(
+      capabilityButton("Edit", () => fillCapabilityForm(view)),
+      capabilityButton("Test", () => {
+        fillCapabilityForm(view);
+        if (gitCapabilityNeedsSSH(capability)) {
+          setStatus("Select a separate approved SSH capability ID before testing Git over SSH");
+          elements.capabilityGitSSHID.focus();
+          return;
+        }
+        void testCapability();
+      }, view.state === "invalid"),
+    );
+    if (view.state === "enabled") {
+      actions.append(
+        capabilityButton("Disable", () =>
+          void runCapabilityAction(
+            (generation) =>
+              api().DisableCapabilityV2(generation, Number(capability.id)),
+            `Disabling capability #${capability.id}…`,
+            `Could not disable capability #${capability.id}`,
+          ),
+        ),
+        capabilityButton("Expire now", () =>
+          void runCapabilityAction(
+            (generation) =>
+              api().ExpireCapabilityV2(generation, Number(capability.id)),
+            `Expiring capability #${capability.id}…`,
+            `Could not expire capability #${capability.id}`,
+          ),
+        ),
+      );
+    } else {
+      actions.append(
+        capabilityButton(
+          "Review and enable",
+          () => void enableCapability(view),
+          !canEnableCapability(view, capability.scope_digest),
+        ),
+      );
+    }
+    actions.append(
+      capabilityButton("Audit", () => void loadCapabilityAudits(view)),
+      capabilityButton("Remove", async () => {
+        if (!window.confirm(`Remove capability “${capability.name}”?`)) return;
+        await runCapabilityAction(
+          (generation) =>
+            api().RemoveCapabilityV2(generation, Number(capability.id)),
+          `Removing capability #${capability.id}…`,
+          `Could not remove capability #${capability.id}`,
+        );
+      }),
+    );
+    card.append(heading, scope, risk, actions);
+    elements.capabilityList.append(card);
+  });
+}
+
+async function loadCapabilities() {
+  if (workspaceController.state.status !== "open") return;
+  const request = ++capabilityRequest;
+  const ticket = workspaceController.capture();
+  try {
+    const result = await api().GetCapabilitiesV2(ticket.generation);
+    if (
+      request !== capabilityRequest ||
+      !workspaceController.accepts(ticket, Number(result.generation))
+    ) return;
+    capabilityViews = result.capabilities || [];
+    renderCapabilities();
+  } catch (error) {
+    if (
+      request === capabilityRequest &&
+      ticket.epoch === workspaceController.capture().epoch
+    ) {
+      elements.capabilityList.replaceChildren(
+        capabilityEmpty("Capabilities could not be loaded."),
+      );
+      showError(error);
+    }
+  }
+}
+
+async function previewCapability() {
+  if (workspaceController.state.status !== "open") return;
+  const request = ++capabilityPreviewRequest;
+  const revision = capabilityFormRevision;
+  const ticket = workspaceController.capture();
+  try {
+    const result = await api().PreviewCapabilityV2(
+      ticket.generation,
+      capabilityDraftFromForm(),
+    );
+    if (
+      !capabilityResponseIsCurrent(
+        request, capabilityPreviewRequest, revision, capabilityFormRevision,
+      ) || !workspaceController.accepts(ticket, Number(result.generation))
+    ) return;
+    showCapabilityPreview(result.view);
+  } catch (error) {
+    if (
+      capabilityResponseIsCurrent(
+        request, capabilityPreviewRequest, revision, capabilityFormRevision,
+      ) && ticket.epoch === workspaceController.capture().epoch
+    ) showError(error);
+  }
+}
+
+async function saveCapability() {
+  if (!canStartCapabilitySave(capabilitySaveInFlight)) return;
+  capabilitySaveInFlight = true;
+  elements.capabilitySaveButton.disabled = true;
+  const revision = capabilityFormRevision;
+  const draft = capabilityDraftFromForm();
+  try {
+    const result = await runCapabilityAction(
+      (generation) => api().SaveCapabilityV2(generation, draft),
+      "Saving disabled capability draft…",
+      "Could not save capability",
+    );
+    if (result?.view && revision === capabilityFormRevision) {
+      fillCapabilityForm(result.view);
+    }
+  } finally {
+    capabilitySaveInFlight = false;
+    elements.capabilitySaveButton.disabled = false;
+  }
+}
+
 function applyView() {
   const open = workspaceState.status === "open";
   elements.workspace.hidden = !open || view !== "board";
   elements.overviewPage.hidden = !open || view !== "overview";
+  elements.settingsPage.hidden = !open || view !== "settings";
   elements.navBoard.classList.toggle("active", view === "board");
   elements.navOverview.classList.toggle("active", view === "overview");
+  elements.navSettings.classList.toggle("active", view === "settings");
   if (view === "board") elements.navBoard.setAttribute("aria-current", "page");
   else elements.navBoard.removeAttribute("aria-current");
   if (view === "overview") elements.navOverview.setAttribute("aria-current", "page");
   else elements.navOverview.removeAttribute("aria-current");
+  if (view === "settings") elements.navSettings.setAttribute("aria-current", "page");
+  else elements.navSettings.removeAttribute("aria-current");
 }
 
 function setView(nextView) {
-  view = nextView === "overview" ? "overview" : "board";
+  view = ["overview", "settings"].includes(nextView) ? nextView : "board";
   applyView();
   if (view === "overview") {
     requestAnimationFrame(fitRecentMemory);
     void loadHeatmap();
   }
+  if (view === "settings") void loadCapabilities();
 }
 
 function renderWorkspaceState(state, focus = false) {
@@ -1605,6 +2192,7 @@ function renderWorkspaceState(state, focus = false) {
   elements.stateScreen.hidden = open;
   elements.navBoard.disabled = !open;
   elements.navOverview.disabled = !open;
+  elements.navSettings.disabled = !open;
   elements.switchProject.hidden = !open;
   elements.closeProject.hidden = !open;
   elements.openProject.hidden = open;
@@ -1612,6 +2200,8 @@ function renderWorkspaceState(state, focus = false) {
   elements.workspace.inert = false;
   elements.overviewPage.removeAttribute("aria-busy");
   elements.overviewPage.inert = false;
+  elements.settingsPage.removeAttribute("aria-busy");
+  elements.settingsPage.inert = false;
   elements.switchProject.disabled = false;
   elements.closeProject.disabled = false;
 
@@ -1633,6 +2223,16 @@ function renderWorkspaceState(state, focus = false) {
   closeTaskDetail();
   closePalette();
   heatmapRequested = false;
+  capabilityRequest += 1;
+  capabilityFormRevision += 1;
+  capabilityPreviewRequest += 1;
+  capabilityTestRequest += 1;
+  capabilityAuditRequest += 1;
+  capabilityViews = [];
+  capabilityPreview = null;
+  renderCapabilities();
+  elements.capabilityPreviewResult.hidden = true;
+  elements.capabilityAuditList.hidden = true;
   board = null;
   snapshot = null;
   elements.projectName.textContent = "Project workspace";
@@ -1664,6 +2264,8 @@ function publishBackendState(state, transition, focus = false, keepInert = false
     elements.workspace.setAttribute("aria-busy", "true");
     elements.overviewPage.inert = true;
     elements.overviewPage.setAttribute("aria-busy", "true");
+    elements.settingsPage.inert = true;
+    elements.settingsPage.setAttribute("aria-busy", "true");
   }
   if (state.status === "open" && !keepInert) void loadSnapshot(0);
   return true;
@@ -1676,6 +2278,8 @@ function beginWorkspaceTransition() {
     elements.workspace.setAttribute("aria-busy", "true");
     elements.overviewPage.inert = true;
     elements.overviewPage.setAttribute("aria-busy", "true");
+    elements.settingsPage.inert = true;
+    elements.settingsPage.setAttribute("aria-busy", "true");
     elements.switchProject.disabled = true;
     elements.closeProject.disabled = true;
     setStatus("Preparing project transition…");
@@ -1885,6 +2489,7 @@ function registerNativeProjectActions() {
     eventsOn("workspace:open-requested", () => void requestOpenProject()),
     eventsOn("workspace:switch-requested", () => void requestOpenProject()),
     eventsOn("workspace:close-requested", () => void requestCloseProject()),
+    eventsOn("workspace:capabilities-requested", () => setView("settings")),
     eventsOn("workspace:data-changed", () =>
       void loadSnapshot(board?.planId || 0, true),
     ),
@@ -1901,10 +2506,27 @@ window.addEventListener("resize", () => setSidebarWidth(sidebarWidth, false));
 
 elements.navBoard.addEventListener("click", () => setView("board"));
 elements.navOverview.addEventListener("click", () => setView("overview"));
+elements.navSettings.addEventListener("click", () => setView("settings"));
 
 window.addEventListener("focus", () => {
   if (workspaceController.state.status !== "open") return;
-  void loadSnapshot(board?.planId || 0, true);
+  if (view === "settings") void loadCapabilities();
+  else void loadSnapshot(board?.planId || 0, true);
+});
+
+elements.capabilityKind.addEventListener("change", syncCapabilityScopeFields);
+elements.capabilityForm.addEventListener("input", invalidateCapabilityForm);
+elements.capabilityNew.addEventListener("click", resetCapabilityForm);
+elements.capabilityClear.addEventListener("click", resetCapabilityForm);
+elements.capabilityPreviewButton.addEventListener("click", () =>
+  void previewCapability(),
+);
+elements.capabilityTestButton.addEventListener("click", () =>
+  void testCapability(),
+);
+elements.capabilityForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  void saveCapability();
 });
 
 elements.paletteInput.addEventListener("input", schedulePaletteSearch);
@@ -2052,6 +2674,7 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault();
     if (command === "board") setView("board");
     if (command === "overview") setView("overview");
+    if (command === "settings") setView("settings");
     if (command === "addTask") {
       setView("board");
       elements.taskTitle.focus();

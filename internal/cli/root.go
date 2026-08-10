@@ -60,6 +60,7 @@ func newRootCmd() *cobra.Command {
 		newStatusCmd(),
 		newProjectsCmd(),
 		newBackupCmd(),
+		newCapabilityCmd(),
 		newVersionCmd(),
 	)
 	// Let main.go own error reporting; silence cobra's own error/usage prints.

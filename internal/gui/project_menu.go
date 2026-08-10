@@ -11,6 +11,7 @@ const (
 	projectMenuOpenEvent   = "workspace:open-requested"
 	projectMenuSwitchEvent = "workspace:switch-requested"
 	projectMenuCloseEvent  = "workspace:close-requested"
+	capabilitiesMenuEvent  = "workspace:capabilities-requested"
 )
 
 func newProjectWorkspaceMenu(app *App) *menu.Menu {
@@ -29,8 +30,11 @@ func newProjectWorkspaceMenu(app *App) *menu.Menu {
 	project.AddText("Close Project", keys.CmdOrCtrl("w"), func(*menu.CallbackData) {
 		app.emitTerminalEvent(projectMenuCloseEvent, nil)
 	})
+	settings := result.AddSubmenu("Settings")
+	settings.AddText("Network Capabilities…", nil, func(*menu.CallbackData) {
+		app.emitTerminalEvent(capabilitiesMenuEvent, nil)
+	})
 	if runtime.GOOS == "darwin" {
-		settings := result.AddSubmenu("Settings")
 		settings.AddText("Install 'ptrack' Shell Command…", nil, func(*menu.CallbackData) {
 			app.InstallShellCommand()
 		})

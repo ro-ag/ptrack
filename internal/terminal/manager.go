@@ -83,6 +83,17 @@ func (m *Manager) Profiles() []Profile {
 }
 
 func (m *Manager) Create(profileID, requestedCWD string, rows, columns int) (*Session, error) {
+	return m.CreateWithEnv(profileID, requestedCWD, rows, columns, nil)
+}
+
+// CreateWithEnv starts a session with host-minted per-launch environment
+// values layered over the immutable profile. It is used for capability tokens
+// that must exist before the child process starts.
+func (m *Manager) CreateWithEnv(
+	profileID, requestedCWD string,
+	rows, columns int,
+	extraEnvironment map[string]string,
+) (*Session, error) {
 	m.mu.Lock()
 	if m.shuttingDown {
 		m.mu.Unlock()
@@ -102,7 +113,14 @@ func (m *Manager) Create(profileID, requestedCWD string, rows, columns int) (*Se
 	if err != nil {
 		return nil, err
 	}
-	environment, err := buildEnvironment(os.Environ(), profile.Env)
+	overrides := cloneEnvironment(profile.Env)
+	for key, value := range extraEnvironment {
+		if !safeEnvironmentEntry(key, value) {
+			return nil, fmt.Errorf("unsafe per-launch environment override %q", key)
+		}
+		overrides[key] = value
+	}
+	environment, err := buildEnvironment(os.Environ(), overrides)
 	if err != nil {
 		return nil, err
 	}
@@ -146,6 +164,14 @@ func (m *Manager) Create(profileID, requestedCWD string, rows, columns int) (*Se
 	m.sessions[id] = session
 	m.mu.Unlock()
 	return session, nil
+}
+
+func cloneEnvironment(source map[string]string) map[string]string {
+	clone := make(map[string]string, len(source))
+	for key, value := range source {
+		clone[key] = value
+	}
+	return clone
 }
 
 func (m *Manager) Get(sessionID string) (*Session, error) {

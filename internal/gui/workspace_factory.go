@@ -51,12 +51,13 @@ func buildProductionWorkspace(path string, initialPlan uint64) (*WorkspaceContex
 		return nil, err
 	}
 	workspace := newWorkspaceContext(workspaceContextConfig{
-		root:        root,
-		dbPath:      dbPath,
-		name:        filepath.Base(root),
-		initialPlan: initialPlan,
-		terminals:   productionTerminalManager{manager: manager},
-		agents:      newWorkspaceAgentResources(root, globalHome),
+		root:         root,
+		dbPath:       dbPath,
+		name:         filepath.Base(root),
+		initialPlan:  initialPlan,
+		terminals:    productionTerminalManager{manager: manager},
+		agents:       newWorkspaceAgentResources(root, globalHome),
+		capabilities: newWorkspaceCapabilityResources(globalHome, root, dbPath),
 	})
 	registerGUIProjectBestEffort(root)
 	return workspace, nil
