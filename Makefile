@@ -30,6 +30,7 @@ build: frontend-install frontend-build
 		-clean \
 		-nopackage \
 		-trimpath \
+		-ldflags "-X github.com/ro-ag/ptrack/internal/cli.Version=$(VERSION)" \
 		-windowsconsole
 
 # macOS app bundle: build/bin/p-track.app with the branded icon and the
@@ -38,7 +39,8 @@ build: frontend-install frontend-build
 # bundle's entry point is the launcher script (build/darwin/launcher), which
 # always runs `ptrack gui`; the Wails binary stays available as the plain CLI.
 package: frontend-install frontend-build
-	$(WAILS) build -clean -trimpath
+	$(WAILS) build -clean -trimpath \
+		-ldflags "-X github.com/ro-ag/ptrack/internal/cli.Version=$(VERSION)"
 	cp build/darwin/launcher "$(APP)/Contents/MacOS/p-track"
 	chmod +x "$(APP)/Contents/MacOS/p-track"
 	/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $(VERSION)" "$(APP)/Contents/Info.plist"

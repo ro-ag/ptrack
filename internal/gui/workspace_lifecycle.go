@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ro-ag/ptrack/internal/gitinfo"
+	"github.com/ro-ag/ptrack/internal/store"
 )
 
 type WorkspaceStatus string
@@ -35,6 +36,7 @@ type WorkspaceProject struct {
 type WorkspaceState struct {
 	Status     WorkspaceStatus   `json:"status"`
 	Generation uint64            `json:"generation"`
+	Version    string            `json:"version"`
 	Project    *WorkspaceProject `json:"project,omitempty"`
 	Error      string            `json:"error,omitempty"`
 }
@@ -97,6 +99,7 @@ func (a *App) workspaceStateLocked() WorkspaceState {
 	state := WorkspaceState{
 		Status:     a.workspaceStatus,
 		Generation: a.lastGeneration,
+		Version:    store.WriterVersion,
 		Error:      a.workspaceError,
 	}
 	if a.workspace != nil {

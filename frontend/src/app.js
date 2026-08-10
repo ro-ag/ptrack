@@ -25,6 +25,7 @@ import {
   WorkspaceController,
 } from "./workspace/controller";
 import {
+  appVersionLabel,
   collapsedLaneStatuses,
   commandShortcut,
   confirmationCopy,
@@ -69,6 +70,7 @@ const elements = {
   stateOpen: document.querySelector("#state-open-project-button"),
   recents: document.querySelector("#recent-project-list"),
   board: document.querySelector("#board"),
+  appVersion: document.querySelector("#app-version"),
   projectName: document.querySelector("#project-name"),
   planTitle: document.querySelector("#plan-title"),
   planTotal: document.querySelector("#plan-total"),
@@ -2188,6 +2190,11 @@ function setView(nextView) {
 function renderWorkspaceState(state, focus = false) {
   const wasOpen = workspaceState.status === "open";
   workspaceState = state;
+  if (typeof state.version === "string") {
+    const version = appVersionLabel(state.version);
+    elements.appVersion.textContent = version;
+    elements.appVersion.setAttribute("aria-label", `p-track version ${version}`);
+  }
   const open = state.status === "open";
   if (open && !wasOpen) view = "board";
   applyView();
