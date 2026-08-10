@@ -1,4 +1,4 @@
-# P-TRACK Embedded Terminal Design
+# p-track Embedded Terminal Design
 
 **Status:** Proposed
 **Date:** 2026-07-25
@@ -6,7 +6,7 @@
 
 ## Goal
 
-Put project tracking and model execution in one P-TRACK desktop window without
+Put project tracking and model execution in one p-track desktop window without
 embedding another terminal application or turning the Wails frontend into a
 second backend.
 
@@ -15,7 +15,7 @@ shell or agent CLI in the project root. Tabs, recursive splits, profiles, and
 workspace restoration build on the same session model after the transport spike
 passes.
 
-## Current P-TRACK Constraints
+## Current p-track Constraints
 
 - The desktop app uses Wails v2.13 and a Go backend.
 - `frontend/dist` is currently hand-maintained vanilla HTML, CSS, and JavaScript.
@@ -57,7 +57,7 @@ The dependency concern is real. The current
 has Angular 15, ng-bootstrap, RxJS, `tabby-core`, and `tabby-settings` peer
 dependencies. `tabby-local` and `tabby-electron` add more Tabby and Electron
 coupling. Importing these packages would bring an application framework into
-P-TRACK, not just a terminal widget.
+p-track, not just a terminal widget.
 
 ### Renderer abstraction
 
@@ -78,9 +78,9 @@ Tabby currently loads:
 - WebGL or Canvas rendering
 
 It also reaches into private xterm internals for scroll pinning, immediate
-repaint, keyboard behavior, and renderer recovery. P-TRACK should adopt the
+repaint, keyboard behavior, and renderer recovery. p-track should adopt the
 observable behavior but stay on public xterm APIs wherever possible. Tabby is
-on xterm 5.x; P-TRACK should use xterm 6.x, where DOM is the supported fallback
+on xterm 5.x; p-track should use xterm 6.x, where DOM is the supported fallback
 when WebGL is unavailable.
 
 ### Session and PTY separation
@@ -101,7 +101,7 @@ translates that interface into Electron IPC. The real
 [`PTYManager`](https://github.com/Eugeny/tabby/blob/14e2d60b9b6dee84a53c37f05eefeb803787de04/app/lib/pty.ts)
 lives in the main process and owns `node-pty`.
 
-P-TRACK should preserve these boundaries:
+p-track should preserve these boundaries:
 
 ```
 xterm pane -> terminal client -> byte transport -> Go session -> go-pty -> process
@@ -123,11 +123,11 @@ The PTY queue also avoids splitting incomplete UTF-8 sequences when converting
 bytes for the renderer.
 
 This is a critical production behavior. A terminal that works at a prompt can
-still consume unbounded memory or freeze during a large build log. P-TRACK's
+still consume unbounded memory or freeze during a large build log. p-track's
 stream protocol needs bounded chunks and acknowledgements tied to xterm write
 completion.
 
-P-TRACK can send `Uint8Array` directly to xterm, allowing xterm's streaming
+p-track can send `Uint8Array` directly to xterm, allowing xterm's streaming
 decoder to handle byte boundaries. It should not convert arbitrary PTY chunks
 to separate JavaScript strings.
 
@@ -137,7 +137,7 @@ Tabby uses a `ResizeObserver`, coalesces frontend resize work to about one fit
 per 32 ms, and audits PTY resize events at 100 ms. It preserves viewport
 position when the user has scrolled away from the bottom.
 
-P-TRACK should similarly separate:
+p-track should similarly separate:
 
 - fitting/redrawing xterm in response to layout changes;
 - sending coalesced rows/columns to the Go PTY;
@@ -152,7 +152,7 @@ Tabby detects known-incompatible renderers, handles WebGL context loss, retries
 context creation only while the pane is visible and focused, and eventually
 falls back.
 
-P-TRACK should start with WebGL when available and fall back to xterm's DOM
+p-track should start with WebGL when available and fall back to xterm's DOM
 renderer. It should dispose xterm/addon instances when panes close and call
 fit/redraw when a hidden tab becomes visible. Multiple tabs and panes make GPU
 context limits a real concern.
@@ -168,7 +168,7 @@ Tabby implements multiline-paste protection outside xterm:
    application is active.
 5. Use bracketed-paste markers when the terminal mode requests them.
 
-P-TRACK needs the same host-level interception so the warning cannot be bypassed
+p-track needs the same host-level interception so the warning cannot be bypassed
 by the ordinary keyboard paste path. Wails' native clipboard API is preferable
 to relying solely on browser clipboard permissions inside a webview.
 
@@ -178,7 +178,7 @@ Tabby's search panel wraps xterm's Search addon. It offers next/previous,
 incremental search, regex, case-sensitive, and whole-word options, and reports
 the active result/count. The options are persisted.
 
-P-TRACK should implement the same compact overlay per pane. This behavior can be
+p-track should implement the same compact overlay per pane. This behavior can be
 implemented directly with `@xterm/addon-search`; no Tabby code is required.
 
 ### Activity and completion notifications
@@ -193,7 +193,7 @@ The local terminal implementation obtains the child process tree through
 platform-specific native modules. It is not based on OSC 133/633 shell command
 markers.
 
-For P-TRACK:
+For p-track:
 
 - Direct agent profiles can notify reliably when their PTY process exits.
 - Any output can mark a hidden pane/tab as active.
@@ -210,14 +210,14 @@ array, environment overrides, CWD, icon/color, terminal color scheme, and
 behavior on session end. Custom profile defaults and group defaults are layered
 without mutating the source profile.
 
-P-TRACK needs a smaller immutable profile descriptor:
+p-track needs a smaller immutable profile descriptor:
 
 ```text
 id, name, executable, args[], cwd policy, env overrides, kind, exit behavior
 ```
 
 Commands and arguments stay separate; profiles must not concatenate
-user-controlled strings into a shell command. P-TRACK inherits the user's
+user-controlled strings into a shell command. p-track inherits the user's
 environment and never installs an agent CLI.
 
 ### Recursive splits
@@ -236,7 +236,7 @@ containers, flattens adjacent containers with the same orientation, and
 renormalizes ratios. The same tree drives pane geometry, drag/drop targets,
 spanners, focus navigation, and serialization.
 
-P-TRACK should adopt this data model, expressed as plain versioned data rather
+p-track should adopt this data model, expressed as plain versioned data rather
 than Angular component instances:
 
 ```json
@@ -277,7 +277,7 @@ A “live PTY ID” only helps while the process owning the PTY survives, such a
 renderer reload. It does not make an ordinary terminal process survive a full
 application shutdown.
 
-P-TRACK restoration semantics are:
+p-track restoration semantics are:
 
 - restore dock visibility/height, tabs, split tree, selected pane, profile, and
   last reported CWD;
@@ -294,7 +294,7 @@ a kill/cancel warning, and performs TERM-then-KILL graceful shutdown on Unix.
 The PTY manager outlives renderer components, which enables reattachment by ID
 within the same application process.
 
-P-TRACK's Go manager similarly owns sessions independently of frontend DOM
+p-track's Go manager similarly owns sessions independently of frontend DOM
 nodes. Closing a live pane requires confirmation. Application shutdown closes
 WebSockets, terminates process groups/ConPTY sessions, closes PTY handles, and
 waits for goroutines with a bounded timeout.
@@ -307,7 +307,7 @@ important: terminal bytes use an authenticated loopback WebSocket. Wails
 bindings handle URL discovery and resize, while a Wails event handles clear.
 
 That is stronger than routing PTY bytes through Wails events, which serialize
-event payloads as JSON. P-TRACK should retain this control-plane/data-plane
+event payloads as JSON. p-track should retain this control-plane/data-plane
 split.
 
 WailsTerm remains a reference, not code to embed:
@@ -320,7 +320,7 @@ WailsTerm remains a reference, not code to embed:
 - Windows and Linux are not tested;
 - its source is MPL-2.0.
 
-P-TRACK will use one dynamically assigned loopback listener for all sessions,
+p-track will use one dynamically assigned loopback listener for all sessions,
 strict token/origin validation, explicit shutdown, event-driven resize, bounded
 flow control, and its own Apache-2.0-compatible implementation.
 
@@ -370,7 +370,7 @@ shutdown. `gui.App` exposes only profile/lifecycle/resize bindings and emits
 low-frequency status events.
 
 Use `github.com/aymanbagabas/go-pty` v0.2.3. It provides Unix PTYs and Windows
-ConPTY behind one Go interface. Wrap it behind a P-TRACK-owned factory so unit
+ConPTY behind one Go interface. Wrap it behind a p-track-owned factory so unit
 tests use fakes and a future backend can be substituted without changing GUI
 bindings.
 
@@ -427,7 +427,7 @@ Backend session IDs and WebSocket URLs are runtime-only.
 Persist a project-keyed workspace document in `localStorage` for the initial
 implementation. Validate the version and shape before use; corrupt state falls
 back to one default pane. A later change can move the same schema into the
-global P-TRACK store if cross-webview migration or centralized settings require
+global p-track store if cross-webview migration or centralized settings require
 it.
 
 ## Delivery Stages
@@ -470,7 +470,7 @@ task status.
 - TanStack Start, SSR, or a second JavaScript backend.
 - Installing shells or agent CLIs.
 - Running commands without a user action.
-- Persisting live processes across full P-TRACK shutdown.
+- Persisting live processes across full p-track shutdown.
 - Prompt scraping as completion detection.
 - SSH, serial, file transfer, ZMODEM, plugin compatibility, or terminal images
   in the initial delivery.

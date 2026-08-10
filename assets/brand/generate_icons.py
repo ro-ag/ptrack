@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the P-TRACK brand icon set and README banner.
+"""Generate the p-track brand icon set and README banner.
 
 Brand concept: a dark terminal-style squircle holding three kanban columns
 (todo / doing / done) in the brand palette, finished with a check on the done
@@ -176,7 +176,7 @@ def draw_banner(width: int, height: int, out: Path, social: bool = False) -> Non
 
     title_size = round(H * (0.30 if not social else 0.24))
     title_font = menlo(title_size)
-    title = "P-TRACK"
+    title = "p-track"
     tagline = "Persistent project memory for humans and AI agents"
 
     # Shrink the tagline until it fits the canvas width.

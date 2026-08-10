@@ -9,7 +9,7 @@ import (
 
 func TestEnsureShellPathAppendsManagedBlock(t *testing.T) {
 	profile := filepath.Join(t.TempDir(), ".zprofile")
-	changed, err := ensureShellPath(profile, "/Applications/P-TRACK.app/Contents/MacOS")
+	changed, err := ensureShellPath(profile, "/Applications/p-track.app/Contents/MacOS")
 	if err != nil {
 		t.Fatalf("ensureShellPath: %v", err)
 	}
@@ -24,7 +24,7 @@ func TestEnsureShellPathAppendsManagedBlock(t *testing.T) {
 	if !strings.Contains(content, shellPathMarkerBegin) || !strings.Contains(content, shellPathMarkerEnd) {
 		t.Fatalf("managed markers missing:\n%s", content)
 	}
-	if !strings.Contains(content, `export PATH="$PATH:/Applications/P-TRACK.app/Contents/MacOS"`) {
+	if !strings.Contains(content, `export PATH="$PATH:/Applications/p-track.app/Contents/MacOS"`) {
 		t.Fatalf("PATH entry missing:\n%s", content)
 	}
 }

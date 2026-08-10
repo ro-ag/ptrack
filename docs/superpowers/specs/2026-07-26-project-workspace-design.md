@@ -1,4 +1,4 @@
-# P-TRACK Project Workspace Design
+# p-track Project Workspace Design
 
 **Status:** Reviewed
 **Date:** 2026-07-26
@@ -6,7 +6,7 @@
 
 ## Goal
 
-Make the desktop application the canonical P-TRACK project GUI. The process
+Make the desktop application the canonical p-track project GUI. The process
 must be able to start without a project, open and switch projects without a
 restart, present one bounded project-intelligence snapshot, and reliably
 dispose every resource owned by the previous project.
@@ -32,7 +32,7 @@ The durable application has five user-visible states:
    present the welcome screen without exiting the process.
 
 Starting `ptrack gui [PATH]` resolves PATH, defaulting to the current directory.
-If PATH does not contain or sit beneath a P-TRACK project, Wails still starts
+If PATH does not contain or sit beneath a p-track project, Wails still starts
 in Welcome. `ptrack board --gui [--plan ID]` remains a compatible alias for
 `ptrack gui` in the current directory.
 
@@ -73,7 +73,7 @@ Open, close, and switch are serialized.
 
 1. Reserve a transition/request ID. This is distinct from the published
    project generation and cannot invalidate the still-open project.
-2. Resolve the selected directory to an existing P-TRACK database and
+2. Resolve the selected directory to an existing p-track database and
    canonical root.
 3. Fence active-resource admission on the current context and capture its
    resource revision. If terminals or live AgentRuns are active, return a
@@ -182,7 +182,7 @@ The project toolbar and Welcome screen expose:
 - recent registered projects, newest first.
 
 Open/Switch invokes Wails' native directory dialog. Selecting a nested
-directory resolves upward using P-TRACK discovery. Cancelling makes no state
+directory resolves upward using p-track discovery. Cancelling makes no state
 change. Recent projects are bounded to 20 entries and stale paths are labeled;
 choosing one uses the same open/switch path.
 
@@ -211,7 +211,7 @@ WorkspaceSnapshot
   generation, capturedAt, stale
   project {name, root, dbPath, storage status/version}
   tracking {goal, handoff, plans, selected/active plan, board tasks}
-  blockers, issues, recent notes, recent P-TRACK activity, inventory
+  blockers, issues, recent notes, recent p-track activity, inventory
   terminals
   agentRuns
   git {state, status, refs, remotes, commits, divergence, stale branches}
@@ -225,7 +225,7 @@ Bounds:
 - project-wide blockers: 50;
 - open issues: 50;
 - recent notes: 50;
-- recent P-TRACK activity: 24;
+- recent p-track activity: 24;
 - terminal sessions: 64;
 - AgentRuns: 64;
 - Git remotes: 16;
@@ -304,8 +304,8 @@ the Git section while the tracking snapshot remains usable.
 ## AgentRun Registry
 
 Create `internal/agentrun`, independent of GUI, terminal, and store packages.
-It tracks only agents launched through a P-TRACK agent profile or explicitly
-registered through the P-TRACK API. It never scans process names, terminal
+It tracks only agents launched through a p-track agent profile or explicitly
+registered through the p-track API. It never scans process names, terminal
 titles, or arbitrary process tables.
 
 An AgentRun has:
@@ -359,7 +359,7 @@ close. Snapshot output is newest-activity-first and bounded. Registry storage
 is capped at 1,024 records; inactive oldest records are evicted, while a full
 set of active runs rejects new registration instead of hiding live work.
 
-Provider is immutable metadata from an installed P-TRACK agent profile or an
+Provider is immutable metadata from an installed p-track agent profile or an
 explicit external registration request. PID for launched profiles comes from
 the owned PTY process. Launched process state is authoritative; external
 process state and lease state remain distinct. Active-resource confirmation

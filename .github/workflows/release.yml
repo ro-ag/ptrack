@@ -131,10 +131,10 @@ jobs:
             -ldflags "-s -w -X github.com/ro-ag/ptrack/internal/cli.Version=${version}"
           # Install the launcher entry point (runs `ptrack gui`); the bundle's
           # CFBundleExecutable points at it, so the app cannot start without it.
-          cp build/darwin/launcher "build/bin/P-TRACK.app/Contents/MacOS/P-TRACK"
-          chmod +x "build/bin/P-TRACK.app/Contents/MacOS/P-TRACK"
+          cp build/darwin/launcher "build/bin/p-track.app/Contents/MacOS/p-track"
+          chmod +x "build/bin/p-track.app/Contents/MacOS/p-track"
           # Stamp the release version into the bundle metadata.
-          app="build/bin/P-TRACK.app"
+          app="build/bin/p-track.app"
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${version}" "$app/Contents/Info.plist"
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${version}" "$app/Contents/Info.plist"
 
@@ -170,7 +170,7 @@ jobs:
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
-          app="build/bin/P-TRACK.app"
+          app="build/bin/p-track.app"
           # The bundle's main executable is the launcher script, so the
           # notary checks the ptrack binary's own signature: sign the binary
           # first, then the bundle as a whole.
@@ -210,7 +210,7 @@ jobs:
           mkdir -p "dist/${archive}"
           if [ "${{ runner.os }}" = "macOS" ]; then
             # The CLI binary ships inside the app bundle on macOS.
-            cp "build/bin/P-TRACK.app/Contents/MacOS/ptrack" "dist/${archive}/ptrack"
+            cp "build/bin/p-track.app/Contents/MacOS/ptrack" "dist/${archive}/ptrack"
           else
             cp build/bin/ptrack "dist/${archive}/"
           fi
@@ -227,14 +227,14 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           mkdir -p build/dmg
-          cp -R "build/bin/P-TRACK.app" build/dmg/
+          cp -R "build/bin/p-track.app" build/dmg/
           ln -s /Applications build/dmg/Applications
-          hdiutil create -volname "P-TRACK" -srcfolder build/dmg \
-            -ov -format UDZO "dist/P-TRACK_${version}_darwin_${{ matrix.goarch }}.dmg"
+          hdiutil create -volname "p-track" -srcfolder build/dmg \
+            -ov -format UDZO "dist/p-track_${version}_darwin_${{ matrix.goarch }}.dmg"
           rm -rf build/dmg
           if [ "${SIGNING_ENABLED}" = "true" ]; then
             codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp \
-              "dist/P-TRACK_${version}_darwin_${{ matrix.goarch }}.dmg"
+              "dist/p-track_${version}_darwin_${{ matrix.goarch }}.dmg"
           fi
 
       - name: Notarize disk image
@@ -246,7 +246,7 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
           version="${GITHUB_REF_NAME#v}"
-          dmg="dist/P-TRACK_${version}_darwin_${{ matrix.goarch }}.dmg"
+          dmg="dist/p-track_${version}_darwin_${{ matrix.goarch }}.dmg"
           echo "$APPLE_API_KEY" > "$RUNNER_TEMP/AuthKey.p8"
           xcrun notarytool submit "$dmg" \
             --key "$RUNNER_TEMP/AuthKey.p8" \
@@ -274,7 +274,7 @@ jobs:
           name: release-${{ matrix.archive_os }}-${{ matrix.goarch }}
           path: |
             dist/ptrack_*
-            dist/P-TRACK_*
+            dist/p-track_*
           if-no-files-found: error
           retention-days: 1
 
@@ -297,7 +297,7 @@ jobs:
         shell: bash
         run: |
           cd dist
-          sha256sum ptrack_* P-TRACK_* > checksums.txt
+          sha256sum ptrack_* p-track_* > checksums.txt
 
       - name: Extract release notes
         shell: bash
@@ -315,7 +315,7 @@ jobs:
         run: |
           gh release create "${GITHUB_REF_NAME}" \
             dist/* \
-            --title "P-TRACK ${GITHUB_REF_NAME}" \
+            --title "p-track ${GITHUB_REF_NAME}" \
             --notes-file release-notes.md \
             --verify-tag
         env:

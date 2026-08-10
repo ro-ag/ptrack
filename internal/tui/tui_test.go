@@ -111,7 +111,7 @@ func TestCommandMenuNavigatesAndExposesMaintenance(t *testing.T) {
 		t.Fatal("? should open the command menu")
 	}
 	view := ansi.Strip(d.View())
-	for _, want := range []string{"P-TRACK", "Command menu", "Board", "Edit selected", "Move task", "Convert task to plan", "Create backup"} {
+	for _, want := range []string{"p-track", "Command menu", "Board", "Edit selected", "Move task", "Convert task to plan", "Create backup"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("menu missing %q:\n%s", want, view)
 		}

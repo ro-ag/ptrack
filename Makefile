@@ -6,8 +6,8 @@ WAILS := go run github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
 # Version stamped into the app bundle: latest tag, or "dev" outside a checkout.
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v//' || echo dev)
 ARCH := $(shell uname -m)
-APP := build/bin/P-TRACK.app
-DMG := build/bin/P-TRACK-$(VERSION)-macOS-$(ARCH).dmg
+APP := build/bin/p-track.app
+DMG := build/bin/p-track-$(VERSION)-macOS-$(ARCH).dmg
 ENTITLEMENTS := build/darwin/entitlements.plist
 
 # Signing identity: the SHA-1 fingerprint of the Developer ID Application
@@ -32,15 +32,15 @@ build: frontend-install frontend-build
 		-trimpath \
 		-windowsconsole
 
-# macOS app bundle: build/bin/P-TRACK.app with the branded icon and the
+# macOS app bundle: build/bin/p-track.app with the branded icon and the
 # Info.plist from build/darwin/. The bundle version is stamped from git so
 # local builds never silently inherit the version pinned in wails.json. The
 # bundle's entry point is the launcher script (build/darwin/launcher), which
 # always runs `ptrack gui`; the Wails binary stays available as the plain CLI.
 package: frontend-install frontend-build
 	$(WAILS) build -clean -trimpath
-	cp build/darwin/launcher "$(APP)/Contents/MacOS/P-TRACK"
-	chmod +x "$(APP)/Contents/MacOS/P-TRACK"
+	cp build/darwin/launcher "$(APP)/Contents/MacOS/p-track"
+	chmod +x "$(APP)/Contents/MacOS/p-track"
 	/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $(VERSION)" "$(APP)/Contents/Info.plist"
 	/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(VERSION)" "$(APP)/Contents/Info.plist"
 	@echo "Built $(APP) (version $(VERSION))"
@@ -51,7 +51,7 @@ dmg: package
 	mkdir -p build/dmg
 	cp -R "$(APP)" build/dmg/
 	ln -s /Applications build/dmg/Applications
-	hdiutil create -volname "P-TRACK" -srcfolder build/dmg \
+	hdiutil create -volname "p-track" -srcfolder build/dmg \
 		-ov -format UDZO "$(DMG)"
 	rm -rf build/dmg
 	@echo "Built $(DMG)"
@@ -86,7 +86,7 @@ signed-dmg: sign
 	mkdir -p build/dmg
 	cp -R "$(APP)" build/dmg/
 	ln -s /Applications build/dmg/Applications
-	hdiutil create -volname "P-TRACK" -srcfolder build/dmg \
+	hdiutil create -volname "p-track" -srcfolder build/dmg \
 		-ov -format UDZO "$(DMG)"
 	rm -rf build/dmg
 	codesign --force --sign "$(SIGN_IDENTITY)" --timestamp "$(DMG)"

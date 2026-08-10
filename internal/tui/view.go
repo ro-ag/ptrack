@@ -63,7 +63,7 @@ func (d dashboard) View() string {
 // space between. Left rail (reading position) carries identity and the goal;
 // right rail carries the menu hint and the 2×2 stat grid, right edges flush.
 //
-//	▉P-TRACK · project▉▒░fade                                        ? menu
+//	▉p-track · project▉▒░fade                                        ? menu
 //	✦ Goal line one …                        milestones ▰▰▱▱▱  1/2  plans …
 //	  goal line two …                        tasks      ▰▱▱▱▱  1/5  issues …
 //	───────────────────────────── gradient rule ────────────────────────────
@@ -72,7 +72,7 @@ func (d dashboard) header(w int) string {
 	// rightward toward the terminal background.
 	name := filepath.Base(filepath.Dir(filepath.Dir(d.dbPath)))
 	bandText := lipgloss.NewStyle().Bold(true).Foreground(cInk).Background(cAccent)
-	pill := bandText.Render(" P-TRACK · " + name + " ")
+	pill := bandText.Render(" p-track · " + name + " ")
 	right := hint("?", "menu")
 	fadeW := min(24, max(0, w-lipgloss.Width(pill)-lipgloss.Width(right)-2))
 	row1 := pill + bgFade(fadeW, gradAccent, gradNight)
@@ -202,6 +202,8 @@ func blockWordmark(w int) string {
 	if w < 76 {
 		width := min(58, max(1, w))
 		rule := gradientText(strings.Repeat("━", width), gradDarkCyan, gradBlueGreen)
+		// The compact wordmark follows the same all-caps treatment as the
+		// large ASCII artwork. Product names outside artwork stay lowercase.
 		name := lipgloss.NewStyle().Width(width).Align(lipgloss.Center).Bold(true).Foreground(cAccent).Render("P-TRACK")
 		return lipgloss.JoinVertical(lipgloss.Center, rule, name, rule)
 	}
@@ -493,7 +495,7 @@ func (d dashboard) viewMaintenance(w, h int) string {
 		kv("Writer", orUnset(d.meta.LastWriteVersion)),
 		kv("Updated", d.meta.UpdatedAt.Format("2006-01-02 15:04")),
 		"",
-		dimStyle.Render("P-TRACK opens the database only for each action,"),
+		dimStyle.Render("p-track opens the database only for each action,"),
 		dimStyle.Render("so agents and this dashboard can work side by side."),
 	}, "\n")
 

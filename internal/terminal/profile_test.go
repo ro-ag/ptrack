@@ -338,7 +338,7 @@ func TestBuildEnvironmentAppliesTerminalDefaults(t *testing.T) {
 		"PATH":         "/usr/bin",
 		"TERM":         "xterm-256color",
 		"COLORTERM":    "truecolor",
-		"TERM_PROGRAM": "P-TRACK",
+		"TERM_PROGRAM": "p-track",
 		"UNCHANGED":    "value",
 	}
 	if locale := defaultUTF8Locale(runtime.GOOS); locale != "" {
@@ -436,14 +436,14 @@ func TestBuildEnvironmentAppliesSafeExplicitOverridesWithoutMutation(t *testing.
 	overrides := map[string]string{
 		"TERM":         "screen-256color",
 		"COLORTERM":    "24bit",
-		"TERM_PROGRAM": "P-TRACK-test",
+		"TERM_PROGRAM": "p-track-test",
 		"CUSTOM":       "custom value",
 	}
 	wantBase := append([]string(nil), base...)
 	wantOverrides := map[string]string{
 		"TERM":         "screen-256color",
 		"COLORTERM":    "24bit",
-		"TERM_PROGRAM": "P-TRACK-test",
+		"TERM_PROGRAM": "p-track-test",
 		"CUSTOM":       "custom value",
 	}
 
@@ -498,7 +498,7 @@ func TestBuildEnvironmentHandlesWindowsKeysAndDriveDirectoryEntries(t *testing.T
 		"PATH":         `C:\Tools`,
 		"TERM":         "screen-256color",
 		"COLORTERM":    "truecolor",
-		"TERM_PROGRAM": "P-TRACK",
+		"TERM_PROGRAM": "p-track",
 	}
 	if !reflect.DeepEqual(values, want) {
 		t.Fatalf("environment values:\ngot:  %#v\nwant: %#v", values, want)

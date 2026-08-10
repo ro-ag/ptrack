@@ -1,6 +1,6 @@
 <div align="center">
 
-![P-TRACK — persistent project memory for humans and AI agents](assets/brand/banner.png)
+![p-track — persistent project memory for humans and AI agents](assets/brand/banner.png)
 
 Keep goals, plans, tasks, decisions, issues, and commit context alive across
 terminal sessions—without a server or a cloud account.
@@ -12,9 +12,9 @@ terminal sessions—without a server or a cloud account.
 
 </div>
 
-![P-TRACK launch screen](docs/assets/welcome.png)
+![p-track launch screen](docs/assets/welcome.png)
 
-P-TRACK gives one project two complementary interfaces:
+p-track gives one project two complementary interfaces:
 
 - **Humans get a full-screen terminal dashboard.** Run `ptrack` to browse and
   edit the live project state, move work on a board, and perform maintenance.
@@ -47,15 +47,15 @@ Download the native archive for your platform from the
 `ptrack` executable somewhere on your `PATH`. Every release binary includes the
 CLI, terminal dashboard, and Wails desktop GUI.
 
-On macOS you can instead download `P-TRACK_<version>_darwin_<arch>.dmg` and drag
-**P-TRACK.app** into `/Applications`. Release disk images are Developer ID-signed,
+On macOS you can instead download `p-track_<version>_darwin_<arch>.dmg` and drag
+**p-track.app** into `/Applications`. Release disk images are Developer ID-signed,
 notarized, and stapled by the tag workflow. The same executable inside the
 bundle doubles as the CLI; symlink it onto your `PATH` with
-`ln -s /Applications/P-TRACK.app/Contents/MacOS/ptrack /usr/local/bin/ptrack`.
+`ln -s /Applications/p-track.app/Contents/MacOS/ptrack /usr/local/bin/ptrack`.
 
-Do not install P-TRACK with `go install`. Wails requires platform-specific build
+Do not install p-track with `go install`. Wails requires platform-specific build
 tags, CGO setup, and native linker flags that `go install module@version` cannot
-apply. P-TRACK rejects plain Go application builds instead of producing a
+apply. p-track rejects plain Go application builds instead of producing a
 binary whose `--gui` option fails at runtime. Building from source requires Go
 1.26 or newer and the Wails prerequisites for your platform.
 
@@ -87,19 +87,19 @@ screen instead of a database error.
 
 ## The terminal dashboard
 
-Bare `ptrack` opens a focused P-TRACK launch screen: a high-density Unicode
+Bare `ptrack` opens a focused p-track launch screen: a high-density Unicode
 wordmark with one highlighted action and a few small shortcuts underneath.
 Press `enter` to open the dashboard, `1`–`5` to jump directly to a screen, or
 `?` to open the command menu. Narrow terminals fall back to a compact line-art
 brand so the launch screen never overflows.
 
-![P-TRACK overview dashboard](docs/assets/overview.png)
+![p-track overview dashboard](docs/assets/overview.png)
 
 Inside the dashboard, the header becomes compact again. The numbered navigation
 stays visible at the top, contextual actions stay visible at the bottom, and
 `?` opens the command menu from any screen.
 
-![P-TRACK command menu](docs/assets/command-menu.png)
+![p-track command menu](docs/assets/command-menu.png)
 
 Use `↑`/`↓` and `enter` in the command menu, or press its shortcut directly.
 The five main screens are also available with `1`–`5`:
@@ -117,7 +117,7 @@ The five main screens are also available with `1`–`5`:
 The board is a live kanban view of the selected plan. Move between columns with
 `←`/`→`, select a card with `↑`/`↓`, and change its status with `H`/`L`.
 
-![P-TRACK kanban board](docs/assets/board.png)
+![p-track kanban board](docs/assets/board.png)
 
 Press `enter` on a plan, task, milestone, issue, or card to open its full item
 view. Notes, linked entities, explanations, and recorded commits are shown in
@@ -128,7 +128,7 @@ scrollable nested panels; `enter` or `esc` returns to the dashboard.
 Maintenance is a first-class screen instead of a hidden shortcut. It shows the
 project root, database location, schema, last writer, and backup destination.
 
-![P-TRACK maintenance screen](docs/assets/maintenance.png)
+![p-track maintenance screen](docs/assets/maintenance.png)
 
 - `r` reloads changes written by an agent or another CLI process.
 - `B` creates a timestamped database backup.
@@ -158,11 +158,11 @@ ptrack board --gui          # compatible alias
 ptrack board --gui --plan 4
 ```
 
-![P-TRACK desktop kanban board](docs/assets/gui-board.png)
+![p-track desktop kanban board](docs/assets/gui-board.png)
 
 Outside a project, the app opens a welcome screen with recent projects. Use the
 native directory picker to open or switch projects, or close a project without
-exiting the app. P-TRACK confirms before a transition stops active terminals or
+exiting the app. p-track confirms before a transition stops active terminals or
 registered agent runs.
 
 The project-memory rail combines a bounded tracking snapshot with repository
@@ -184,7 +184,7 @@ API should treat the registry descriptor as stale when its hosting process is
 gone — after a crash, wait for a fresh descriptor instead of dialling a dead
 port.
 
-![P-TRACK task-memory dialog](docs/assets/gui-memory.png)
+![p-track task-memory dialog](docs/assets/gui-memory.png)
 
 The bottom dock hosts one resizable embedded terminal at the project root.
 Choose the default login shell or a detected installed-agent profile, then use
@@ -258,12 +258,12 @@ Add `--json` at automation boundaries.
 
 ### Agent onboarding
 
-`ptrack init` installs a short, marker-delimited P-TRACK section into the
+`ptrack init` installs a short, marker-delimited p-track section into the
 project's `AGENTS.md` and `CLAUDE.md`. Existing content is preserved, and
 re-running `ptrack guide` updates only that managed section.
 
 Use `ptrack init --no-guide` to skip guide installation. Personal working
-agreements can live at `~/.ptrack/guide.md` or `$PTRACK_HOME/guide.md`; P-TRACK
+agreements can live at `~/.ptrack/guide.md` or `$PTRACK_HOME/guide.md`; p-track
 appends them to the installed guide without changing the defaults shipped to
 other users.
 
@@ -296,13 +296,13 @@ Put `#<task-id>` in a commit message to link the commit to that task.
 | `ptrack status [--json]` | Print a compact project overview. |
 | `ptrack projects [--json]` | List projects in the global registry. |
 | `ptrack backup` | Copy the current project database into global backups. |
-| `ptrack version` | Print the P-TRACK version. |
+| `ptrack version` | Print the p-track version. |
 
 Run `ptrack <command> --help` for flags and examples specific to a command.
 
 ## Storage and safety
 
-P-TRACK is local-first and has no server process.
+p-track is local-first and has no server process.
 
 | Store | Location | Contents |
 |---|---|---|
@@ -335,9 +335,9 @@ make build
 On macOS, two more targets produce the branded desktop artifacts:
 
 ```sh
-make package   # build/bin/P-TRACK.app — bundle id com.ro-ag.ptrack, version
+make package   # build/bin/p-track.app — bundle id com.ro-ag.ptrack, version
                # stamped from git, icon from build/appicon.png
-make dmg       # build/bin/P-TRACK-<version>-macOS-<arch>.dmg with an
+make dmg       # build/bin/p-track-<version>-macOS-<arch>.dmg with an
                # /Applications drop link
 ```
 
