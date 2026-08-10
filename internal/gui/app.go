@@ -108,14 +108,15 @@ type Column struct {
 
 // Task is the frontend representation of a kanban card.
 type Task struct {
-	ID          uint64 `json:"id"`
-	Title       string `json:"title"`
-	Status      string `json:"status"`
-	UpdatedAt   string `json:"updatedAt"`
-	NoteCount   int    `json:"noteCount"`
-	CommitCount int    `json:"commitCount"`
-	IssueCount  int    `json:"issueCount"`
-	LatestNote  string `json:"latestNote"`
+	ID            uint64                    `json:"id"`
+	Title         string                    `json:"title"`
+	Status        string                    `json:"status"`
+	UpdatedAt     string                    `json:"updatedAt"`
+	NoteCount     int                       `json:"noteCount"`
+	CommitCount   int                       `json:"commitCount"`
+	IssueCount    int                       `json:"issueCount"`
+	LatestNote    string                    `json:"latestNote"`
+	LinkedRuntime *TaskLinkedRuntimeSummary `json:"linkedRuntime,omitempty"`
 }
 
 // ProjectStats is the compact project status shown in the memory rail.
@@ -343,6 +344,11 @@ func (a *App) getBoard(expectedGeneration, planID uint64) (Board, error) {
 	if len(board.OpenIssues) > 5 {
 		board.OpenIssues = board.OpenIssues[:5]
 	}
+	projection, err := workspaceRuntimeProjection(s, workspace)
+	if err != nil {
+		return Board{}, err
+	}
+	applyLinkedRuntimeToBoard(&board, projection)
 	return board, nil
 }
 
@@ -370,8 +376,8 @@ func recentActivity(planID uint64, taskIDs map[uint64]bool, notes []model.Note, 
 		events = append(events, activityEvent{
 			at: note.CreatedAt,
 			activity: Activity{
-				Kind:       "note",
-				Title:      "Decision recorded",
+				Kind:       memoryActivityKind(note.Kind),
+				Title:      memoryActivityTitle(note.Kind),
 				Detail:     note.Body,
 				Target:     target,
 				OccurredAt: note.CreatedAt.Format(time.RFC3339),
@@ -408,6 +414,26 @@ func recentActivity(planID uint64, taskIDs map[uint64]bool, notes []model.Note, 
 		activity = append(activity, event.activity)
 	}
 	return activity
+}
+
+func memoryActivityKind(kind model.MemoryKind) string {
+	if kind == "" {
+		return "note"
+	}
+	return string(kind)
+}
+
+func memoryActivityTitle(kind model.MemoryKind) string {
+	switch kind {
+	case model.MemoryDecision:
+		return "Decision recorded"
+	case model.MemoryBlocker:
+		return "Blocker recorded"
+	case model.MemoryHandoff:
+		return "Handoff recorded"
+	default:
+		return "Memory recorded"
+	}
 }
 
 // AddTask creates a todo card in planID.
@@ -503,30 +529,14 @@ func (a *App) moveTask(
 	expectedGeneration, taskID uint64,
 	status string,
 ) (WorkspaceMutationResult, error) {
-	wanted := model.TaskStatus(status)
-	valid := false
-	for _, candidate := range statuses {
-		if wanted == candidate {
-			valid = true
-			break
-		}
-	}
-	if !valid {
-		return WorkspaceMutationResult{}, fmt.Errorf("invalid task status %q", status)
-	}
-	s, workspace, release, err := a.openWorkspace(expectedGeneration)
+	result, err := a.MoveTaskV3(expectedGeneration, taskID, status, "")
 	if err != nil {
 		return WorkspaceMutationResult{}, err
 	}
-	defer release()
-	defer s.Close()
-	if err := s.SetTaskStatus(taskID, wanted); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return WorkspaceMutationResult{}, fmt.Errorf("task #%d not found", taskID)
-		}
-		return WorkspaceMutationResult{}, err
+	if result.RequiresConfirmation {
+		return WorkspaceMutationResult{}, ErrTaskTransitionConfirmationRequired
 	}
-	return WorkspaceMutationResult{Generation: workspace.Generation()}, nil
+	return WorkspaceMutationResult{Generation: result.Generation}, nil
 }
 
 // AddTaskNote records a decision or observation on a card.

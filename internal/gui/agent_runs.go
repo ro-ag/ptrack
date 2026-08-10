@@ -6,13 +6,36 @@ import (
 	"time"
 
 	"github.com/ro-ag/ptrack/internal/agentrun"
+	"github.com/ro-ag/ptrack/internal/association"
 )
 
 type workspaceAgentRegistry interface {
 	workspaceShutdowner
 	ActiveCount() int
 	Snapshot(limit int) []agentrun.Run
+	SnapshotBounded(limit int) ([]agentrun.Run, int)
+	RuntimeSnapshotBounded(limit int) ([]agentrun.Run, int)
+	WithExactRuntimeSnapshot(int, func([]agentrun.Run) error) error
 	RegisterLaunched(agentrun.Registration) (agentrun.Run, error)
+	RegisterLinkedLaunched(
+		agentrun.Registration,
+		*association.Host,
+		association.PointerV1,
+	) (agentrun.Run, error)
+	RollbackLinkedLaunched(runID, terminalID string) bool
+	RollbackLinkedTerminal(terminalID string) int
+	HasLinkedTerminal(terminalID string) bool
+	IsLinkedLaunchRun(runID string) bool
+	Associate(string, *association.Host, association.PointerV1) (association.AssociationV1, error)
+	PrepareLinkedTerminalAssociationChange(
+		string,
+		*association.AssociationV1,
+		association.AssociationV1,
+		*association.Host,
+		association.PointerV1,
+	) (agentrun.LinkedAssociationChange, bool, error)
+	CommitLinkedAssociationChange(agentrun.LinkedAssociationChange) error
+	RollbackLinkedAssociationChange(agentrun.LinkedAssociationChange) error
 	RecordTerminalActivity(terminalID string) bool
 	RecordTerminalActivityAt(terminalID string, activityAt time.Time) bool
 	RecordTerminalExit(terminalID string, code int, result string) bool
@@ -75,10 +98,85 @@ func (r *workspaceAgentResources) Snapshot(limit int) []agentrun.Run {
 	return r.registry.Snapshot(limit)
 }
 
+func (r *workspaceAgentResources) SnapshotBounded(limit int) ([]agentrun.Run, int) {
+	return r.registry.SnapshotBounded(limit)
+}
+
+func (r *workspaceAgentResources) RuntimeSnapshotBounded(limit int) ([]agentrun.Run, int) {
+	return r.registry.RuntimeSnapshotBounded(limit)
+}
+
+func (r *workspaceAgentResources) WithExactRuntimeSnapshot(
+	maximum int,
+	use func([]agentrun.Run) error,
+) error {
+	return r.registry.WithExactRuntimeSnapshot(maximum, use)
+}
+
 func (r *workspaceAgentResources) RegisterLaunched(
 	registration agentrun.Registration,
 ) (agentrun.Run, error) {
 	return r.registry.RegisterLaunched(registration)
+}
+
+func (r *workspaceAgentResources) RegisterLinkedLaunched(
+	registration agentrun.Registration,
+	host *association.Host,
+	pointer association.PointerV1,
+) (agentrun.Run, error) {
+	return r.registry.RegisterLinkedLaunched(registration, host, pointer)
+}
+
+func (r *workspaceAgentResources) RollbackLinkedLaunched(runID, terminalID string) bool {
+	return r.registry.RollbackLinkedLaunched(runID, terminalID)
+}
+
+func (r *workspaceAgentResources) RollbackLinkedTerminal(terminalID string) int {
+	return r.registry.RollbackLinkedTerminal(terminalID)
+}
+
+func (r *workspaceAgentResources) HasLinkedTerminal(terminalID string) bool {
+	return r.registry.HasLinkedTerminal(terminalID)
+}
+
+func (r *workspaceAgentResources) IsLinkedLaunchRun(runID string) bool {
+	return r.registry.IsLinkedLaunchRun(runID)
+}
+
+func (r *workspaceAgentResources) Associate(
+	runID string,
+	host *association.Host,
+	pointer association.PointerV1,
+) (association.AssociationV1, error) {
+	return r.registry.Associate(runID, host, pointer)
+}
+
+func (r *workspaceAgentResources) PrepareLinkedTerminalAssociationChange(
+	terminalID string,
+	terminalPrevious *association.AssociationV1,
+	terminalNext association.AssociationV1,
+	host *association.Host,
+	pointer association.PointerV1,
+) (agentrun.LinkedAssociationChange, bool, error) {
+	return r.registry.PrepareLinkedTerminalAssociationChange(
+		terminalID,
+		terminalPrevious,
+		terminalNext,
+		host,
+		pointer,
+	)
+}
+
+func (r *workspaceAgentResources) CommitLinkedAssociationChange(
+	change agentrun.LinkedAssociationChange,
+) error {
+	return r.registry.CommitLinkedAssociationChange(change)
+}
+
+func (r *workspaceAgentResources) RollbackLinkedAssociationChange(
+	change agentrun.LinkedAssociationChange,
+) error {
+	return r.registry.RollbackLinkedAssociationChange(change)
 }
 
 func (r *workspaceAgentResources) RecordTerminalActivity(terminalID string) bool {

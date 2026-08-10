@@ -2,33 +2,31 @@ package gui
 
 import (
 	"errors"
-
-	"github.com/ro-ag/ptrack/internal/agentrun"
 )
 
-const agentRunSnapshotLimit = 64
-
 type AgentRunsV2 struct {
-	Generation uint64         `json:"generation"`
-	Runs       []agentrun.Run `json:"runs"`
+	Generation uint64                `json:"generation"`
+	Runs       []AgentRuntimeSummary `json:"runs"`
+	Bounds     BoundedSnapshot       `json:"bounds"`
 }
 
 func (a *App) GetAgentRunsV2(generation uint64) (AgentRunsV2, error) {
-	workspace, err := a.currentWorkspace(generation)
-	if err != nil {
-		return AgentRunsV2{}, err
-	}
-	release, err := workspace.beginOperation(generation, false)
+	s, workspace, release, err := a.openWorkspace(generation)
 	if err != nil {
 		return AgentRunsV2{}, err
 	}
 	defer release()
-	registry := workspace.agentRegistry()
-	if registry == nil {
+	defer s.Close()
+	if workspace.agentRegistry() == nil {
 		return AgentRunsV2{}, errors.New("AgentRun registry is unavailable")
+	}
+	projection, err := workspaceRuntimeProjection(s, workspace)
+	if err != nil {
+		return AgentRunsV2{}, err
 	}
 	return AgentRunsV2{
 		Generation: workspace.Generation(),
-		Runs:       registry.Snapshot(agentRunSnapshotLimit),
+		Runs:       projection.agents,
+		Bounds:     projection.agentBounds,
 	}, nil
 }

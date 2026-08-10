@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -114,6 +115,40 @@ func TestTaskCRUD(t *testing.T) {
 	only, _ := s.ListTasksByPlan(p.ID)
 	if len(only) != 2 {
 		t.Errorf("ListTasksByPlan = %d want 2", len(only))
+	}
+}
+
+func TestCompareAndSetTaskStatusFencesPlanAndStatus(t *testing.T) {
+	s := openTemp(t)
+	first, _ := s.AddPlan("first")
+	second, _ := s.AddPlan("second")
+	task, _ := s.AddTask(first.ID, "move me")
+
+	transitioned, err := s.CompareAndSetTaskStatus(
+		task.ID, first.ID, model.TaskTodo, task.UpdatedAt, model.TaskDoing,
+	)
+	if err != nil {
+		t.Fatalf("initial compare-and-set: %v", err)
+	}
+	if _, err := s.CompareAndSetTaskStatus(
+		task.ID, first.ID, model.TaskTodo, task.UpdatedAt, model.TaskDone,
+	); !errors.Is(err, ErrTaskStatusChanged) {
+		t.Fatalf("stale status compare-and-set = %v", err)
+	}
+	if err := s.SetTaskPlan(task.ID, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CompareAndSetTaskStatus(
+		task.ID, first.ID, model.TaskDoing, transitioned.UpdatedAt, model.TaskDone,
+	); !errors.Is(err, ErrTaskStatusChanged) {
+		t.Fatalf("stale plan compare-and-set = %v", err)
+	}
+	got, err := s.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PlanID != second.ID || got.Status != model.TaskDoing {
+		t.Fatalf("failed compare-and-set mutated task: %#v", got)
 	}
 }
 

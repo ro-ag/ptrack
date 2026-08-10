@@ -7,6 +7,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/ro-ag/ptrack/internal/association"
 )
 
 type SessionState string
@@ -62,6 +64,7 @@ type Session struct {
 	lastActivityAt time.Time
 	rows           int
 	columns        int
+	association    *association.AssociationV1
 
 	startupOutput []byte
 	attached      bool
@@ -216,6 +219,96 @@ func (s *Session) State() SessionState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.state
+}
+
+func (s *Session) associate(
+	host *association.Host,
+	pointer association.PointerV1,
+) (association.AssociationV1, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state != SessionRunning {
+		return association.AssociationV1{}, fmt.Errorf(
+			"%w: terminal session is not live",
+			ErrSessionNotFound,
+		)
+	}
+	next, err := host.Bind(s.id, pointer, s.association)
+	if err != nil {
+		return association.AssociationV1{}, err
+	}
+	s.association = &next
+	return next, nil
+}
+
+func (s *Session) prepareAssociationChange(
+	host *association.Host,
+	pointer association.PointerV1,
+	expectedRevision uint64,
+) (AssociationChange, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state != SessionRunning {
+		return AssociationChange{}, fmt.Errorf("%w: terminal session is not live", ErrSessionNotFound)
+	}
+	if s.association == nil {
+		if expectedRevision != 0 {
+			return AssociationChange{}, association.ErrStaleAssociation
+		}
+	} else if s.association.Revision != expectedRevision {
+		return AssociationChange{}, association.ErrStaleAssociation
+	}
+	next, err := host.Bind(s.id, pointer, s.association)
+	if err != nil {
+		return AssociationChange{}, err
+	}
+	var previous *association.AssociationV1
+	if s.association != nil {
+		copy := *s.association
+		previous = &copy
+	}
+	return AssociationChange{SessionID: s.id, Previous: previous, Next: next}, nil
+}
+
+func (s *Session) commitAssociationChange(
+	expected *association.AssociationV1,
+	replacement *association.AssociationV1,
+	requireRunning bool,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if (requireRunning && s.state != SessionRunning) ||
+		!associationPointersEqual(s.association, expected) {
+		return association.ErrStaleAssociation
+	}
+	if replacement == nil {
+		s.association = nil
+		return nil
+	}
+	copy := *replacement
+	s.association = &copy
+	return nil
+}
+
+func (s *Session) withLiveAssociation(
+	expectedRevision uint64,
+	use func(association.AssociationV1) error,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state != SessionRunning || s.association == nil ||
+		s.association.Revision != expectedRevision {
+		return association.ErrStaleAssociation
+	}
+	copy := *s.association
+	return use(copy)
+}
+
+func associationPointersEqual(left, right *association.AssociationV1) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func (s *Session) ExitResults() <-chan ExitResult {

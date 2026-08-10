@@ -13,9 +13,11 @@ import {
   nextWorkspaceId,
   normalizeSplitRatio,
   normalizeTabTitle,
+  normalizeAssociationPointer,
   normalizeWorkspace,
   paneCount,
   type IdFactory,
+  type AssociationPointerV1,
   type PaneNode,
   type SplitDirection,
   type TerminalDescriptor,
@@ -25,9 +27,20 @@ import {
 } from "./model";
 
 export type WorkspaceAction =
-  | { type: "create-tab"; title?: string; profileId?: string; cwd?: string }
+  | {
+      type: "create-tab";
+      title?: string;
+      profileId?: string;
+      cwd?: string;
+      association?: AssociationPointerV1;
+    }
   | { type: "select-tab"; tabId: string }
   | { type: "rename-tab"; tabId: string; title: string }
+  | {
+      type: "set-tab-association";
+      tabId: string;
+      association?: AssociationPointerV1;
+    }
   | { type: "reorder-tab"; tabId: string; toIndex: number }
   | { type: "duplicate-tab"; tabId: string }
   | { type: "close-tab"; tabId: string }
@@ -106,7 +119,10 @@ function cloneNode(
 export function createTab(
   workspace: Workspace,
   ids: IdFactory,
-  options: TerminalDescriptor & { title?: string } = {},
+  options: TerminalDescriptor & {
+    title?: string;
+    association?: AssociationPointerV1;
+  } = {},
 ): Workspace {
   if (workspace.tabs.length >= maximumWorkspaceTabs) return workspace;
   try {
@@ -133,6 +149,29 @@ export function renameTab(
   return updateTab(workspace, tabId, (tab) => {
     const nextTitle = normalizeTabTitle(title);
     return nextTitle === tab.title ? tab : { ...tab, title: nextTitle };
+  });
+}
+
+export function setTabAssociation(
+  workspace: Workspace,
+  tabId: string,
+  association?: AssociationPointerV1,
+): Workspace {
+  const normalized = association === undefined
+    ? undefined
+    : normalizeAssociationPointer(association);
+  if (association !== undefined && normalized === undefined) return workspace;
+  return updateTab(workspace, tabId, (tab) => {
+    if (
+      tab.association?.version === normalized?.version &&
+      tab.association?.planId === normalized?.planId &&
+      tab.association?.taskId === normalized?.taskId
+    ) return tab;
+    if (normalized === undefined) {
+      const { association: _removed, ...detached } = tab;
+      return detached;
+    }
+    return { ...tab, association: normalized };
   });
 }
 
@@ -238,7 +277,11 @@ export function splitPane(
 ): Workspace {
   if (direction !== "horizontal" && direction !== "vertical") return workspace;
   const tab = workspace.tabs.find((candidate) => candidate.id === tabId);
-  if (!tab || paneCount(tab.root) >= maximumPanesPerTab) return workspace;
+  if (
+    !tab ||
+    tab.association !== undefined ||
+    paneCount(tab.root) >= maximumPanesPerTab
+  ) return workspace;
   let activePaneId = tab.activePaneId;
   const usedIds = collectWorkspaceIds(workspace);
   try {
@@ -346,6 +389,9 @@ export function reduceWorkspace(
       break;
     case "rename-tab":
       next = renameTab(current, action.tabId, action.title);
+      break;
+    case "set-tab-association":
+      next = setTabAssociation(current, action.tabId, action.association);
       break;
     case "reorder-tab":
       next = reorderTab(current, action.tabId, action.toIndex);

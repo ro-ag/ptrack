@@ -6,6 +6,7 @@ package store
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/ro-ag/ptrack/internal/model"
@@ -15,10 +16,15 @@ import (
 // ErrNotFound is returned when a requested plan, task, or note id does not exist.
 var ErrNotFound = errors.New("not found")
 
+// ErrTaskStatusChanged is returned by a compare-and-set transition after
+// another writer changed the authoritative task status.
+var ErrTaskStatusChanged = errors.New("task status changed")
+
 // CurrentFormat is the on-disk schema version this build writes and understands.
-// v2 adds milestones/issues, v3 adds commits, and v4 adds project capability
-// grants plus their bounded metadata audit trail.
-const CurrentFormat uint = 4
+// v2 adds milestones/issues, v3 adds commits, v4 adds project capability
+// grants plus their bounded metadata audit trail, and v5 adds typed durable
+// memory plus bounded write-back idempotency records.
+const CurrentFormat uint = 5
 
 // WriterVersion is the ptrack semver recorded on writes for diagnostics. main
 // sets it from the resolved CLI version; it defaults to "dev".
@@ -45,6 +51,7 @@ var (
 	bucketCommits          = []byte("commits")
 	bucketCapabilities     = []byte("capabilities")
 	bucketCapabilityAudits = []byte("capability_audits")
+	bucketMemoryWritebacks = []byte("memory_writebacks")
 	keyMeta                = []byte("meta")
 )
 
@@ -71,9 +78,31 @@ func Open(dbPath string) (*Store, error) {
 // Close closes the underlying database.
 func (s *Store) Close() error { return s.db.Close() }
 
+// ProjectRoot returns the canonical project root for a standard
+// <root>/.ptrack/ptrack.db project store. It rejects other layouts so callers
+// cannot accidentally treat an arbitrary database as a project authority.
+func (s *Store) ProjectRoot() (string, error) {
+	if s == nil || s.db == nil {
+		return "", errors.New("project store is required")
+	}
+	dbPath, err := filepath.Abs(s.db.Path())
+	if err != nil {
+		return "", fmt.Errorf("resolve project database path: %w", err)
+	}
+	dbPath, err = filepath.EvalSymlinks(dbPath)
+	if err != nil {
+		return "", fmt.Errorf("canonicalize project database path: %w", err)
+	}
+	metadataDir := filepath.Dir(dbPath)
+	if filepath.Base(metadataDir) != ".ptrack" {
+		return "", errors.New("project database must be inside a .ptrack directory")
+	}
+	return filepath.Dir(metadataDir), nil
+}
+
 func (s *Store) init() error {
 	return s.db.Update(func(tx *bolt.Tx) error {
-		for _, b := range [][]byte{bucketMeta, bucketPlans, bucketTasks, bucketNotes, bucketMilestones, bucketIssues, bucketCommits, bucketCapabilities, bucketCapabilityAudits} {
+		for _, b := range [][]byte{bucketMeta, bucketPlans, bucketTasks, bucketNotes, bucketMilestones, bucketIssues, bucketCommits, bucketCapabilities, bucketCapabilityAudits, bucketMemoryWritebacks} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
@@ -119,6 +148,8 @@ func migrateMeta(m *model.Meta) {
 	// v2 -> v3: commits bucket is created by init. Nothing to transform.
 	// v3 -> v4: capability and audit buckets are created by init. Nothing to
 	//           transform because existing projects begin with no grants.
+	// v4 -> v5: the write-back replay bucket is created by init and legacy Note
+	//           values decode with an empty Kind, preserving their old display.
 	_ = m
 }
 
@@ -317,6 +348,42 @@ func (s *Store) GetTask(id uint64) (model.Task, error) {
 // SetTaskStatus updates a task's status.
 func (s *Store) SetTaskStatus(id uint64, st model.TaskStatus) error {
 	return s.mutateTask(id, func(t *model.Task) { t.Status = st })
+}
+
+// CompareAndSetTaskStatus atomically applies st only while the task retains
+// its expected plan and status. It is the storage fence used by
+// linked-resource confirmation.
+func (s *Store) CompareAndSetTaskStatus(
+	id uint64,
+	expectedPlanID uint64,
+	expected model.TaskStatus,
+	expectedUpdatedAt time.Time,
+	st model.TaskStatus,
+) (model.Task, error) {
+	var task model.Task
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(bucketTasks)
+		if err := getGobNF(bucket, itob(id), &task); err != nil {
+			return err
+		}
+		if task.PlanID != expectedPlanID || task.Status != expected ||
+			!task.UpdatedAt.Equal(expectedUpdatedAt) {
+			return fmt.Errorf(
+				"%w: task #%d is plan #%d/%q at %s, expected plan #%d/%q at %s",
+				ErrTaskStatusChanged, id, task.PlanID, task.Status,
+				task.UpdatedAt.UTC().Format(time.RFC3339Nano),
+				expectedPlanID, expected,
+				expectedUpdatedAt.UTC().Format(time.RFC3339Nano),
+			)
+		}
+		if task.Status == st {
+			return nil
+		}
+		task.Status = st
+		task.UpdatedAt = time.Now()
+		return putGob(bucket, itob(id), task)
+	})
+	return task, err
 }
 
 // SetTaskTitle renames a task.

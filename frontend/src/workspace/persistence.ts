@@ -1,5 +1,6 @@
 import {
   validateWorkspace,
+  type AssociationPointerV1,
   type PaneNode,
   type Workspace,
   type WorkspaceTab,
@@ -134,6 +135,16 @@ function cloneNode(node: PaneNode): PaneNode {
   };
 }
 
+function cloneAssociationPointer(
+  pointer: AssociationPointerV1,
+): AssociationPointerV1 {
+  return {
+    version: pointer.version,
+    ...(pointer.planId === undefined ? {} : { planId: pointer.planId }),
+    ...(pointer.taskId === undefined ? {} : { taskId: pointer.taskId }),
+  };
+}
+
 export function terminalWorkspaceStorageKey(projectRoot: string): string {
   return `${terminalWorkspaceStoragePrefix}${encodeURIComponent(projectRoot)}`;
 }
@@ -147,6 +158,9 @@ export function cloneWorkspaceForPersistence(workspace: Workspace): Workspace {
       title: tab.title,
       activePaneId: tab.activePaneId,
       root: cloneNode(tab.root),
+      ...(tab.association === undefined
+        ? {}
+        : { association: cloneAssociationPointer(tab.association) }),
     })),
   };
 }
@@ -200,7 +214,13 @@ export function repairWorkspaceDescriptors(
   const repairedWorkspace: Workspace = {
     version: 1,
     activeTabId: workspace.activeTabId,
-    tabs: workspace.tabs.map((tab) => ({ ...tab, root: repairNode(tab.root) })),
+    tabs: workspace.tabs.map((tab) => ({
+      ...tab,
+      ...(tab.association === undefined
+        ? {}
+        : { association: cloneAssociationPointer(tab.association) }),
+      root: repairNode(tab.root),
+    })),
   };
   return {
     workspace: repairedProfiles === 0 && repairedCwds === 0

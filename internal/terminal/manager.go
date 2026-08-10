@@ -7,13 +7,17 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"sync"
+
+	"github.com/ro-ag/ptrack/internal/association"
 )
 
 var (
 	ErrManagerShutdown = errors.New("terminal manager is shut down")
 	ErrProfileNotFound = errors.New("terminal profile not found")
 	ErrSessionNotFound = errors.New("terminal session not found")
+	ErrSnapshotLimit   = errors.New("terminal session snapshot exceeds exact limit")
 )
 
 type Manager struct {
@@ -185,12 +189,124 @@ func (m *Manager) Get(sessionID string) (*Session, error) {
 	return session, nil
 }
 
+// SessionInfo returns an exact, content-free metadata snapshot for one live
+// manager-owned session. It never exposes stream tokens or terminal output.
+func (m *Manager) SessionInfo(sessionID string) (SessionInfo, error) {
+	session, err := m.Get(sessionID)
+	if err != nil {
+		return SessionInfo{}, err
+	}
+	return session.Info(), nil
+}
+
+// WithLiveAssociation fences one bounded metadata operation against process
+// exit and association mutation. The callback must not perform terminal I/O.
+func (m *Manager) WithLiveAssociation(
+	sessionID string,
+	expectedRevision uint64,
+	use func(association.AssociationV1) error,
+) error {
+	if use == nil {
+		return errors.New("live association callback is required")
+	}
+	session, err := m.Get(sessionID)
+	if err != nil {
+		return err
+	}
+	return session.withLiveAssociation(expectedRevision, use)
+}
+
+// WithExactSessionSnapshot holds terminal lifecycle and session-state locks
+// across one bounded metadata callback. It is reserved for short host-side
+// compare-and-set decisions and never exposes stream tokens or output.
+func (m *Manager) WithExactSessionSnapshot(
+	maximum int,
+	use func([]SessionInfo) error,
+) error {
+	if maximum <= 0 || use == nil {
+		return errors.New("exact terminal snapshot callback and limit are required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	byID := make(map[string]*Session, len(m.sessions)+len(m.closing))
+	for id, session := range m.sessions {
+		byID[id] = session
+	}
+	for id, session := range m.closing {
+		byID[id] = session
+	}
+	if len(byID) > maximum {
+		return ErrSnapshotLimit
+	}
+	ids := make([]string, 0, len(byID))
+	for id := range byID {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		byID[id].mu.Lock()
+	}
+	defer func() {
+		for index := len(ids) - 1; index >= 0; index-- {
+			byID[ids[index]].mu.Unlock()
+		}
+	}()
+	snapshot := make([]SessionInfo, 0, len(ids))
+	for _, id := range ids {
+		snapshot = append(snapshot, byID[id].infoLocked())
+	}
+	return use(snapshot)
+}
+
 func (m *Manager) Resize(sessionID string, rows, columns int) error {
 	session, err := m.Get(sessionID)
 	if err != nil {
 		return err
 	}
 	return session.Resize(rows, columns)
+}
+
+// Associate attaches host-validated project context to a live session. The
+// association is descriptive only and does not mint or change capabilities.
+func (m *Manager) Associate(
+	sessionID string,
+	host *association.Host,
+	pointer association.PointerV1,
+) (association.AssociationV1, error) {
+	session, err := m.Get(sessionID)
+	if err != nil {
+		return association.AssociationV1{}, err
+	}
+	return session.associate(host, pointer)
+}
+
+func (m *Manager) PrepareAssociationChange(
+	sessionID string,
+	host *association.Host,
+	pointer association.PointerV1,
+	expectedRevision uint64,
+) (AssociationChange, error) {
+	session, err := m.Get(sessionID)
+	if err != nil {
+		return AssociationChange{}, err
+	}
+	return session.prepareAssociationChange(host, pointer, expectedRevision)
+}
+
+func (m *Manager) CommitAssociationChange(change AssociationChange) error {
+	session, err := m.Get(change.SessionID)
+	if err != nil {
+		return err
+	}
+	return session.commitAssociationChange(change.Previous, &change.Next, true)
+}
+
+func (m *Manager) RollbackAssociationChange(change AssociationChange) error {
+	session, err := m.Get(change.SessionID)
+	if err != nil {
+		return err
+	}
+	return session.commitAssociationChange(&change.Next, change.Previous, false)
 }
 
 func (m *Manager) CloseSession(sessionID string, force bool) error {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ro-ag/ptrack/internal/agentrun"
+	"github.com/ro-ag/ptrack/internal/association"
 	"github.com/ro-ag/ptrack/internal/terminal"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -52,12 +53,14 @@ type TerminalProfilesV2 struct {
 }
 
 type TerminalSessionV2 struct {
-	Generation uint64                `json:"generation"`
-	SessionID  string                `json:"sessionId"`
-	ProfileID  string                `json:"profileId"`
-	CWD        string                `json:"cwd"`
-	State      terminal.SessionState `json:"state"`
-	StreamURL  string                `json:"streamUrl"`
+	Generation          uint64                `json:"generation"`
+	SessionID           string                `json:"sessionId"`
+	ProfileID           string                `json:"profileId"`
+	CWD                 string                `json:"cwd"`
+	State               terminal.SessionState `json:"state"`
+	StreamURL           string                `json:"streamUrl"`
+	AssociationRevision uint64                `json:"associationRevision,omitempty"`
+	LinkedLaunch        bool                  `json:"linkedLaunch,omitempty"`
 }
 
 type managedTerminalSession struct {
@@ -86,6 +89,37 @@ type terminalManager interface {
 
 type terminalEnvironmentManager interface {
 	CreateWithEnv(profileID, cwd string, rows, columns int, environment map[string]string) (managedTerminalSession, error)
+}
+
+type terminalAssociationManager interface {
+	Associate(string, *association.Host, association.PointerV1) (association.AssociationV1, error)
+}
+
+type terminalAssociationCASManager interface {
+	PrepareAssociationChange(
+		string,
+		*association.Host,
+		association.PointerV1,
+		uint64,
+	) (terminal.AssociationChange, error)
+	CommitAssociationChange(terminal.AssociationChange) error
+	RollbackAssociationChange(terminal.AssociationChange) error
+}
+
+type terminalSessionInfoManager interface {
+	SessionInfo(string) (terminal.SessionInfo, error)
+}
+
+type terminalLiveAssociationManager interface {
+	WithLiveAssociation(
+		string,
+		uint64,
+		func(association.AssociationV1) error,
+	) error
+}
+
+type terminalExactSnapshotManager interface {
+	WithExactSessionSnapshot(int, func([]terminal.SessionInfo) error) error
 }
 
 type terminalEventEmitter func(context.Context, string, any)
@@ -155,6 +189,61 @@ func (m productionTerminalManager) Resize(sessionID string, rows, columns int) e
 	return m.manager.Resize(sessionID, rows, columns)
 }
 
+func (m productionTerminalManager) Associate(
+	sessionID string,
+	host *association.Host,
+	pointer association.PointerV1,
+) (association.AssociationV1, error) {
+	return m.manager.Associate(sessionID, host, pointer)
+}
+
+func (m productionTerminalManager) PrepareAssociationChange(
+	sessionID string,
+	host *association.Host,
+	pointer association.PointerV1,
+	expectedRevision uint64,
+) (terminal.AssociationChange, error) {
+	return m.manager.PrepareAssociationChange(
+		sessionID,
+		host,
+		pointer,
+		expectedRevision,
+	)
+}
+
+func (m productionTerminalManager) CommitAssociationChange(
+	change terminal.AssociationChange,
+) error {
+	return m.manager.CommitAssociationChange(change)
+}
+
+func (m productionTerminalManager) RollbackAssociationChange(
+	change terminal.AssociationChange,
+) error {
+	return m.manager.RollbackAssociationChange(change)
+}
+
+func (m productionTerminalManager) SessionInfo(
+	sessionID string,
+) (terminal.SessionInfo, error) {
+	return m.manager.SessionInfo(sessionID)
+}
+
+func (m productionTerminalManager) WithLiveAssociation(
+	sessionID string,
+	expectedRevision uint64,
+	use func(association.AssociationV1) error,
+) error {
+	return m.manager.WithLiveAssociation(sessionID, expectedRevision, use)
+}
+
+func (m productionTerminalManager) WithExactSessionSnapshot(
+	maximum int,
+	use func([]terminal.SessionInfo) error,
+) error {
+	return m.manager.WithExactSessionSnapshot(maximum, use)
+}
+
 func (m productionTerminalManager) Close(sessionID string, force bool) error {
 	return m.manager.CloseSession(sessionID, force)
 }
@@ -165,6 +254,18 @@ func (m productionTerminalManager) Shutdown(ctx context.Context) error {
 
 func (m productionTerminalManager) SessionSnapshot(limit int) []terminal.SessionInfo {
 	return m.manager.SessionSnapshot(limit)
+}
+
+func (m productionTerminalManager) SessionSnapshotBounded(
+	limit int,
+) ([]terminal.SessionInfo, int) {
+	return m.manager.SessionSnapshotBounded(limit)
+}
+
+func (m productionTerminalManager) RuntimeSessionSnapshotBounded(
+	limit int,
+) ([]terminal.SessionInfo, int) {
+	return m.manager.RuntimeSessionSnapshotBounded(limit)
 }
 
 func newAppWithTerminal(
@@ -447,7 +548,9 @@ func (a *App) monitorTerminalAttachmentLease(
 		// CloseSession transfers this ID out of manager ownership before it
 		// waits for process teardown, including error returns. The lease still
 		// has to remove the GUI record so shutdown/retry cannot treat it as live.
+		workspace.associationMu.Lock()
 		_ = manager.Close(session.SessionID, true)
+		workspace.associationMu.Unlock()
 		workspace.removeTerminal(session.SessionID)
 		a.publishWorkspaceTerminalStatus(workspace, TerminalStatus{
 			Generation: workspace.Generation(),
@@ -495,6 +598,7 @@ func (a *App) CloseTerminalV2(
 	if manager == nil {
 		return errors.New("terminal manager is unavailable")
 	}
+	workspace.associationMu.Lock()
 	// Revoke the broker identity before asking the PTY manager to close. A
 	// failed or delayed process close must never leave network authority live.
 	if broker := workspace.capabilityBroker(); broker != nil {
@@ -502,8 +606,10 @@ func (a *App) CloseTerminalV2(
 	}
 	if err := manager.Close(sessionID, force); err != nil &&
 		!errors.Is(err, terminal.ErrSessionNotFound) {
+		workspace.associationMu.Unlock()
 		return err
 	}
+	workspace.associationMu.Unlock()
 	workspace.removeTerminal(sessionID)
 	a.publishWorkspaceTerminalStatus(workspace, TerminalStatus{
 		Generation: workspace.Generation(),
@@ -606,6 +712,12 @@ func (a *App) publishWorkspaceTerminalExit(
 	}
 }
 
+func (a *App) publishWorkspaceRuntimeChanged(workspace *WorkspaceContext) {
+	if a.workspaceIsPublished(workspace) {
+		a.emitTerminalEvent(workspaceRuntimeChangedEvent, workspace.Generation())
+	}
+}
+
 func (a *App) workspaceIsPublished(workspace *WorkspaceContext) bool {
 	a.workspaceMu.RLock()
 	defer a.workspaceMu.RUnlock()
@@ -664,6 +776,7 @@ func (a *App) monitorTerminalExit(
 				registry.RecordTerminalExit(sessionID, result.ExitCode, resultText)
 			}
 			a.publishWorkspaceTerminalExit(workspace, exit)
+			a.publishWorkspaceRuntimeChanged(workspace)
 		case <-workspace.Context().Done():
 		}
 	}()

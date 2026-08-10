@@ -182,8 +182,6 @@ func (s *IntegrationServer) handleRegister(
 		Profile  string `json:"profile"`
 		Provider string `json:"provider"`
 		PID      int    `json:"pid"`
-		PlanID   uint64 `json:"planId"`
-		TaskID   uint64 `json:"taskId"`
 		CWD      string `json:"cwd"`
 	}
 	if !decodeIntegrationJSON(response, request, &registration) {
@@ -193,8 +191,6 @@ func (s *IntegrationServer) handleRegister(
 		Profile:  registration.Profile,
 		Provider: registration.Provider,
 		PID:      registration.PID,
-		PlanID:   registration.PlanID,
-		TaskID:   registration.TaskID,
 		CWD:      registration.CWD,
 	})
 	if err != nil {

@@ -394,6 +394,20 @@ func TestDetailShowsNotes(t *testing.T) {
 	}
 }
 
+func TestDetailLabelsTypedMemoryAndPreservesLegacyNotes(t *testing.T) {
+	d := dashboard{}
+	lines := d.noteLines([]model.Note{
+		{Kind: model.MemoryDecision, Body: "use atomic storage"},
+		{Body: "legacy observation"},
+	})
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "[decision] use atomic storage") ||
+		!strings.Contains(joined, "legacy observation") ||
+		strings.Contains(joined, "[note] legacy observation") {
+		t.Fatalf("typed memory detail = %q", joined)
+	}
+}
+
 func TestDetailWrapsLongNotes(t *testing.T) {
 	d, dbPath := newTestModel(t)
 	withStore(t, dbPath, func(s *store.Store) {

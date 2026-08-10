@@ -130,6 +130,101 @@ export function shortcutIntent(
   return null;
 }
 
+export interface LinkedTaskRuntimeSummary {
+  terminals?: number;
+  liveTerminals?: number;
+  agents?: number;
+  liveAgents?: number;
+  terminalBackedRuns?: number;
+  externalRuns?: number;
+  truncated?: boolean;
+}
+
+export interface LinkedRuntimePresentation {
+  compact: string;
+  detail: string;
+  state: "live" | "historical";
+}
+
+export function linkedTaskRuntimePresentation(
+  summary: LinkedTaskRuntimeSummary | null | undefined,
+): LinkedRuntimePresentation | null {
+  const terminals = Math.max(0, Number(summary?.terminals) || 0);
+  const agents = Math.max(0, Number(summary?.agents) || 0);
+  const truncated = summary?.truncated === true;
+  if (terminals === 0 && agents === 0 && !truncated) return null;
+  const liveTerminals = Math.min(
+    terminals,
+    Math.max(0, Number(summary?.liveTerminals) || 0),
+  );
+  const liveAgents = Math.min(
+    agents,
+    Math.max(0, Number(summary?.liveAgents) || 0),
+  );
+  const live = liveTerminals + liveAgents;
+  const historical = terminals + agents - live;
+  const resources = [
+    terminals ? `${terminals} terminal${terminals === 1 ? "" : "s"}` : "",
+    agents ? `${agents} agent${agents === 1 ? "" : "s"}` : "",
+  ].filter(Boolean).join(" · ");
+  if (terminals === 0 && agents === 0) {
+    return {
+      compact: "Runtime capped",
+      detail: "Linked runtime may be omitted because the project candidate bound was reached",
+      state: "historical",
+    };
+  }
+  return {
+    compact: `${live > 0 ? "Live" : "History"} · ${terminals}T ${agents}A`,
+    detail:
+      `${truncated ? "At least " : ""}${resources} · ${live} live` +
+      `${historical ? ` · ${historical} historical` : ""}` +
+      `${truncated ? " · additional entries may be omitted" : ""}`,
+    state: live > 0 ? "live" : "historical",
+  };
+}
+
+export interface RuntimeAssociationSummary {
+  planId?: number;
+  taskId?: number;
+  revision?: number;
+}
+
+export function runtimeAssociationLabel(
+  association: RuntimeAssociationSummary | null | undefined,
+): string {
+  if (!association) return "unlinked";
+  if (association.taskId) {
+    return `plan #${association.planId} · task #${association.taskId}`;
+  }
+  if (association.planId) return `plan #${association.planId}`;
+  return "project";
+}
+
+export function runtimeCountLabel(
+  terminals: ReadonlyArray<{ live?: boolean }> = [],
+  agents: ReadonlyArray<{ live?: boolean }> = [],
+): { compact: string; detail: string } {
+  const liveTerminals = terminals.filter((item) => item.live).length;
+  const liveAgents = agents.filter((item) => item.live).length;
+  return {
+    compact: `${liveTerminals}T · ${liveAgents}A`,
+    detail:
+      `${liveTerminals}/${terminals.length} live terminals · ` +
+      `${liveAgents}/${agents.length} live agents`,
+  };
+}
+
+export function runtimeEventIsCurrent(
+  eventGeneration: unknown,
+  currentGeneration: number,
+  workspaceOpen: boolean,
+): boolean {
+  return workspaceOpen && Number.isSafeInteger(Number(eventGeneration)) &&
+    Number(eventGeneration) > 0 &&
+    Number(eventGeneration) === currentGeneration;
+}
+
 // commandShortcut routes primary-modifier (⌘/Ctrl) chords. "palette" is
 // global; the caller decides whether the view shortcuts are blocked by an
 // input, a modal, or the terminal.

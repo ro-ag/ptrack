@@ -11,6 +11,7 @@ import (
 // TaskDetailNote is one recorded memory on a task card.
 type TaskDetailNote struct {
 	ID         uint64 `json:"id"`
+	Kind       string `json:"kind,omitempty"`
 	Body       string `json:"body"`
 	OccurredAt string `json:"occurredAt"`
 }
@@ -25,11 +26,12 @@ type TaskDetailCommit struct {
 
 // TaskDetail is the full context shown in the task detail drawer.
 type TaskDetail struct {
-	Generation uint64             `json:"generation"`
-	Task       Task               `json:"task"`
-	Notes      []TaskDetailNote   `json:"notes"`
-	Commits    []TaskDetailCommit `json:"commits"`
-	Issues     []Issue            `json:"issues"`
+	Generation    uint64                  `json:"generation"`
+	Task          Task                    `json:"task"`
+	LinkedRuntime TaskLinkedRuntimeDetail `json:"linkedRuntime"`
+	Notes         []TaskDetailNote        `json:"notes"`
+	Commits       []TaskDetailCommit      `json:"commits"`
+	Issues        []Issue                 `json:"issues"`
 }
 
 // GetTaskDetailV2 returns the full context for one board card: the task
@@ -82,6 +84,7 @@ func (a *App) GetTaskDetailV2(generation, taskID uint64) (TaskDetail, error) {
 		note := notes[i]
 		detail.Notes = append(detail.Notes, TaskDetailNote{
 			ID:         note.ID,
+			Kind:       string(note.Kind),
 			Body:       note.Body,
 			OccurredAt: note.CreatedAt.UTC().Format(time.RFC3339),
 		})
@@ -108,6 +111,17 @@ func (a *App) GetTaskDetailV2(generation, taskID uint64) (TaskDetail, error) {
 	}
 	if len(notes) > 0 {
 		detail.Task.LatestNote = notes[len(notes)-1].Body
+	}
+	projection, err := workspaceRuntimeProjection(s, workspace)
+	if err != nil {
+		return TaskDetail{}, err
+	}
+	detail.LinkedRuntime = taskLinkedRuntime(projection, taskID)
+	if detail.LinkedRuntime.Summary.Terminals != 0 ||
+		detail.LinkedRuntime.Summary.Agents != 0 ||
+		detail.LinkedRuntime.Summary.Truncated {
+		summary := detail.LinkedRuntime.Summary
+		detail.Task.LinkedRuntime = &summary
 	}
 	return detail, nil
 }

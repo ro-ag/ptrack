@@ -10,6 +10,7 @@ import {
   preferredWebglPaneIds,
   separatorAria,
   splitControlPolicy,
+  splitControlsRestricted,
   splitDragOutcome,
   terminalPanePresentationPolicy,
 } from "./split-view";
@@ -112,6 +113,12 @@ describe("split geometry", () => {
 });
 
 describe("split controls", () => {
+  it("keeps split controls disabled for a detached linked-launch pane", () => {
+    expect(splitControlsRestricted(true, false)).toBe(true);
+    expect(splitControlsRestricted(false, true)).toBe(true);
+    expect(splitControlsRestricted(false, false)).toBe(false);
+  });
+
   it("enforces pane and depth caps", () => {
     expect(splitControlPolicy(nested, "b")).toEqual({
       canSplitRight: true,

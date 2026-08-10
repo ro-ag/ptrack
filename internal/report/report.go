@@ -64,6 +64,7 @@ type NoteLine struct {
 	ID       uint64 `json:"id"`
 	Target   string `json:"target"`
 	TargetID uint64 `json:"target_id"`
+	Kind     string `json:"kind,omitempty"`
 	Body     string `json:"body"`
 }
 
@@ -215,14 +216,18 @@ func taskLine(t model.Task) TaskLine {
 }
 
 func noteLine(n model.Note) NoteLine {
-	return NoteLine{ID: n.ID, Target: string(n.Target), TargetID: n.TargetID, Body: n.Body}
+	return NoteLine{ID: n.ID, Target: string(n.Target), TargetID: n.TargetID, Kind: string(n.Kind), Body: n.Body}
 }
 
 func noteMarkdown(n NoteLine) string {
-	if n.TargetID == 0 {
-		return fmt.Sprintf("(%s) %s", n.Target, n.Body)
+	kind := ""
+	if n.Kind != "" {
+		kind = "[" + n.Kind + "] "
 	}
-	return fmt.Sprintf("(%s #%d) %s", n.Target, n.TargetID, n.Body)
+	if n.TargetID == 0 {
+		return fmt.Sprintf("%s(%s) %s", kind, n.Target, n.Body)
+	}
+	return fmt.Sprintf("%s(%s #%d) %s", kind, n.Target, n.TargetID, n.Body)
 }
 
 func orDash(s string) string {

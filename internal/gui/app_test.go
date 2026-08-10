@@ -2,6 +2,7 @@ package gui
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -9,9 +10,18 @@ import (
 	"github.com/ro-ag/ptrack/internal/store"
 )
 
+func projectTestDBPath(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".ptrack"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(root, ".ptrack", "ptrack.db")
+}
+
 func seedApp(t *testing.T) *App {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "ptrack.db")
+	dbPath := projectTestDBPath(t)
 	s, err := store.Open(dbPath)
 	if err != nil {
 		t.Fatalf("open store: %v", err)

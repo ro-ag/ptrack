@@ -24,6 +24,15 @@ export interface TerminalPane {
   cwd: string;
 }
 
+// AssociationPointerV1 is the only association metadata safe to persist with
+// a tab. The backend resolves it against the current project generation before
+// attaching context to any live terminal session or agent run.
+export interface AssociationPointerV1 {
+  version: 1;
+  planId?: number;
+  taskId?: number;
+}
+
 export interface SplitPane {
   kind: "split";
   splitId: string;
@@ -40,6 +49,7 @@ export interface WorkspaceTab {
   title: string;
   activePaneId: string;
   root: PaneNode;
+  association?: AssociationPointerV1;
 }
 
 export type Terminal = TerminalPane;
@@ -56,6 +66,11 @@ export interface TerminalDescriptor {
   profileId?: string;
   cwd?: string;
 }
+
+export type WorkspaceTabOptions = TerminalDescriptor & {
+  title?: string;
+  association?: AssociationPointerV1;
+};
 
 export interface WorkspaceValidation {
   valid: boolean;
@@ -78,6 +93,27 @@ function nonemptyId(value: unknown): value is string {
   return typeof value === "string" &&
     value.trim().length > 0 &&
     value.length <= maximumWorkspaceIdLength;
+}
+
+function positiveSafeId(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+export function normalizeAssociationPointer(
+  value: unknown,
+): AssociationPointerV1 | undefined {
+  if (!isRecord(value) || value.version !== 1) return undefined;
+  const planId = value.planId;
+  const taskId = value.taskId;
+  if (planId !== undefined && !positiveSafeId(planId)) return undefined;
+  if (taskId !== undefined && (!positiveSafeId(taskId) || planId === undefined)) {
+    return undefined;
+  }
+  return {
+    version: 1,
+    ...(planId === undefined ? {} : { planId }),
+    ...(taskId === undefined ? {} : { taskId }),
+  };
 }
 
 function reportUnknownKeys(
@@ -292,22 +328,24 @@ export function createSplitPane(
 
 export function createWorkspaceTab(
   ids: IdFactory,
-  options: TerminalDescriptor & { title?: string } = {},
+  options: WorkspaceTabOptions = {},
   usedIds = new Set<string>(),
 ): WorkspaceTab {
   const id = allocateId(ids, "tab", usedIds);
   const root = createTerminalPane(ids, options, usedIds);
+  const association = normalizeAssociationPointer(options.association);
   return {
     id,
     title: normalizeTabTitle(options.title, "Terminal"),
     activePaneId: root.paneId,
     root,
+    ...(association === undefined ? {} : { association }),
   };
 }
 
 export function createWorkspace(
   ids: IdFactory,
-  options: TerminalDescriptor & { title?: string } = {},
+  options: WorkspaceTabOptions = {},
 ): Workspace {
   const tab = createWorkspaceTab(ids, options);
   return {
@@ -342,6 +380,7 @@ export function normalizeWorkspace(
     const root = normalizeNode(candidate.root, 1, state);
     if (!root) continue;
     const paneIdList = terminalPaneIds(root);
+    const association = normalizeAssociationPointer(candidate.association);
     tabs.push({
       id: retainOrAllocateId(candidate.id, "tab", state),
       title: normalizeTabTitle(candidate.title, `Terminal ${tabs.length + 1}`),
@@ -350,6 +389,7 @@ export function normalizeWorkspace(
           ? candidate.activePaneId
           : paneIdList[0],
       root,
+      ...(association === undefined ? {} : { association }),
     });
   }
 
@@ -456,7 +496,12 @@ export function validateWorkspace(value: unknown): WorkspaceValidation {
       errors.push(`${path} must be an object`);
       continue;
     }
-    reportUnknownKeys(candidate, ["id", "title", "activePaneId", "root"], path, errors);
+    reportUnknownKeys(
+      candidate,
+      ["id", "title", "activePaneId", "root", "association"],
+      path,
+      errors,
+    );
     addId(candidate.id, `${path}.id`);
     if (nonemptyId(candidate.id)) tabIds.push(candidate.id);
     if (typeof candidate.title !== "string" || candidate.title.trim().length === 0) {
@@ -469,6 +514,32 @@ export function validateWorkspace(value: unknown): WorkspaceValidation {
     if (paneIdList.length > maximumPanesPerTab) errors.push(`${path} has too many panes`);
     if (!nonemptyId(candidate.activePaneId) || !paneIdList.includes(candidate.activePaneId)) {
       errors.push(`${path}.activePaneId must reference a pane in the tab`);
+    }
+    if (candidate.association !== undefined) {
+      if (!isRecord(candidate.association)) {
+        errors.push(`${path}.association must be an object`);
+      } else {
+        reportUnknownKeys(
+          candidate.association,
+          ["version", "planId", "taskId"],
+          `${path}.association`,
+          errors,
+        );
+        if (candidate.association.version !== 1) {
+          errors.push(`${path}.association version must be 1`);
+        }
+        const planId = candidate.association.planId;
+        const taskId = candidate.association.taskId;
+        if (planId !== undefined && !positiveSafeId(planId)) {
+          errors.push(`${path}.association.planId must be a positive safe integer`);
+        }
+        if (taskId !== undefined && !positiveSafeId(taskId)) {
+          errors.push(`${path}.association.taskId must be a positive safe integer`);
+        }
+        if (taskId !== undefined && planId === undefined) {
+          errors.push(`${path}.association.taskId requires planId`);
+        }
+      }
     }
   }
   if (!nonemptyId(value.activeTabId) || !tabIds.includes(value.activeTabId)) {

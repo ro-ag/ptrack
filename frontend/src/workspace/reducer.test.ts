@@ -70,6 +70,54 @@ describe("workspace tab reducer", () => {
     expect(reduceWorkspace(workspace, { type: "close-tab", tabId: secondId }, ids)).toBe(workspace);
   });
 
+  it("creates a linked tab with only its authority-free association pointer", () => {
+    const ids = sequentialIds();
+    let workspace = createWorkspace(ids, { title: "First" });
+    workspace = reduce(workspace, {
+      type: "create-tab",
+      title: "Task #9 · Codex",
+      profileId: "agent-codex",
+      cwd: "/repo",
+      association: { version: 1, planId: 2, taskId: 9 },
+    }, ids);
+    expect(workspace.tabs[1]).toMatchObject({
+      title: "Task #9 · Codex",
+      association: { version: 1, planId: 2, taskId: 9 },
+      root: { profileId: "agent-codex", cwd: "/repo" },
+    });
+    expect(Object.keys(workspace.tabs[1].association ?? {}).sort()).toEqual([
+      "planId",
+      "taskId",
+      "version",
+    ]);
+  });
+
+  it("relinks and detaches only the selected tab pointer", () => {
+    const ids = sequentialIds();
+    let workspace = createWorkspace(ids, {
+      association: { version: 1, planId: 2, taskId: 9 },
+    });
+    const tabId = workspace.activeTabId;
+    workspace = reduce(workspace, {
+      type: "set-tab-association",
+      tabId,
+      association: { version: 1, planId: 2 },
+    }, ids);
+    expect(workspace.tabs[0].association).toEqual({ version: 1, planId: 2 });
+    const relinked = workspace;
+    workspace = reduce(workspace, {
+      type: "set-tab-association",
+      tabId,
+    }, ids);
+    expect(workspace.tabs[0].association).toBeUndefined();
+    expect(workspace.tabs[0].root).toBe(relinked.tabs[0].root);
+    expect(reduceWorkspace(workspace, {
+      type: "set-tab-association",
+      tabId: "missing",
+      association: { version: 1, planId: 2 },
+    }, ids)).toBe(workspace);
+  });
+
   it("duplicates descriptors with fresh ids and preserves active-pane mapping", () => {
     const ids = sequentialIds();
     let workspace = createWorkspace(ids, { title: "Work", profileId: "shell", cwd: "/repo" });
@@ -82,6 +130,7 @@ describe("workspace tab reducer", () => {
       direction: "vertical",
     }, ids);
     const source = workspace.tabs[0];
+    source.association = { version: 1, planId: 2, taskId: 9 };
     const sourceIds = collectWorkspaceIds(workspace);
 
     workspace = reduce(workspace, { type: "duplicate-tab", tabId }, ids);
@@ -95,6 +144,7 @@ describe("workspace tab reducer", () => {
     expect(duplicate.title).toBe("Work copy");
     expect(findTerminalPane(duplicate.root, duplicate.activePaneId)).not.toBeNull();
     expect(paneCount(duplicate.root)).toBe(paneCount(source.root));
+    expect(duplicate.association).toBeUndefined();
   });
 
   it("keeps invalid tab actions as safe no-ops and caps tab count", () => {
@@ -120,6 +170,30 @@ describe("workspace tab reducer", () => {
 });
 
 describe("workspace pane reducer", () => {
+  it("does not split a linked tab", () => {
+    const ids = sequentialIds();
+    const workspace = createWorkspace(ids, {
+      profileId: "agent",
+      cwd: "/repo",
+      association: { version: 1, planId: 3, taskId: 7 },
+    });
+    const tab = workspace.tabs[0];
+    const next = reduce(workspace, {
+      type: "split-pane",
+      tabId: tab.id,
+      paneId: tab.activePaneId,
+      direction: "horizontal",
+    }, ids);
+
+    expect(next).toBe(workspace);
+    expect(next.tabs[0].root.kind).toBe("terminal");
+    expect(next.tabs[0].association).toEqual({
+      version: 1,
+      planId: 3,
+      taskId: 7,
+    });
+  });
+
   it("splits, focuses, updates, resizes, and closes panes", () => {
     const ids = sequentialIds();
     let workspace = createWorkspace(ids, { profileId: "shell", cwd: "/repo" });

@@ -7,11 +7,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/ro-ag/ptrack/internal/agentrun"
 	"github.com/ro-ag/ptrack/internal/gitinfo"
 	"github.com/ro-ag/ptrack/internal/model"
 	"github.com/ro-ag/ptrack/internal/store"
-	"github.com/ro-ag/ptrack/internal/terminal"
 )
 
 const (
@@ -21,8 +19,6 @@ const (
 	snapshotNoteLimit        = 50
 	snapshotCommitLimit      = 50
 	snapshotIssueLimit       = 50
-	snapshotTerminalLimit    = 64
-	snapshotAgentRunLimit    = 64
 	workspaceSnapshotTimeout = 8 * time.Second
 	snapshotActivityLimit    = 24
 )
@@ -66,6 +62,7 @@ type SnapshotNote struct {
 	ID         uint64 `json:"id"`
 	Target     string `json:"target"`
 	TargetID   uint64 `json:"targetId"`
+	Kind       string `json:"kind,omitempty"`
 	Body       string `json:"body"`
 	OccurredAt string `json:"occurredAt"`
 }
@@ -95,15 +92,17 @@ type GitSnapshot struct {
 }
 
 type TerminalSnapshot struct {
-	State    SnapshotState          `json:"state"`
-	Error    string                 `json:"error,omitempty"`
-	Sessions []terminal.SessionInfo `json:"sessions"`
+	State    SnapshotState            `json:"state"`
+	Error    string                   `json:"error,omitempty"`
+	Sessions []TerminalRuntimeSummary `json:"sessions"`
+	Bounds   BoundedSnapshot          `json:"bounds"`
 }
 
 type AgentRunSnapshot struct {
-	State SnapshotState  `json:"state"`
-	Error string         `json:"error,omitempty"`
-	Runs  []agentrun.Run `json:"runs"`
+	State  SnapshotState         `json:"state"`
+	Error  string                `json:"error,omitempty"`
+	Runs   []AgentRuntimeSummary `json:"runs"`
+	Bounds BoundedSnapshot       `json:"bounds"`
 }
 
 type WorkspaceSnapshot struct {
@@ -157,6 +156,11 @@ func (a *App) GetWorkspaceSnapshot(
 	if err != nil {
 		return WorkspaceSnapshot{}, err
 	}
+	runtimeProjection, err := workspaceRuntimeProjection(s, workspace)
+	if err != nil {
+		return WorkspaceSnapshot{}, err
+	}
+	applyLinkedRuntimeToBoard(&tracking.Board, runtimeProjection)
 	snapshot := WorkspaceSnapshot{
 		Generation: workspace.Generation(),
 		CapturedAt: time.Now().UTC().Format(time.RFC3339),
@@ -168,24 +172,14 @@ func (a *App) GetWorkspaceSnapshot(
 		Tracking: tracking,
 		Terminals: TerminalSnapshot{
 			State:    SnapshotReady,
-			Sessions: []terminal.SessionInfo{},
+			Sessions: runtimeProjection.terminals,
+			Bounds:   runtimeProjection.terminalBounds,
 		},
 		AgentRuns: AgentRunSnapshot{
-			State: SnapshotReady,
-			Runs:  []agentrun.Run{},
+			State:  SnapshotReady,
+			Runs:   runtimeProjection.agents,
+			Bounds: runtimeProjection.agentBounds,
 		},
-	}
-
-	if manager, ok := workspace.terminals.(interface {
-		SessionSnapshot(int) []terminal.SessionInfo
-	}); ok {
-		snapshot.Terminals.Sessions = manager.SessionSnapshot(snapshotTerminalLimit)
-	}
-	if registry := workspace.agentRegistry(); registry != nil {
-		for _, session := range snapshot.Terminals.Sessions {
-			registry.RecordTerminalActivityAt(session.ID, session.LastActivityAt)
-		}
-		snapshot.AgentRuns.Runs = registry.Snapshot(snapshotAgentRunLimit)
 	}
 
 	// Do not retain a bbolt read handle while the separately bounded Git
@@ -333,6 +327,7 @@ func boundedTrackingSnapshot(
 			ID:         note.ID,
 			Target:     string(note.Target),
 			TargetID:   note.TargetID,
+			Kind:       string(note.Kind),
 			Body:       note.Body,
 			OccurredAt: note.CreatedAt.UTC().Format(time.RFC3339),
 		})

@@ -54,6 +54,13 @@ export interface SplitControlPolicy {
   canClose: boolean;
 }
 
+export function splitControlsRestricted(
+  tabAssociationPresent: boolean,
+  paneLinkedOrigin: boolean,
+): boolean {
+  return tabAssociationPresent || paneLinkedOrigin;
+}
+
 export interface TerminalPanePresentationPolicy {
   paneVisible: boolean;
   foreground: boolean;
@@ -306,6 +313,7 @@ export interface WorkspaceSplitViewOptions {
   controller: WorkspaceTabController;
   hostForPane(paneId: string): HTMLElement | null;
   closePane(action: Extract<WorkspaceAction, { type: "close-pane" }>): void;
+  linkedOriginForPane?(paneId: string): boolean;
   fitPanes?(paneIds: readonly string[]): void;
   visibilityChanged?(visiblePaneIds: readonly string[]): void;
 }
@@ -329,6 +337,7 @@ export class WorkspaceSplitView {
   readonly #controller: WorkspaceTabController;
   readonly #hostForPane: (paneId: string) => HTMLElement | null;
   readonly #closePane: WorkspaceSplitViewOptions["closePane"];
+  readonly #linkedOriginForPane?: WorkspaceSplitViewOptions["linkedOriginForPane"];
   readonly #fitPanes?: WorkspaceSplitViewOptions["fitPanes"];
   readonly #visibilityChanged?: WorkspaceSplitViewOptions["visibilityChanged"];
   readonly #panels = new Map<string, HTMLElement>();
@@ -344,6 +353,7 @@ export class WorkspaceSplitView {
     this.#controller = options.controller;
     this.#hostForPane = options.hostForPane;
     this.#closePane = options.closePane;
+    this.#linkedOriginForPane = options.linkedOriginForPane;
     this.#fitPanes = options.fitPanes;
     this.#visibilityChanged = options.visibilityChanged;
     this.#workspace = options.controller.workspace;
@@ -511,11 +521,13 @@ export class WorkspaceSplitView {
     select.addEventListener("click", () => {
       this.#controller.dispatch({ type: "focus-pane", tabId, paneId: pane.paneId });
     });
-    const policy = splitControlPolicy(
-      this.#workspace.tabs.find((tab) => tab.id === tabId)?.root ?? pane,
-      pane.paneId,
+    const workspaceTab = this.#workspace.tabs.find((tab) => tab.id === tabId);
+    const policy = splitControlPolicy(workspaceTab?.root ?? pane, pane.paneId);
+    const linked = splitControlsRestricted(
+      workspaceTab?.association !== undefined,
+      this.#linkedOriginForPane?.(pane.paneId) === true,
     );
-    const splitRight = this.#button("Split right", "→", !policy.canSplitRight, () => {
+    const splitRight = this.#button("Split right", "→", linked || !policy.canSplitRight, () => {
       this.#controller.dispatch({
         type: "split-pane",
         tabId,
@@ -525,7 +537,7 @@ export class WorkspaceSplitView {
         cwd: pane.cwd,
       });
     });
-    const splitDown = this.#button("Split down", "↓", !policy.canSplitDown, () => {
+    const splitDown = this.#button("Split down", "↓", linked || !policy.canSplitDown, () => {
       this.#controller.dispatch({
         type: "split-pane",
         tabId,

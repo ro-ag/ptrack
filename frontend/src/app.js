@@ -1,4 +1,12 @@
 import { mountTerminalDock } from "./terminal/pane";
+import {
+  linkedAssociationPointer,
+  selectedInstalledAgentProfile,
+} from "./terminal/linked-launch";
+import {
+  stableTerminalWritebackRequestID,
+  terminalWritebackContentPolicy,
+} from "./terminal/writeback";
 import { initTheme } from "./theme";
 import {
   canEnableCapability,
@@ -25,6 +33,12 @@ import {
   WorkspaceController,
 } from "./workspace/controller";
 import {
+  taskTransitionCanStart,
+  taskTransitionConfirmationCopy,
+  taskTransitionFocusIntent,
+  taskTransitionResponseIsCurrent,
+} from "./workspace/task-transition";
+import {
   appVersionLabel,
   collapsedLaneStatuses,
   commandShortcut,
@@ -32,8 +46,12 @@ import {
   focusCycleIndex,
   groupSearchResults,
   heatmapWeeks,
+  linkedTaskRuntimePresentation,
   paletteTarget,
   preserveSectionOnError,
+  runtimeAssociationLabel,
+  runtimeCountLabel,
+  runtimeEventIsCurrent,
   shortcutIntent,
   workspaceStateCopy,
 } from "./workspace/presentation";
@@ -77,6 +95,7 @@ const elements = {
   planList: document.querySelector("#sidebar-plan-list"),
   planProgress: document.querySelector("#plan-progress"),
   planProgressLabel: document.querySelector("#plan-progress-label"),
+  planLaunchAgent: document.querySelector("#plan-launch-agent"),
   goal: document.querySelector("#goal"),
   summary: document.querySelector("#summary"),
   stats: document.querySelector("#project-stats"),
@@ -130,12 +149,55 @@ const elements = {
   drawerStatusSelect: document.querySelector("#drawer-status-select"),
   drawerRename: document.querySelector("#drawer-rename"),
   drawerMemory: document.querySelector("#drawer-memory"),
+  drawerLaunchAgent: document.querySelector("#drawer-launch-agent"),
+  drawerRuntime: document.querySelector("#drawer-runtime"),
+  drawerRuntimeCount: document.querySelector("#drawer-runtime-count"),
   drawerNotes: document.querySelector("#drawer-notes"),
   drawerNotesCount: document.querySelector("#drawer-notes-count"),
   drawerCommits: document.querySelector("#drawer-commits"),
   drawerCommitsCount: document.querySelector("#drawer-commits-count"),
   drawerIssues: document.querySelector("#drawer-issues"),
   drawerIssuesCount: document.querySelector("#drawer-issues-count"),
+  agentLaunchModal: document.querySelector("#agent-launch-modal"),
+  agentLaunchForm: document.querySelector("#agent-launch-form"),
+  agentLaunchHeading: document.querySelector("#agent-launch-heading"),
+  agentLaunchDetail: document.querySelector("#agent-launch-detail"),
+  agentLaunchSelect: document.querySelector("#agent-launch-profile"),
+  agentLaunchMessage: document.querySelector("#agent-launch-message"),
+  agentLaunchCancel: document.querySelector("#agent-launch-cancel"),
+  agentLaunchSubmit: document.querySelector("#agent-launch-submit"),
+  terminalLinkContext: document.querySelector("#terminal-link-context"),
+  terminalWriteback: document.querySelector("#terminal-writeback"),
+  terminalAssociationModal: document.querySelector("#terminal-association-modal"),
+  terminalAssociationForm: document.querySelector("#terminal-association-form"),
+  terminalAssociationHeading: document.querySelector("#terminal-association-heading"),
+  terminalAssociationDetail: document.querySelector("#terminal-association-detail"),
+  terminalAssociationTarget: document.querySelector("#terminal-association-target"),
+  terminalAssociationMessage: document.querySelector("#terminal-association-message"),
+  terminalAssociationCancel: document.querySelector("#terminal-association-cancel"),
+  terminalAssociationDetach: document.querySelector("#terminal-association-detach"),
+  terminalAssociationSubmit: document.querySelector("#terminal-association-submit"),
+  terminalWritebackModal: document.querySelector("#terminal-writeback-modal"),
+  terminalWritebackForm: document.querySelector("#terminal-writeback-form"),
+  terminalWritebackTarget: document.querySelector("#terminal-writeback-target"),
+  terminalWritebackKind: document.querySelector("#terminal-writeback-kind"),
+  terminalWritebackContent: document.querySelector("#terminal-writeback-content"),
+  terminalWritebackMessage: document.querySelector("#terminal-writeback-message"),
+  terminalWritebackPreview: document.querySelector("#terminal-writeback-preview"),
+  terminalWritebackPreviewTarget: document.querySelector("#terminal-writeback-preview-target"),
+  terminalWritebackPreviewContent: document.querySelector("#terminal-writeback-preview-content"),
+  terminalWritebackSummaryWarning: document.querySelector("#terminal-writeback-summary-warning"),
+  terminalWritebackSummaryConfirm: document.querySelector("#terminal-writeback-summary-confirm"),
+  terminalWritebackCancel: document.querySelector("#terminal-writeback-cancel"),
+  terminalWritebackPreviewButton: document.querySelector("#terminal-writeback-preview-button"),
+  terminalWritebackSave: document.querySelector("#terminal-writeback-save"),
+  taskTransitionModal: document.querySelector("#task-transition-modal"),
+  taskTransitionForm: document.querySelector("#task-transition-form"),
+  taskTransitionHeading: document.querySelector("#task-transition-heading"),
+  taskTransitionDetail: document.querySelector("#task-transition-detail"),
+  taskTransitionMessage: document.querySelector("#task-transition-message"),
+  taskTransitionCancel: document.querySelector("#task-transition-cancel"),
+  taskTransitionSubmit: document.querySelector("#task-transition-submit"),
   palette: document.querySelector("#palette"),
   paletteInput: document.querySelector("#palette-input"),
   paletteResults: document.querySelector("#palette-results"),
@@ -230,6 +292,22 @@ let detailTask = null;
 let detailRequest = 0;
 let drawerReturnFocus = null;
 let drawerOpenTimer = null;
+let agentLaunchRequest = null;
+let agentLaunchProfiles = [];
+let agentLaunchReturnFocus = null;
+let agentLaunchSequence = 0;
+let agentLaunchBusy = false;
+let terminalAssociationRequest = null;
+let terminalAssociationReturnFocus = null;
+let terminalAssociationSequence = 0;
+let terminalAssociationBusy = false;
+let terminalWritebackRequest = null;
+let terminalWritebackReturnFocus = null;
+let terminalWritebackSequence = 0;
+let terminalWritebackBusy = false;
+let taskTransitionRequest = null;
+let taskTransitionSequence = 0;
+let taskTransitionBusy = false;
 let dragJustEndedAt = 0;
 let sidebarWidth = defaultSidebarWidth;
 let sidebarHidden = false;
@@ -696,6 +774,21 @@ function cardElement(task) {
   title.textContent = task.title;
   dragZone.append(meta, title);
 
+  const linkedRuntime = linkedTaskRuntimePresentation(task.linkedRuntime);
+  if (linkedRuntime) {
+    const linked = document.createElement("span");
+    linked.className = "card-linked-runtime";
+    linked.dataset.state = linkedRuntime.state;
+    linked.textContent = linkedRuntime.compact;
+    linked.title = linkedRuntime.detail;
+    linked.setAttribute("aria-label", `Linked runtime: ${linkedRuntime.detail}`);
+    dragZone.append(linked);
+    dragZone.setAttribute(
+      "aria-label",
+      `Task #${task.id}: ${task.title}. ${linkedRuntime.detail}. Drag to change status, press Enter for details.`,
+    );
+  }
+
   if (task.latestNote) {
     const note = document.createElement("p");
     note.className = "latest-note";
@@ -756,9 +849,19 @@ function cardElement(task) {
     option.selected = column.status === task.status;
     statusSelect.append(option);
   });
-  statusSelect.addEventListener("change", () => void moveTask(task.id, statusSelect.value));
+  statusSelect.addEventListener("change", (event) =>
+    void moveTask(task.id, statusSelect.value, event.currentTarget)
+  );
   actions.append(
     statusSelect,
+    actionButton(
+      "Agent",
+      `Launch an installed agent for task #${task.id}`,
+      (event) => void openAgentLaunchPicker(
+        { planId: Number(board.planId), task },
+        event.currentTarget,
+      ),
+    ),
     actionButton("Edit", "Rename task", () => openRename(task)),
     actionButton("Memory", "Record a memory note", () => openMemory(task)),
   );
@@ -857,7 +960,11 @@ function columnElement(column, collapsed = false) {
     event.preventDefault();
     lane.classList.remove("drag-over");
     if (draggedTask && draggedTask.status !== column.status) {
-      void moveTask(draggedTask.id, column.status);
+      const taskId = draggedTask.id;
+      const invoker = document.querySelector(
+        `.card[data-task-id="${taskId}"] .card-drag-zone`,
+      );
+      void moveTask(taskId, column.status, invoker);
     }
   });
   return lane;
@@ -919,6 +1026,7 @@ function renderBoard() {
   elements.planProgressLabel.textContent = `${done}/${total} done`;
   elements.taskTitle.disabled = board.planId === 0;
   elements.addForm.querySelector("button").disabled = board.planId === 0;
+  elements.planLaunchAgent.disabled = board.planId === 0;
   const collapsed = new Set(
     collapsedLaneStatuses(
       board.columns.map((column) => ({
@@ -966,7 +1074,7 @@ function renderIntelligence() {
   tracking.notes.slice(0, 10).forEach((note) => {
     elements.notes.append(
       intelligenceItem(
-        `Note · ${note.target}${note.targetId ? ` #${note.targetId}` : ""}`,
+        `${note.kind || "Note"} · ${note.target}${note.targetId ? ` #${note.targetId}` : ""}`,
         `${relativeTime(note.occurredAt)} · ${note.body}`,
       ),
     );
@@ -1064,16 +1172,21 @@ function renderRuntimeIntelligence(terminals, agents) {
   elements.agentRuns.replaceChildren();
   const sessions = terminals.sessions || [];
   const runs = agents.runs || [];
-  const activeRuns = runs.filter((run) => ["running", "unknown", "stale"].includes(run.state));
-  elements.runtimeTotal.textContent = sessions.length + activeRuns.length;
+  const counts = runtimeCountLabel(sessions, runs);
+  const omitted = Number(terminals.bounds?.more || 0) +
+    Number(agents.bounds?.more || 0);
+  elements.runtimeTotal.textContent = counts.compact;
+  elements.runtimeTotal.title = omitted
+    ? `${counts.detail} · ${omitted} older entries omitted`
+    : counts.detail;
   if (sessions.length === 0) {
     elements.terminalSessions.append(emptyMemory("No terminal sessions."));
   } else {
     sessions.forEach((session) => {
       elements.terminalSessions.append(
         intelligenceItem(
-          `Terminal · ${session.profileId}`,
-          `${session.state} · PID ${session.pid || "unknown"} · ${relativeTime(session.lastActivityAt)} · ${session.cwd}`,
+          `Terminal · ${session.profileKind}`,
+          `${session.live ? "live" : "historical"} · ${session.state} · ${session.profileKind} · ${runtimeAssociationLabel(session.association)}`,
           session.state === "failed" ? "error" : "",
         ),
       );
@@ -1083,15 +1196,17 @@ function renderRuntimeIntelligence(terminals, agents) {
     elements.agentRuns.append(emptyMemory("No registered agent runs."));
   } else {
     runs.forEach((run) => {
-      const association = [
-        run.planId ? `plan #${run.planId}` : "",
-        run.taskId ? `task #${run.taskId}` : "",
-        run.terminalId ? `terminal ${run.terminalId.slice(0, 8)}` : "",
-      ].filter(Boolean);
+      const origin = run.terminalBacked
+        ? run.correspondingTerminal
+          ? `terminal-backed · terminal ${run.terminalId.slice(0, 8)}`
+          : run.terminalPresent
+            ? "terminal-backed · association does not correspond"
+            : "terminal-backed · terminal unavailable"
+        : "external";
       elements.agentRuns.append(
         intelligenceItem(
-          `Agent · ${run.profile} · ${run.provider}`,
-          `${run.state} · process ${run.processState} · lease ${run.leaseState} · PID ${run.pid || "unknown"} · ${association.join(" · ") || "project"} · ${relativeTime(run.lastActivityAt)}`,
+          `${run.terminalBacked ? "Terminal-backed" : "External"} agent`,
+          `${run.live ? "live" : "historical"} · lifecycle ${run.state} · process ${run.processState} · lease ${run.leaseState} · ${origin} · ${runtimeAssociationLabel(run.association)}`,
           ["stale", "unknown"].includes(run.state) ? "stale" : run.state === "exited" ? "" : "",
         ),
       );
@@ -1104,6 +1219,10 @@ function snapshotDialogIsOpen() {
     !elements.modal.hidden ||
     !elements.memoryModal.hidden ||
     !elements.confirmModal.hidden ||
+    !elements.agentLaunchModal.hidden ||
+    !elements.terminalAssociationModal.hidden ||
+    !elements.terminalWritebackModal.hidden ||
+    !elements.taskTransitionModal.hidden ||
     !elements.drawer.hidden ||
     !elements.palette.hidden ||
     Boolean(
@@ -1114,11 +1233,15 @@ function snapshotDialogIsOpen() {
   );
 }
 
-async function loadSnapshot(planId = board?.planId || 0, quiet = false) {
-  if (workspaceController.state.status !== "open") return;
-  if (!refreshGate.tryBegin(!quiet)) {
-    if (!quiet) queuedSnapshotPlanId = Number(planId);
-    return;
+async function loadSnapshot(
+  planId = board?.planId || 0,
+  quiet = false,
+  queueIfBusy = true,
+) {
+  if (workspaceController.state.status !== "open") return false;
+  if (!refreshGate.tryBegin(!quiet && queueIfBusy)) {
+    if (!quiet && queueIfBusy) queuedSnapshotPlanId = Number(planId);
+    return false;
   }
   if (
     quiet &&
@@ -1127,7 +1250,7 @@ async function loadSnapshot(planId = board?.planId || 0, quiet = false) {
       elements.taskTitle.value.trim().length > 0)
   ) {
     refreshGate.finish();
-    return;
+    return false;
   }
 
   const ticket = workspaceController.capture();
@@ -1137,7 +1260,7 @@ async function loadSnapshot(planId = board?.planId || 0, quiet = false) {
   try {
     const response = await api().GetWorkspaceSnapshot(ticket.generation, Number(planId));
     if (request !== snapshotSequence || !workspaceController.accepts(ticket, response.generation)) {
-      return;
+      return true;
     }
     response.git = preserveSectionOnError(snapshot?.git, response.git);
     snapshot = response;
@@ -1166,10 +1289,35 @@ async function loadSnapshot(planId = board?.planId || 0, quiet = false) {
     const rerun = refreshGate.finish();
     if (rerun && workspaceController.state.status === "open") {
       const queuedPlan = queuedSnapshotPlanId || board?.planId || 0;
+      const queuedGeneration = workspaceController.state.generation;
       queuedSnapshotPlanId = 0;
-      queueMicrotask(() => void loadSnapshot(queuedPlan));
+      queueMicrotask(() => {
+        if (workspaceController.state.status === "open" &&
+          workspaceController.state.generation === queuedGeneration) {
+          void loadSnapshot(queuedPlan);
+        }
+      });
+    } else if (rerun) {
+      refreshGate.reset();
     }
   }
+  return true;
+}
+
+async function loadExactTaskTransitionSnapshot(planId, generation) {
+  while (workspaceController.state.status === "open" &&
+    workspaceController.state.generation === generation) {
+    await refreshGate.whenIdle();
+    if (workspaceController.state.status !== "open" ||
+      workspaceController.state.generation !== generation ||
+      Number(board?.planId) !== Number(planId)) return false;
+    if (await loadSnapshot(planId, false, false)) {
+      await refreshGate.whenIdle();
+      return workspaceController.state.status === "open" &&
+        workspaceController.state.generation === generation;
+    }
+  }
+  return false;
 }
 
 async function runMutation(operation, progress, failed) {
@@ -1200,12 +1348,216 @@ async function runMutation(operation, progress, failed) {
   }
 }
 
-async function moveTask(taskId, status) {
-  await runMutation(
-    (generation) => api().MoveTaskV2(generation, Number(taskId), status),
-    `Moving task #${taskId}…`,
-    `Could not move task #${taskId}`,
+function boardTask(taskId) {
+  return board?.columns
+    ?.flatMap((column) => column.tasks)
+    .find((task) => Number(task.id) === Number(taskId));
+}
+
+function taskTransitionRequestIsCurrent(request) {
+  return taskTransitionRequest === request &&
+    taskTransitionSequence === request.sequence &&
+    workspaceController.state.status === "open" &&
+    workspaceController.state.generation === request.generation;
+}
+
+function restoreTaskTransitionControl(request) {
+  if (request.invoker instanceof HTMLSelectElement) {
+    request.invoker.value = request.fromStatus;
+  }
+}
+
+function focusTaskTransitionOrigin(request) {
+  const intent = taskTransitionFocusIntent(
+    request.origin,
+    !elements.drawer.hidden,
+    Boolean(detailTask && Number(detailTask.id) === request.taskId),
   );
+  if (intent === "none") return;
+  if (intent === "drawer-select") {
+    elements.drawerStatusSelect.focus();
+    return;
+  }
+  if (intent === "card-select") {
+    const select = document.querySelector(
+      `.card[data-task-id="${request.taskId}"] .card-actions select`,
+    );
+    if (select instanceof HTMLElement) {
+      select.focus();
+      return;
+    }
+    document.querySelector(
+      `.card[data-task-id="${request.taskId}"] .card-drag-zone`,
+    )?.focus?.();
+    return;
+  }
+  if (request.invoker instanceof HTMLElement && request.invoker.isConnected) {
+    request.invoker.focus();
+    return;
+  }
+  document.querySelector(
+    `.card[data-task-id="${request.taskId}"] .card-drag-zone`,
+  )?.focus?.();
+}
+
+function closeTaskTransition(
+  restoreState = true,
+  restoreFocus = true,
+  force = false,
+) {
+  if (taskTransitionBusy && !force) return;
+  const request = taskTransitionRequest;
+  taskTransitionSequence += 1;
+  taskTransitionBusy = false;
+  taskTransitionRequest = null;
+  elements.taskTransitionModal.hidden = true;
+  elements.taskTransitionCancel.disabled = false;
+  elements.taskTransitionSubmit.disabled = false;
+  if (request?.invoker instanceof HTMLSelectElement) {
+    request.invoker.disabled = false;
+  }
+  if (request && restoreState) restoreTaskTransitionControl(request);
+  if (restoreFocus && request) focusTaskTransitionOrigin(request);
+}
+
+async function refreshTaskTransitionView(request) {
+  const refreshed = await loadExactTaskTransitionSnapshot(
+    request.planId,
+    request.generation,
+  );
+  if (!refreshed) return false;
+  if (workspaceController.state.status !== "open" ||
+    workspaceController.state.generation !== request.generation ||
+    Number(board?.planId) !== request.planId) return false;
+  const fresh = boardTask(request.taskId);
+  if (fresh && detailTask && !elements.drawer.hidden &&
+    Number(detailTask.id) === request.taskId) {
+    detailTask = fresh;
+    renderDrawerTask(fresh);
+    await loadTaskDetail(fresh);
+  }
+  if (workspaceController.state.status !== "open" ||
+    workspaceController.state.generation !== request.generation ||
+    Number(board?.planId) !== request.planId) return false;
+  focusTaskTransitionOrigin(request);
+  return true;
+}
+
+function openTaskTransitionConfirmation(request, result) {
+  const confirmation = result.confirmation;
+  request.confirmation = confirmation;
+  elements.taskTransitionHeading.textContent =
+    `Move task #${request.taskId} to ${statusTitles[request.toStatus]}?`;
+  elements.taskTransitionDetail.textContent = taskTransitionConfirmationCopy(
+    request.taskId,
+    statusTitles[request.fromStatus],
+    statusTitles[request.toStatus],
+    confirmation,
+  );
+  elements.taskTransitionMessage.textContent =
+    "Confirm to apply this one status change, or cancel to leave the board unchanged.";
+  elements.taskTransitionCancel.disabled = false;
+  elements.taskTransitionSubmit.disabled = false;
+  elements.taskTransitionModal.hidden = false;
+  requestAnimationFrame(() => {
+    if (taskTransitionRequestIsCurrent(request)) {
+      elements.taskTransitionCancel.focus();
+    }
+  });
+}
+
+async function moveTask(taskId, status, invoker = document.activeElement) {
+  if (!board || workspaceController.state.status !== "open") return;
+  const task = boardTask(taskId);
+  if (!task || task.status === status || !statuses.includes(status)) return;
+  if (!taskTransitionCanStart(Boolean(taskTransitionRequest), taskTransitionBusy)) {
+    if (invoker instanceof HTMLSelectElement) invoker.value = task.status;
+    setStatus("Finish the current task status change before starting another.");
+    return;
+  }
+  const sequence = ++taskTransitionSequence;
+  const request = {
+    sequence,
+    generation: workspaceController.state.generation,
+    planId: Number(board.planId),
+    taskId: Number(taskId),
+    fromStatus: task.status,
+    toStatus: status,
+    invoker: invoker instanceof HTMLElement ? invoker : null,
+    origin: invoker === elements.drawerStatusSelect
+      ? "drawer-select"
+      : invoker instanceof HTMLSelectElement
+        ? "card-select"
+        : "drag",
+    confirmation: null,
+  };
+  taskTransitionRequest = request;
+  taskTransitionBusy = true;
+  if (request.invoker instanceof HTMLSelectElement) request.invoker.disabled = true;
+  setStatus(`Checking linked resources for task #${taskId}…`);
+  try {
+    const result = await api().MoveTaskV3(
+      request.generation,
+      request.taskId,
+      request.toStatus,
+      "",
+    );
+    if (!taskTransitionRequestIsCurrent(request)) return;
+    if (!taskTransitionResponseIsCurrent(result, request)) {
+      throw new Error("Stale task transition response ignored");
+    }
+    taskTransitionBusy = false;
+    if (result.applied) {
+      closeTaskTransition(false, false);
+      if (await refreshTaskTransitionView(request)) {
+        setStatus(`Task #${taskId} moved to ${statusTitles[status]}.`);
+      }
+      return;
+    }
+    openTaskTransitionConfirmation(request, result);
+  } catch (error) {
+    if (!taskTransitionRequestIsCurrent(request)) return;
+    taskTransitionBusy = false;
+    closeTaskTransition(true, true);
+    showError(error);
+    if (await refreshTaskTransitionView(request)) {
+      setStatus(`Could not move task #${taskId}`);
+    }
+  }
+}
+
+async function confirmTaskTransition() {
+  const request = taskTransitionRequest;
+  if (!request || taskTransitionBusy || !request.confirmation) return;
+  taskTransitionBusy = true;
+  elements.taskTransitionCancel.disabled = true;
+  elements.taskTransitionSubmit.disabled = true;
+  elements.taskTransitionMessage.textContent = "Revalidating linked resources…";
+  try {
+    const result = await api().MoveTaskV3(
+      request.generation,
+      request.taskId,
+      request.toStatus,
+      request.confirmation.token,
+    );
+    if (!taskTransitionRequestIsCurrent(request)) return;
+    if (!taskTransitionResponseIsCurrent(result, request) || !result.applied) {
+      throw new Error("Task or linked resources changed; status was not updated");
+    }
+    taskTransitionBusy = false;
+    closeTaskTransition(false, false);
+    if (await refreshTaskTransitionView(request)) {
+      setStatus(`Task #${request.taskId} moved to ${statusTitles[request.toStatus]}.`);
+    }
+  } catch (error) {
+    if (!taskTransitionRequestIsCurrent(request)) return;
+    taskTransitionBusy = false;
+    closeTaskTransition(true, true);
+    showError(error);
+    if (await refreshTaskTransitionView(request)) {
+      setStatus(`Could not move task #${request.taskId}`);
+    }
+  }
 }
 
 function openRename(task) {
@@ -1454,9 +1806,78 @@ function renderDrawerTask(task) {
     option.selected = status === task.status;
     elements.drawerStatusSelect.append(option);
   });
+  renderDrawerRuntimeSummary(task.linkedRuntime);
+}
+
+function renderDrawerRuntimeSummary(summary) {
+  const presentation = linkedTaskRuntimePresentation(summary);
+  elements.drawerRuntimeCount.textContent = presentation
+    ? presentation.compact
+    : "0";
+  elements.drawerRuntime.replaceChildren(
+    drawerEmptyState(
+      presentation
+        ? presentation.detail
+        : "No current terminal or agent is linked to this task.",
+    ),
+  );
+}
+
+function renderDrawerRuntimeDetail(linkedRuntime) {
+  const summary = linkedRuntime?.summary;
+  const presentation = linkedTaskRuntimePresentation(summary);
+  const terminals = linkedRuntime?.terminals || [];
+  const agents = linkedRuntime?.agents || [];
+  elements.drawerRuntimeCount.textContent = presentation
+    ? presentation.compact
+    : "0";
+  elements.drawerRuntime.replaceChildren();
+  if (!presentation) {
+    elements.drawerRuntime.append(
+      drawerEmptyState("No current terminal or agent is linked to this task."),
+    );
+    return;
+  }
+  terminals.forEach((session) => {
+    elements.drawerRuntime.append(
+      intelligenceItem(
+        `Terminal · ${session.profileKind}`,
+        `${session.live ? "live" : "historical"} · ${session.state} · ${session.profileKind}`,
+        session.state === "failed" ? "error" : "",
+      ),
+    );
+  });
+  agents.forEach((run) => {
+    const origin = run.terminalBacked
+      ? run.correspondingTerminal
+        ? "paired with linked terminal"
+        : run.terminalPresent
+          ? "terminal present · association does not correspond"
+          : "terminal unavailable"
+      : "external";
+    elements.drawerRuntime.append(
+      intelligenceItem(
+        `${run.terminalBacked ? "Terminal-backed" : "External"} agent`,
+        `${run.live ? "live" : "historical"} · lifecycle ${run.state} · process ${run.processState} · lease ${run.leaseState} · ${origin}`,
+        run.state === "stale" ? "stale" : "",
+      ),
+    );
+  });
+  const terminalRowsMore = Number(linkedRuntime?.terminalRowsMore || 0);
+  const agentRowsMore = Number(linkedRuntime?.agentRowsMore || 0);
+  if (terminalRowsMore || agentRowsMore) {
+    elements.drawerRuntime.append(
+      drawerEmptyState(
+        `${terminalRowsMore} more terminal${terminalRowsMore === 1 ? "" : "s"} · ` +
+        `${agentRowsMore} more agent${agentRowsMore === 1 ? "" : "s"}`,
+      ),
+    );
+  }
 }
 
 function renderDrawerLoading() {
+  elements.drawerRuntimeCount.textContent = "…";
+  elements.drawerRuntime.replaceChildren(drawerEmptyState("Loading linked runtime…"));
   elements.drawerNotesCount.textContent = "…";
   elements.drawerCommitsCount.textContent = "…";
   elements.drawerIssuesCount.textContent = "…";
@@ -1473,7 +1894,7 @@ function drawerNoteElement(note) {
   body.textContent = note.body;
   const meta = document.createElement("span");
   meta.className = "drawer-item-meta";
-  meta.textContent = relativeTime(note.occurredAt);
+  meta.textContent = `${note.kind || "note"} · ${relativeTime(note.occurredAt)}`;
   item.append(body, meta);
   return item;
 }
@@ -1512,6 +1933,7 @@ function drawerIssueElement(issue) {
 }
 
 function renderDrawerSections(detail) {
+  renderDrawerRuntimeDetail(detail.linkedRuntime);
   elements.drawerNotesCount.textContent = detail.notes.length;
   elements.drawerCommitsCount.textContent = detail.commits.length;
   elements.drawerIssuesCount.textContent = detail.issues.length;
@@ -1589,6 +2011,486 @@ function closeTaskDetail() {
     document.querySelector(`.card[data-task-id="${taskId}"] .card-drag-zone`);
   (card || drawerReturnFocus)?.focus?.();
   drawerReturnFocus = null;
+}
+
+async function openAgentLaunchPicker(target, invoker = document.activeElement) {
+  if (workspaceController.state.status !== "open") return;
+  let association;
+  try {
+    association = linkedAssociationPointer(
+      Number(target.planId),
+      target.task ? Number(target.task.id) : undefined,
+    );
+  } catch (error) {
+    showError(error);
+    return;
+  }
+  closeAgentLaunchPicker(false, true);
+  const sequence = ++agentLaunchSequence;
+  const generation = workspaceController.state.generation;
+  agentLaunchReturnFocus = invoker instanceof HTMLElement ? invoker : null;
+  agentLaunchProfiles = [];
+  elements.agentLaunchHeading.textContent = target.task
+    ? `Launch agent for task #${target.task.id}`
+    : `Launch agent for plan #${target.planId}`;
+  elements.agentLaunchDetail.textContent = target.task
+    ? target.task.title
+    : board?.planTitle || `Plan #${target.planId}`;
+  elements.agentLaunchMessage.textContent = "Discovering installed agent profiles…";
+  elements.agentLaunchSelect.replaceChildren();
+  elements.agentLaunchSelect.disabled = true;
+  elements.agentLaunchCancel.disabled = false;
+  elements.agentLaunchSubmit.disabled = true;
+  elements.agentLaunchModal.hidden = false;
+  requestAnimationFrame(() => elements.agentLaunchCancel.focus());
+
+  try {
+    await ensureTerminalDock(
+      generation,
+      workspaceState.project?.root || terminalProjectRoot,
+    );
+    const handle = terminalHandle;
+    if (!handle) throw new Error("Terminal workspace is unavailable");
+    const profiles = await handle.agentProfiles();
+    if (
+      sequence !== agentLaunchSequence ||
+      elements.agentLaunchModal.hidden ||
+      workspaceController.state.status !== "open" ||
+      workspaceController.state.generation !== generation ||
+      terminalHandle !== handle
+    ) return;
+    agentLaunchProfiles = profiles;
+    agentLaunchRequest = {
+      association,
+      generation,
+      handle,
+      title: target.task
+        ? `Task #${target.task.id} · agent`
+        : `Plan #${target.planId} · agent`,
+    };
+    if (profiles.length === 0) {
+      elements.agentLaunchMessage.textContent =
+        "No installed agent profiles were discovered. Install a supported agent to launch it here.";
+      return;
+    }
+    for (const profile of profiles) {
+      const option = document.createElement("option");
+      option.value = profile.id;
+      option.textContent = profile.name;
+      elements.agentLaunchSelect.append(option);
+    }
+    elements.agentLaunchMessage.textContent =
+      "Only installed agent profiles are available; this link grants no capabilities.";
+    elements.agentLaunchSelect.disabled = false;
+    elements.agentLaunchSubmit.disabled = false;
+    elements.agentLaunchSelect.focus();
+  } catch (error) {
+    if (sequence !== agentLaunchSequence || elements.agentLaunchModal.hidden) return;
+    elements.agentLaunchMessage.textContent = messageFrom(error);
+    showError(error);
+  }
+}
+
+function closeAgentLaunchPicker(restoreFocus = true, force = false) {
+  if (agentLaunchBusy && !force) return;
+  agentLaunchSequence += 1;
+  agentLaunchBusy = false;
+  agentLaunchRequest = null;
+  agentLaunchProfiles = [];
+  elements.agentLaunchModal.hidden = true;
+  elements.agentLaunchSelect.disabled = true;
+  elements.agentLaunchCancel.disabled = false;
+  elements.agentLaunchSubmit.disabled = true;
+  if (restoreFocus) agentLaunchReturnFocus?.focus?.();
+  agentLaunchReturnFocus = null;
+}
+
+function terminalAssociationTargets() {
+  if (!board?.planId) return [];
+  const planId = Number(board.planId);
+  const targets = [{
+    value: `plan:${planId}`,
+    label: `Plan #${planId} · ${board.planTitle || "Selected plan"}`,
+    association: linkedAssociationPointer(planId),
+  }];
+  for (const column of board.columns || []) {
+    for (const task of column.tasks || []) {
+      targets.push({
+        value: `task:${Number(task.id)}`,
+        label: `Task #${task.id} · ${task.title}`,
+        association: linkedAssociationPointer(planId, Number(task.id)),
+      });
+    }
+  }
+  return targets;
+}
+
+function openTerminalAssociationEditor(invoker = document.activeElement) {
+  if (workspaceController.state.status !== "open" || !terminalHandle) return;
+  const active = terminalHandle.associationState();
+  if (!active || active.generation !== workspaceController.state.generation) {
+    showError(new Error("A live single-pane terminal tab is required"));
+    return;
+  }
+  closeTerminalAssociationEditor(false, true);
+  const sequence = ++terminalAssociationSequence;
+  const targets = terminalAssociationTargets();
+  terminalAssociationReturnFocus = invoker instanceof HTMLElement ? invoker : null;
+  terminalAssociationRequest = {
+    active,
+    generation: active.generation,
+    handle: terminalHandle,
+    sequence,
+    targets,
+  };
+  elements.terminalAssociationHeading.textContent = active.pointer
+    ? "Relink terminal context"
+    : "Link terminal context";
+  elements.terminalAssociationDetail.textContent =
+    `Live session ${active.sessionId} · revision ${active.revision}`;
+  elements.terminalAssociationTarget.replaceChildren();
+  for (const target of targets) {
+    const option = document.createElement("option");
+    option.value = target.value;
+    option.textContent = target.label;
+    elements.terminalAssociationTarget.append(option);
+  }
+  const selected = targets.find((target) =>
+    target.association.planId === active.pointer?.planId &&
+    target.association.taskId === active.pointer?.taskId
+  );
+  if (selected) elements.terminalAssociationTarget.value = selected.value;
+  elements.terminalAssociationMessage.textContent = targets.length === 0
+    ? "Select a plan before linking this terminal. You can still detach its existing link."
+    : "Linking changes context only and grants no capabilities.";
+  elements.terminalAssociationTarget.disabled = targets.length === 0;
+  elements.terminalAssociationCancel.disabled = false;
+  elements.terminalAssociationDetach.disabled = active.pointer === undefined;
+  elements.terminalAssociationSubmit.disabled = targets.length === 0;
+  elements.terminalAssociationModal.hidden = false;
+  requestAnimationFrame(() => {
+    if (terminalAssociationSequence !== sequence) return;
+    (targets.length === 0
+      ? elements.terminalAssociationCancel
+      : elements.terminalAssociationTarget).focus();
+  });
+}
+
+function closeTerminalAssociationEditor(restoreFocus = true, force = false) {
+  if (terminalAssociationBusy && !force) return;
+  terminalAssociationSequence += 1;
+  terminalAssociationBusy = false;
+  terminalAssociationRequest = null;
+  elements.terminalAssociationModal.hidden = true;
+  elements.terminalAssociationTarget.disabled = true;
+  elements.terminalAssociationCancel.disabled = false;
+  elements.terminalAssociationDetach.disabled = true;
+  elements.terminalAssociationSubmit.disabled = true;
+  if (restoreFocus) terminalAssociationReturnFocus?.focus?.();
+  terminalAssociationReturnFocus = null;
+}
+
+async function submitTerminalAssociation(detach = false) {
+  const request = terminalAssociationRequest;
+  if (!request || terminalAssociationBusy) return;
+  const selected = detach
+    ? null
+    : request.targets.find(
+      (target) => target.value === elements.terminalAssociationTarget.value,
+    );
+  if (!detach && !selected) {
+    showError(new Error("Select the current plan or one of its tasks"));
+    return;
+  }
+  terminalAssociationBusy = true;
+  elements.terminalAssociationTarget.disabled = true;
+  elements.terminalAssociationCancel.disabled = true;
+  elements.terminalAssociationDetach.disabled = true;
+  elements.terminalAssociationSubmit.disabled = true;
+  elements.terminalAssociationMessage.textContent = detach
+    ? "Detaching terminal context…"
+    : "Relinking terminal context…";
+  try {
+    const result = await request.handle.mutateAssociation(
+      request.active,
+      selected?.association,
+      () =>
+        terminalAssociationSequence === request.sequence &&
+        !elements.terminalAssociationModal.hidden &&
+        workspaceController.state.status === "open" &&
+        workspaceController.state.generation === request.generation &&
+        terminalHandle === request.handle,
+    );
+    if (
+      terminalAssociationSequence !== request.sequence ||
+      workspaceController.state.status !== "open" ||
+      workspaceController.state.generation !== request.generation ||
+      terminalHandle !== request.handle ||
+      result.generation !== request.generation
+    ) return;
+    terminalAssociationBusy = false;
+    closeTerminalAssociationEditor(true);
+    setStatus(detach
+      ? "Terminal context detached."
+      : "Terminal context relinked.");
+  } catch (error) {
+    if (
+      terminalAssociationSequence !== request.sequence ||
+      elements.terminalAssociationModal.hidden
+    ) return;
+    terminalAssociationBusy = false;
+    elements.terminalAssociationMessage.textContent = messageFrom(error);
+    elements.terminalAssociationTarget.disabled = request.targets.length === 0;
+    elements.terminalAssociationCancel.disabled = false;
+    elements.terminalAssociationDetach.disabled = request.active.pointer === undefined;
+    elements.terminalAssociationSubmit.disabled = request.targets.length === 0;
+    showError(error);
+  }
+}
+
+function terminalWritebackAssociationLabel(active) {
+  if (active.pointer?.taskId) return `Task #${active.pointer.taskId}`;
+  if (active.pointer?.planId) return `Plan #${active.pointer.planId}`;
+  return active.pointer ? "Project" : "Detached terminal";
+}
+
+function invalidateTerminalWritebackPreview() {
+  const request = terminalWritebackRequest;
+  if (!request || terminalWritebackBusy) return;
+  request.preview = null;
+  request.requestID = null;
+  elements.terminalWritebackPreview.hidden = true;
+  elements.terminalWritebackSummaryWarning.hidden = true;
+  elements.terminalWritebackSummaryConfirm.checked = false;
+  elements.terminalWritebackSave.disabled = true;
+  const policy = terminalWritebackContentPolicy(elements.terminalWritebackContent.value);
+  elements.terminalWritebackMessage.textContent = policy.message;
+}
+
+function openTerminalWriteback(invoker = document.activeElement) {
+  if (workspaceController.state.status !== "open" || !terminalHandle) return;
+  const active = terminalHandle.associationState();
+  if (!active?.pointer || active.generation !== workspaceController.state.generation) {
+    showError(new Error("A live linked terminal tab is required for write-back"));
+    return;
+  }
+  closeTerminalWriteback(false, true);
+  const sequence = ++terminalWritebackSequence;
+  terminalWritebackReturnFocus = invoker instanceof HTMLElement ? invoker : null;
+  terminalWritebackRequest = {
+    active,
+    generation: active.generation,
+    handle: terminalHandle,
+    sequence,
+    preview: null,
+    requestID: null,
+  };
+  elements.terminalWritebackTarget.textContent =
+    `${terminalWritebackAssociationLabel(active)} · live revision ${active.revision}. ` +
+    "The backend will derive and revalidate this destination.";
+  elements.terminalWritebackKind.value = "decision";
+  elements.terminalWritebackContent.value = "";
+  elements.terminalWritebackContent.disabled = false;
+  elements.terminalWritebackKind.disabled = false;
+  elements.terminalWritebackCancel.disabled = false;
+  elements.terminalWritebackPreviewButton.disabled = false;
+  elements.terminalWritebackPreview.hidden = true;
+  elements.terminalWritebackSummaryWarning.hidden = true;
+  elements.terminalWritebackSummaryConfirm.checked = false;
+  elements.terminalWritebackSave.disabled = true;
+  elements.terminalWritebackMessage.textContent =
+    "Enter memory, then preview its authoritative destination.";
+  elements.terminalWritebackModal.hidden = false;
+  requestAnimationFrame(() => {
+    if (terminalWritebackSequence === sequence) {
+      elements.terminalWritebackKind.focus();
+    }
+  });
+}
+
+function closeTerminalWriteback(restoreFocus = true, force = false) {
+  if (terminalWritebackBusy && !force) return;
+  terminalWritebackSequence += 1;
+  terminalWritebackBusy = false;
+  terminalWritebackRequest = null;
+  elements.terminalWritebackModal.hidden = true;
+  elements.terminalWritebackContent.value = "";
+  elements.terminalWritebackContent.disabled = false;
+  elements.terminalWritebackKind.disabled = false;
+  elements.terminalWritebackCancel.disabled = false;
+  elements.terminalWritebackPreviewButton.disabled = false;
+  elements.terminalWritebackSave.disabled = true;
+  elements.terminalWritebackPreview.hidden = true;
+  elements.terminalWritebackSummaryWarning.hidden = true;
+  elements.terminalWritebackSummaryConfirm.checked = false;
+  if (restoreFocus) terminalWritebackReturnFocus?.focus?.();
+  terminalWritebackReturnFocus = null;
+}
+
+function terminalWritebackRequestIsCurrent(request) {
+  return terminalWritebackSequence === request.sequence &&
+    !elements.terminalWritebackModal.hidden &&
+    workspaceController.state.status === "open" &&
+    workspaceController.state.generation === request.generation &&
+    terminalHandle === request.handle;
+}
+
+async function previewTerminalWriteback() {
+  const request = terminalWritebackRequest;
+  if (!request || terminalWritebackBusy) return;
+  const kind = elements.terminalWritebackKind.value;
+  const policy = terminalWritebackContentPolicy(elements.terminalWritebackContent.value);
+  if (!policy.valid) {
+    elements.terminalWritebackMessage.textContent = policy.message;
+    return;
+  }
+  terminalWritebackBusy = true;
+  elements.terminalWritebackKind.disabled = true;
+  elements.terminalWritebackContent.disabled = true;
+  elements.terminalWritebackCancel.disabled = true;
+  elements.terminalWritebackPreviewButton.disabled = true;
+  elements.terminalWritebackSave.disabled = true;
+  elements.terminalWritebackMessage.textContent = "Validating write-back preview…";
+  try {
+    const preview = await request.handle.previewWriteback(
+      request.active,
+      kind,
+      policy.normalized,
+      () => terminalWritebackRequestIsCurrent(request),
+    );
+    if (!terminalWritebackRequestIsCurrent(request)) return;
+    terminalWritebackBusy = false;
+    request.preview = preview;
+    request.requestID = stableTerminalWritebackRequestID(
+      request.requestID,
+      () => `writeback-${crypto.randomUUID()}`,
+    );
+    elements.terminalWritebackContent.value = preview.content;
+    elements.terminalWritebackPreviewTarget.textContent =
+      `Destination: ${preview.destination} · associated with ${preview.associationTarget}`;
+    elements.terminalWritebackPreviewContent.textContent = preview.content;
+    elements.terminalWritebackPreview.hidden = false;
+    elements.terminalWritebackSummaryWarning.hidden = !preview.replacesSummary;
+    elements.terminalWritebackSummaryConfirm.checked = false;
+    elements.terminalWritebackMessage.textContent =
+      `${preview.contentBytes} bytes validated. Review before writing.`;
+    elements.terminalWritebackKind.disabled = false;
+    elements.terminalWritebackContent.disabled = false;
+    elements.terminalWritebackCancel.disabled = false;
+    elements.terminalWritebackPreviewButton.disabled = false;
+    elements.terminalWritebackSave.disabled = preview.replacesSummary;
+    (preview.replacesSummary
+      ? elements.terminalWritebackSummaryConfirm
+      : elements.terminalWritebackSave).focus();
+  } catch (error) {
+    if (!terminalWritebackRequestIsCurrent(request)) return;
+    terminalWritebackBusy = false;
+    elements.terminalWritebackMessage.textContent = messageFrom(error);
+    elements.terminalWritebackKind.disabled = false;
+    elements.terminalWritebackContent.disabled = false;
+    elements.terminalWritebackCancel.disabled = false;
+    elements.terminalWritebackPreviewButton.disabled = false;
+    showError(error);
+  }
+}
+
+async function commitTerminalWriteback() {
+  const request = terminalWritebackRequest;
+  if (!request || terminalWritebackBusy || !request.preview || !request.requestID) return;
+  const policy = terminalWritebackContentPolicy(elements.terminalWritebackContent.value);
+  if (!policy.valid || policy.normalized !== request.preview.content ||
+    elements.terminalWritebackKind.value !== request.preview.kind) {
+    invalidateTerminalWritebackPreview();
+    return;
+  }
+  const confirmSummary = request.preview.replacesSummary &&
+    elements.terminalWritebackSummaryConfirm.checked;
+  if (request.preview.replacesSummary && !confirmSummary) {
+    elements.terminalWritebackMessage.textContent =
+      "Confirm replacement of the entire project rolling summary.";
+    return;
+  }
+  terminalWritebackBusy = true;
+  elements.terminalWritebackKind.disabled = true;
+  elements.terminalWritebackContent.disabled = true;
+  elements.terminalWritebackCancel.disabled = true;
+  elements.terminalWritebackPreviewButton.disabled = true;
+  elements.terminalWritebackSave.disabled = true;
+  elements.terminalWritebackMessage.textContent = "Writing explicit project memory…";
+  try {
+    const result = await request.handle.writeback(
+      request.active,
+      request.requestID,
+      request.preview.kind,
+      request.preview.content,
+      confirmSummary,
+      () => terminalWritebackRequestIsCurrent(request),
+    );
+    if (!terminalWritebackRequestIsCurrent(request)) return;
+    terminalWritebackBusy = false;
+    closeTerminalWriteback(true);
+    setStatus(`${result.kind} written to ${result.destination}.`);
+    await loadSnapshot(board?.planId || 0);
+  } catch (error) {
+    if (!terminalWritebackRequestIsCurrent(request)) return;
+    terminalWritebackBusy = false;
+    elements.terminalWritebackMessage.textContent =
+      `${messageFrom(error)} Retry keeps the same request identity.`;
+    elements.terminalWritebackKind.disabled = false;
+    elements.terminalWritebackContent.disabled = false;
+    elements.terminalWritebackCancel.disabled = false;
+    elements.terminalWritebackPreviewButton.disabled = false;
+    elements.terminalWritebackSave.disabled =
+      request.preview.replacesSummary && !elements.terminalWritebackSummaryConfirm.checked;
+    showError(error);
+  }
+}
+
+async function submitAgentLaunch() {
+  const request = agentLaunchRequest;
+  if (!request || elements.agentLaunchSubmit.disabled) return;
+  let profile;
+  try {
+    profile = selectedInstalledAgentProfile(
+      agentLaunchProfiles,
+      elements.agentLaunchSelect.value,
+    );
+  } catch (error) {
+    showError(error);
+    return;
+  }
+  const sequence = agentLaunchSequence;
+  agentLaunchBusy = true;
+  elements.agentLaunchSelect.disabled = true;
+  elements.agentLaunchCancel.disabled = true;
+  elements.agentLaunchSubmit.disabled = true;
+  elements.agentLaunchMessage.textContent = `Launching ${profile.name}…`;
+  try {
+    await request.handle.launchLinked({
+      profileId: profile.id,
+      title: request.title.replace("agent", profile.name),
+      association: request.association,
+    });
+    if (
+      sequence !== agentLaunchSequence ||
+      workspaceController.state.status !== "open" ||
+      workspaceController.state.generation !== request.generation ||
+      terminalHandle !== request.handle
+    ) return;
+    agentLaunchBusy = false;
+    closeAgentLaunchPicker(false);
+    if (!elements.drawer.hidden) closeTaskDetail();
+    setStatus(`${profile.name} launched in a linked terminal tab.`);
+    await loadSnapshot(board?.planId || 0, false);
+  } catch (error) {
+    if (sequence !== agentLaunchSequence || elements.agentLaunchModal.hidden) return;
+    agentLaunchBusy = false;
+    elements.agentLaunchMessage.textContent = messageFrom(error);
+    elements.agentLaunchSelect.disabled = agentLaunchProfiles.length === 0;
+    elements.agentLaunchCancel.disabled = false;
+    elements.agentLaunchSubmit.disabled = agentLaunchProfiles.length === 0;
+    showError(error);
+  }
 }
 
 function showWorkspaceConfirmation(action, resources) {
@@ -2228,6 +3130,12 @@ function renderWorkspaceState(state, focus = false) {
 
   snapshotSequence += 1;
   activeSnapshotRequest = null;
+  queuedSnapshotPlanId = 0;
+  refreshGate.cancelQueued();
+  closeAgentLaunchPicker(false, true);
+  closeTerminalAssociationEditor(false, true);
+  closeTerminalWriteback(false, true);
+  closeTaskTransition(false, false, true);
   disposeTerminalDock();
   closeTaskDetail();
   closePalette();
@@ -2281,6 +3189,9 @@ function publishBackendState(state, transition, focus = false, keepInert = false
 }
 
 function beginWorkspaceTransition() {
+  closeTerminalAssociationEditor(false, true);
+  closeTerminalWriteback(false, true);
+  closeTaskTransition(false, false, true);
   const transition = workspaceController.beginTransition();
   if (workspaceState.status === "open") {
     elements.workspace.inert = true;
@@ -2402,6 +3313,63 @@ function generationTerminalBackend(generation) {
         await api().CreateTerminalV2(generation, profileID, cwd, rows, columns),
       );
     },
+    async LaunchLinkedAgent(profileID, cwd, rows, columns, association) {
+      return assertGeneration(
+        await api().LaunchLinkedAgentV2(
+          generation,
+          profileID,
+          cwd,
+          rows,
+          columns,
+          association,
+        ),
+      );
+    },
+    RollbackLinkedAgent(sessionID) {
+      return api().RollbackLinkedAgentLaunchV2(generation, sessionID);
+    },
+    async MutateTerminalAssociation(sessionID, expectedRevision, association) {
+      return assertGeneration(
+        await api().MutateTerminalAssociationV2(
+          generation,
+          sessionID,
+          expectedRevision,
+          association === undefined,
+          association ?? { version: 1 },
+        ),
+      );
+    },
+    async PreviewTerminalWriteback(sessionID, expectedRevision, kind, content) {
+      return assertGeneration(
+        await api().PreviewTerminalWritebackV2(
+          generation,
+          sessionID,
+          expectedRevision,
+          kind,
+          content,
+        ),
+      );
+    },
+    async WriteTerminalMemory(
+      sessionID,
+      expectedRevision,
+      requestID,
+      kind,
+      content,
+      confirmSummary,
+    ) {
+      return assertGeneration(
+        await api().WriteTerminalMemoryV2(
+          generation,
+          sessionID,
+          expectedRevision,
+          requestID,
+          kind,
+          content,
+          confirmSummary,
+        ),
+      );
+    },
     async ValidateTerminalCWDs(cwds) {
       return assertGeneration(
         await api().ValidateTerminalCWDsV2(generation, cwds),
@@ -2422,6 +3390,12 @@ async function ensureTerminalDock(generation, projectRoot) {
     terminalGeneration === generation &&
     terminalProjectRoot === projectRoot
   ) return;
+  if (terminalHandle) {
+    closeAgentLaunchPicker(false, true);
+    closeTerminalAssociationEditor(false, true);
+    closeTerminalWriteback(false, true);
+    closeTaskTransition(false, false, true);
+  }
   disposeTerminalDock();
   terminalGeneration = generation;
   terminalProjectRoot = projectRoot;
@@ -2454,6 +3428,9 @@ async function ensureTerminalDock(generation, projectRoot) {
 }
 
 function disposeTerminalDock() {
+  closeTerminalAssociationEditor(false, true);
+  closeTerminalWriteback(false, true);
+  closeTaskTransition(false, false, true);
   terminalHandle?.dispose();
   terminalHandle = null;
   terminalGeneration = 0;
@@ -2482,7 +3459,17 @@ function boardShortcutIsBlocked(event) {
 
 function trapModalFocus(event) {
   if (event.key !== "Tab") return;
-  const modal = [elements.palette, elements.confirmModal, elements.modal, elements.memoryModal, elements.drawer].find(
+  const modal = [
+    elements.palette,
+    elements.confirmModal,
+    elements.agentLaunchModal,
+    elements.terminalAssociationModal,
+    elements.terminalWritebackModal,
+    elements.taskTransitionModal,
+    elements.modal,
+    elements.memoryModal,
+    elements.drawer,
+  ].find(
     (candidate) => !candidate.hidden,
   );
   if (!modal) return;
@@ -2490,7 +3477,7 @@ function trapModalFocus(event) {
     modal.querySelectorAll(
       'button:not([disabled]), input:not([disabled]):not([hidden]), textarea:not([disabled]):not([hidden]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
     ),
-  ).filter((item) => !item.hidden);
+  ).filter((item) => !item.hidden && !item.closest("[hidden]"));
   if (focusable.length === 0) return;
   const first = focusable[0];
   const current = focusable.indexOf(document.activeElement);
@@ -2515,6 +3502,15 @@ function registerNativeProjectActions() {
     eventsOn("workspace:data-changed", () =>
       void loadSnapshot(board?.planId || 0, true),
     ),
+    eventsOn("workspace:runtime-changed", (generation) => {
+      if (!runtimeEventIsCurrent(
+        generation,
+        workspaceController.state.generation,
+        workspaceController.state.status === "open",
+      )) return;
+      void loadSnapshot(board?.planId || 0, false);
+      if (detailTask && !elements.drawer.hidden) void loadTaskDetail(detailTask);
+    }),
   );
 }
 
@@ -2587,6 +3583,13 @@ elements.switchProject.addEventListener("click", () => void requestOpenProject()
 elements.closeProject.addEventListener("click", () => void requestCloseProject());
 elements.stateOpen.addEventListener("click", () => void requestOpenProject());
 elements.activityMore.addEventListener("click", openMemoryHistory);
+elements.planLaunchAgent.addEventListener("click", (event) => {
+  if (!board?.planId) return;
+  void openAgentLaunchPicker(
+    { planId: Number(board.planId) },
+    event.currentTarget,
+  );
+});
 elements.confirmCancel.addEventListener("click", () => finishWorkspaceConfirmation(false));
 elements.confirmSubmit.addEventListener("click", () => finishWorkspaceConfirmation(true));
 
@@ -2647,9 +3650,13 @@ document.querySelectorAll("[data-close-drawer]").forEach((element) => {
   element.addEventListener("click", closeTaskDetail);
 });
 elements.drawerClose.addEventListener("click", closeTaskDetail);
-elements.drawerStatusSelect.addEventListener("change", () => {
+elements.drawerStatusSelect.addEventListener("change", (event) => {
   if (!detailTask) return;
-  void moveTask(detailTask.id, elements.drawerStatusSelect.value);
+  void moveTask(
+    detailTask.id,
+    elements.drawerStatusSelect.value,
+    event.currentTarget,
+  );
 });
 elements.drawerRename.addEventListener("click", () => {
   if (detailTask) openRename(detailTask);
@@ -2657,12 +3664,92 @@ elements.drawerRename.addEventListener("click", () => {
 elements.drawerMemory.addEventListener("click", () => {
   if (detailTask) openMemory(detailTask);
 });
+elements.drawerLaunchAgent.addEventListener("click", (event) => {
+  if (!detailTask || !board?.planId) return;
+  void openAgentLaunchPicker(
+    { planId: Number(board.planId), task: detailTask },
+    event.currentTarget,
+  );
+});
+elements.agentLaunchForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  void submitAgentLaunch();
+});
+elements.agentLaunchCancel.addEventListener("click", () => closeAgentLaunchPicker());
+document.querySelectorAll("[data-close-agent-launch]").forEach((element) => {
+  element.addEventListener("click", () => closeAgentLaunchPicker());
+});
+elements.terminalLinkContext.addEventListener("click", (event) => {
+  openTerminalAssociationEditor(event.currentTarget);
+});
+elements.terminalAssociationForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  void submitTerminalAssociation(false);
+});
+elements.terminalAssociationDetach.addEventListener("click", () => {
+  void submitTerminalAssociation(true);
+});
+elements.terminalAssociationCancel.addEventListener("click", () =>
+  closeTerminalAssociationEditor()
+);
+document.querySelectorAll("[data-close-terminal-association]").forEach((element) => {
+  element.addEventListener("click", () => closeTerminalAssociationEditor());
+});
+elements.terminalWriteback.addEventListener("click", (event) => {
+  openTerminalWriteback(event.currentTarget);
+});
+elements.terminalWritebackForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  void previewTerminalWriteback();
+});
+elements.terminalWritebackKind.addEventListener("change", invalidateTerminalWritebackPreview);
+elements.terminalWritebackContent.addEventListener("input", invalidateTerminalWritebackPreview);
+elements.terminalWritebackSummaryConfirm.addEventListener("change", () => {
+  const preview = terminalWritebackRequest?.preview;
+  elements.terminalWritebackSave.disabled = !preview ||
+    (preview.replacesSummary && !elements.terminalWritebackSummaryConfirm.checked);
+});
+elements.terminalWritebackSave.addEventListener("click", () => {
+  void commitTerminalWriteback();
+});
+elements.terminalWritebackCancel.addEventListener("click", () => closeTerminalWriteback());
+document.querySelectorAll("[data-close-terminal-writeback]").forEach((element) => {
+  element.addEventListener("click", () => closeTerminalWriteback());
+});
+elements.taskTransitionForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  void confirmTaskTransition();
+});
+elements.taskTransitionCancel.addEventListener("click", () => closeTaskTransition());
+document.querySelectorAll("[data-close-task-transition]").forEach((element) => {
+  element.addEventListener("click", () => closeTaskTransition());
+});
 
 document.addEventListener("keydown", (event) => {
   trapModalFocus(event);
   if (event.key === "Escape" && !elements.confirmModal.hidden) {
     event.preventDefault();
     finishWorkspaceConfirmation(false);
+    return;
+  }
+  if (event.key === "Escape" && !elements.agentLaunchModal.hidden) {
+    event.preventDefault();
+    closeAgentLaunchPicker();
+    return;
+  }
+  if (event.key === "Escape" && !elements.terminalAssociationModal.hidden) {
+    event.preventDefault();
+    closeTerminalAssociationEditor();
+    return;
+  }
+  if (event.key === "Escape" && !elements.terminalWritebackModal.hidden) {
+    event.preventDefault();
+    closeTerminalWriteback();
+    return;
+  }
+  if (event.key === "Escape" && !elements.taskTransitionModal.hidden) {
+    event.preventDefault();
+    closeTaskTransition();
     return;
   }
   if (event.key === "Escape" && !elements.modal.hidden) closeDialog();

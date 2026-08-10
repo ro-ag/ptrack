@@ -66,7 +66,11 @@ func (d *dashboard) noteLines(notes []model.Note) []string {
 	out := make([]string, 0, len(notes))
 	for _, n := range notes {
 		stamp := dimStyle.Render(n.CreatedAt.Format("2006-01-02 15:04") + "  ")
-		out = append(out, "• "+stamp+textStyle.Render(n.Body))
+		kind := ""
+		if n.Kind != "" {
+			kind = "[" + string(n.Kind) + "] "
+		}
+		out = append(out, "• "+stamp+textStyle.Render(kind+n.Body))
 	}
 	return out
 }

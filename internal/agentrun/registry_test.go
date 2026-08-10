@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/ro-ag/ptrack/internal/association"
 )
 
 func TestRegistryTracksLaunchedRunAndTerminalExit(t *testing.T) {
@@ -24,8 +26,6 @@ func TestRegistryTracksLaunchedRunAndTerminalExit(t *testing.T) {
 		PID:        4242,
 		TerminalID: "terminal-1",
 		CWD:        "/project",
-		PlanID:     2,
-		TaskID:     9,
 	})
 	if err != nil {
 		t.Fatalf("RegisterLaunched: %v", err)
@@ -76,6 +76,247 @@ func TestRegistryAcceptsOwnedTerminalActivityTimeWithoutRegressing(t *testing.T)
 	got := registry.Snapshot(1)[0]
 	if got.ID != run.ID || got.LastActivityAt != activity {
 		t.Fatalf("last activity = %v, want %v", got.LastActivityAt, activity)
+	}
+}
+
+type registryAssociationCatalog struct{}
+
+func (registryAssociationCatalog) ValidatePlan(planID uint64) error {
+	if planID != 2 {
+		return errors.New("not found")
+	}
+	return nil
+}
+
+func (registryAssociationCatalog) TaskPlan(taskID uint64) (uint64, error) {
+	if taskID != 9 {
+		return 0, errors.New("not found")
+	}
+	return 2, nil
+}
+
+func TestRegistryAssociationsAreHostOwnedMonotonicAndSnapshotSafe(t *testing.T) {
+	projectRoot := t.TempDir()
+	registry := NewRegistry(Config{ProjectRoot: projectRoot})
+	t.Cleanup(func() { _ = registry.Shutdown(context.Background()) })
+	lease, err := registry.RegisterExternal(Registration{
+		Profile: "wrapper", Provider: "external", CWD: projectRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lease.Run.Association != nil {
+		t.Fatalf("registration association = %#v", lease.Run.Association)
+	}
+	host, err := association.NewHost(projectRoot, 4, registryAssociationCatalog{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := registry.Associate(lease.Run.ID, host, association.PointerV1{
+		Version: association.VersionV1, PlanID: 2, TaskID: 9,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := registry.Associate(lease.Run.ID, host, association.PointerV1{
+		Version: association.VersionV1, PlanID: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Revision != 1 || second.Revision != 2 || second.LiveID != lease.Run.ID {
+		t.Fatalf("associations = first %#v second %#v", first, second)
+	}
+	snapshot := registry.Snapshot(1)
+	if snapshot[0].Association == nil || snapshot[0].Association.Revision != 2 {
+		t.Fatalf("snapshot = %#v", snapshot[0])
+	}
+	snapshot[0].Association.Revision = 99
+	if got := registry.Snapshot(1)[0].Association.Revision; got != 2 {
+		t.Fatalf("snapshot mutation changed registry revision to %d", got)
+	}
+}
+
+func TestRegisterLinkedLaunchedIsAtomicAndRollbackIsTerminalScoped(t *testing.T) {
+	projectRoot := t.TempDir()
+	registry := NewRegistry(Config{ProjectRoot: projectRoot})
+	t.Cleanup(func() { _ = registry.Shutdown(context.Background()) })
+	host, err := association.NewHost(projectRoot, 4, registryAssociationCatalog{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registration := Registration{
+		Profile: "agent-codex", Provider: "codex", PID: 42,
+		TerminalID: "linked-terminal", CWD: projectRoot,
+	}
+	if _, err := registry.RegisterLinkedLaunched(
+		registration,
+		host,
+		association.PointerV1{Version: 2},
+	); !errors.Is(err, association.ErrUnsupportedVersion) {
+		t.Fatalf("invalid linked registration = %v", err)
+	}
+	if len(registry.Snapshot(8)) != 0 {
+		t.Fatal("failed binding published a detached run")
+	}
+	run, err := registry.RegisterLinkedLaunched(
+		registration,
+		host,
+		association.PointerV1{Version: association.VersionV1, PlanID: 2, TaskID: 9},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Association == nil || run.Association.Revision != 1 ||
+		run.Association.Target.PlanID != 2 || run.Association.Target.TaskID != 9 {
+		t.Fatalf("linked run = %#v", run)
+	}
+	if !registry.HasLinkedTerminal("linked-terminal") {
+		t.Fatal("linked terminal provenance was not recorded")
+	}
+	if registry.RollbackLinkedLaunched(run.ID, "another-terminal") {
+		t.Fatal("rollback removed a run owned by another terminal")
+	}
+	ordinary, err := registry.RegisterLaunched(Registration{
+		Profile: "agent-codex", Provider: "codex", PID: 43,
+		TerminalID: "ordinary-terminal", CWD: projectRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Associate(
+		ordinary.ID,
+		host,
+		association.PointerV1{
+			Version: association.VersionV1,
+			PlanID:  2,
+			TaskID:  9,
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if removed := registry.RollbackLinkedTerminal("ordinary-terminal"); removed != 0 {
+		t.Fatalf("linked rollback removed %d associated ordinary runs", removed)
+	}
+	if registry.HasLinkedTerminal("ordinary-terminal") {
+		t.Fatal("associated ordinary run gained linked-launch provenance")
+	}
+	if removed := registry.RollbackLinkedTerminal("linked-terminal"); removed != 1 {
+		t.Fatalf("terminal rollback removed %d runs", removed)
+	}
+	if registry.HasLinkedTerminal("linked-terminal") {
+		t.Fatal("linked terminal provenance survived rollback")
+	}
+	snapshot := registry.Snapshot(8)
+	if len(snapshot) != 1 || snapshot[0].ID != ordinary.ID {
+		t.Fatalf("terminal rollback result = %#v", snapshot)
+	}
+}
+
+func TestLinkedAssociationChangeTracksTerminalCASAndPreservesProvenance(t *testing.T) {
+	projectRoot := t.TempDir()
+	registry := NewRegistry(Config{ProjectRoot: projectRoot})
+	t.Cleanup(func() { _ = registry.Shutdown(context.Background()) })
+	host, err := association.NewHost(projectRoot, 4, registryAssociationCatalog{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pointer := association.PointerV1{
+		Version: association.VersionV1, PlanID: 2, TaskID: 9,
+	}
+	terminalAssociation, err := host.Bind("linked-terminal", pointer, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := registry.RegisterLinkedLaunched(Registration{
+		Profile: "agent", Provider: "test", PID: 42,
+		TerminalID: "linked-terminal", CWD: projectRoot,
+	}, host, pointer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminalNext, err := host.Bind(
+		"linked-terminal",
+		association.PointerV1{Version: association.VersionV1, PlanID: 2},
+		&terminalAssociation,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	change, found, err := registry.PrepareLinkedTerminalAssociationChange(
+		"linked-terminal",
+		&terminalAssociation,
+		terminalNext,
+		host,
+		association.PointerV1{Version: association.VersionV1, PlanID: 2},
+	)
+	if err != nil || !found {
+		t.Fatalf("prepare = found %t err %v", found, err)
+	}
+	if current := registry.Snapshot(1)[0].Association; current == nil ||
+		current.Target.TaskID != 9 || current.Revision != 1 {
+		t.Fatalf("prepare changed run = %#v", current)
+	}
+	if err := registry.CommitLinkedAssociationChange(change); err != nil {
+		t.Fatal(err)
+	}
+	current := registry.Snapshot(1)[0]
+	if current.ID != run.ID || current.Association == nil ||
+		current.Association.Target.TaskID != 0 || current.Association.Revision != 2 {
+		t.Fatalf("committed run = %#v", current)
+	}
+	if err := registry.CommitLinkedAssociationChange(change); !errors.Is(err, ErrAssociationMismatch) {
+		t.Fatalf("replayed commit = %v", err)
+	}
+	if err := registry.RollbackLinkedAssociationChange(change); err != nil {
+		t.Fatal(err)
+	}
+	if !registry.IsLinkedLaunchRun(run.ID) ||
+		!registry.HasLinkedTerminal("linked-terminal") {
+		t.Fatal("association rollback lost immutable linked-launch provenance")
+	}
+}
+
+func TestLinkedAssociationChangeFailsClosedOnCorrespondenceMismatch(t *testing.T) {
+	projectRoot := t.TempDir()
+	registry := NewRegistry(Config{ProjectRoot: projectRoot})
+	t.Cleanup(func() { _ = registry.Shutdown(context.Background()) })
+	host, err := association.NewHost(projectRoot, 4, registryAssociationCatalog{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pointer := association.PointerV1{
+		Version: association.VersionV1, PlanID: 2, TaskID: 9,
+	}
+	terminalAssociation, err := host.Bind("linked-terminal", pointer, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.RegisterLinkedLaunched(Registration{
+		Profile: "agent", Provider: "test", PID: 42,
+		TerminalID: "linked-terminal", CWD: projectRoot,
+	}, host, pointer); err != nil {
+		t.Fatal(err)
+	}
+	mismatch := terminalAssociation
+	mismatch.Revision++
+	if _, found, err := registry.PrepareLinkedTerminalAssociationChange(
+		"linked-terminal",
+		&mismatch,
+		mismatch,
+		host,
+		association.PointerV1{Version: association.VersionV1, PlanID: 2},
+	); found || !errors.Is(err, ErrAssociationMismatch) {
+		t.Fatalf("mismatch = found %t err %v", found, err)
+	}
+	if _, found, err := registry.PrepareLinkedTerminalAssociationChange(
+		"ordinary-terminal",
+		nil,
+		terminalAssociation,
+		host,
+		association.PointerV1{Version: association.VersionV1, PlanID: 2},
+	); err != nil || found {
+		t.Fatalf("ordinary terminal = found %t err %v", found, err)
 	}
 }
 

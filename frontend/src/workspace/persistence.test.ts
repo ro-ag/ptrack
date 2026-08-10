@@ -151,6 +151,37 @@ describe("terminal workspace persistence", () => {
     });
   });
 
+  it("migrates existing v1 data and persists only a plan/task pointer", () => {
+    const storage = new MemoryStorage();
+    const legacy = createWorkspace(ids(), { profileId: "shell", cwd: "/repo" });
+    const key = terminalWorkspaceStorageKey("/repo");
+    storage.setItem(key, JSON.stringify({ version: 1, workspace: legacy, dockRatio: 0.3 }));
+    expect(loadTerminalWorkspace(storage, "/repo")).toMatchObject({
+      workspace: legacy,
+      invalidReason: null,
+    });
+
+    legacy.tabs[0].association = { version: 1, planId: 2, taskId: 9 };
+    Object.assign(legacy.tabs[0].association as unknown as Record<string, unknown>, {
+      generation: 7,
+      sessionId: "runtime-session",
+      token: "secret",
+      environment: { SECRET: "value" },
+      context: "hidden",
+      output: "terminal bytes",
+      authority: "network",
+    });
+    const raw = serializeTerminalWorkspace(legacy, 0.3)!;
+    expect(JSON.parse(raw).workspace.tabs[0].association).toEqual({
+      version: 1,
+      planId: 2,
+      taskId: 9,
+    });
+    for (const forbidden of [
+      "generation", "sessionId", "token", "environment", "context", "output", "authority",
+    ]) expect(raw).not.toContain(forbidden);
+  });
+
   it("round trips valid state and treats storage exceptions as nonfatal", () => {
     const storage = new MemoryStorage();
     const workspace = createWorkspace(ids(), { profileId: "shell", cwd: "/repo" });

@@ -85,12 +85,15 @@ export class RefreshLoop {
 export class RefreshGate {
   #running = false;
   #queued = false;
+  #handoffPending = false;
+  #idleWaiters: Array<() => void> = [];
 
   tryBegin(queueIfBusy = false): boolean {
     if (this.#running) {
       this.#queued ||= queueIfBusy;
       return false;
     }
+    this.#handoffPending = false;
     this.#running = true;
     return true;
   }
@@ -99,11 +102,33 @@ export class RefreshGate {
     this.#running = false;
     const queued = this.#queued;
     this.#queued = false;
+    this.#handoffPending = queued;
+    if (!queued) {
+      const waiters = this.#idleWaiters.splice(0);
+      for (const resolve of waiters) resolve();
+    }
     return queued;
+  }
+
+  whenIdle(): Promise<void> {
+    if (!this.#running && !this.#handoffPending) return Promise.resolve();
+    return new Promise((resolve) => this.#idleWaiters.push(resolve));
+  }
+
+  cancelQueued(): void {
+    this.#queued = false;
+    this.#handoffPending = false;
+    if (!this.#running) {
+      const waiters = this.#idleWaiters.splice(0);
+      for (const resolve of waiters) resolve();
+    }
   }
 
   reset(): void {
     this.#running = false;
     this.#queued = false;
+    this.#handoffPending = false;
+    const waiters = this.#idleWaiters.splice(0);
+    for (const resolve of waiters) resolve();
   }
 }

@@ -96,6 +96,43 @@ func TestBoundedRecentNotesCommitsAndIssuesAreNewestFirst(t *testing.T) {
 	}
 }
 
+func TestOpenIssueScanBoundedReportsDeterministicHardLimit(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "ptrack.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for index := range 5 {
+		issue, err := s.AddIssue(
+			fmt.Sprintf("issue-%d", index), "", model.SeverityMedium, 0,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if index == 3 {
+			if err := s.SetIssueStatus(issue.ID, model.IssueClosed); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	result, err := s.ListOpenIssuesScanBounded(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Scanned != 2 || result.ScanLimit != 2 || !result.Truncated ||
+		len(result.Items) != 1 || result.Items[0].Title != "issue-4" {
+		t.Fatalf("hard issue scan = %#v", result)
+	}
+	complete, err := s.ListOpenIssuesScanBounded(5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete.Scanned != 5 || complete.ScanLimit != 5 || complete.Truncated ||
+		len(complete.Items) != 4 {
+		t.Fatalf("complete issue scan = %#v", complete)
+	}
+}
+
 func TestBoundedReadsRejectInvalidLimits(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "ptrack.db"))
 	if err != nil {

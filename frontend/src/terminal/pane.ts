@@ -11,6 +11,29 @@ import "@xterm/xterm/css/xterm.css";
 import { TerminalStreamClient } from "./client";
 import type { StreamState } from "./client";
 import {
+  completeLinkedLaunchTransaction,
+  installedAgentProfiles,
+  LinkedLaunchPersistenceStage,
+  linkedAssociationPointer,
+  persistUnlessLinkedLaunchStaged,
+  selectedInstalledAgentProfile,
+  type DiscoveredTerminalProfile,
+  type InstalledAgentProfile,
+  type LinkedLaunchRequest,
+} from "./linked-launch";
+import {
+  commitTerminalAssociationMutation,
+  terminalHasLinkedOrigin,
+  type ActiveTerminalAssociation,
+  type TerminalAssociationMutationResult,
+} from "./association-editor";
+import {
+  terminalWritebackStateMatches,
+  type TerminalWritebackKind,
+  type TerminalWritebackPreview,
+  type TerminalWritebackResult,
+} from "./writeback";
+import {
   binaryStringToBytes,
   commitClipboardPaste,
   prepareClipboardPaste,
@@ -73,7 +96,9 @@ import {
   maximumWorkspaceTabs,
   paneIds,
   type TerminalDescriptor,
+  type AssociationPointerV1,
   type Workspace,
+  type WorkspaceTab,
 } from "../workspace/model";
 import {
   clearTerminalWorkspaceAfterReplace,
@@ -109,11 +134,7 @@ import {
 
 type DockState = PaneRuntimeState;
 
-interface TerminalProfile {
-  id: string;
-  name: string;
-  kind: "shell" | "agent";
-}
+type TerminalProfile = DiscoveredTerminalProfile;
 
 interface TerminalSession {
   sessionId: string;
@@ -121,6 +142,8 @@ interface TerminalSession {
   cwd: string;
   state: string;
   streamUrl: string;
+  associationRevision?: number;
+  linkedLaunch?: boolean;
 }
 
 interface TerminalExit {
@@ -140,6 +163,33 @@ interface TerminalBackend {
     rows: number,
     columns: number,
   ): Promise<TerminalSession>;
+  LaunchLinkedAgent(
+    profileID: string,
+    cwd: string,
+    rows: number,
+    columns: number,
+    association: LinkedLaunchRequest["association"],
+  ): Promise<TerminalSession>;
+  RollbackLinkedAgent(sessionID: string): Promise<void>;
+  MutateTerminalAssociation(
+    sessionID: string,
+    expectedRevision: number,
+    association?: AssociationPointerV1,
+  ): Promise<TerminalAssociationMutationResult>;
+  PreviewTerminalWriteback(
+    sessionID: string,
+    expectedRevision: number,
+    kind: TerminalWritebackKind,
+    content: string,
+  ): Promise<TerminalWritebackPreview>;
+  WriteTerminalMemory(
+    sessionID: string,
+    expectedRevision: number,
+    requestID: string,
+    kind: TerminalWritebackKind,
+    content: string,
+    confirmSummary: boolean,
+  ): Promise<TerminalWritebackResult>;
   ResizeTerminal(sessionID: string, rows: number, columns: number): Promise<void>;
   CloseTerminal(sessionID: string, force: boolean): Promise<void>;
 }
@@ -153,6 +203,28 @@ interface MountOptions {
 
 export interface TerminalDockHandle {
   ready: Promise<void>;
+  agentProfiles(): Promise<InstalledAgentProfile[]>;
+  launchLinked(request: LinkedLaunchRequest): Promise<void>;
+  associationState(): ActiveTerminalAssociation | null;
+  mutateAssociation(
+    expected: ActiveTerminalAssociation,
+    association?: AssociationPointerV1,
+    accepts?: () => boolean,
+  ): Promise<ActiveTerminalAssociation>;
+  previewWriteback(
+    expected: ActiveTerminalAssociation,
+    kind: TerminalWritebackKind,
+    content: string,
+    accepts?: () => boolean,
+  ): Promise<TerminalWritebackPreview>;
+  writeback(
+    expected: ActiveTerminalAssociation,
+    requestID: string,
+    kind: TerminalWritebackKind,
+    content: string,
+    confirmSummary: boolean,
+    accepts?: () => boolean,
+  ): Promise<TerminalWritebackResult>;
   setVisible(visible: boolean): void;
   dispose(): void;
 }
@@ -179,6 +251,11 @@ interface PaneResources {
 }
 
 type DockPaneRuntime = PaneRuntime<TerminalSession, PaneResources>;
+
+interface LinkedTabStage {
+  tab: WorkspaceTab;
+  paneId: string;
+}
 
 const minimumDockHeight = 180;
 const defaultDockHeight = 300;
@@ -255,6 +332,10 @@ class TerminalDock {
   readonly #open = requiredElement<HTMLButtonElement>("#terminal-open");
   readonly #restart = requiredElement<HTMLButtonElement>("#terminal-restart");
   readonly #close = requiredElement<HTMLButtonElement>("#terminal-close");
+  readonly #association = requiredElement<HTMLButtonElement>(
+    "#terminal-link-context",
+  );
+  readonly #writeback = requiredElement<HTMLButtonElement>("#terminal-writeback");
   readonly #searchOpen = requiredElement<HTMLButtonElement>("#terminal-search-open");
   readonly #searchForm = requiredElement<HTMLFormElement>("#terminal-search");
   readonly #searchInput = requiredElement<HTMLInputElement>("#terminal-search-input");
@@ -331,6 +412,7 @@ class TerminalDock {
   #modernUnicodeEnabled = true;
   #fontSize = defaultTerminalFontSize;
   #defaultProfileId = "";
+  #profiles: TerminalProfile[] = [];
   #profileKinds = new Map<string, TerminalProfileKind>();
   #earlyExit = new Map<string, TerminalExit>();
   #dragCleanup: (() => void) | null = null;
@@ -343,6 +425,8 @@ class TerminalDock {
   #pasteRequest = 0;
   #disposed = false;
   #resetPromise: Promise<void> | null = null;
+  readonly #linkedPersistenceStage = new LinkedLaunchPersistenceStage();
+  #linkedLaunchPaneIds = new Set<string>();
   #authorizedRuntimeRemoval = new Set<string>();
   #dockDisposers: Array<() => void> = [];
 
@@ -364,12 +448,14 @@ class TerminalDock {
         clearTimeout: (handle) => window.clearTimeout(handle as number),
       },
       () => {
-        saveTerminalWorkspace(
-          localStorage,
-          this.#projectRoot,
-          this.#tabController.workspace,
-          this.#dockRatio,
-        );
+        persistUnlessLinkedLaunchStaged(this.#linkedPersistenceStage, () => {
+          saveTerminalWorkspace(
+            localStorage,
+            this.#projectRoot,
+            this.#tabController.workspace,
+            this.#dockRatio,
+          );
+        });
       },
     );
     this.#lifecycle = new PaneLifecycleCoordinator(this.#runtimes, {
@@ -419,6 +505,8 @@ class TerminalDock {
       controller: this.#tabController,
       hostForPane: (paneId) => this.#runtimes.get(paneId)?.resources?.host ?? null,
       closePane: (action) => void this.#handleStructuralClose(action),
+      linkedOriginForPane: (paneId) => this.#linkedLaunchPaneIds.has(paneId) ||
+        this.#runtimes.get(paneId)?.session?.linkedLaunch === true,
       fitPanes: (paneIdList) => this.#fitPanes(paneIdList),
     });
     this.#dockDisposers.push(
@@ -569,6 +657,7 @@ class TerminalDock {
     try {
       const profiles = await this.#backend.GetTerminalProfiles();
       if (this.#disposed) return;
+      this.#profiles = profiles.map((profile) => ({ ...profile }));
       this.#profile.replaceChildren();
       this.#profileKinds.clear();
       for (const profile of profiles) {
@@ -634,6 +723,11 @@ class TerminalDock {
       !descriptor ||
       !descriptor.pane.profileId
     ) return;
+    if (this.#paneIsLinked(runtime, descriptor.association)) {
+      throw new Error(
+        "Linked agent tabs must be launched again from their plan or task",
+      );
+    }
     await this.#pendingSessionCloses.retryPending();
     if (this.#disposed || !this.#descriptorFor(runtime.paneId)) return;
     this.#lifecycle.prepareOpen(runtime.paneId);
@@ -668,13 +762,17 @@ class TerminalDock {
         resources.terminal.cols,
       );
       createdSession = session;
-      let accepted: boolean;
       try {
-        accepted = await this.#pendingSessionCloses.settle({
-          sessionId: session.sessionId,
+        if (!(await this.#attachCreatedSession(
+          runtime,
+          descriptor,
+          ticket,
           resources,
-          accepts: () => this.#accepts(runtime, ticket),
-        });
+          session,
+        ))) {
+          createdSession = null;
+          return;
+        }
       } catch (error) {
         createdSession = null;
         if (error instanceof PendingSessionCloseError) {
@@ -683,47 +781,7 @@ class TerminalDock {
         }
         throw error;
       }
-      if (!accepted) {
-        createdSession = null;
-        return;
-      }
-      runtime.session = session;
-      runtime.activity = {
-        ...runtime.activity,
-        profileKind: this.#profileKinds.get(session.profileId) ??
-          runtime.activity.profileKind,
-      };
-      this.#tabController.dispatch({
-        type: "update-pane",
-        tabId: descriptor.tabId,
-        paneId: runtime.paneId,
-        changes: { profileId: session.profileId, cwd: session.cwd },
-      });
-      resources.client = new TerminalStreamClient({
-        createWebSocket: (url) => new WebSocket(url) as any,
-        writeOutput: (output, done) => resources.terminal.write(output, done),
-        onStateChange: (state) => this.#streamStateChanged(
-          runtime,
-          ticket,
-          session.sessionId,
-          state,
-        ),
-        onOutput: (byteLength) => this.#recordPaneOutput(
-          runtime,
-          ticket,
-          session.sessionId,
-          byteLength,
-        ),
-      });
-      resources.client.connect(session.streamUrl);
-
-      const earlyExit = this.#earlyExit.get(session.sessionId);
-      if (earlyExit) {
-        this.#earlyExit.delete(session.sessionId);
-        this.#handleExit(earlyExit, runtime, ticket);
-      }
-      this.#pruneEarlyExits();
-      if (this.#isActive(runtime)) resources.terminal.focus();
+      createdSession = null;
     } catch (error) {
       if (createdSession) {
         this.#earlyExit.delete(createdSession.sessionId);
@@ -741,7 +799,70 @@ class TerminalDock {
     }
   }
 
+  async #attachCreatedSession(
+    runtime: DockPaneRuntime,
+    descriptor: NonNullable<ReturnType<typeof activeTerminalDescriptor>>,
+    ticket: PaneRuntimeTicket,
+    resources: PaneResources,
+    session: TerminalSession,
+  ): Promise<boolean> {
+    const accepted = await this.#pendingSessionCloses.settle({
+      sessionId: session.sessionId,
+      resources,
+      accepts: () => this.#accepts(runtime, ticket),
+    });
+    if (!accepted) return false;
+    runtime.session = session;
+    if (session.linkedLaunch === true) {
+      this.#linkedLaunchPaneIds.add(runtime.paneId);
+      this.#splitView.refresh(this.#tabController.workspace);
+    }
+    runtime.activity = {
+      ...runtime.activity,
+      profileKind: this.#profileKinds.get(session.profileId) ??
+        runtime.activity.profileKind,
+    };
+    this.#tabController.dispatch({
+      type: "update-pane",
+      tabId: descriptor.tabId,
+      paneId: runtime.paneId,
+      changes: { profileId: session.profileId, cwd: session.cwd },
+    });
+    resources.client = new TerminalStreamClient({
+      createWebSocket: (url) => new WebSocket(url) as any,
+      writeOutput: (output, done) => resources.terminal.write(output, done),
+      onStateChange: (state) => this.#streamStateChanged(
+        runtime,
+        ticket,
+        session.sessionId,
+        state,
+      ),
+      onOutput: (byteLength) => this.#recordPaneOutput(
+        runtime,
+        ticket,
+        session.sessionId,
+        byteLength,
+      ),
+    });
+    resources.client.connect(session.streamUrl);
+
+    const earlyExit = this.#earlyExit.get(session.sessionId);
+    if (earlyExit) {
+      this.#earlyExit.delete(session.sessionId);
+      this.#handleExit(earlyExit, runtime, ticket);
+    }
+    this.#pruneEarlyExits();
+    if (this.#isActive(runtime)) resources.terminal.focus();
+    return true;
+  }
+
   async #restartTerminal(runtime: DockPaneRuntime): Promise<void> {
+    const descriptor = this.#descriptorFor(runtime.paneId);
+    if (this.#paneIsLinked(runtime, descriptor?.association)) {
+      throw new Error(
+        "Linked agent tabs must be launched again from their plan or task",
+      );
+    }
     await this.#lifecycle.close(runtime.paneId);
     if (this.#disposed || !this.#descriptorFor(runtime.paneId)) return;
     this.#lifecycle.prepareOpen(runtime.paneId);
@@ -1752,13 +1873,30 @@ class TerminalDock {
     this.#zoomReset.disabled = terminalActionsDisabled;
     this.#clear.disabled = terminalActionsDisabled;
     this.#renderZoomState();
-    const descriptor = activeTerminalDescriptor(this.#tabController.workspace);
-    this.#open.disabled = runtime.busy || runtime.closing || !descriptor?.pane.profileId;
-    this.#restart.disabled = runtime.busy || runtime.closing;
+    const workspace = this.#tabController.workspace;
+    const descriptor = activeTerminalDescriptor(workspace);
+    const activeAssociation = workspace.tabs.find(
+      (tab) => tab.id === workspace.activeTabId,
+    )?.association;
+    const linked = this.#paneIsLinked(runtime, activeAssociation);
+    this.#open.disabled = runtime.busy || runtime.closing || linked ||
+      !descriptor?.pane.profileId;
+    this.#restart.disabled = runtime.busy || runtime.closing || linked;
     this.#close.disabled = runtime.busy || runtime.closing;
+    const associationState = this.associationState();
+    this.#association.disabled = associationState === null;
+    const associationLabel = associationState?.pointer
+      ? "Relink terminal context"
+      : associationState && associationState.revision > 0
+        ? "Relink detached terminal context"
+        : "Link terminal context";
+    this.#association.textContent = associationState?.pointer ? "Relink" : "Link context";
+    this.#association.setAttribute("aria-label", associationLabel);
+    this.#association.title = associationLabel;
+    this.#writeback.disabled = associationState?.pointer === undefined;
     const descriptorEditable = runtimeDescriptorEditable(runtime);
-    this.#profile.disabled = !descriptorEditable;
-    this.#cwd.disabled = !descriptorEditable;
+    this.#profile.disabled = !descriptorEditable || linked;
+    this.#cwd.disabled = !descriptorEditable || linked;
     this.#syncDescriptorEditor();
     this.#title.textContent = runtime.state === "closed"
       ? "Stopped"
@@ -1776,9 +1914,22 @@ class TerminalDock {
   #descriptorFor(paneId: string) {
     for (const tab of this.#tabController.workspace.tabs) {
       const pane = findTerminalPane(tab.root, paneId);
-      if (pane) return { tabId: tab.id, pane };
+      if (pane) {
+        return { tabId: tab.id, pane, association: tab.association };
+      }
     }
     return null;
+  }
+
+  #paneIsLinked(
+    runtime: DockPaneRuntime,
+    pointer: AssociationPointerV1 | undefined,
+  ): boolean {
+    return terminalHasLinkedOrigin(
+      pointer,
+      runtime.session?.linkedLaunch === true,
+      this.#linkedLaunchPaneIds.has(runtime.paneId),
+    );
   }
 
   #isActive(runtime: DockPaneRuntime): boolean {
@@ -1918,7 +2069,11 @@ class TerminalDock {
       this.#runtimes.accepts(ticket);
   }
 
-  #defaultTabIntent(action: WorkspaceAction): WorkspaceAction {
+  #defaultTabIntent(action: WorkspaceAction): WorkspaceAction | null {
+    if (
+      action.type === "split-pane" &&
+      this.#linkedLaunchPaneIds.has(action.paneId)
+    ) return null;
     if (action.type !== "create-tab") return action;
     return {
       ...action,
@@ -2050,6 +2205,7 @@ class TerminalDock {
         if (this.#authorizedRuntimeRemoval.has(runtime.paneId)) {
           this.#lifecycle.releaseLocal(runtime.paneId);
           this.#runtimes.remove(runtime.paneId);
+          this.#linkedLaunchPaneIds.delete(runtime.paneId);
           this.#authorizedRuntimeRemoval.delete(runtime.paneId);
         } else {
           this.#showError(
@@ -2282,6 +2438,263 @@ class TerminalDock {
     );
   }
 
+  agentProfiles(): InstalledAgentProfile[] {
+    return installedAgentProfiles(this.#profiles);
+  }
+
+  async launchLinked(request: LinkedLaunchRequest): Promise<void> {
+    if (this.#disposed) throw new Error("Terminal workspace is unavailable");
+    await this.#pendingSessionCloses.retryPending();
+    if (this.#disposed) throw new Error("Terminal workspace is unavailable");
+    const profile = selectedInstalledAgentProfile(
+      this.agentProfiles(),
+      request.profileId,
+    );
+    if (request.association.version !== 1) {
+      throw new Error("Unsupported linked launch association version");
+    }
+    const association = linkedAssociationPointer(
+      request.association.planId ?? 0,
+      request.association.taskId,
+    );
+    const activeResources = this.#activeRuntime().resources;
+    const rows = activeResources?.terminal.rows ?? 24;
+    const columns = activeResources?.terminal.cols ?? 80;
+
+    let releasePersistenceStage: (() => void) | null = null;
+    try {
+      await completeLinkedLaunchTransaction<TerminalSession, LinkedTabStage>({
+        launch: () => this.#backend.LaunchLinkedAgent(
+          profile.id,
+          request.cwd ?? "",
+          rows,
+          columns,
+          association,
+        ),
+        createTab: (session) => {
+          if (this.#disposed || session.profileId !== profile.id) return null;
+          // Persist the last committed workspace before staging. While the
+          // backend session is unattached, neither timers nor project teardown
+          // may serialize the tentative linked descriptor.
+          releasePersistenceStage = this.#linkedPersistenceStage.begin(
+            () => this.#flushPersistence(),
+          );
+          const priorTabIDs = new Set(
+            this.#tabController.workspace.tabs.map((tab) => tab.id),
+          );
+          const workspace = this.#tabController.dispatch({
+            type: "create-tab",
+            title: request.title,
+            profileId: profile.id,
+            cwd: session.cwd,
+            association,
+          });
+          if (!workspace) return null;
+          const tab = workspace.tabs.find(
+            (candidate) => candidate.id === workspace.activeTabId,
+          );
+          if (!tab || tab.association === undefined) {
+            const staged = workspace.tabs.find((candidate) =>
+              !priorTabIDs.has(candidate.id)
+            );
+            if (staged) {
+              this.#authorizedRuntimeRemoval.add(staged.activePaneId);
+              this.#tabController.dispatch({
+                type: "close-tab",
+                tabId: staged.id,
+              });
+            }
+            return null;
+          }
+          return { tab, paneId: tab.activePaneId };
+        },
+        attach: async (stage, session) => {
+          const descriptor = activeTerminalDescriptor(
+            this.#tabController.workspace,
+          );
+          if (
+            this.#disposed ||
+            !descriptor ||
+            descriptor.tabId !== stage.tab.id ||
+            descriptor.pane.paneId !== stage.paneId
+          ) throw new Error("Linked terminal tab is no longer active");
+          const runtime = this.#runtimes.ensure(stage.paneId);
+          this.#lifecycle.prepareOpen(stage.paneId);
+          this.#teardownRuntime(runtime);
+          runtime.activity = resetPaneActivity("agent");
+          const ticket = this.#runtimes.begin(stage.paneId);
+          runtime.session = null;
+          runtime.closing = false;
+          runtime.title = "";
+          this.#body.hidden = false;
+          this.#message.hidden = true;
+          this.#setState(runtime, "opening");
+
+          await new Promise<void>((resolve) =>
+            requestAnimationFrame(() => resolve())
+          );
+          if (
+            !this.#accepts(runtime, ticket) ||
+            !this.#descriptorFor(stage.paneId)
+          ) throw new Error("Linked terminal tab closed before attachment");
+          const resources = this.#createRenderer(runtime, ticket);
+          runtime.resources = resources;
+          this.#updateWebglPolicy();
+          if (this.#isActive(runtime)) this.#renderState();
+          this.#fit(runtime, resources, false);
+          if (!(await this.#attachCreatedSession(
+            runtime,
+            descriptor,
+            ticket,
+            resources,
+            session,
+          ))) throw new Error("Linked terminal session could not be attached");
+        },
+        closeSession: (session) =>
+          this.#backend.RollbackLinkedAgent(session.sessionId),
+        rollbackTab: (stage) => {
+          const exists = this.#tabController.workspace.tabs.some(
+            (tab) => tab.id === stage.tab.id,
+          );
+          if (!exists) return;
+          this.#authorizedRuntimeRemoval.add(stage.paneId);
+          const removed = this.#tabController.dispatch({
+            type: "close-tab",
+            tabId: stage.tab.id,
+          });
+          if (!removed && !this.#disposed) {
+            this.#authorizedRuntimeRemoval.delete(stage.paneId);
+            throw new Error("Could not roll back linked terminal tab");
+          }
+        },
+      });
+    } finally {
+      if (releasePersistenceStage !== null) {
+        releasePersistenceStage();
+        if (!this.#disposed) this.#markPersistenceDirty();
+      }
+    }
+    if (this.#disposed) return;
+    this.#terminalHidden = false;
+    this.#renderPanelVisibility();
+    requestAnimationFrame(() => {
+      if (!this.#disposed) this.#activeRuntime().resources?.terminal.focus();
+    });
+  }
+
+  associationState(): ActiveTerminalAssociation | null {
+    if (this.#disposed) return null;
+    const active = activeTerminalDescriptor(this.#tabController.workspace);
+    if (!active) return null;
+    const tab = this.#tabController.workspace.tabs.find(
+      (candidate) => candidate.id === active.tabId,
+    );
+    const runtime = this.#runtimes.get(active.pane.paneId);
+    const session = runtime?.session;
+    const revision = session?.associationRevision ?? 0;
+    if (
+      !tab || !runtime || runtime.state !== "running" || runtime.busy ||
+      runtime.closing || !session || paneIds(tab.root).length !== 1 ||
+      !Number.isSafeInteger(revision) || revision < 0
+    ) return null;
+    return {
+      generation: this.#workspaceGeneration,
+      tabId: tab.id,
+      paneId: active.pane.paneId,
+      sessionId: session.sessionId,
+      revision,
+      ...(tab.association === undefined
+        ? {}
+        : { pointer: tab.association }),
+    };
+  }
+
+  async mutateAssociation(
+    expected: ActiveTerminalAssociation,
+    association?: AssociationPointerV1,
+    accepts: () => boolean = () => true,
+  ): Promise<ActiveTerminalAssociation> {
+    return commitTerminalAssociationMutation({
+      expected,
+      pointer: association,
+      current: () => accepts() ? this.associationState() : null,
+      mutate: (sessionID, revision, pointer) =>
+        this.#backend.MutateTerminalAssociation(sessionID, revision, pointer),
+      commit: (next) => {
+        const current = this.associationState();
+        if (!current || current.sessionId !== next.sessionId ||
+          current.tabId !== next.tabId || current.paneId !== next.paneId) {
+          throw new Error("Terminal association target changed before commit");
+        }
+        const runtime = this.#runtimes.get(next.paneId);
+        if (!runtime?.session || runtime.session.sessionId !== next.sessionId) {
+          throw new Error("Terminal session changed before association commit");
+        }
+        runtime.session.associationRevision = next.revision;
+        const before = this.#tabController.workspace;
+        const after = this.#tabController.dispatch({
+          type: "set-tab-association",
+          tabId: next.tabId,
+          association: next.pointer,
+        });
+        if (!after && !associationPointersMatch(
+          before.tabs.find((tab) => tab.id === next.tabId)?.association,
+          next.pointer,
+        )) {
+          throw new Error("Terminal association pointer could not be committed");
+        }
+        this.#markPersistenceDirty();
+        this.#flushPersistence();
+        this.#renderState();
+      },
+    });
+  }
+
+  async previewWriteback(
+    expected: ActiveTerminalAssociation,
+    kind: TerminalWritebackKind,
+    content: string,
+    accepts: () => boolean = () => true,
+  ): Promise<TerminalWritebackPreview> {
+    if (!accepts() || !terminalWritebackStateMatches(expected, this.associationState())) {
+      throw new Error("Terminal write-back target changed");
+    }
+    const result = await this.#backend.PreviewTerminalWriteback(
+      expected.sessionId, expected.revision, kind, content,
+    );
+    if (!accepts() || !terminalWritebackStateMatches(expected, this.associationState()) ||
+      result.generation !== expected.generation ||
+      result.sessionId !== expected.sessionId || result.revision !== expected.revision ||
+      result.kind !== kind) {
+      throw new Error("Stale terminal write-back preview ignored");
+    }
+    return result;
+  }
+
+  async writeback(
+    expected: ActiveTerminalAssociation,
+    requestID: string,
+    kind: TerminalWritebackKind,
+    content: string,
+    confirmSummary: boolean,
+    accepts: () => boolean = () => true,
+  ): Promise<TerminalWritebackResult> {
+    if (!accepts() || !terminalWritebackStateMatches(expected, this.associationState())) {
+      throw new Error("Terminal write-back target changed");
+    }
+    const result = await this.#backend.WriteTerminalMemory(
+      expected.sessionId, expected.revision, requestID, kind, content,
+      confirmSummary,
+    );
+    if (!accepts() || !terminalWritebackStateMatches(expected, this.associationState()) ||
+      result.generation !== expected.generation ||
+      result.sessionId !== expected.sessionId || result.revision !== expected.revision ||
+      result.requestId !== requestID || result.kind !== kind) {
+      throw new Error("Stale terminal write-back result ignored");
+    }
+    return result;
+  }
+
   dispose(): void {
     if (this.#disposed) return;
     this.#persistenceScheduler.dispose();
@@ -2298,6 +2711,8 @@ class TerminalDock {
     this.#tabController.dispose();
     this.#boardToggle.disabled = true;
     this.#terminalToggle.disabled = true;
+    this.#association.disabled = true;
+    this.#writeback.disabled = true;
     this.#searchOpen.disabled = true;
     this.#clear.disabled = true;
     this.#dragCleanup?.();
@@ -2319,9 +2734,41 @@ export function mountTerminalDock(
   options: MountOptions,
 ): TerminalDockHandle {
   const dock = new TerminalDock(options);
+  const ready = dock.initialize();
   return {
-    ready: dock.initialize(),
+    ready,
+    agentProfiles: async () => {
+      await ready;
+      return dock.agentProfiles();
+    },
+    launchLinked: async (request) => {
+      await ready;
+      return dock.launchLinked(request);
+    },
+    associationState: () => dock.associationState(),
+    mutateAssociation: async (expected, association, accepts) => {
+      await ready;
+      return dock.mutateAssociation(expected, association, accepts);
+    },
+    previewWriteback: async (expected, kind, content, accepts) => {
+      await ready;
+      return dock.previewWriteback(expected, kind, content, accepts);
+    },
+    writeback: async (expected, requestID, kind, content, confirmSummary, accepts) => {
+      await ready;
+      return dock.writeback(
+        expected, requestID, kind, content, confirmSummary, accepts,
+      );
+    },
     setVisible: (visible) => dock.setVisible(visible),
     dispose: () => dock.dispose(),
   };
+}
+
+function associationPointersMatch(
+  left: AssociationPointerV1 | undefined,
+  right: AssociationPointerV1 | undefined,
+): boolean {
+  return left?.version === right?.version && left?.planId === right?.planId &&
+    left?.taskId === right?.taskId;
 }

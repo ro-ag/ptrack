@@ -98,20 +98,25 @@ func newNoteCmd() *cobra.Command {
 					ID       uint64 `json:"id"`
 					Target   string `json:"target"`
 					TargetID uint64 `json:"target_id"`
+					Kind     string `json:"kind,omitempty"`
 					Body     string `json:"body"`
 				}
 				rows := make([]noteRow, 0, len(notes))
 				for _, n := range notes {
-					rows = append(rows, noteRow{n.ID, string(n.Target), n.TargetID, n.Body})
+					rows = append(rows, noteRow{n.ID, string(n.Target), n.TargetID, string(n.Kind), n.Body})
 				}
 				return emitJSON(cmd, rows)
 			}
 			out := cmd.OutOrStdout()
 			for _, n := range notes {
+				kind := ""
+				if n.Kind != "" {
+					kind = string(n.Kind) + " · "
+				}
 				if n.TargetID == 0 {
-					fmt.Fprintf(out, "#%d (%s) %s\n", n.ID, n.Target, n.Body)
+					fmt.Fprintf(out, "#%d (%s%s) %s\n", n.ID, kind, n.Target, n.Body)
 				} else {
-					fmt.Fprintf(out, "#%d (%s #%d) %s\n", n.ID, n.Target, n.TargetID, n.Body)
+					fmt.Fprintf(out, "#%d (%s%s #%d) %s\n", n.ID, kind, n.Target, n.TargetID, n.Body)
 				}
 			}
 			return nil

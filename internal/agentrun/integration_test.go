@@ -60,8 +60,6 @@ func TestIntegrationServerRegisterHeartbeatExitAndCleanup(t *testing.T) {
 		"provider": "external-test",
 		"pid":      8123,
 		"cwd":      projectRoot,
-		"planId":   2,
-		"taskId":   9,
 	}
 	unauthorized := integrationRequest(t, http.MethodPost, descriptor.URL+"/v1/runs/register", "wrong", registration)
 	if unauthorized.StatusCode != http.StatusUnauthorized {
@@ -90,6 +88,9 @@ func TestIntegrationServerRegisterHeartbeatExitAndCleanup(t *testing.T) {
 	_ = response.Body.Close()
 	if leaseResponse.ID == "" || leaseResponse.LeaseToken == "" {
 		t.Fatalf("registration response = %#v", leaseResponse)
+	}
+	if run := registry.Snapshot(1)[0]; run.Association != nil {
+		t.Fatalf("external registration self-associated run: %#v", run.Association)
 	}
 	if snapshotJSON, _ := json.Marshal(registry.Snapshot(10)); bytes.Contains(snapshotJSON, []byte(leaseResponse.LeaseToken)) {
 		t.Fatal("lease token leaked into snapshot")
@@ -129,6 +130,36 @@ func TestIntegrationServerRegisterHeartbeatExitAndCleanup(t *testing.T) {
 	}
 	if _, err := os.Stat(descriptorPath); !os.IsNotExist(err) {
 		t.Fatalf("descriptor remains after shutdown: %v", err)
+	}
+}
+
+func TestIntegrationServerRejectsExternalAssociationClaims(t *testing.T) {
+	projectRoot := t.TempDir()
+	registry := NewRegistry(Config{ProjectRoot: projectRoot})
+	server, err := StartIntegrationServer(registry, IntegrationConfig{
+		GlobalHome: t.TempDir(), ProjectRoot: projectRoot, Generation: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = server.Shutdown(context.Background())
+		_ = registry.Shutdown(context.Background())
+	})
+	contents, _ := os.ReadFile(server.DescriptorPath())
+	var descriptor IntegrationDescriptor
+	_ = json.Unmarshal(contents, &descriptor)
+	response := integrationRequest(t, http.MethodPost, descriptor.URL+"/v1/runs/register",
+		descriptor.RegistrationToken, map[string]any{
+			"profile": "wrapper", "provider": "external", "cwd": projectRoot,
+			"planId": 2, "taskId": 9,
+		})
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("association claim status = %d, want 400", response.StatusCode)
+	}
+	if len(registry.Snapshot(10)) != 0 {
+		t.Fatal("rejected association claim registered a run")
 	}
 }
 

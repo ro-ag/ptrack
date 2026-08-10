@@ -41,7 +41,16 @@ func Run(startPath string, initialPlan uint64, assets fs.FS) error {
 		app.workspaceError = err.Error()
 	}
 	defer app.onShutdown(context.Background())
+	return runWails(app, assets)
+}
 
+// RunBindings exposes the App methods to Wails' bindings-only build without
+// opening project state or starting the interactive terminal dashboard.
+func RunBindings(assets fs.FS) error {
+	return runWails(newWorkspaceCoordinator(buildProductionWorkspace, nil), assets)
+}
+
+func runWails(app *App, assets fs.FS) error {
 	return wails.Run(&options.App{
 		Title:     "p-track Project Workspace",
 		Width:     1440,
