@@ -6,6 +6,13 @@ interface WorkspaceCopy {
   detail: string;
 }
 
+export function appVersionLabel(value: unknown): string {
+  if (typeof value !== "string") return "dev";
+  const version = value.trim();
+  if (!version || version.toLowerCase() === "dev") return "dev";
+  return version.toLowerCase().startsWith("v") ? version : `v${version}`;
+}
+
 export function workspaceStateCopy(
   status: WorkspaceStatus,
   error = "",

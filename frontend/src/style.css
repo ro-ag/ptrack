@@ -381,6 +381,15 @@ button:disabled {
   padding: var(--space-050) var(--space-100) var(--space-200);
 }
 
+.app-version {
+  margin: -1px 0 2px;
+  color: var(--faint);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.625rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
 .sidebar-nav {
   display: grid;
   flex: 0 0 auto;
@@ -3099,6 +3108,8 @@ button.modal-backdrop:active {
 }
 
 .terminal-split-leaf {
+  width: 100%;
+  height: 100%;
   min-width: 120px;
   min-height: 72px;
   display: grid;

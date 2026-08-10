@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  appVersionLabel,
   collapsedLaneStatuses,
   commandShortcut,
   confirmationCopy,
@@ -15,6 +16,13 @@ import {
 } from "./presentation";
 
 describe("workspace presentation policy", () => {
+  it("formats release versions without inventing a development release", () => {
+    expect(appVersionLabel("1.2.3")).toBe("v1.2.3");
+    expect(appVersionLabel("v2.0.0")).toBe("v2.0.0");
+    expect(appVersionLabel("dev")).toBe("dev");
+    expect(appVersionLabel(" ")).toBe("dev");
+  });
+
   it("defines distinct copy for every workspace state", () => {
     for (const state of ["welcome", "loading", "open", "error", "closed"] as const) {
       const copy = workspaceStateCopy(state, state === "error" ? "broken" : "");

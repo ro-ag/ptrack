@@ -7,16 +7,23 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ro-ag/ptrack/internal/store"
 	"github.com/ro-ag/ptrack/internal/terminal"
 )
 
 func TestWorkspaceCoordinatorStartsWelcomeAndPublishesOnOpen(t *testing.T) {
+	previousVersion := store.WriterVersion
+	store.WriterVersion = "1.2.3"
+	t.Cleanup(func() { store.WriterVersion = previousVersion })
 	builder := &fakeWorkspaceBuilder{roots: map[string]string{"alpha": t.TempDir()}}
 	app := newWorkspaceCoordinator(builder.Build, nil)
 
 	state := app.GetWorkspaceState()
 	if state.Status != WorkspaceWelcome || state.Generation != 0 || state.Project != nil {
 		t.Fatalf("initial state = %#v, want welcome generation zero", state)
+	}
+	if state.Version != "1.2.3" {
+		t.Fatalf("initial version = %q, want 1.2.3", state.Version)
 	}
 	result, err := app.OpenProject("alpha", "")
 	if err != nil {

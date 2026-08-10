@@ -27,6 +27,7 @@ describe("production asset layout", () => {
     const styles = readFileSync(resolve(distRoot, "style.css"), "utf8");
     expect(index).toContain('src="/app.js"');
     expect(index).toContain('href="/style.css"');
+    expect(index).toMatch(/id="app-version"[^>]*>dev<\/p>/);
     expect(index).toMatch(/id="terminal-tabs"[\s\S]*role="tablist"/);
     expect(index).not.toMatch(/id="terminal-tabs"[^>]*aria-live/);
     expect(index).toMatch(
@@ -50,6 +51,9 @@ describe("production asset layout", () => {
     expect(styles).toMatch(/\[data-indicator=(?:"failed"|failed)\]/);
     expect(styles).toMatch(/\[data-unread=(?:"true"|true)\]/);
     expect(styles).toContain(".terminal-split-node");
+    expect(styles).toMatch(
+      /\.terminal-split-leaf\{[^}]*width:100%[^}]*height:100%/,
+    );
     expect(styles).toContain("touch-action:none");
     expect(styles).toMatch(
       /data-state=(?:"closed"|closed)\]\[data-layout-interactive=(?:"false"|false)\]/,
