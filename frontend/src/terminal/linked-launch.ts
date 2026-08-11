@@ -4,6 +4,13 @@ export interface DiscoveredTerminalProfile {
   id: string;
   name: string;
   kind: "shell" | "agent";
+  provider?: string;
+  theme?: string;
+  fontFamily?: string;
+  fontSize?: number;
+  scrollback?: number;
+  cwdPolicy?: "requested" | "project" | "fixed";
+  exitBehavior?: "keep" | "close-on-success" | "close";
 }
 
 export interface InstalledAgentProfile {

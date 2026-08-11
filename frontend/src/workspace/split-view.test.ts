@@ -228,4 +228,25 @@ describe("renderer resource policies", () => {
     expect(selected.unread).toBe(false);
     expect(sibling).toMatchObject({ signal: "exited", unread: true });
   });
+
+  it.each([
+    ["terminal hidden", { terminalHidden: true }, false, false],
+    ["workspace hidden", { workspaceViewVisible: false }, false, false],
+    ["inactive tab", { activeTab: false }, false, false],
+    ["document hidden", { documentVisible: false }, true, false],
+    ["full-height terminal", {}, true, true],
+  ])("applies %s presentation policy", (_name, override, paneVisible, webglAllowed) => {
+    expect(terminalPanePresentationPolicy({
+      workspaceViewVisible: true,
+      terminalHidden: false,
+      documentVisible: true,
+      activeTab: true,
+      selected: true,
+      hasResources: true,
+      hostVisible: true,
+      bodyVisible: true,
+      dockVisible: true,
+      ...override,
+    })).toMatchObject({ paneVisible, webglAllowed });
+  });
 });

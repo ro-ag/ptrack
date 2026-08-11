@@ -123,8 +123,8 @@ function reportUnknownKeys(
   errors: string[],
 ): void {
   const allowedKeys = new Set(allowed);
-  for (const key of Object.keys(value)) {
-    if (!allowedKeys.has(key)) errors.push(`${path}.${key} is not allowed`);
+  if (Object.keys(value).some((key) => !allowedKeys.has(key))) {
+    errors.push(`${path} contains unsupported fields`);
   }
 }
 

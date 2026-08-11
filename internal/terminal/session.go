@@ -49,22 +49,23 @@ type Session struct {
 	request      StartRequest
 	dependencies sessionDependencies
 
-	mu             sync.Mutex
-	id             string
-	token          string
-	profile        string
-	profileKind    ProfileKind
-	provider       string
-	cwd            string
-	state          SessionState
-	streamErr      error
-	process        PTYProcess
-	pid            int
-	startedAt      time.Time
-	lastActivityAt time.Time
-	rows           int
-	columns        int
-	association    *association.AssociationV1
+	mu               sync.Mutex
+	id               string
+	token            string
+	profile          string
+	profileKind      ProfileKind
+	provider         string
+	cwd              string
+	state            SessionState
+	streamErr        error
+	process          PTYProcess
+	pid              int
+	startedAt        time.Time
+	lastActivityAt   time.Time
+	rows             int
+	columns          int
+	association      *association.AssociationV1
+	shellIntegration ShellIntegrationDescriptor
 
 	startupOutput []byte
 	attached      bool
@@ -198,6 +199,7 @@ func (s *Session) setMetadata(
 	id, token, profileID string,
 	profileKind ProfileKind,
 	provider, cwd string,
+	shellIntegration ShellIntegrationDescriptor,
 ) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -207,6 +209,15 @@ func (s *Session) setMetadata(
 	s.profileKind = profileKind
 	s.provider = provider
 	s.cwd = cwd
+	s.shellIntegration = shellIntegration
+}
+
+// ShellIntegration returns process-local renderer correlation metadata. The
+// nonce is never included in persisted or aggregate session snapshots.
+func (s *Session) ShellIntegration() ShellIntegrationDescriptor {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.shellIntegration
 }
 
 func (s *Session) PID() int {

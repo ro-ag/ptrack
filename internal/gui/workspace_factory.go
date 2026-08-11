@@ -35,19 +35,28 @@ func buildProductionWorkspace(path string, initialPlan uint64) (*WorkspaceContex
 		return nil, fmt.Errorf("canonicalize GUI project root: %w", err)
 	}
 	dbPath = filepath.Join(root, ".ptrack", "ptrack.db")
-	profiles, err := terminal.DiscoverProfiles()
+	globalHome, err := store.GlobalHome()
+	if err != nil {
+		return nil, err
+	}
+	discoveredProfiles, err := terminal.DiscoverProfiles()
+	if err != nil {
+		return nil, err
+	}
+	configuredProfiles := []terminal.Profile(nil)
+	profileConfigPath := filepath.Join(globalHome, "terminal-profiles.json")
+	profileConfig, configErr := terminal.LoadProfileConfig(profileConfigPath)
+	if configErr == nil {
+		configuredProfiles = profileConfig.Profiles
+	} else if !errors.Is(configErr, os.ErrNotExist) {
+		return nil, configErr
+	}
+	profiles, err := terminal.MergeProfiles(discoveredProfiles, configuredProfiles)
 	if err != nil {
 		return nil, err
 	}
 	manager, err := terminal.NewManager(root, profiles, terminal.GoPTYFactory{})
 	if err != nil {
-		return nil, err
-	}
-	globalHome, err := store.GlobalHome()
-	if err != nil {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		_ = manager.Shutdown(shutdownCtx)
-		cancel()
 		return nil, err
 	}
 	workspace := newWorkspaceContext(workspaceContextConfig{

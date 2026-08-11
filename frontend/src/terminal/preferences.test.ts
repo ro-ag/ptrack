@@ -6,10 +6,13 @@ import {
   maximumTerminalFontSize,
   minimumTerminalFontSize,
   readTerminalFontSize,
+  readTerminalProfileFontSize,
   storedTerminalFontSize,
   terminalFontSizeStorageKey,
+  terminalProfileFontSizeStorageKey,
   terminalZoomLabel,
   writeTerminalFontSize,
+  writeTerminalProfileFontSize,
 } from "./preferences";
 
 describe("terminal font preferences", () => {
@@ -49,5 +52,19 @@ describe("terminal font preferences", () => {
 
     expect(readTerminalFontSize(storage)).toBe(defaultTerminalFontSize);
     expect(() => writeTerminalFontSize(storage, 18)).not.toThrow();
+  });
+
+  it("persists zoom per stable profile and migrates the legacy preference", () => {
+    const entries = new Map<string, string>([[terminalFontSizeStorageKey, "16"]]);
+    const storage = {
+      getItem: (key: string) => entries.get(key) ?? null,
+      setItem: (key: string, value: string) => entries.set(key, value),
+    };
+
+    expect(readTerminalProfileFontSize(storage, "shell/default", 12)).toBe(16);
+    writeTerminalProfileFontSize(storage, "shell/default", 19);
+    expect(entries.get(terminalProfileFontSizeStorageKey("shell/default"))).toBe("19");
+    expect(readTerminalProfileFontSize(storage, "shell/default", 12)).toBe(19);
+    expect(readTerminalProfileFontSize(storage, "new-profile", 12)).toBe(16);
   });
 });

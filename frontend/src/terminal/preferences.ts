@@ -2,6 +2,7 @@ export const defaultTerminalFontSize = 14;
 export const minimumTerminalFontSize = 10;
 export const maximumTerminalFontSize = 24;
 export const terminalFontSizeStorageKey = "ptrack-terminal-font-size";
+export const terminalProfileFontSizeStoragePrefix = "ptrack-terminal-font-size:";
 
 interface SettingStorage {
   getItem(key: string): string | null;
@@ -42,6 +43,48 @@ export function writeTerminalFontSize(
   }
 }
 
-export function terminalZoomLabel(fontSize: number): string {
-  return `${Math.round((clampTerminalFontSize(fontSize) / defaultTerminalFontSize) * 100)}%`;
+export function terminalProfileFontSizeStorageKey(profileId: string): string {
+  return `${terminalProfileFontSizeStoragePrefix}${encodeURIComponent(profileId)}`;
+}
+
+export function readTerminalProfileFontSize(
+  storage: SettingStorage,
+  profileId: string,
+  fallback: number,
+): number {
+  try {
+    const profileValue = storage.getItem(terminalProfileFontSizeStorageKey(profileId));
+    if (profileValue !== null && profileValue.trim() !== "") {
+      return storedTerminalFontSize(profileValue);
+    }
+    const legacyValue = storage.getItem(terminalFontSizeStorageKey);
+    if (legacyValue !== null && legacyValue.trim() !== "") {
+      return storedTerminalFontSize(legacyValue);
+    }
+    return clampTerminalFontSize(fallback);
+  } catch {
+    return clampTerminalFontSize(fallback);
+  }
+}
+
+export function writeTerminalProfileFontSize(
+  storage: SettingStorage,
+  profileId: string,
+  fontSize: number,
+): void {
+  try {
+    storage.setItem(
+      terminalProfileFontSizeStorageKey(profileId),
+      String(clampTerminalFontSize(fontSize)),
+    );
+  } catch {
+    // Keep the live profile setting usable when WebView storage is unavailable.
+  }
+}
+
+export function terminalZoomLabel(
+  fontSize: number,
+  baseFontSize = defaultTerminalFontSize,
+): string {
+  return `${Math.round((clampTerminalFontSize(fontSize) / clampTerminalFontSize(baseFontSize)) * 100)}%`;
 }

@@ -29,6 +29,7 @@ export class TerminalStreamClient {
   #bufferedBytes = 0;
   #writing = false;
   #generation = 0;
+  #consumed = false;
 
   readonly #onOpen: SocketListener = () => {
     if (!this.#socket) return;
@@ -74,9 +75,13 @@ export class TerminalStreamClient {
   }
 
   connect(url: string): void {
+    if (this.#consumed) {
+      throw new Error("terminal stream authority is single-use");
+    }
     if (this.#socket || this.#state === "connecting" || this.#state === "open") {
       throw new Error("terminal stream is already connected");
     }
+    this.#consumed = true;
     const socket = this.#options.createWebSocket(url);
     this.#socket = socket;
     socket.binaryType = "arraybuffer";

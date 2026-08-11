@@ -303,7 +303,11 @@ func TestDiscoverProfilesFindsHomebrewAgentOutsideDesktopPATH(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discoverProfiles: %v", err)
 	}
-	profile := profileForExecutable(t, profiles, gemini)
+	expectedGemini, err := filepath.Abs(gemini)
+	if err != nil {
+		t.Fatalf("absolute Gemini path: %v", err)
+	}
+	profile := profileForExecutable(t, profiles, expectedGemini)
 	if profile.ID != "agent-gemini" || profile.Provider != "gemini" {
 		t.Fatalf("unexpected Gemini profile: %#v", profile)
 	}
@@ -481,6 +485,34 @@ func TestBuildEnvironmentAppliesSafeExplicitOverridesWithoutMutation(t *testing.
 	}
 	if !reflect.DeepEqual(overrides, wantOverrides) {
 		t.Fatalf("buildEnvironment mutated overrides:\ngot:  %#v\nwant: %#v", overrides, wantOverrides)
+	}
+}
+
+func TestBuildEnvironmentStripsInheritedPTrackAuthorityBeforeHostInjection(t *testing.T) {
+	environment, err := buildEnvironmentForOS([]string{
+		"PATH=/usr/bin",
+		"PTRACK_HOME=/tmp/ptrack-home",
+		"PTRACK_CAPABILITY_TOKEN=stale-token",
+		"PTRACK_AGENT_EVENT_TOKEN_V1=stale-event-token",
+		"PTRACK_FUTURE_AUTHORITY=stale-future-token",
+	}, map[string]string{
+		"PTRACK_CAPABILITY_TOKEN": "fresh-host-token",
+	}, "linux")
+	if err != nil {
+		t.Fatalf("buildEnvironmentForOS: %v", err)
+	}
+	if !containsEnvironment(environment, "PTRACK_HOME=/tmp/ptrack-home") ||
+		!containsEnvironment(environment, "PTRACK_CAPABILITY_TOKEN=fresh-host-token") {
+		t.Fatalf("safe inherited config or fresh host authority missing: %v", environment)
+	}
+	for _, forbidden := range []string{
+		"PTRACK_CAPABILITY_TOKEN=stale-token",
+		"PTRACK_AGENT_EVENT_TOKEN_V1=stale-event-token",
+		"PTRACK_FUTURE_AUTHORITY=stale-future-token",
+	} {
+		if containsEnvironment(environment, forbidden) {
+			t.Fatalf("inherited p-track authority survived: %q in %v", forbidden, environment)
+		}
 	}
 }
 

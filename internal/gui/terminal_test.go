@@ -21,12 +21,19 @@ import (
 func TestGetTerminalProfilesReturnsSafeMetadataAndPropagatesError(t *testing.T) {
 	manager := &fakeGUITerminalManager{
 		profiles: []terminal.Profile{{
-			ID:         "shell-default",
-			Name:       "Default shell",
-			Kind:       terminal.ProfileShell,
-			Executable: "/test/shell",
-			Args:       []string{"-l"},
-			Env:        map[string]string{"MODE": "safe"},
+			ID:           "shell-default",
+			Name:         "Default shell",
+			Kind:         terminal.ProfileShell,
+			Executable:   "/test/shell",
+			Args:         []string{"-l"},
+			Env:          map[string]string{"MODE": "safe"},
+			Theme:        "platinum",
+			FontFamily:   "Iosevka",
+			FontSize:     16,
+			Scrollback:   50_000,
+			CWDPolicy:    terminal.CWDFixed,
+			FixedCWD:     "/sensitive/fixed/path",
+			ExitBehavior: terminal.ExitCloseOnSuccess,
 		}},
 	}
 	app, _ := newTerminalBindingTestApp(t, manager, nil)
@@ -38,10 +45,15 @@ func TestGetTerminalProfilesReturnsSafeMetadataAndPropagatesError(t *testing.T) 
 	if len(profiles) != 1 ||
 		profiles[0].ID != "shell-default" ||
 		profiles[0].Name != "Default shell" ||
-		profiles[0].Kind != terminal.ProfileShell {
+		profiles[0].Kind != terminal.ProfileShell ||
+		profiles[0].Theme != "platinum" || profiles[0].FontFamily != "Iosevka" ||
+		profiles[0].FontSize != 16 || profiles[0].Scrollback != 50_000 ||
+		profiles[0].CWDPolicy != terminal.CWDFixed ||
+		profiles[0].ExitBehavior != terminal.ExitCloseOnSuccess {
 		t.Fatalf("safe profile metadata = %#v", profiles)
 	}
-	if profiles[0].Executable != "" || len(profiles[0].Args) != 0 || len(profiles[0].Env) != 0 {
+	if profiles[0].Executable != "" || len(profiles[0].Args) != 0 || len(profiles[0].Env) != 0 ||
+		profiles[0].FixedCWD != "" {
 		t.Fatalf("profile exposes launch configuration: %#v", profiles[0])
 	}
 

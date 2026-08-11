@@ -31,6 +31,7 @@ type Manager struct {
 	shuttingDown bool
 	creates      sync.WaitGroup
 	streamServer *streamServer
+	shells       *shellIntegrationOwner
 
 	shutdownOnce sync.Once
 	shutdownDone chan struct{}
@@ -61,6 +62,13 @@ func NewManager(projectRoot string, profiles []Profile, factory PTYFactory) (*Ma
 		return nil, errors.New("at least one terminal profile is required")
 	}
 
+	shells, err := newShellIntegrationOwner(profileMap)
+	if err != nil {
+		// Shell integration is an optional presentation enhancement. Failure to
+		// create its private transient hooks must not prevent ordinary terminals
+		// from starting; affected sessions explicitly advertise no integration.
+		shells = nil
+	}
 	manager := &Manager{
 		projectRoot:  canonicalRoot,
 		factory:      factory,
@@ -68,10 +76,11 @@ func NewManager(projectRoot string, profiles []Profile, factory PTYFactory) (*Ma
 		sessions:     make(map[string]*Session),
 		closing:      make(map[string]*Session),
 		shutdownDone: make(chan struct{}),
+		shells:       shells,
 	}
 	manager.streamServer, err = newStreamServer(manager)
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(err, shells.Close())
 	}
 	return manager, nil
 }
@@ -114,7 +123,14 @@ func (m *Manager) CreateWithEnv(
 	m.mu.Unlock()
 	defer m.creates.Done()
 
-	cwd, err := resolveCWD(m.projectRoot, requestedCWD)
+	profileCWD := requestedCWD
+	switch profile.CWDPolicy {
+	case CWDProject:
+		profileCWD = ""
+	case CWDFixed:
+		profileCWD = profile.FixedCWD
+	}
+	cwd, err := resolveCWD(m.projectRoot, profileCWD)
 	if err != nil {
 		return nil, err
 	}
@@ -137,10 +153,22 @@ func (m *Manager) CreateWithEnv(
 	if err != nil {
 		return nil, fmt.Errorf("create terminal stream token: %w", err)
 	}
+	shellNonce := ""
+	if m.shells.supports(profile) {
+		shellNonce, err = randomOpaqueValue()
+		if err != nil {
+			return nil, fmt.Errorf("create shell integration nonce: %w", err)
+		}
+	}
+	args, environment, shellIntegration := m.shells.prepare(
+		profile,
+		environment,
+		shellNonce,
+	)
 
 	session := newSession(StartRequest{
 		Executable: profile.Executable,
-		Args:       append([]string(nil), profile.Args...),
+		Args:       args,
 		Env:        environment,
 		CWD:        cwd,
 		Rows:       rows,
@@ -150,7 +178,15 @@ func (m *Manager) CreateWithEnv(
 		startupBufferBytes: defaultStartupBufferBytes,
 		gracefulTimeout:    defaultGracefulTimeout,
 	})
-	session.setMetadata(id, token, profile.ID, profile.Kind, profile.Provider, cwd)
+	session.setMetadata(
+		id,
+		token,
+		profile.ID,
+		profile.Kind,
+		profile.Provider,
+		cwd,
+		shellIntegration,
+	)
 	if err := session.start(); err != nil {
 		return nil, err
 	}
@@ -384,6 +420,9 @@ func (m *Manager) runShutdown() {
 	close(errorsBySession)
 
 	for err := range errorsBySession {
+		shutdownErrors = append(shutdownErrors, err)
+	}
+	if err := m.shells.Close(); err != nil {
 		shutdownErrors = append(shutdownErrors, err)
 	}
 	m.mu.Lock()
