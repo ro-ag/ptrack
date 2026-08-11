@@ -31,9 +31,13 @@ import (
 //     the regular lease sweep marks it stale within one lease duration.
 
 const (
-	persistedStateVersion = 2
+	persistedStateVersion = 3
 	runHistoryFileName    = "agent-runs.json"
 )
+
+// ErrHistoryFutureVersion prevents an older process from overwriting a run
+// history written by a newer p-track.
+var ErrHistoryFutureVersion = errors.New("AgentRun history is newer than supported")
 
 // persistedRegistryState is the on-disk mirror of the registry's records.
 type persistedRegistryState struct {
@@ -43,8 +47,11 @@ type persistedRegistryState struct {
 }
 
 type persistedRecord struct {
-	Run        Run    `json:"run"`
-	LeaseToken string `json:"leaseToken,omitempty"`
+	Run                Run     `json:"run"`
+	LeaseToken         string  `json:"leaseToken,omitempty"`
+	Events             []Event `json:"events,omitempty"`
+	LastSourceSequence uint64  `json:"lastSourceSequence,omitempty"`
+	NextHostSequence   uint64  `json:"nextHostSequence,omitempty"`
 }
 
 // RuntimeDir returns the private per-project runtime directory under the
@@ -200,8 +207,8 @@ func (r *Registry) restoreLocked() error {
 		return fmt.Errorf("decode AgentRun history: %w", err)
 	}
 	if state.Version > persistedStateVersion {
-		return fmt.Errorf("AgentRun history version %d is newer than supported %d",
-			state.Version, persistedStateVersion)
+		return fmt.Errorf("%w: version %d exceeds %d",
+			ErrHistoryFutureVersion, state.Version, persistedStateVersion)
 	}
 
 	// Keep at most maxRecords, preferring the most recently active runs.
@@ -214,8 +221,10 @@ func (r *Registry) restoreLocked() error {
 
 	for _, persisted := range state.Runs {
 		run := persisted.Run
-		if run.ID == "" || filepath.Clean(run.ProjectRoot) != r.projectRoot ||
-			!pathWithin(r.projectRoot, filepath.Clean(run.CWD)) {
+		run.ProjectRoot = canonicalRegistryPath(run.ProjectRoot)
+		run.CWD = canonicalRegistryPath(run.CWD)
+		if run.ID == "" || run.ProjectRoot != r.projectRoot ||
+			!pathWithin(r.projectRoot, run.CWD) {
 			continue
 		}
 		if run.Kind == RegistrationLaunched && run.State != StateExited {
@@ -223,15 +232,111 @@ func (r *Registry) restoreLocked() error {
 			run.State = StateStale
 			run.ProcessState = ProcessUnknown
 		}
+		if run.Exit != nil {
+			run.Exit.Result = classifyExitResult(run.Exit.Result, run.Exit.Code)
+		}
 		// Associations are live, generation-scoped host state. Version 1 history
 		// may contain legacy planId/taskId fields; JSON decoding ignores them and
 		// every restored run is deliberately detached for the new generation.
 		run.Association = nil
+		events := r.restoreEventsLocked(run, persisted.Events)
+		lastSourceSequence := persisted.LastSourceSequence
+		nextHostSequence := persisted.NextHostSequence
+		for _, event := range events {
+			if event.SourceSequence > lastSourceSequence {
+				lastSourceSequence = event.SourceSequence
+			}
+			if event.HostSequence > nextHostSequence {
+				nextHostSequence = event.HostSequence
+			}
+		}
 		r.records[run.ID] = &record{
-			run: run, leaseToken: persisted.LeaseToken, lifecycleRevision: 1,
+			run:                run,
+			leaseToken:         persisted.LeaseToken,
+			lifecycleRevision:  1,
+			events:             events,
+			lastSourceSequence: lastSourceSequence,
+			nextHostSequence:   nextHostSequence,
 		}
 	}
+	// A successful restore receives one normalized rewrite on the next sweep.
+	// This durably removes expired/invalid evidence and applies migrations
+	// instead of leaving pre-normalized private data on disk.
+	r.persistenceDirty = true
 	return nil
+}
+
+func (r *Registry) restoreEventsLocked(run Run, persisted []Event) []Event {
+	if !r.eventPolicy.CollectionEnabled {
+		return []Event{}
+	}
+	validated := make([]Event, 0, len(persisted))
+	seenIDs := make(map[string]bool, len(persisted))
+	var lastSourceSequence uint64
+	var lastHostSequence uint64
+	sort.SliceStable(persisted, func(i, j int) bool {
+		return persisted[i].HostSequence < persisted[j].HostSequence
+	})
+	now := r.now()
+	for _, event := range persisted {
+		event.Correlation.ProjectRoot = canonicalRegistryPath(event.Correlation.ProjectRoot)
+		if event.Correlation.RepositoryRoot != "" {
+			event.Correlation.RepositoryRoot = canonicalRegistryPath(event.Correlation.RepositoryRoot)
+		}
+		if event.ModelVersion != EventModelVersion || event.ID == "" ||
+			event.RunID != run.ID || event.Provider != run.Provider ||
+			event.SourceSequence <= lastSourceSequence ||
+			event.HostSequence <= lastHostSequence || seenIDs[event.ID] ||
+			event.ObservedAt.IsZero() || event.ObservedAt.After(now.Add(maxEventClockSkew)) ||
+			!validPersistedEventCorrelation(
+				event.Correlation,
+				run,
+				r.projectRoot,
+				r.repositoryRoot,
+			) {
+			continue
+		}
+		normalized, err := NormalizeEventObservation(
+			r.projectRoot,
+			event.ObservedAt,
+			r.eventPolicy,
+			EventObservation{
+				ModelVersion:   event.ModelVersion,
+				SourceID:       event.SourceID,
+				SourceSequence: event.SourceSequence,
+				Kind:           event.Kind,
+				Phase:          event.Phase,
+				Outcome:        event.Outcome,
+				Subject:        event.Subject,
+				Paths:          event.Paths,
+				CommitSHA:      event.CommitSHA,
+				ExitCode:       event.ExitCode,
+				ErrorClass:     event.ErrorClass,
+				Summary:        event.Summary,
+				OccurredAt:     event.OccurredAt,
+			},
+		)
+		if err != nil {
+			continue
+		}
+		event.SourceID = normalized.SourceID
+		event.Subject = normalized.Subject
+		event.Paths = normalized.Paths
+		event.CommitSHA = normalized.CommitSHA
+		event.ExitCode = cloneInt(normalized.ExitCode)
+		event.ErrorClass = normalized.ErrorClass
+		event.Summary = normalized.Summary
+		event.OccurredAt = normalized.OccurredAt
+		validated = append(validated, cloneEvent(event))
+		seenIDs[event.ID] = true
+		lastSourceSequence = event.SourceSequence
+		lastHostSequence = event.HostSequence
+	}
+	retained, err := RetainEvents(validated, now, r.eventPolicy)
+	if err != nil {
+		return []Event{}
+	}
+	return retained
 }
 
 // saveLocked mirrors the current records to r.statePath. It is best-effort:
@@ -242,13 +347,22 @@ func (r *Registry) saveLocked() error {
 	if r.statePath == "" {
 		return nil
 	}
+	if !r.persistenceWritable {
+		return nil
+	}
+	if _, err := r.pruneExpiredEventsLocked(r.now()); err != nil {
+		return err
+	}
 	runs := make([]persistedRecord, 0, len(r.records))
 	for _, entry := range r.records {
 		persistedRun := cloneRun(entry.run)
 		persistedRun.Association = nil
 		runs = append(runs, persistedRecord{
-			Run:        persistedRun,
-			LeaseToken: entry.leaseToken,
+			Run:                persistedRun,
+			LeaseToken:         entry.leaseToken,
+			Events:             cloneEvents(entry.events),
+			LastSourceSequence: entry.lastSourceSequence,
+			NextHostSequence:   entry.nextHostSequence,
 		})
 	}
 	sort.SliceStable(runs, func(i, j int) bool {
@@ -294,4 +408,12 @@ func (r *Registry) saveLocked() error {
 		return fmt.Errorf("publish AgentRun history: %w", err)
 	}
 	return securePublishedDescriptor(r.statePath)
+}
+
+func cloneEvents(events []Event) []Event {
+	clones := make([]Event, 0, len(events))
+	for _, event := range events {
+		clones = append(clones, cloneEvent(event))
+	}
+	return clones
 }

@@ -256,8 +256,8 @@ func TestRunHistoryMigratesV1DetachedAndNeverPersistsLiveAssociation(t *testing.
 	if err := json.Unmarshal(persisted, &state); err != nil {
 		t.Fatal(err)
 	}
-	if state.Version != 2 {
-		t.Fatalf("migrated history version = %d, want 2", state.Version)
+	if state.Version != persistedStateVersion {
+		t.Fatalf("migrated history version = %d, want %d", state.Version, persistedStateVersion)
 	}
 }
 

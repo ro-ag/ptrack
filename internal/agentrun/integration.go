@@ -20,6 +20,7 @@ const (
 	maxIntegrationBodyBytes = 16 * 1024
 	integrationReadTimeout  = 5 * time.Second
 	integrationWriteTimeout = 5 * time.Second
+	launchedEventBindWait   = 2 * time.Second
 )
 
 type IntegrationConfig struct {
@@ -135,6 +136,7 @@ func StartIntegrationServer(
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/runs/register", server.handleRegister)
 	mux.HandleFunc("/v1/runs/", server.handleRun)
+	mux.HandleFunc("/v1/events", server.handleLaunchedEvent)
 	server.httpServer = &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: integrationReadTimeout,
@@ -160,6 +162,13 @@ func StartIntegrationServer(
 
 func (s *IntegrationServer) DescriptorPath() string {
 	return s.descriptorPath
+}
+
+// EventEndpoint is the run-ID-free telemetry endpoint injected only into
+// host-launched agent processes. Its token remains unusable until the host
+// binds the successful launch to an AgentRun.
+func (s *IntegrationServer) EventEndpoint() string {
+	return "http://" + s.listener.Addr().String() + "/v1/events"
 }
 
 func (s *IntegrationServer) serve() {
@@ -245,11 +254,76 @@ func (s *IntegrationServer) handleRun(
 			http.Error(response, "AgentRun lease rejected", http.StatusUnauthorized)
 			return
 		}
+	case "events":
+		if err := s.registry.AuthenticateEventLease(id, token); err != nil {
+			http.Error(response, "AgentRun lease rejected", http.StatusUnauthorized)
+			return
+		}
+		var providerEvent ProviderEvent
+		if !decodeIntegrationJSON(response, request, &providerEvent) {
+			return
+		}
+		event, err := s.registry.RecordProviderEvent(id, token, providerEvent)
+		if err != nil {
+			if errors.Is(err, ErrInvalidLease) || errors.Is(err, ErrRunNotFound) {
+				http.Error(response, "AgentRun lease rejected", http.StatusUnauthorized)
+			} else {
+				http.Error(response, "AgentRun event rejected", http.StatusBadRequest)
+			}
+			return
+		}
+		writeEventReceipt(response, event)
+		return
 	default:
 		http.NotFound(response, request)
 		return
 	}
 	response.WriteHeader(http.StatusNoContent)
+}
+
+func (s *IntegrationServer) handleLaunchedEvent(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	if request.Method != http.MethodPost || request.Header.Get("Origin") != "" {
+		http.Error(response, "AgentRun request rejected", http.StatusForbidden)
+		return
+	}
+	token := bearerToken(request.Header.Get("Authorization"))
+	bindContext, cancelBind := context.WithTimeout(request.Context(), launchedEventBindWait)
+	defer cancelBind()
+	if token == "" || s.registry.AwaitLaunchedEventToken(bindContext, token) != nil {
+		http.Error(response, "AgentRun event token rejected", http.StatusUnauthorized)
+		return
+	}
+	var providerEvent ProviderEvent
+	if !decodeIntegrationJSON(response, request, &providerEvent) {
+		return
+	}
+	event, err := s.registry.RecordLaunchedProviderEvent(token, providerEvent)
+	if err != nil {
+		if errors.Is(err, ErrInvalidEventToken) || errors.Is(err, ErrRunNotFound) {
+			http.Error(response, "AgentRun event token rejected", http.StatusUnauthorized)
+		} else {
+			http.Error(response, "AgentRun event rejected", http.StatusBadRequest)
+		}
+		return
+	}
+	writeEventReceipt(response, event)
+}
+
+func writeEventReceipt(response http.ResponseWriter, event Event) {
+	response.Header().Set("Content-Type", "application/json")
+	response.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(response).Encode(struct {
+		ID           string    `json:"id"`
+		HostSequence uint64    `json:"hostSequence"`
+		ObservedAt   time.Time `json:"observedAt"`
+	}{
+		ID:           event.ID,
+		HostSequence: event.HostSequence,
+		ObservedAt:   event.ObservedAt,
+	})
 }
 
 func (s *IntegrationServer) acceptRequest(

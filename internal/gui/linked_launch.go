@@ -13,7 +13,18 @@ import (
 	"github.com/ro-ag/ptrack/internal/terminal"
 )
 
-const LinkedLaunchContextEnvironment = "PTRACK_LAUNCH_CONTEXT_V1"
+const (
+	LinkedLaunchContextEnvironment = "PTRACK_LAUNCH_CONTEXT_V1"
+	AgentEventEndpointEnvironment  = "PTRACK_AGENT_EVENT_ENDPOINT_V1"
+	AgentEventTokenEnvironment     = "PTRACK_AGENT_EVENT_TOKEN_V1"
+)
+
+type linkedAgentEventResources interface {
+	AgentEventEndpoint() string
+	IssueLaunchedEventToken() (string, error)
+	BindLaunchedEventToken(token, runID string) error
+	RevokeLaunchedEventToken(token string)
+}
 
 // LaunchLinkedAgentV2 launches one discovered agent profile with a bounded
 // host-built context and atomically publishes the linked terminal/run pair.
@@ -74,11 +85,24 @@ func (a *App) LaunchLinkedAgentV2(
 	environment := map[string]string{
 		LinkedLaunchContextEnvironment: launchContext.Text,
 	}
+	eventResources, _ := workspace.agents.(linkedAgentEventResources)
+	eventToken := ""
+	if eventResources != nil && eventResources.AgentEventEndpoint() != "" {
+		eventToken, err = eventResources.IssueLaunchedEventToken()
+		if err != nil {
+			return TerminalSessionV2{}, err
+		}
+		environment[AgentEventEndpointEnvironment] = eventResources.AgentEventEndpoint()
+		environment[AgentEventTokenEnvironment] = eventToken
+	}
 	broker := workspace.capabilityBroker()
 	capabilityToken := ""
 	if broker != nil {
 		capabilityToken, err = broker.IssueSessionToken(profile.ID)
 		if err != nil {
+			if eventToken != "" {
+				eventResources.RevokeLaunchedEventToken(eventToken)
+			}
 			return TerminalSessionV2{}, err
 		}
 		environment["PTRACK_CAPABILITY_TOKEN"] = capabilityToken
@@ -95,6 +119,9 @@ func (a *App) LaunchLinkedAgentV2(
 		environment,
 	)
 	if err != nil {
+		if eventToken != "" {
+			eventResources.RevokeLaunchedEventToken(eventToken)
+		}
 		if capabilityToken != "" {
 			broker.RevokeToken(capabilityToken)
 		}
@@ -102,6 +129,9 @@ func (a *App) LaunchLinkedAgentV2(
 	}
 	capabilityBound := false
 	cleanup := func(cause error) error {
+		if eventToken != "" {
+			eventResources.RevokeLaunchedEventToken(eventToken)
+		}
 		if capabilityToken != "" {
 			if capabilityBound {
 				broker.RevokeSession(session.SessionID)
@@ -151,6 +181,12 @@ func (a *App) LaunchLinkedAgentV2(
 			// contract and remove the just-created record before process teardown.
 			registry.RollbackLinkedLaunched(run.ID, session.SessionID)
 			return errors.New("linked terminal and AgentRun associations differ")
+		}
+		if eventToken != "" {
+			if bindErr := eventResources.BindLaunchedEventToken(eventToken, run.ID); bindErr != nil {
+				registry.RollbackLinkedLaunched(run.ID, session.SessionID)
+				return bindErr
+			}
 		}
 		if capabilityToken != "" {
 			if bindErr := broker.BindSession(capabilityToken, session.SessionID); bindErr != nil {
@@ -225,6 +261,7 @@ func (a *App) RollbackLinkedAgentLaunchV2(
 	if broker := workspace.capabilityBroker(); broker != nil {
 		broker.RevokeSession(sessionID)
 	}
+	registry.RevokeLaunchedEventTokenForTerminal(sessionID)
 	closeErr := manager.Close(sessionID, true)
 	if errors.Is(closeErr, terminal.ErrSessionNotFound) {
 		closeErr = nil

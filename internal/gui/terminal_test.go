@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ro-ag/ptrack/internal/agentrun"
 	"github.com/ro-ag/ptrack/internal/association"
 	"github.com/ro-ag/ptrack/internal/terminal"
 )
@@ -255,6 +256,70 @@ func TestAgentTerminalReceivesHostMintedCapabilityIdentityAndRevokesOnClose(t *t
 	}
 	if len(broker.revokedSessions) != 1 || broker.revokedSessions[0] != "session-1" {
 		t.Fatalf("revoked sessions = %v", broker.revokedSessions)
+	}
+}
+
+func TestAgentProfileReturningShellFailsClosedBeforeCapabilityBinding(t *testing.T) {
+	manager := &fakeGUITerminalManager{
+		profiles: []terminal.Profile{{ID: "agent-codex", Name: "Codex", Kind: terminal.ProfileAgent}},
+		createResult: managedTerminalSession{
+			SessionID: "wrong-kind", ProfileID: "agent-codex", ProfileKind: terminal.ProfileShell,
+			CWD: t.TempDir(), State: terminal.SessionRunning,
+		},
+	}
+	app, _ := newTerminalBindingTestApp(t, manager, nil)
+	broker := &fakeWorkspaceCapabilityBroker{token: "unbound-capability-token"}
+	app.workspace.capabilities = broker
+	if _, err := app.CreateTerminal("agent-codex", "", 24, 80); err == nil {
+		t.Fatal("agent profile accepted a shell session")
+	}
+	if broker.boundSession != "" ||
+		!reflect.DeepEqual(broker.revokedTokens, []string{"unbound-capability-token"}) {
+		t.Fatalf("capability identity was not failed closed: %#v", broker)
+	}
+	if len(manager.closes) == 0 || manager.lastClose().sessionID != "wrong-kind" {
+		t.Fatalf("mismatched session was not closed: %#v", manager.closes)
+	}
+}
+
+func TestTerminalCloseRevokesAllEventTokensEvenWhenProcessCloseFails(t *testing.T) {
+	wantCloseErr := errors.New("process close failed")
+	manager := &fakeGUITerminalManager{
+		createResult: managedTerminalSession{
+			SessionID: "shared-session", ProfileID: "agent-codex",
+			ProfileKind: terminal.ProfileAgent, CWD: t.TempDir(), State: terminal.SessionRunning,
+		},
+		closeErrors: map[string]error{"shared-session": wantCloseErr},
+	}
+	app, projectRoot := newTerminalBindingTestApp(t, manager, nil)
+	registry := agentrun.NewRegistry(agentrun.Config{ProjectRoot: projectRoot})
+	t.Cleanup(func() { _ = registry.Shutdown(context.Background()) })
+	app.workspace.agents = registry
+	tokens := make([]string, 0, 2)
+	for index := 0; index < 2; index++ {
+		token, err := registry.IssueLaunchedEventToken()
+		if err != nil {
+			t.Fatal(err)
+		}
+		run, err := registry.RegisterLaunched(agentrun.Registration{
+			Profile: "agent-codex", Provider: "codex", PID: index + 1,
+			TerminalID: "shared-session", CWD: projectRoot,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := registry.BindLaunchedEventToken(token, run.ID); err != nil {
+			t.Fatal(err)
+		}
+		tokens = append(tokens, token)
+	}
+	if err := app.CloseTerminalV2(1, "shared-session", true); !errors.Is(err, wantCloseErr) {
+		t.Fatalf("close error = %v, want %v", err, wantCloseErr)
+	}
+	for _, token := range tokens {
+		if err := registry.AuthenticateLaunchedEventToken(token); !errors.Is(err, agentrun.ErrInvalidEventToken) {
+			t.Fatalf("event token survived failed close: %v", err)
+		}
 	}
 }
 
@@ -736,11 +801,12 @@ type fakeGUITerminalManager struct {
 	profiles    []terminal.Profile
 	profilesErr error
 
-	creates       []terminalCreateCall
-	createResult  managedTerminalSession
-	createErrors  map[string]error
-	createStarted chan struct{}
-	createRelease chan struct{}
+	creates           []terminalCreateCall
+	createResult      managedTerminalSession
+	createErrors      map[string]error
+	createStarted     chan struct{}
+	createRelease     chan struct{}
+	createWithEnvHook func(map[string]string)
 
 	resizes      []terminalResizeCall
 	resizeErrors map[string]error
@@ -810,6 +876,9 @@ func (m *fakeGUITerminalManager) CreateWithEnv(
 		m.creates[len(m.creates)-1].environment = environment
 	}
 	m.mu.Unlock()
+	if m.createWithEnvHook != nil {
+		m.createWithEnvHook(environment)
+	}
 	return result, err
 }
 

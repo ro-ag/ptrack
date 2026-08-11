@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  agentIntelligenceLabel,
   appVersionLabel,
   collapsedLaneStatuses,
   commandShortcut,
@@ -9,6 +10,7 @@ import {
   groupSearchResults,
   heatLevel,
   heatmapWeeks,
+  handoffPreviewResponseIsCurrent,
   linkedTaskRuntimePresentation,
   paletteTarget,
   preserveSectionOnError,
@@ -78,6 +80,15 @@ describe("workspace presentation policy", () => {
     });
   });
 
+  it("accepts handoff previews only for the exact visible task association", () => {
+    const association = { planId: 2, taskId: 7, revision: 3 };
+    expect(handoffPreviewResponseIsCurrent(7, association, association, 7)).toBe(true);
+    expect(handoffPreviewResponseIsCurrent(7, association, { ...association, taskId: 8 }, 7)).toBe(false);
+    expect(handoffPreviewResponseIsCurrent(7, association, { ...association, revision: 4 }, 7)).toBe(false);
+    expect(handoffPreviewResponseIsCurrent(7, association, association, 8)).toBe(false);
+    expect(handoffPreviewResponseIsCurrent(7, association, null, 7)).toBe(false);
+  });
+
   it("labels exact runtime targets and separate live resource counts", () => {
     expect(runtimeAssociationLabel({ planId: 2, taskId: 9 })).toBe(
       "plan #2 · task #9",
@@ -92,6 +103,26 @@ describe("workspace presentation policy", () => {
       compact: "1T · 1A",
       detail: "1/2 live terminals · 1/3 live agents",
     });
+  });
+
+  it("presents only allowlisted content-free agent intelligence", () => {
+    expect(agentIntelligenceLabel({
+      state: "waiting",
+      confidence: "medium",
+      eventCount: 1,
+    })).toBe("intelligence waiting · medium confidence · 1 structured event");
+    expect(agentIntelligenceLabel({
+      state: "potentiallyDrifting",
+      confidence: "high",
+      eventCount: -4,
+    })).toBe(
+      "intelligence potentiallyDrifting · high confidence · 0 structured events",
+    );
+    expect(agentIntelligenceLabel({
+      state: "<script>alert(1)</script>",
+      confidence: "very",
+      eventCount: "many",
+    })).toBe("");
   });
 
   it("accepts runtime refresh events only for the open generation", () => {

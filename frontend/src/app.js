@@ -39,12 +39,14 @@ import {
   taskTransitionResponseIsCurrent,
 } from "./workspace/task-transition";
 import {
+  agentIntelligenceLabel,
   appVersionLabel,
   collapsedLaneStatuses,
   commandShortcut,
   confirmationCopy,
   focusCycleIndex,
   groupSearchResults,
+  handoffPreviewResponseIsCurrent,
   heatmapWeeks,
   linkedTaskRuntimePresentation,
   paletteTarget,
@@ -1206,7 +1208,8 @@ function renderRuntimeIntelligence(terminals, agents) {
       elements.agentRuns.append(
         intelligenceItem(
           `${run.terminalBacked ? "Terminal-backed" : "External"} agent`,
-          `${run.live ? "live" : "historical"} · lifecycle ${run.state} · process ${run.processState} · lease ${run.leaseState} · ${origin} · ${runtimeAssociationLabel(run.association)}`,
+          `${run.live ? "live" : "historical"} · lifecycle ${run.state} · process ${run.processState} · lease ${run.leaseState} · ${origin} · ${runtimeAssociationLabel(run.association)}` +
+            `${agentIntelligenceLabel(run.intelligence) ? ` · ${agentIntelligenceLabel(run.intelligence)}` : ""}`,
           ["stale", "unknown"].includes(run.state) ? "stale" : run.state === "exited" ? "" : "",
         ),
       );
@@ -1823,11 +1826,14 @@ function renderDrawerRuntimeSummary(summary) {
   );
 }
 
-function renderDrawerRuntimeDetail(linkedRuntime) {
+function renderDrawerRuntimeDetail(linkedRuntime, agentIntelligence = []) {
   const summary = linkedRuntime?.summary;
   const presentation = linkedTaskRuntimePresentation(summary);
   const terminals = linkedRuntime?.terminals || [];
   const agents = linkedRuntime?.agents || [];
+  const intelligenceByRun = new Map(
+    (agentIntelligence || []).map((entry) => [entry.runId, entry]),
+  );
   elements.drawerRuntimeCount.textContent = presentation
     ? presentation.compact
     : "0";
@@ -1858,10 +1864,62 @@ function renderDrawerRuntimeDetail(linkedRuntime) {
     elements.drawerRuntime.append(
       intelligenceItem(
         `${run.terminalBacked ? "Terminal-backed" : "External"} agent`,
-        `${run.live ? "live" : "historical"} · lifecycle ${run.state} · process ${run.processState} · lease ${run.leaseState} · ${origin}`,
+        `${run.live ? "live" : "historical"} · lifecycle ${run.state} · process ${run.processState} · lease ${run.leaseState} · ${origin}` +
+          `${agentIntelligenceLabel(run.intelligence) ? ` · ${agentIntelligenceLabel(run.intelligence)}` : ""}`,
         run.state === "stale" ? "stale" : "",
       ),
     );
+    const intelligence = intelligenceByRun.get(run.runId);
+    if (intelligence) {
+      const intelligenceEntry = intelligenceItem(
+        `Agent intelligence · ${intelligence.intelligence.state}`,
+        `${intelligence.intelligence.confidence || "low"} confidence · ${intelligence.eventBounds?.total || 0} retained structured events`,
+        intelligence.intelligence.state === "failed" ? "error" :
+          intelligence.intelligence.state === "potentiallyDrifting" ? "stale" : "",
+      );
+      const handoffButton = document.createElement("button");
+      handoffButton.type = "button";
+      handoffButton.className = "button-secondary";
+      handoffButton.textContent = "Preview handoff";
+      const handoffPreview = document.createElement("pre");
+      handoffPreview.className = "intelligence-detail";
+      handoffPreview.hidden = true;
+      handoffPreview.style.whiteSpace = "pre-wrap";
+      const handoffTaskId = Number(detailTask?.id || 0);
+      const handoffAssociation = intelligence.association;
+      handoffButton.addEventListener("click", async () => {
+        const ticket = workspaceController.capture();
+        handoffButton.disabled = true;
+        handoffButton.textContent = "Generating preview…";
+        try {
+          const result = await api().PreviewAgentHandoffV2(ticket.generation, run.runId);
+          if (!workspaceController.accepts(ticket, Number(result.generation))) return;
+          if (!handoffPreviewResponseIsCurrent(
+            handoffTaskId,
+            handoffAssociation,
+            result.association,
+            Number(detailTask?.id || 0),
+          )) return;
+          handoffPreview.textContent = `${result.preview.text}\n\nPreview only · project memory was not changed.`;
+          handoffPreview.hidden = false;
+        } catch (error) {
+          showError(error);
+        } finally {
+          handoffButton.disabled = false;
+          handoffButton.textContent = "Refresh handoff preview";
+        }
+      });
+      intelligenceEntry.append(handoffButton, handoffPreview);
+      elements.drawerRuntime.append(intelligenceEntry);
+      (intelligence.suggestions || []).forEach((suggestion) => {
+        elements.drawerRuntime.append(
+          intelligenceItem(
+            `Suggestion · ${suggestion.kind}`,
+            `${suggestion.label} · ${suggestion.reason}`,
+          ),
+        );
+      });
+    }
   });
   const terminalRowsMore = Number(linkedRuntime?.terminalRowsMore || 0);
   const agentRowsMore = Number(linkedRuntime?.agentRowsMore || 0);
@@ -1933,7 +1991,7 @@ function drawerIssueElement(issue) {
 }
 
 function renderDrawerSections(detail) {
-  renderDrawerRuntimeDetail(detail.linkedRuntime);
+  renderDrawerRuntimeDetail(detail.linkedRuntime, detail.agentIntelligence);
   elements.drawerNotesCount.textContent = detail.notes.length;
   elements.drawerCommitsCount.textContent = detail.commits.length;
   elements.drawerIssuesCount.textContent = detail.issues.length;

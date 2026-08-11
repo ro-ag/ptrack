@@ -32,6 +32,8 @@ var (
 	ErrAssociationMismatch = errors.New("AgentRun association does not correspond to terminal")
 	ErrLinkedAssociation   = errors.New("linked AgentRun association requires terminal-paired mutation")
 	ErrSnapshotLimit       = errors.New("AgentRun snapshot exceeds exact limit")
+	ErrEventOrder          = errors.New("AgentRun event source order is stale or duplicated")
+	ErrInvalidEventToken   = errors.New("invalid AgentRun launched-event token")
 )
 
 type RegistrationKind string
@@ -66,7 +68,10 @@ type Registration struct {
 }
 
 type Exit struct {
-	Code       int       `json:"code"`
+	Code int `json:"code"`
+	// Result is an allowlisted outcome class retained for compatibility with
+	// the version 1 registry JSON shape. Raw provider result text is never
+	// stored here.
 	Result     string    `json:"result"`
 	OccurredAt time.Time `json:"occurredAt"`
 }
@@ -124,6 +129,9 @@ type Config struct {
 	Now           func() time.Time
 	NewTicker     func(time.Duration) Ticker
 	MaxRecords    int
+	// EventPolicy is explicit so the zero value cannot silently enable
+	// collection. Nil selects DefaultEventPrivacyPolicy.
+	EventPolicy *EventPrivacyPolicy
 	// StatePath, when non-empty, mirrors a bounded snapshot of the registry to
 	// disk (see persistence.go) so registered runs survive an app restart.
 	// Empty keeps the registry memory-only.
@@ -137,30 +145,44 @@ type record struct {
 	// linkedLaunch is immutable provenance set only by RegisterLinkedLaunched.
 	// A later host association on an ordinary run must not make it eligible for
 	// the linked-launch rollback path.
-	linkedLaunch bool
+	linkedLaunch       bool
+	eventToken         string
+	events             []Event
+	lastSourceSequence uint64
+	nextHostSequence   uint64
 }
 
 type Registry struct {
-	projectRoot   string
-	leaseDuration time.Duration
-	now           func() time.Time
-	ticker        Ticker
-	maxRecords    int
-	statePath     string
+	projectRoot    string
+	leaseDuration  time.Duration
+	now            func() time.Time
+	ticker         Ticker
+	maxRecords     int
+	statePath      string
+	repositoryRoot string
+	eventPolicy    EventPrivacyPolicy
+	// persistenceWritable becomes false when a future history format is
+	// detected. The registry remains usable in memory but never clobbers the
+	// newer file on shutdown.
+	persistenceWritable bool
 
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu              sync.Mutex
-	records         map[string]*record
-	closed          bool
-	admissionFences int
+	mu                 sync.Mutex
+	records            map[string]*record
+	pendingEventTokens map[string]chan struct{}
+	eventTokenRuns     map[string]string
+	persistenceDirty   bool
+	closed             bool
+	admissionFences    int
 
 	shutdownOnce sync.Once
 	shutdownDone chan struct{}
 }
 
 func NewRegistry(config Config) *Registry {
+	projectRoot := canonicalRegistryPath(config.ProjectRoot)
 	leaseDuration := config.LeaseDuration
 	if leaseDuration <= 0 {
 		leaseDuration = defaultLeaseDuration
@@ -184,22 +206,36 @@ func NewRegistry(config Config) *Registry {
 	if maxRecords <= 0 {
 		maxRecords = defaultMaxRecords
 	}
+	eventPolicy := DefaultEventPrivacyPolicy()
+	if config.EventPolicy != nil {
+		eventPolicy = *config.EventPolicy
+		if validateEventPrivacyPolicy(eventPolicy) != nil {
+			eventPolicy = EventPrivacyPolicy{}
+		}
+	}
 	registry := &Registry{
-		projectRoot:   filepath.Clean(config.ProjectRoot),
-		leaseDuration: leaseDuration,
-		now:           now,
-		ticker:        newTicker(sweepInterval),
-		maxRecords:    maxRecords,
-		statePath:     config.StatePath,
-		ctx:           ctx,
-		cancel:        cancel,
-		records:       make(map[string]*record),
-		shutdownDone:  make(chan struct{}),
+		projectRoot:         projectRoot,
+		leaseDuration:       leaseDuration,
+		now:                 now,
+		ticker:              newTicker(sweepInterval),
+		maxRecords:          maxRecords,
+		statePath:           config.StatePath,
+		repositoryRoot:      discoverEventRepositoryRoot(projectRoot),
+		eventPolicy:         eventPolicy,
+		persistenceWritable: true,
+		ctx:                 ctx,
+		cancel:              cancel,
+		records:             make(map[string]*record),
+		pendingEventTokens:  make(map[string]chan struct{}),
+		eventTokenRuns:      make(map[string]string),
+		shutdownDone:        make(chan struct{}),
 	}
 	if registry.statePath != "" {
 		// Best effort: a missing or damaged history must never block startup.
 		// The in-memory registry is authoritative; the file is only a mirror.
-		_ = registry.restoreLocked()
+		if err := registry.restoreLocked(); errors.Is(err, ErrHistoryFutureVersion) {
+			registry.persistenceWritable = false
+		}
 	}
 	go registry.runSweeper()
 	return registry
@@ -238,9 +274,46 @@ func (r *Registry) RollbackLinkedLaunched(id, terminalID string) bool {
 		terminalID == "" || entry.run.TerminalID != terminalID {
 		return false
 	}
+	r.revokeRecordEventTokenLocked(entry)
 	delete(r.records, id)
-	_ = r.saveLocked()
+	r.persistLocked()
 	return true
+}
+
+// RollbackLaunched removes one ordinary, non-linked launched run when the
+// surrounding terminal launch cannot finish publishing its telemetry token.
+func (r *Registry) RollbackLaunched(id, terminalID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry := r.records[id]
+	if entry == nil || entry.linkedLaunch ||
+		entry.run.Kind != RegistrationLaunched || terminalID == "" ||
+		entry.run.TerminalID != terminalID {
+		return false
+	}
+	r.revokeRecordEventTokenLocked(entry)
+	delete(r.records, id)
+	r.persistLocked()
+	return true
+}
+
+// RevokeLaunchedEventTokenForTerminal closes the telemetry-only authority for
+// a host-owned terminal before process teardown begins.
+func (r *Registry) RevokeLaunchedEventTokenForTerminal(terminalID string) bool {
+	if terminalID == "" {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	revoked := false
+	for _, entry := range r.records {
+		if entry.run.Kind == RegistrationLaunched &&
+			entry.run.TerminalID == terminalID && entry.eventToken != "" {
+			r.revokeRecordEventTokenLocked(entry)
+			revoked = true
+		}
+	}
+	return revoked
 }
 
 // RollbackLinkedTerminal removes host-launched records for one terminal when
@@ -257,12 +330,13 @@ func (r *Registry) RollbackLinkedTerminal(terminalID string) int {
 		if entry.linkedLaunch && entry.run.Kind == RegistrationLaunched &&
 			entry.run.Association != nil &&
 			entry.run.TerminalID == terminalID {
+			r.revokeRecordEventTokenLocked(entry)
 			delete(r.records, id)
 			removed++
 		}
 	}
 	if removed > 0 {
-		_ = r.saveLocked()
+		r.persistLocked()
 	}
 	return removed
 }
@@ -310,7 +384,7 @@ func (r *Registry) register(
 	if registration.CWD == "" {
 		registration.CWD = r.projectRoot
 	}
-	cwd := filepath.Clean(registration.CWD)
+	cwd := canonicalRegistryPath(registration.CWD)
 	if !pathWithin(r.projectRoot, cwd) {
 		return Run{}, errors.New("AgentRun CWD is outside the project")
 	}
@@ -377,7 +451,7 @@ func (r *Registry) register(
 		lifecycleRevision: 1,
 		linkedLaunch:      kind == RegistrationLaunched && pointer != nil,
 	}
-	_ = r.saveLocked()
+	r.persistLocked()
 	return cloneRun(run), nil
 }
 
@@ -403,7 +477,7 @@ func (r *Registry) Associate(
 		return association.AssociationV1{}, err
 	}
 	entry.run.Association = &next
-	_ = r.saveLocked()
+	r.persistLocked()
 	return next, nil
 }
 
@@ -486,7 +560,7 @@ func (r *Registry) applyLinkedAssociationChange(
 	}
 	next := replacement
 	entry.run.Association = &next
-	_ = r.saveLocked()
+	r.persistLocked()
 	return nil
 }
 
@@ -514,6 +588,7 @@ func (r *Registry) evictInactiveLocked() bool {
 	if oldestID == "" {
 		return false
 	}
+	r.revokeRecordEventTokenLocked(r.records[oldestID])
 	delete(r.records, oldestID)
 	return true
 }
@@ -573,8 +648,422 @@ func (r *Registry) ExitExternal(id, token string, code int, result string) error
 		return err
 	}
 	r.recordExitLocked(entry, code, result)
-	_ = r.saveLocked()
+	r.persistLocked()
 	return nil
+}
+
+// RecordProviderEvent authenticates before selecting the immutable provider
+// adapter, so an untrusted caller cannot choose another run's adapter or use
+// validation differences as an unauthenticated probe.
+func (r *Registry) RecordProviderEvent(
+	id string,
+	token string,
+	providerEvent ProviderEvent,
+) (Event, error) {
+	r.mu.Lock()
+	entry, err := r.externalRecordLocked(id, token)
+	if err != nil || !runIsActive(entry.run) {
+		r.mu.Unlock()
+		if err != nil {
+			return Event{}, err
+		}
+		return Event{}, ErrInvalidLease
+	}
+	provider := entry.run.Provider
+	r.mu.Unlock()
+	observation, err := NormalizeProviderEvent(provider, providerEvent)
+	if err != nil {
+		return Event{}, err
+	}
+	return r.RecordEvent(id, token, observation)
+}
+
+// AuthenticateEventLease verifies only run-event authority and liveness. HTTP
+// handlers use it before decoding provider-controlled request content; event
+// commit performs the same check again.
+func (r *Registry) AuthenticateEventLease(id string, token string) error {
+	return r.authenticateActiveEventLease(id, token)
+}
+
+// IssueLaunchedEventToken creates one pending, authority-free telemetry
+// identity before a host-owned agent process starts. It cannot ingest events
+// until BindLaunchedEventToken attaches it to the exact launched Run.
+func (r *Registry) IssueLaunchedEventToken() (string, error) {
+	token, err := randomOpaqueValue()
+	if err != nil {
+		return "", err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return "", ErrRegistryClosed
+	}
+	if r.admissionFences > 0 {
+		return "", ErrAdmissionFenced
+	}
+	if len(r.pendingEventTokens) >= r.maxRecords {
+		return "", ErrRegistryFull
+	}
+	r.pendingEventTokens[token] = make(chan struct{})
+	return token, nil
+}
+
+// BindLaunchedEventToken consumes one host-minted pending token only after the
+// launched Run and its host association have been published successfully.
+func (r *Registry) BindLaunchedEventToken(token string, runID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	pending := r.pendingEventTokenLocked(token)
+	if pending == "" {
+		return ErrInvalidEventToken
+	}
+	entry := r.records[runID]
+	if entry == nil {
+		return ErrRunNotFound
+	}
+	if entry.run.Kind != RegistrationLaunched || !runIsActive(entry.run) ||
+		entry.eventToken != "" {
+		return ErrInvalidEventToken
+	}
+	ready := r.pendingEventTokens[pending]
+	delete(r.pendingEventTokens, pending)
+	entry.eventToken = pending
+	r.eventTokenRuns[pending] = runID
+	close(ready)
+	return nil
+}
+
+// RevokeLaunchedEventToken invalidates a pending or bound telemetry identity.
+// It is idempotent so every launch rollback path can call it safely.
+func (r *Registry) RevokeLaunchedEventToken(token string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if pending := r.pendingEventTokenLocked(token); pending != "" {
+		ready := r.pendingEventTokens[pending]
+		delete(r.pendingEventTokens, pending)
+		close(ready)
+	}
+	if entry, matched := r.launchedEventRecordLocked(token); matched != "" {
+		r.revokeRecordEventTokenLocked(entry)
+	}
+}
+
+// AuthenticateLaunchedEventToken verifies that a host-minted token is bound
+// to a currently live launched Run. Pending, exited, revoked, and unknown
+// tokens all fail identically.
+func (r *Registry) AuthenticateLaunchedEventToken(token string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry, _ := r.launchedEventRecordLocked(token)
+	if entry == nil || !runIsActive(entry.run) {
+		return ErrInvalidEventToken
+	}
+	return nil
+}
+
+// AwaitLaunchedEventToken allows a hook emitted during process startup to
+// wait briefly for the host to finish publishing and binding its Run. Merely
+// pending tokens still authorize nothing: the request body is not decoded
+// until this returns successfully, and revocation and timeout fail closed.
+func (r *Registry) AwaitLaunchedEventToken(ctx context.Context, token string) error {
+	r.mu.Lock()
+	entry, _ := r.launchedEventRecordLocked(token)
+	if entry != nil && runIsActive(entry.run) {
+		r.mu.Unlock()
+		return nil
+	}
+	pending := r.pendingEventTokenLocked(token)
+	if pending == "" {
+		r.mu.Unlock()
+		return ErrInvalidEventToken
+	}
+	ready := r.pendingEventTokens[pending]
+	r.mu.Unlock()
+
+	select {
+	case <-ready:
+		return r.AuthenticateLaunchedEventToken(token)
+	case <-ctx.Done():
+		return ErrInvalidEventToken
+	}
+}
+
+// RecordLaunchedProviderEvent maps and records one provider event through a
+// token whose RunID/provider/terminal/association were bound by the host.
+func (r *Registry) RecordLaunchedProviderEvent(
+	token string,
+	providerEvent ProviderEvent,
+) (Event, error) {
+	r.mu.Lock()
+	entry, _ := r.launchedEventRecordLocked(token)
+	if entry == nil || !runIsActive(entry.run) {
+		r.mu.Unlock()
+		return Event{}, ErrInvalidEventToken
+	}
+	provider := entry.run.Provider
+	r.mu.Unlock()
+	observation, err := NormalizeProviderEvent(provider, providerEvent)
+	if err != nil {
+		return Event{}, err
+	}
+	return r.recordLaunchedEvent(token, observation)
+}
+
+// RecordEvent authenticates one provider-normalized observation against an
+// external run lease. Provider, run, project, association, and host ordering
+// are all assigned from registry state; the observation carries no authority.
+func (r *Registry) RecordEvent(
+	id string,
+	token string,
+	observation EventObservation,
+) (Event, error) {
+	// Fail closed on authority before parsing or redacting attacker-controlled
+	// content. The lease is checked again while committing to cover expiry or
+	// exit between validation and storage.
+	if err := r.authenticateActiveEventLease(id, token); err != nil {
+		return Event{}, err
+	}
+	now, normalized, eventID, err := r.prepareEvent(observation)
+	if err != nil {
+		return Event{}, err
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry, err := r.externalRecordLocked(id, token)
+	if err != nil {
+		return Event{}, err
+	}
+	if !runIsActive(entry.run) {
+		return Event{}, ErrInvalidLease
+	}
+	return r.recordNormalizedEventLocked(entry, normalized, eventID, now)
+}
+
+func (r *Registry) recordLaunchedEvent(
+	token string,
+	observation EventObservation,
+) (Event, error) {
+	if err := r.AuthenticateLaunchedEventToken(token); err != nil {
+		return Event{}, err
+	}
+	now, normalized, eventID, err := r.prepareEvent(observation)
+	if err != nil {
+		return Event{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry, _ := r.launchedEventRecordLocked(token)
+	if entry == nil || !runIsActive(entry.run) {
+		return Event{}, ErrInvalidEventToken
+	}
+	return r.recordNormalizedEventLocked(entry, normalized, eventID, now)
+}
+
+func (r *Registry) prepareEvent(
+	observation EventObservation,
+) (time.Time, EventObservation, string, error) {
+	now := r.now()
+	normalized, err := NormalizeEventObservation(
+		r.projectRoot,
+		now,
+		r.eventPolicy,
+		observation,
+	)
+	if err != nil {
+		return time.Time{}, EventObservation{}, "", err
+	}
+	eventID, err := randomOpaqueValue()
+	if err != nil {
+		return time.Time{}, EventObservation{}, "", err
+	}
+	return now, normalized, eventID, nil
+}
+
+func (r *Registry) recordNormalizedEventLocked(
+	entry *record,
+	normalized EventObservation,
+	eventID string,
+	now time.Time,
+) (Event, error) {
+	if normalized.SourceSequence <= entry.lastSourceSequence {
+		return Event{}, ErrEventOrder
+	}
+	for _, existing := range entry.events {
+		if existing.SourceID == normalized.SourceID {
+			return Event{}, ErrEventOrder
+		}
+	}
+	entry.nextHostSequence++
+	event := Event{
+		ModelVersion:   EventModelVersion,
+		ID:             eventID,
+		RunID:          entry.run.ID,
+		Provider:       entry.run.Provider,
+		SourceID:       normalized.SourceID,
+		SourceSequence: normalized.SourceSequence,
+		HostSequence:   entry.nextHostSequence,
+		Kind:           normalized.Kind,
+		Phase:          normalized.Phase,
+		Outcome:        normalized.Outcome,
+		Subject:        normalized.Subject,
+		Paths:          append([]string{}, normalized.Paths...),
+		CommitSHA:      normalized.CommitSHA,
+		ExitCode:       cloneInt(normalized.ExitCode),
+		ErrorClass:     normalized.ErrorClass,
+		Summary:        normalized.Summary,
+		OccurredAt:     normalized.OccurredAt,
+		ObservedAt:     now.UTC(),
+		Correlation:    eventCorrelationForRun(entry.run, r.repositoryRoot),
+	}
+	candidateEvents := append(entry.events, event)
+	retainedEvents, err := RetainEvents(candidateEvents, now, r.eventPolicy)
+	if err != nil {
+		entry.nextHostSequence--
+		return Event{}, err
+	}
+	entry.events = retainedEvents
+	entry.lastSourceSequence = normalized.SourceSequence
+	if now.After(entry.run.LastActivityAt) {
+		entry.run.LastActivityAt = now
+	}
+	r.persistLocked()
+	return cloneEvent(event), nil
+}
+
+func (r *Registry) pendingEventTokenLocked(token string) string {
+	if token == "" {
+		return ""
+	}
+	for candidate := range r.pendingEventTokens {
+		if subtle.ConstantTimeCompare([]byte(candidate), []byte(token)) == 1 {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func (r *Registry) launchedEventRecordLocked(token string) (*record, string) {
+	if token == "" {
+		return nil, ""
+	}
+	for candidate, runID := range r.eventTokenRuns {
+		if subtle.ConstantTimeCompare([]byte(candidate), []byte(token)) != 1 {
+			continue
+		}
+		entry := r.records[runID]
+		if entry == nil || entry.eventToken != candidate {
+			return nil, ""
+		}
+		return entry, candidate
+	}
+	return nil, ""
+}
+
+func (r *Registry) revokeRecordEventTokenLocked(entry *record) {
+	if entry == nil || entry.eventToken == "" {
+		return
+	}
+	delete(r.eventTokenRuns, entry.eventToken)
+	entry.eventToken = ""
+}
+
+func (r *Registry) authenticateActiveEventLease(id string, token string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry, err := r.externalRecordLocked(id, token)
+	if err != nil {
+		return err
+	}
+	if !runIsActive(entry.run) {
+		return ErrInvalidLease
+	}
+	return nil
+}
+
+// EventSnapshot returns a deterministic, independent, bounded timeline for
+// one run. It never exposes lease tokens or raw provider payloads.
+func (r *Registry) EventSnapshot(id string, limit int) ([]Event, int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry := r.records[id]
+	if entry == nil {
+		return nil, 0, ErrRunNotFound
+	}
+	events, err := RetainEvents(entry.events, r.now(), r.eventPolicy)
+	if err != nil {
+		return nil, 0, err
+	}
+	pruned := len(events) != len(entry.events)
+	entry.events = events
+	if pruned {
+		r.persistLocked()
+	}
+	total := len(events)
+	if limit <= 0 || limit > r.eventPolicy.RetainLast {
+		limit = r.eventPolicy.RetainLast
+	}
+	if len(events) > limit {
+		events = events[len(events)-limit:]
+	}
+	result := make([]Event, 0, len(events))
+	for _, event := range events {
+		result = append(result, cloneEvent(event))
+	}
+	return result, total, nil
+}
+
+// Intelligence returns one content-free derived state from the current run
+// lifecycle plus its retained structured events.
+func (r *Registry) Intelligence(id string) (RunIntelligence, error) {
+	_, _, _, intelligence, err := r.IntelligenceSnapshot(id, 0)
+	return intelligence, err
+}
+
+// IntelligenceSnapshot returns run metadata, retained events, and their
+// derived state from one registry moment. It prevents GUI projections from
+// combining an old association with newer evidence.
+func (r *Registry) IntelligenceSnapshot(
+	id string,
+	limit int,
+) (Run, []Event, int, RunIntelligence, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry := r.records[id]
+	if entry == nil {
+		return Run{}, nil, 0, RunIntelligence{}, ErrRunNotFound
+	}
+	retained, err := RetainEvents(entry.events, r.now(), r.eventPolicy)
+	if err != nil {
+		return Run{}, nil, 0, RunIntelligence{}, err
+	}
+	pruned := len(retained) != len(entry.events)
+	entry.events = retained
+	if pruned {
+		r.persistLocked()
+	}
+	run := cloneRun(entry.run)
+	intelligence := DeriveRunIntelligence(run, retained)
+	total := len(retained)
+	if limit <= 0 || limit > r.eventPolicy.RetainLast {
+		limit = r.eventPolicy.RetainLast
+	}
+	if len(retained) > limit {
+		retained = retained[len(retained)-limit:]
+	}
+	return run, cloneEvents(retained), total, intelligence, nil
+}
+
+// Run returns an independent copy of one registered run for host-side
+// correlation and read-only intelligence enrichment.
+func (r *Registry) Run(id string) (Run, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry := r.records[id]
+	if entry == nil {
+		return Run{}, ErrRunNotFound
+	}
+	return cloneRun(entry.run), nil
 }
 
 // RecordTerminalActivity reports activity on a terminal, returning whether a
@@ -624,20 +1113,25 @@ func (r *Registry) RecordTerminalExit(terminalID string, code int, result string
 		}
 	}
 	if matched {
-		_ = r.saveLocked()
+		r.persistLocked()
 	}
 	return matched
 }
 
 func (r *Registry) recordExitLocked(entry *record, code int, result string) {
 	now := r.now()
+	r.revokeRecordEventTokenLocked(entry)
 	entry.run.State = StateExited
 	entry.run.ProcessState = ProcessExited
 	if entry.run.Kind == RegistrationExternal {
 		entry.run.LeaseState = LeaseExpired
 	}
 	entry.run.LastActivityAt = now
-	entry.run.Exit = &Exit{Code: code, Result: result, OccurredAt: now}
+	entry.run.Exit = &Exit{
+		Code:       code,
+		Result:     classifyExitResult(result, code),
+		OccurredAt: now,
+	}
 	entry.lifecycleRevision++
 }
 
@@ -656,9 +1150,37 @@ func (r *Registry) externalRecordLocked(id, token string) (*record, error) {
 func (r *Registry) SweepExpired() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.sweepExpiredLocked(r.now()) {
-		_ = r.saveLocked()
+	now := r.now()
+	pruned, pruneErr := r.pruneExpiredEventsLocked(now)
+	if pruneErr != nil {
+		r.persistenceDirty = true
 	}
+	if r.sweepExpiredLocked(now) || pruned || r.persistenceDirty {
+		r.persistLocked()
+	}
+}
+
+func (r *Registry) pruneExpiredEventsLocked(now time.Time) (bool, error) {
+	changed := false
+	for _, entry := range r.records {
+		retained, err := RetainEvents(entry.events, now, r.eventPolicy)
+		if err != nil {
+			return false, err
+		}
+		if len(retained) != len(entry.events) {
+			changed = true
+		}
+		entry.events = retained
+	}
+	return changed, nil
+}
+
+func (r *Registry) persistLocked() {
+	if err := r.saveLocked(); err != nil {
+		r.persistenceDirty = true
+		return
+	}
+	r.persistenceDirty = false
 }
 
 func (r *Registry) sweepExpiredLocked(now time.Time) bool {
@@ -710,7 +1232,7 @@ func (r *Registry) WithExactRuntimeSnapshot(
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.sweepExpiredLocked(r.now()) {
-		_ = r.saveLocked()
+		r.persistLocked()
 	}
 	if len(r.records) > maximum {
 		return ErrSnapshotLimit
@@ -781,6 +1303,10 @@ func (r *Registry) Shutdown(ctx context.Context) error {
 	r.shutdownOnce.Do(func() {
 		r.mu.Lock()
 		r.closed = true
+		for token, ready := range r.pendingEventTokens {
+			delete(r.pendingEventTokens, token)
+			close(ready)
+		}
 		saveErr = r.saveLocked()
 		r.mu.Unlock()
 		r.cancel()
@@ -797,6 +1323,37 @@ func pathWithin(root, path string) bool {
 	relative, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
 	return err == nil && relative != ".." &&
 		!strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+func canonicalRegistryPath(path string) string {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	canonical, err := filepath.EvalSymlinks(absolute)
+	if err == nil {
+		return filepath.Clean(canonical)
+	}
+	// Event metadata may name a project-contained path that does not exist yet.
+	// Canonicalize its nearest existing ancestor so a symlinked temp/home root
+	// cannot make an otherwise-contained path appear outside the project.
+	probe := filepath.Clean(absolute)
+	missing := []string{}
+	for {
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			return filepath.Clean(absolute)
+		}
+		missing = append(missing, filepath.Base(probe))
+		probe = parent
+		canonical, err = filepath.EvalSymlinks(probe)
+		if err == nil {
+			for i := len(missing) - 1; i >= 0; i-- {
+				canonical = filepath.Join(canonical, missing[i])
+			}
+			return filepath.Clean(canonical)
+		}
+	}
 }
 
 func randomOpaqueValue() (string, error) {
@@ -817,4 +1374,34 @@ func cloneRun(run Run) Run {
 		run.Association = &associationCopy
 	}
 	return run
+}
+
+func cloneEvent(event Event) Event {
+	event.Paths = append([]string{}, event.Paths...)
+	event.ExitCode = cloneInt(event.ExitCode)
+	return event
+}
+
+func cloneInt(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+func classifyExitResult(result string, code int) string {
+	normalized := strings.ToLower(strings.TrimSpace(result))
+	switch normalized {
+	case "completed", "done", "success", "succeeded":
+		return normalized
+	case "failed", "error", "cancelled", "canceled", "timeout", "timed_out",
+		"interrupted", "killed", "session restarted", "unknown":
+		return normalized
+	default:
+		if code == 0 {
+			return "completed"
+		}
+		return "failed"
+	}
 }

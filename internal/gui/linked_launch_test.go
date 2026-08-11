@@ -1,9 +1,12 @@
 package gui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -176,6 +179,212 @@ func TestLaunchLinkedAgentUsesExactInstalledProfileContextAndSharedAssociation(t
 		terminalAssociation.Generation != 1 || runs[0].Association.Generation != 1 {
 		t.Fatalf("terminal/run association mismatch = %#v / %#v", terminalAssociation, runs[0].Association)
 	}
+}
+
+func TestLinkedLaunchTelemetryReachesTaskIntelligenceAndHandoff(t *testing.T) {
+	fixture := newLinkedLaunchFixture(t)
+	fixture.manager.profiles[2].Provider = "codex"
+	fixture.manager.createResult.Provider = "codex"
+	server, err := agentrun.StartIntegrationServer(fixture.registry, agentrun.IntegrationConfig{
+		GlobalHome: t.TempDir(), ProjectRoot: fixture.root, Generation: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Shutdown(context.Background()) })
+	fixture.app.workspace.agents = &workspaceAgentResources{
+		registry: fixture.registry, integration: server,
+		root: fixture.root, globalHome: t.TempDir(),
+	}
+
+	if _, err := fixture.app.LaunchLinkedAgentV2(
+		1, "agent-beta", "", 24, 80, fixture.taskPointer(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	launch := fixture.manager.lastCreate()
+	endpoint := launch.environment[AgentEventEndpointEnvironment]
+	token := launch.environment[AgentEventTokenEnvironment]
+	if endpoint != server.EventEndpoint() || token == "" {
+		t.Fatalf("launched event environment = %#v", launch.environment)
+	}
+	payload, err := json.Marshal(agentrun.ProviderEvent{
+		ModelVersion: agentrun.ProviderEventModelVersion,
+		ID:           "file-1", Sequence: 1, Type: "item.completed",
+		Category: agentrun.EventFile, Paths: []string{"internal/agentrun/event.go"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("launched event status = %d: %s", response.StatusCode, body)
+	}
+	_ = response.Body.Close()
+
+	detail, err := fixture.app.GetTaskDetailV2(1, fixture.taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.AgentIntelligence) != 1 ||
+		detail.AgentIntelligence[0].EventBounds.Total != 1 ||
+		detail.AgentIntelligence[0].Association == nil ||
+		detail.AgentIntelligence[0].Association.TaskID != fixture.taskID {
+		t.Fatalf("task intelligence = %#v", detail.AgentIntelligence)
+	}
+	foundFile := false
+	for _, suggestion := range detail.AgentIntelligence[0].Suggestions {
+		foundFile = foundFile || suggestion.Path == "internal/agentrun/event.go"
+	}
+	if !foundFile {
+		t.Fatalf("task intelligence lacks launched file evidence: %#v", detail.AgentIntelligence[0])
+	}
+	encodedDetail, err := json.Marshal(detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encodedDetail, []byte(token)) {
+		t.Fatal("task detail exposed the launched event token")
+	}
+	handoff, err := fixture.app.PreviewAgentHandoffV2(
+		1,
+		detail.AgentIntelligence[0].RunID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(handoff.Preview.Text, "internal/agentrun/event.go") {
+		t.Fatalf("launched handoff = %#v", handoff)
+	}
+	if err := fixture.app.CloseTerminalV2(1, "linked-session", true); err != nil {
+		t.Fatal(err)
+	}
+	revokedRequest, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	revokedRequest.Header.Set("Authorization", "Bearer "+token)
+	revokedResponse, err := http.DefaultClient.Do(revokedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revokedResponse.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("event token after terminal close status = %d", revokedResponse.StatusCode)
+	}
+	_ = revokedResponse.Body.Close()
+}
+
+func TestOrdinaryAgentTelemetryWaitsForBindingAndReachesOverview(t *testing.T) {
+	fixture := newLinkedLaunchFixture(t)
+	fixture.manager.profiles[2].Provider = "codex"
+	fixture.manager.createResult.Provider = "codex"
+	server, err := agentrun.StartIntegrationServer(fixture.registry, agentrun.IntegrationConfig{
+		GlobalHome: t.TempDir(), ProjectRoot: fixture.root, Generation: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Shutdown(context.Background()) })
+	fixture.app.workspace.agents = &workspaceAgentResources{
+		registry: fixture.registry, integration: server,
+		root: fixture.root, globalHome: t.TempDir(),
+	}
+	payload, err := json.Marshal(agentrun.ProviderEvent{
+		ModelVersion: agentrun.ProviderEventModelVersion,
+		ID:           "startup-file-1", Sequence: 1, Type: "item.completed",
+		Category: agentrun.EventFile, Paths: []string{"internal/gui/terminal.go"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type postResult struct {
+		response *http.Response
+		err      error
+	}
+	posted := make(chan postResult, 1)
+	fixture.manager.createWithEnvHook = func(environment map[string]string) {
+		endpoint := environment[AgentEventEndpointEnvironment]
+		token := environment[AgentEventTokenEnvironment]
+		started := make(chan struct{})
+		go func() {
+			request, requestErr := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))
+			if requestErr != nil {
+				posted <- postResult{err: requestErr}
+				return
+			}
+			request.Header.Set("Authorization", "Bearer "+token)
+			request.Header.Set("Content-Type", "application/json")
+			close(started)
+			response, requestErr := (&http.Client{Timeout: 3 * time.Second}).Do(request)
+			posted <- postResult{response: response, err: requestErr}
+		}()
+		<-started
+	}
+	launched, err := fixture.app.CreateTerminalV2(1, "agent-beta", "", 24, 80)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := <-posted
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	if result.response.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(result.response.Body)
+		t.Fatalf("startup event status = %d: %s", result.response.StatusCode, body)
+	}
+	_ = result.response.Body.Close()
+
+	runs := fixture.registry.Snapshot(10)
+	if len(runs) != 1 || runs[0].TerminalID != launched.SessionID {
+		t.Fatalf("ordinary launched runs = %#v", runs)
+	}
+	events, total, err := fixture.registry.EventSnapshot(runs[0].ID, 10)
+	if err != nil || total != 1 || len(events) != 1 ||
+		events[0].Correlation.TerminalID != launched.SessionID {
+		t.Fatalf("ordinary event correlation = %#v total=%d err=%v", events, total, err)
+	}
+	snapshot, err := fixture.app.GetWorkspaceSnapshot(1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.AgentRuns.Runs) != 1 || snapshot.AgentRuns.Runs[0].Intelligence == nil ||
+		snapshot.AgentRuns.Runs[0].Intelligence.EventCount != 1 {
+		t.Fatalf("overview intelligence = %#v", snapshot.AgentRuns)
+	}
+	launchEnvironment := fixture.manager.lastCreate().environment
+	if err := fixture.app.CloseTerminalV2(1, launched.SessionID, true); err != nil {
+		t.Fatal(err)
+	}
+	revokedRequest, err := http.NewRequest(
+		http.MethodPost,
+		launchEnvironment[AgentEventEndpointEnvironment],
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revokedRequest.Header.Set(
+		"Authorization",
+		"Bearer "+launchEnvironment[AgentEventTokenEnvironment],
+	)
+	revokedResponse, err := http.DefaultClient.Do(revokedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revokedResponse.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("ordinary token after close status = %d", revokedResponse.StatusCode)
+	}
+	_ = revokedResponse.Body.Close()
 }
 
 func TestLaunchLinkedAgentAcceptsPlanOnlyPointer(t *testing.T) {

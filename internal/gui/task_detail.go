@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ro-ag/ptrack/internal/agentrun"
 	"github.com/ro-ag/ptrack/internal/store"
 )
 
@@ -26,12 +27,13 @@ type TaskDetailCommit struct {
 
 // TaskDetail is the full context shown in the task detail drawer.
 type TaskDetail struct {
-	Generation    uint64                  `json:"generation"`
-	Task          Task                    `json:"task"`
-	LinkedRuntime TaskLinkedRuntimeDetail `json:"linkedRuntime"`
-	Notes         []TaskDetailNote        `json:"notes"`
-	Commits       []TaskDetailCommit      `json:"commits"`
-	Issues        []Issue                 `json:"issues"`
+	Generation        uint64                  `json:"generation"`
+	Task              Task                    `json:"task"`
+	LinkedRuntime     TaskLinkedRuntimeDetail `json:"linkedRuntime"`
+	AgentIntelligence []AgentIntelligenceV2   `json:"agentIntelligence"`
+	Notes             []TaskDetailNote        `json:"notes"`
+	Commits           []TaskDetailCommit      `json:"commits"`
+	Issues            []Issue                 `json:"issues"`
 }
 
 // GetTaskDetailV2 returns the full context for one board card: the task
@@ -75,9 +77,10 @@ func (a *App) GetTaskDetailV2(generation, taskID uint64) (TaskDetail, error) {
 			NoteCount:   len(notes),
 			CommitCount: len(commits),
 		},
-		Notes:   make([]TaskDetailNote, 0, len(notes)),
-		Commits: make([]TaskDetailCommit, 0, len(commits)),
-		Issues:  make([]Issue, 0),
+		Notes:             make([]TaskDetailNote, 0, len(notes)),
+		Commits:           make([]TaskDetailCommit, 0, len(commits)),
+		Issues:            make([]Issue, 0),
+		AgentIntelligence: []AgentIntelligenceV2{},
 	}
 	// NotesByTask is insertion ordered; the drawer shows newest first.
 	for i := len(notes) - 1; i >= 0; i-- {
@@ -117,6 +120,26 @@ func (a *App) GetTaskDetailV2(generation, taskID uint64) (TaskDetail, error) {
 		return TaskDetail{}, err
 	}
 	detail.LinkedRuntime = taskLinkedRuntime(projection, taskID)
+	if registry, ok := workspace.agents.(agentIntelligenceRegistry); ok {
+		for _, run := range detail.LinkedRuntime.Agents {
+			intelligence, intelligenceErr := buildAgentIntelligenceV2(
+				s,
+				workspace,
+				registry,
+				run.RunID,
+			)
+			if intelligenceErr != nil {
+				if errors.Is(intelligenceErr, agentrun.ErrRunNotFound) {
+					continue
+				}
+				return TaskDetail{}, intelligenceErr
+			}
+			if !agentIntelligenceMatchesTaskSnapshot(run, intelligence, taskID) {
+				continue
+			}
+			detail.AgentIntelligence = append(detail.AgentIntelligence, intelligence)
+		}
+	}
 	if detail.LinkedRuntime.Summary.Terminals != 0 ||
 		detail.LinkedRuntime.Summary.Agents != 0 ||
 		detail.LinkedRuntime.Summary.Truncated {
@@ -124,4 +147,16 @@ func (a *App) GetTaskDetailV2(generation, taskID uint64) (TaskDetail, error) {
 		detail.Task.LinkedRuntime = &summary
 	}
 	return detail, nil
+}
+
+func agentIntelligenceMatchesTaskSnapshot(
+	run AgentRuntimeSummary,
+	intelligence AgentIntelligenceV2,
+	taskID uint64,
+) bool {
+	return run.Association != nil && intelligence.Association != nil &&
+		run.Association.PlanID == intelligence.Association.PlanID &&
+		run.Association.TaskID == taskID &&
+		intelligence.Association.TaskID == taskID &&
+		run.Association.Revision == intelligence.Association.Revision
 }

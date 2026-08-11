@@ -184,6 +184,33 @@ API should treat the registry descriptor as stale when its hosting process is
 gone — after a crash, wait for a fresh descriptor instead of dialling a dead
 port.
 
+Authenticated external wrappers can report structured activity to
+`POST /v1/runs/<run-id>/events` with their run lease token. p-track-launched
+agent profiles instead receive `PTRACK_AGENT_EVENT_ENDPOINT_V1` and a separate
+`PTRACK_AGENT_EVENT_TOKEN_V1`; the token is unusable until the host binds the
+successful launch to its AgentRun, is never a network-capability credential,
+and is revoked before terminal teardown. The versioned input contains only an
+event ID and sequence, an allowlisted type, short metadata, project-relative
+paths, and commit or exit metadata. A free-text final-summary field is reserved
+for trusted host-side integrations that explicitly enable it; generic provider
+events cannot self-assert one. Codex, Claude, Gemini, Agy, and OpenCode have
+provider adapters; unknown future providers are limited to explicit lifecycle
+events. Provider event bodies reject unknown fields and do not admit prompts,
+messages, reasoning, tool inputs or results, command arguments, terminal output,
+transcripts, environment variables, request metadata, credentials, or project
+associations.
+
+p-track disables free-text summaries by default. An explicitly configured
+integration may allow only final-summary events, which are treated as
+untrusted, redacted, flattened, capped at 2 KiB, and rejected when they match
+credential or reasoning content. It retains at most 128 structured events per
+run for 14 days and revalidates retained events on restart. Project,
+repository, terminal, plan, and task correlation always comes from the
+host-owned run association. The desktop derives conservative
+working/waiting/blocked/completed/failed/drift indicators from this evidence,
+offers read-only context suggestions, and generates handoffs only when the user
+presses **Preview handoff**. A preview never changes project memory.
+
 ![p-track task-memory dialog](docs/assets/gui-memory.png)
 
 The bottom dock hosts one resizable embedded terminal at the project root.
