@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { RefreshGate, RefreshLoop, WorkspaceController } from "./controller";
+import {
+  RefreshGate,
+  RefreshLoop,
+  RuntimeRefreshCoalescer,
+  WorkspaceController,
+} from "./controller";
 
 describe("WorkspaceController", () => {
   it("rejects responses captured before a project generation changes", () => {
@@ -40,6 +45,29 @@ describe("RefreshLoop", () => {
     loop.dispose();
     loop.dispose();
     vi.advanceTimersByTime(60_000);
+    expect(work).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+});
+
+describe("RuntimeRefreshCoalescer", () => {
+  it("coalesces a heartbeat burst and retains only the latest generation", () => {
+    vi.useFakeTimers();
+    const work = vi.fn();
+    const coalescer = new RuntimeRefreshCoalescer(work, 100);
+
+    coalescer.request(4);
+    coalescer.request(4);
+    coalescer.request(5);
+    vi.advanceTimersByTime(99);
+    expect(work).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(work).toHaveBeenCalledTimes(1);
+    expect(work).toHaveBeenCalledWith(5);
+
+    coalescer.request(5);
+    coalescer.cancel();
+    vi.advanceTimersByTime(100);
     expect(work).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
   });

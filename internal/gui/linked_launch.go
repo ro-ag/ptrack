@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/ro-ag/ptrack/internal/agentrun"
 	"github.com/ro-ag/ptrack/internal/association"
+	"github.com/ro-ag/ptrack/internal/gitinfo"
 	"github.com/ro-ag/ptrack/internal/launchcontext"
 	"github.com/ro-ag/ptrack/internal/store"
 	"github.com/ro-ag/ptrack/internal/terminal"
@@ -51,7 +53,9 @@ func (a *App) LaunchLinkedAgentV2(
 	if err != nil {
 		return TerminalSessionV2{}, err
 	}
-	canonicalCWD, err := resolveLinkedLaunchCWD(workspace.root, cwd)
+	canonicalCWD, err := a.resolveLinkedLaunchCWD(
+		workspace.Context(), workspace.root, cwd,
+	)
 	if err != nil {
 		return TerminalSessionV2{}, err
 	}
@@ -302,7 +306,11 @@ func installedAgentProfile(manager terminalManager, profileID string) (terminal.
 	return terminal.Profile{}, fmt.Errorf("installed agent profile %q is unavailable", profileID)
 }
 
-func resolveLinkedLaunchCWD(projectRoot, requested string) (string, error) {
+func (a *App) resolveLinkedLaunchCWD(
+	ctx context.Context,
+	projectRoot string,
+	requested string,
+) (string, error) {
 	if len(requested) > 4096 {
 		return "", errors.New("linked launch working directory is too long")
 	}
@@ -315,8 +323,17 @@ func resolveLinkedLaunchCWD(projectRoot, requested string) (string, error) {
 		return "", fmt.Errorf("canonicalize linked launch working directory: %w", err)
 	}
 	relative, err := filepath.Rel(projectRoot, canonical)
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return "", errors.New("linked launch working directory is outside the current project")
+	if err == nil && relative != ".." &&
+		!strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return filepath.Clean(canonical), nil
+	}
+	inspector := a.gitWorktrees
+	if inspector == nil {
+		inspector = gitinfo.Service{}
+	}
+	identity, inspectErr := inspector.InspectWorktree(ctx, projectRoot, canonical)
+	if inspectErr != nil || !pathInside(identity.Root, canonical) {
+		return "", errors.New("linked launch working directory is outside the current project or its existing worktrees")
 	}
 	return filepath.Clean(canonical), nil
 }

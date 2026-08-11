@@ -110,7 +110,8 @@ func currentRunEvents(run Run, events []Event) []Event {
 	ordered := make([]Event, 0, len(events))
 	for _, event := range events {
 		if event.ModelVersion != EventModelVersion || event.RunID != run.ID ||
-			event.Provider != run.Provider || event.HostSequence == 0 {
+			event.Provider != run.Provider || event.HostSequence == 0 ||
+			event.LifecycleRevision != run.LifecycleRevision {
 			continue
 		}
 		ordered = append(ordered, cloneEvent(event))

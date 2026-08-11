@@ -164,3 +164,68 @@ func TestProviderAdaptersFailClosed(t *testing.T) {
 		}
 	}
 }
+
+func TestProviderAdaptersNormalizeContentFreeNotifications(t *testing.T) {
+	tests := []struct {
+		typeName string
+		want     EventNotificationKind
+	}{
+		{typeName: "PermissionRequest", want: NotificationApprovalRequested},
+		{typeName: "question", want: NotificationQuestion},
+		{typeName: "turn.failed", want: NotificationFailure},
+		{typeName: "sessionend", want: NotificationCompletion},
+	}
+	for index, test := range tests {
+		observation, err := NormalizeProviderEvent("codex", ProviderEvent{
+			ModelVersion: ProviderEventModelVersion, ID: "notice-1",
+			Sequence: uint64(index + 1), Type: test.typeName,
+			Subject: "QUESTION_TEXT_CANARY", Paths: []string{"SECRET_PATH_CANARY"},
+			Summary: "PROMPT_OUTPUT_CREDENTIAL_CANARY", ErrorClass: "payload_failure",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if observation.Notification != test.want ||
+			observation.Subject != "" || len(observation.Paths) != 0 ||
+			observation.Summary != "" || observation.ErrorClass == "payload_failure" {
+			t.Fatalf("notification = %#v", observation)
+		}
+	}
+
+	if _, err := NormalizeProviderEvent("codex", ProviderEvent{
+		ModelVersion: ProviderEventModelVersion, ID: "unknown-1", Sequence: 1,
+		Type: "approval.granted",
+	}); err == nil {
+		t.Fatal("provider self-asserted an approval result")
+	}
+	exitCode := 2
+	failed, err := NormalizeProviderEvent("codex", ProviderEvent{
+		ModelVersion: ProviderEventModelVersion, ID: "failed-exit", Sequence: 1,
+		Type: "sessionend", ExitCode: &exitCode,
+	})
+	if err != nil || failed.Notification != NotificationFailure ||
+		failed.Phase != EventFailed || failed.Outcome != EventUnsuccessful {
+		t.Fatalf("nonzero completion = %#v err=%v", failed, err)
+	}
+	if _, err := NormalizeProviderEvent("codex", ProviderEvent{
+		ModelVersion: ProviderEventModelVersion, ID: "categorized-notice", Sequence: 1,
+		Type: "question", Category: "untrusted",
+	}); err == nil {
+		t.Fatal("notification bypassed provider category validation")
+	}
+	for _, test := range []struct {
+		eventType string
+		want      EventNotificationKind
+	}{
+		{eventType: "lifecycle.completed", want: NotificationCompletion},
+		{eventType: "lifecycle.failed", want: NotificationFailure},
+	} {
+		observation, err := NormalizeProviderEvent("future-wrapper", ProviderEvent{
+			ModelVersion: ProviderEventModelVersion, ID: "canonical-notice",
+			Sequence: 1, Type: test.eventType,
+		})
+		if err != nil || observation.Notification != test.want {
+			t.Fatalf("canonical %q = %#v err=%v", test.eventType, observation, err)
+		}
+	}
+}

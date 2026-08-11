@@ -80,6 +80,7 @@ func newWorkspaceCoordinator(
 		workspaceStatus:     WorkspaceWelcome,
 		emitTerminal:        emitter,
 		gitSnapshots:        gitinfo.Service{},
+		gitWorktrees:        gitinfo.Service{},
 		confirmationTTL:     time.Minute,
 		shutdownWaitTimeout: 3 * time.Second,
 		terminalAttachLease: 30 * time.Second,
@@ -204,6 +205,7 @@ func (a *App) OpenProject(path, confirmationToken string) (WorkspaceChangeResult
 	old := a.workspace
 	a.lastGeneration++
 	candidate.setGeneration(a.lastGeneration)
+	a.bindWorkspaceRuntimeNotifications(candidate)
 	if err := candidate.activate(); err != nil {
 		a.lastGeneration--
 		a.workspaceMu.Unlock()

@@ -436,6 +436,37 @@ func TestRegistryValidatesImmutableRegistration(t *testing.T) {
 	}
 }
 
+func TestRegistryAdmitsAdditionalCWDOnlyForHostLaunchedRuns(t *testing.T) {
+	validated := ""
+	registry := NewRegistry(Config{
+		ProjectRoot: "/project",
+		AdditionalCWDValidator: func(candidate string) bool {
+			validated = candidate
+			return candidate == "/sibling-worktree/subdir"
+		},
+	})
+	t.Cleanup(func() { _ = registry.Shutdown(context.Background()) })
+	if _, err := registry.RegisterExternal(Registration{
+		Profile: "external", Provider: "codex", CWD: "/sibling-worktree/subdir",
+	}); err == nil || validated != "" {
+		t.Fatalf("external registration reached host CWD admission: validator=%q err=%v", validated, err)
+	}
+	run, err := registry.RegisterLaunched(Registration{
+		Profile: "wrapper", Provider: "codex", CWD: "/sibling-worktree/subdir",
+		PID: 42, TerminalID: "terminal-1",
+	})
+	if err != nil || run.CWD != "/sibling-worktree/subdir" ||
+		validated != "/sibling-worktree/subdir" {
+		t.Fatalf("validated registration = %#v validator=%q err=%v", run, validated, err)
+	}
+	if _, err := registry.RegisterLaunched(Registration{
+		Profile: "wrapper", Provider: "codex", CWD: "/unrelated",
+		PID: 43, TerminalID: "terminal-2",
+	}); err == nil {
+		t.Fatal("unrelated launched CWD bypassed the host validator")
+	}
+}
+
 func TestRegistryAdmissionFenceBlocksNewRunsUntilReleased(t *testing.T) {
 	registry := NewRegistry(Config{ProjectRoot: "/project"})
 	t.Cleanup(func() { _ = registry.Shutdown(context.Background()) })

@@ -60,6 +60,7 @@ type App struct {
 	confirmationTTL   time.Duration
 	confirmationTimer *time.Timer
 	gitSnapshots      gitSnapshotter
+	gitWorktrees      gitWorktreeInspector
 }
 
 // Board is the complete snapshot rendered by the frontend.

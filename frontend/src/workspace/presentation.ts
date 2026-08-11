@@ -271,6 +271,470 @@ export function runtimeCountLabel(
   };
 }
 
+export const agentActivityStates = [
+  "running",
+  "waiting",
+  "blocked",
+  "completed",
+  "failed",
+  "stale",
+  "unknown",
+] as const;
+
+export type AgentActivityState = typeof agentActivityStates[number];
+
+export interface AgentActivityItemPresentation {
+  state?: unknown;
+  ownership?: unknown;
+  [key: string]: unknown;
+}
+
+export interface AgentActivitySectionPresentation {
+  items?: unknown;
+  bounds?: {
+    shown?: unknown;
+    total?: unknown;
+    more?: unknown;
+  };
+  conflicts?: unknown;
+  conflictBounds?: {
+    shown?: unknown;
+    total?: unknown;
+    more?: unknown;
+  };
+  analysisIncomplete?: unknown;
+  notifications?: unknown;
+  notificationBounds?: {
+    shown?: unknown;
+    total?: unknown;
+    more?: unknown;
+  };
+  notificationsIncomplete?: unknown;
+  handoffs?: unknown;
+  worktrees?: unknown;
+  worktreeBounds?: { more?: unknown };
+	worktreesIncomplete?: unknown;
+	workflows?: unknown;
+	workflowTargets?: unknown;
+	workflowTargetsIncomplete?: unknown;
+}
+
+// Keep the browser-side view bounded and explicit about omitted rows even if
+// it receives a partial or malformed snapshot during an app upgrade.
+export function agentActivityPresentation(
+  section: AgentActivitySectionPresentation | null | undefined,
+): {
+  items: Array<AgentActivityItemPresentation & { state: AgentActivityState }>;
+  counts: Array<{ state: AgentActivityState; count: number }>;
+  conflicts: Array<{
+    planId: number;
+    taskId: number;
+    agentCount: number;
+    ownerCount: number;
+    runIds: string[];
+  }>;
+  analysisIncomplete: boolean;
+  notifications: Array<{
+    id: string;
+    runId: string;
+    kind: "approvalRequested" | "question" | "failure" | "completion";
+    observedAt: string;
+    terminalBacked: boolean;
+    association?: unknown;
+  }>;
+  notificationsIncomplete: boolean;
+  handoffs: {
+    items: Array<{
+      id: string;
+      sourceRunId: string;
+      targetRunId: string;
+      createdAt: string;
+      expiresAt: string;
+      preview: { text: string; includedEventIds: string[]; truncated: boolean };
+    }>;
+    incomplete: boolean;
+  };
+  worktrees: Array<{ root: string; branch: string; head: string }>;
+	worktreesIncomplete: boolean;
+	workflows: {
+		items: Array<{
+			id: string;
+			runId: string;
+			kind: "validation" | "commit" | "pullRequest" | "merge";
+			state: "proposed" | "approved";
+			branch: string;
+			head: string;
+			targetBranch: string;
+			targetHead: string;
+			status: { staged: number; unstaged: number; untracked: number; conflicted: number; ahead: number; behind: number };
+		}>;
+		incomplete: boolean;
+	};
+	workflowTargets: string[];
+	workflowTargetsIncomplete: boolean;
+  compact: string;
+  detail: string;
+} {
+  const source = Array.isArray(section?.items) ? section.items.slice(0, 64) : [];
+  const items = source.flatMap((candidate) => {
+    const item = candidate && typeof candidate === "object"
+      ? candidate as AgentActivityItemPresentation
+      : {};
+    const runId = boundedPresentationID(item.runId);
+    if (!runId) return [];
+    const state = agentActivityStates.includes(item.state as AgentActivityState)
+      ? item.state as AgentActivityState
+      : "unknown";
+    const association = sanitizeRuntimeAssociation(item.association);
+    const ownership = sanitizeAgentOwnership(item.ownership);
+    const worktree = sanitizeAgentWorktree(item.worktree);
+    const registrationKind = ["launched", "external"].includes(String(item.registrationKind))
+      ? item.registrationKind as "launched" | "external"
+      : "";
+    const confidence = ["low", "medium", "high"].includes(String(item.confidence))
+      ? item.confidence as "low" | "medium" | "high"
+      : "";
+    const safeItem: AgentActivityItemPresentation & { state: AgentActivityState } = {
+      runId,
+      state,
+      ...(registrationKind ? { registrationKind } : {}),
+      ...(typeof item.terminalBacked === "boolean" ? { terminalBacked: item.terminalBacked } : {}),
+      ...(typeof item.terminalPresent === "boolean" ? { terminalPresent: item.terminalPresent } : {}),
+      ...(typeof item.correspondingTerminal === "boolean" ? { correspondingTerminal: item.correspondingTerminal } : {}),
+      ...(typeof item.live === "boolean" ? { live: item.live } : {}),
+      ...(association ? { association } : {}),
+      ...(confidence ? { confidence } : {}),
+      ...(Number.isFinite(Number(item.evidenceCount))
+        ? { evidenceCount: nonnegativeInteger(item.evidenceCount) }
+        : {}),
+      ...(Number.isFinite(Number(item.eventCount))
+        ? { eventCount: nonnegativeInteger(item.eventCount) }
+        : {}),
+      ...(boundedPresentationTimestamp(item.lastEventAt)
+        ? { lastEventAt: boundedPresentationTimestamp(item.lastEventAt) }
+        : {}),
+      ...(ownership ? { ownership } : {}),
+      ...(worktree ? { worktree } : {}),
+    };
+    return [safeItem];
+  });
+  const counts = agentActivityStates
+    .map((state) => ({
+      state,
+      count: items.filter((item) => item.state === state).length,
+    }))
+    .filter(({ count }) => count > 0);
+  const rawTotal = Number(section?.bounds?.total);
+  const total = Number.isFinite(rawTotal)
+    ? Math.max(items.length, Math.trunc(rawTotal))
+    : items.length;
+  const omitted = Math.max(0, total - items.length);
+  const conflictSource = Array.isArray(section?.conflicts)
+    ? section.conflicts.slice(0, 64)
+    : [];
+  const conflicts = conflictSource.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object") return [];
+    const value = candidate as Record<string, unknown>;
+    const planId = Math.trunc(Number(value.planId));
+    const taskId = Math.trunc(Number(value.taskId));
+    const agentCount = Math.max(0, Math.trunc(Number(value.agentCount)) || 0);
+    const ownerCount = Math.min(
+      agentCount,
+      Math.max(0, Math.trunc(Number(value.ownerCount)) || 0),
+    );
+    if (planId <= 0 || taskId <= 0 || agentCount < 2) return [];
+    const runIds = Array.isArray(value.runIds)
+      ? value.runIds.filter((runId): runId is string => typeof runId === "string").slice(0, 16)
+      : [];
+    return [{ planId, taskId, agentCount, ownerCount, runIds }];
+  });
+  const notificationKinds = [
+    "approvalRequested", "question", "failure", "completion",
+  ] as const;
+  const notificationSource = Array.isArray(section?.notifications)
+    ? section.notifications.slice(0, 64)
+    : [];
+  const notifications = notificationSource.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object") return [];
+    const value = candidate as Record<string, unknown>;
+    const id = boundedPresentationID(value.id);
+    const runId = boundedPresentationID(value.runId);
+    const observedAt = boundedPresentationTimestamp(value.observedAt);
+    const association = sanitizeRuntimeAssociation(value.association);
+    if (!id || !runId || !observedAt ||
+      !notificationKinds.includes(value.kind as typeof notificationKinds[number])) return [];
+    return [{
+      id,
+      runId,
+      kind: value.kind as typeof notificationKinds[number],
+      observedAt,
+      terminalBacked: value.terminalBacked === true,
+      ...(association ? { association } : {}),
+    }];
+  });
+  const handoffSection = section?.handoffs && typeof section.handoffs === "object"
+    ? section.handoffs as Record<string, unknown>
+    : {};
+  const handoffSource = Array.isArray(handoffSection.items)
+    ? handoffSection.items.slice(0, 64)
+    : [];
+  const handoffItems = handoffSource.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object") return [];
+    const value = candidate as Record<string, unknown>;
+    const preview = value.preview && typeof value.preview === "object"
+      ? value.preview as Record<string, unknown>
+      : {};
+    const text = typeof preview.text === "string" ? preview.text : "";
+    if (typeof value.id !== "string" || typeof value.sourceRunId !== "string" ||
+      typeof value.targetRunId !== "string" || value.sourceRunId === value.targetRunId ||
+      typeof value.createdAt !== "string" || typeof value.expiresAt !== "string" ||
+      text.length === 0 || new TextEncoder().encode(text).length > 2048) return [];
+    const includedEventIds = Array.isArray(preview.includedEventIds)
+      ? preview.includedEventIds.filter((id): id is string => typeof id === "string").slice(0, 8)
+      : [];
+    return [{
+      id: value.id,
+      sourceRunId: value.sourceRunId,
+      targetRunId: value.targetRunId,
+      createdAt: value.createdAt,
+      expiresAt: value.expiresAt,
+      preview: { text, includedEventIds, truncated: preview.truncated === true },
+    }];
+  });
+  const worktreeSource = Array.isArray(section?.worktrees)
+    ? section.worktrees.slice(0, 64)
+    : [];
+	const worktrees = worktreeSource.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object") return [];
+    const value = candidate as Record<string, unknown>;
+    const root = boundedWorktreeRoot(value.root);
+    const branch = typeof value.branch === "string" && value.branch.length <= 512
+      ? value.branch
+      : "";
+    const head = normalizedWorktreeHead(value.head);
+    return root && head ? [{ root, branch, head }] : [];
+	});
+	const workflowSection = section?.workflows && typeof section.workflows === "object"
+		? section.workflows as Record<string, unknown>
+		: {};
+	const workflowKinds = ["validation", "commit", "pullRequest", "merge"] as const;
+	const workflowStates = ["proposed", "approved"] as const;
+	const workflowItems = (Array.isArray(workflowSection.items) ? workflowSection.items : [])
+		.slice(0, 64)
+		.flatMap((candidate) => {
+			if (!candidate || typeof candidate !== "object") return [];
+			const value = candidate as Record<string, unknown>;
+			const kind = value.kind as typeof workflowKinds[number];
+			const state = value.state as typeof workflowStates[number];
+			const head = typeof value.head === "string" && /^[0-9a-f]{40}([0-9a-f]{24})?$/i.test(value.head)
+				? value.head.toLowerCase()
+				: "";
+			const branch = typeof value.branch === "string" && value.branch.length > 0 && value.branch.length <= 512
+				? value.branch
+				: "";
+			const targetBranch = typeof value.targetBranch === "string" && value.targetBranch.length <= 512
+				? value.targetBranch
+				: "";
+			const targetHead = typeof value.targetHead === "string" && /^[0-9a-f]{40}([0-9a-f]{24})?$/i.test(value.targetHead)
+				? value.targetHead.toLowerCase()
+				: "";
+			if (typeof value.id !== "string" || typeof value.runId !== "string" ||
+				!workflowKinds.includes(kind) || !workflowStates.includes(state) || !head || !branch ||
+				(["pullRequest", "merge"].includes(kind) && (!targetBranch || !targetHead)) ||
+				(["validation", "commit"].includes(kind) && (targetBranch || targetHead))) return [];
+			const rawStatus = value.status && typeof value.status === "object"
+				? value.status as Record<string, unknown>
+				: {};
+			const count = (name: string) => Math.max(0, Math.trunc(Number(rawStatus[name])) || 0);
+			return [{
+				id: value.id, runId: value.runId, kind, state, branch, head, targetBranch, targetHead,
+				status: {
+					staged: count("staged"), unstaged: count("unstaged"),
+					untracked: count("untracked"), conflicted: count("conflicted"),
+					ahead: count("ahead"), behind: count("behind"),
+				},
+			}];
+		});
+	const workflowTargets = Array.isArray(section?.workflowTargets)
+		? section.workflowTargets.filter((target): target is string =>
+			typeof target === "string" && target.length > 0 && target.length <= 512 && !/[\r\n\0]/.test(target)
+		).slice(0, 100)
+		: [];
+  return {
+    items,
+    counts,
+    conflicts,
+    analysisIncomplete: section?.analysisIncomplete === true ||
+      Number(section?.conflictBounds?.more || 0) > 0,
+    notifications,
+    notificationsIncomplete: section?.notificationsIncomplete === true ||
+      Number(section?.notificationBounds?.more || 0) > 0,
+    handoffs: {
+      items: handoffItems,
+      incomplete: handoffSection.incomplete === true ||
+        Number((handoffSection.bounds as Record<string, unknown> | undefined)?.more || 0) > 0,
+    },
+    worktrees,
+		worktreesIncomplete: section?.worktreesIncomplete === true ||
+			Number(section?.worktreeBounds?.more || 0) > 0,
+		workflows: {
+			items: workflowItems,
+			incomplete: workflowSection.incomplete === true ||
+				Number((workflowSection.bounds as Record<string, unknown> | undefined)?.more || 0) > 0,
+		},
+		workflowTargets,
+		workflowTargetsIncomplete: section?.workflowTargetsIncomplete === true,
+    compact: omitted ? `${items.length}/${total}` : String(total),
+    detail: `${total} registered agent${total === 1 ? "" : "s"}` +
+      (omitted ? ` · ${omitted} older entr${omitted === 1 ? "y" : "ies"} omitted` : ""),
+  };
+}
+
+export function agentActivityAnnouncement(
+  activity: {
+    items: ReadonlyArray<{ runId?: unknown; state?: unknown; [key: string]: unknown }>;
+    notifications: ReadonlyArray<{ id?: unknown }>;
+  },
+  previousKey = "",
+): { key: string; text: string } | null {
+  const states = activity.items.flatMap((item) => {
+    const runId = boundedPresentationID(item.runId);
+    const state = agentActivityStates.includes(item.state as AgentActivityState)
+      ? item.state as AgentActivityState
+      : "unknown";
+    return runId ? [`${runId}:${state}`] : [];
+  }).sort();
+  const notificationIDs = activity.notifications
+    .flatMap((item) => {
+      const id = boundedPresentationID(item.id);
+      return id ? [id] : [];
+    })
+    .sort();
+  const key = JSON.stringify([states, notificationIDs]);
+  if (key === previousKey) return null;
+
+  const counts = agentActivityStates.flatMap((state) => {
+    const count = states.filter((entry) => entry.endsWith(`:${state}`)).length;
+    return count ? [`${count} ${state}`] : [];
+  });
+  const stateText = counts.length ? counts.join(", ") : "no registered agents";
+  const notificationText = notificationIDs.length
+    ? ` ${notificationIDs.length} structured notification${notificationIDs.length === 1 ? "" : "s"}.`
+    : " No structured notifications.";
+  return { key, text: `Agent activity updated: ${stateText}.${notificationText}` };
+}
+
+export function workflowMutationFocusKey(
+  action: "approve" | "dismiss",
+  proposalID: unknown,
+): string {
+  const id = boundedPresentationID(proposalID);
+  return id ? `workflow:${action}:${id}` : "";
+}
+
+export function mutationFocusFallback(
+  focusKey: string,
+): "workflowPrepare" | "handoffSend" | "" {
+  if (focusKey.startsWith("workflow:approve:") ||
+    focusKey.startsWith("workflow:dismiss:")) return "workflowPrepare";
+  if (focusKey.startsWith("handoff:")) return "handoffSend";
+  return "";
+}
+
+export function worktreeSelectionForRerender(
+  options: ReadonlyArray<string>,
+  confirmed: unknown,
+  focusedSelection?: { runId?: unknown; value?: unknown } | null,
+  runID?: unknown,
+): string {
+  const available = options.filter((option) => typeof option === "string" && option.length > 0);
+  const confirmedValue = typeof confirmed === "string" && available.includes(confirmed)
+    ? confirmed
+    : available[0] || "";
+  const currentRunID = boundedPresentationID(runID);
+  const focusedRunID = boundedPresentationID(focusedSelection?.runId);
+  const focusedValue = typeof focusedSelection?.value === "string"
+    ? focusedSelection.value
+    : "";
+  return currentRunID && focusedRunID === currentRunID && available.includes(focusedValue)
+    ? focusedValue
+    : confirmedValue;
+}
+
+function boundedWorktreeRoot(value: unknown): string {
+  return typeof value === "string" && value.length > 0 && value.length <= 4096
+    ? value
+    : "";
+}
+
+function boundedPresentationID(value: unknown): string {
+  return typeof value === "string" && value.length > 0 && value.length <= 512 &&
+    !/[\0\r\n]/.test(value)
+    ? value
+    : "";
+}
+
+function boundedPresentationTimestamp(value: unknown): string {
+  return typeof value === "string" && value.length > 0 && value.length <= 64 &&
+    !/[\0\r\n]/.test(value)
+    ? value
+    : "";
+}
+
+function nonnegativeInteger(value: unknown): number {
+  return Math.max(0, Math.trunc(Number(value)) || 0);
+}
+
+function sanitizeRuntimeAssociation(value: unknown): unknown | null {
+  if (!value || typeof value !== "object") return null;
+  const association = value as Record<string, unknown>;
+  const planId = nonnegativeInteger(association.planId);
+  const taskId = nonnegativeInteger(association.taskId);
+  const revision = nonnegativeInteger(association.revision);
+  if (revision <= 0 || (planId <= 0 && taskId <= 0)) return null;
+  return { planId, taskId, revision };
+}
+
+function sanitizeAgentOwnership(value: unknown): unknown | null {
+  if (!value || typeof value !== "object") return null;
+  const ownership = value as Record<string, unknown>;
+  const planId = nonnegativeInteger(ownership.planId);
+  const taskId = nonnegativeInteger(ownership.taskId);
+  const associationRevision = nonnegativeInteger(ownership.associationRevision);
+  if (planId <= 0 || taskId <= 0 || associationRevision <= 0) return null;
+  return { planId, taskId, associationRevision };
+}
+
+function normalizedWorktreeHead(value: unknown): string {
+  return typeof value === "string" && /^[0-9a-f]{40}([0-9a-f]{24})?$/i.test(value)
+    ? value.toLowerCase()
+    : "";
+}
+
+function sanitizeAgentWorktree(value: unknown): unknown | null {
+  if (!value || typeof value !== "object") return null;
+  const worktree = value as Record<string, unknown>;
+  const identity = worktree.identity && typeof worktree.identity === "object"
+    ? worktree.identity as Record<string, unknown>
+    : {};
+  const root = boundedWorktreeRoot(identity.root);
+  const head = normalizedWorktreeHead(identity.head);
+  if (worktree.verified !== true || !root || !head) return null;
+  return {
+    identity: {
+      root,
+      branch: typeof identity.branch === "string" && identity.branch.length <= 512
+        ? identity.branch
+        : "",
+      head,
+      linked: identity.linked === true,
+    },
+    verified: true,
+    isolated: worktree.isolated === true,
+    cwdMatches: worktree.cwdMatches === true,
+  };
+}
+
 export function runtimeEventIsCurrent(
   eventGeneration: unknown,
   currentGeneration: number,
@@ -279,6 +743,70 @@ export function runtimeEventIsCurrent(
   return workspaceOpen && Number.isSafeInteger(Number(eventGeneration)) &&
     Number(eventGeneration) > 0 &&
     Number(eventGeneration) === currentGeneration;
+}
+
+const driftKinds = [
+  "checkoutChangedPath",
+  "untrackedFile",
+  "unlinkedCommit",
+  "crossTaskPathOverlap",
+  "taskDriftSignal",
+] as const;
+
+export function driftPresentation(section: unknown): {
+  findings: Array<{
+    kind: typeof driftKinds[number];
+    severity: "info" | "warning";
+    scope: "projectUnattributed" | "agent" | "taskComparison";
+    path: string;
+    sha: string;
+    runIds: string[];
+    evidenceCount: number;
+  }>;
+  incomplete: boolean;
+} {
+  const value = section && typeof section === "object"
+    ? section as Record<string, unknown>
+    : {};
+  const source = Array.isArray(value.findings) ? value.findings.slice(0, 64) : [];
+  const findings = source.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object") return [];
+    const finding = candidate as Record<string, unknown>;
+    const kind = finding.kind as typeof driftKinds[number];
+    const severity = finding.severity;
+    const scope = finding.scope;
+    if (!driftKinds.includes(kind) || !["info", "warning"].includes(String(severity)) ||
+      !["projectUnattributed", "agent", "taskComparison"].includes(String(scope))) return [];
+    const path = typeof finding.path === "string" && !finding.path.startsWith("/") &&
+      finding.path !== ".." && !finding.path.startsWith("../") &&
+      !finding.path.includes("/../") && finding.path.length <= 512
+      ? finding.path
+      : "";
+    const sha = typeof finding.sha === "string" && /^[0-9a-f]{7,64}$/i.test(finding.sha)
+      ? finding.sha.toLowerCase()
+      : "";
+    if (["checkoutChangedPath", "untrackedFile", "crossTaskPathOverlap"].includes(kind) && !path) return [];
+    if (kind === "unlinkedCommit" && !sha) return [];
+    const runIds = Array.isArray(finding.runIds)
+      ? finding.runIds.filter((id): id is string => typeof id === "string").slice(0, 16)
+      : [];
+    return [{
+      kind,
+      severity: severity as "info" | "warning",
+      scope: scope as "projectUnattributed" | "agent" | "taskComparison",
+      path,
+      sha,
+      runIds,
+      evidenceCount: Math.max(0, Math.trunc(Number(finding.evidenceCount)) || 0),
+    }];
+  });
+  const bounds = value.bounds && typeof value.bounds === "object"
+    ? value.bounds as Record<string, unknown>
+    : {};
+  return {
+    findings,
+    incomplete: value.incomplete === true || Number(bounds.more || 0) > 0,
+  };
 }
 
 // commandShortcut routes primary-modifier (⌘/Ctrl) chords. "palette" is

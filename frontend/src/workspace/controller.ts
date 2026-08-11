@@ -82,6 +82,39 @@ export class RefreshLoop {
   }
 }
 
+// RuntimeRefreshCoalescer bounds host runtime-event bursts to one trailing
+// workspace refresh per interval. The latest generation is retained so a
+// project transition can still fence the callback when it runs.
+export class RuntimeRefreshCoalescer {
+  readonly #work: (generation: number) => void;
+  readonly #delayMilliseconds: number;
+  #timer: ReturnType<typeof setTimeout> | null = null;
+  #generation = 0;
+
+  constructor(work: (generation: number) => void, delayMilliseconds = 150) {
+    this.#work = work;
+    this.#delayMilliseconds = Math.max(1, Math.trunc(delayMilliseconds));
+  }
+
+  request(generation: number): void {
+    if (!Number.isFinite(generation) || generation <= 0) return;
+    this.#generation = Math.trunc(generation);
+    if (this.#timer !== null) return;
+    this.#timer = setTimeout(() => {
+      this.#timer = null;
+      const current = this.#generation;
+      this.#generation = 0;
+      this.#work(current);
+    }, this.#delayMilliseconds);
+  }
+
+  cancel(): void {
+    if (this.#timer !== null) clearTimeout(this.#timer);
+    this.#timer = null;
+    this.#generation = 0;
+  }
+}
+
 export class RefreshGate {
   #running = false;
   #queued = false;

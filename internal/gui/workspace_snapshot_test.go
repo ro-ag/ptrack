@@ -56,8 +56,12 @@ func TestWorkspaceSnapshotCombinesBoundedProjectIntelligence(t *testing.T) {
 		t.Fatalf("git snapshot = %#v", snapshot.Git)
 	}
 	if snapshot.Terminals.State != SnapshotReady ||
-		snapshot.AgentRuns.State != SnapshotReady {
+		snapshot.AgentRuns.State != SnapshotReady ||
+		snapshot.AgentActivity.State != SnapshotReady {
 		t.Fatalf("runtime sections = terminals %#v agents %#v", snapshot.Terminals, snapshot.AgentRuns)
+	}
+	if snapshot.AgentActivity.Bounds != snapshot.AgentRuns.Bounds {
+		t.Fatalf("agent activity bounds = %#v, runs = %#v", snapshot.AgentActivity.Bounds, snapshot.AgentRuns.Bounds)
 	}
 }
 

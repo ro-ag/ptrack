@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	maxGitCommands       = 8
+	maxGitCommands       = 9
 	maxAggregateGitBytes = 12 * 1024 * 1024
 	maxRemotes           = 16
 	maxLocalBranches     = 100
@@ -75,20 +75,25 @@ type Divergence struct {
 }
 
 type Snapshot struct {
-	State             RepositoryState `json:"state"`
-	Root              string          `json:"root"`
-	GitDir            string          `json:"gitDir"`
-	CommonGitDir      string          `json:"commonGitDir"`
-	Bare              bool            `json:"bare"`
-	LinkedWorktree    bool            `json:"linkedWorktree"`
-	Status            Status          `json:"status"`
-	Remotes           []Remote        `json:"remotes"`
-	LocalBranches     []Branch        `json:"localBranches"`
-	RemoteBranches    []Branch        `json:"remoteBranches"`
-	RecentCommits     []Commit        `json:"recentCommits"`
-	UnpushedCommits   []Commit        `json:"unpushedCommits"`
-	Divergence        *Divergence     `json:"divergence,omitempty"`
-	StaleBranchPolicy string          `json:"staleBranchPolicy"`
+	State                    RepositoryState    `json:"state"`
+	Root                     string             `json:"root"`
+	GitDir                   string             `json:"gitDir"`
+	CommonGitDir             string             `json:"commonGitDir"`
+	Bare                     bool               `json:"bare"`
+	LinkedWorktree           bool               `json:"linkedWorktree"`
+	Status                   Status             `json:"status"`
+	Remotes                  []Remote           `json:"remotes"`
+	LocalBranches            []Branch           `json:"localBranches"`
+	RemoteBranches           []Branch           `json:"remoteBranches"`
+	RecentCommits            []Commit           `json:"recentCommits"`
+	UnpushedCommits          []Commit           `json:"unpushedCommits"`
+	RecentCommitsTruncated   bool               `json:"recentCommitsTruncated"`
+	UnpushedCommitsTruncated bool               `json:"unpushedCommitsTruncated"`
+	Worktrees                []ExistingWorktree `json:"worktrees"`
+	WorktreeBounds           WorktreeBounds     `json:"worktreeBounds"`
+	WorktreesIncomplete      bool               `json:"worktreesIncomplete"`
+	Divergence               *Divergence        `json:"divergence,omitempty"`
+	StaleBranchPolicy        string             `json:"staleBranchPolicy"`
 }
 
 type Service struct {
@@ -151,6 +156,18 @@ func (s Service) Capture(ctx context.Context, root string) (Snapshot, error) {
 	snapshot, err := parseRepositoryIdentity(identity)
 	if err != nil {
 		return Snapshot{}, err
+	}
+	worktreeOutput, worktreeErr := run("worktree", "list", "--porcelain", "-z")
+	if worktreeErr == nil {
+		snapshot.Worktrees, snapshot.WorktreeBounds, err = parseWorktreeList(worktreeOutput)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		snapshot.WorktreesIncomplete = snapshot.WorktreeBounds.More > 0
+	} else if errors.Is(worktreeErr, ErrCommandFailed) {
+		snapshot.WorktreesIncomplete = true
+	} else {
+		return Snapshot{}, worktreeErr
 	}
 
 	statusOutput, err := run(
@@ -222,15 +239,19 @@ func (s Service) Capture(ctx context.Context, root string) (Snapshot, error) {
 
 	logOutput, err := run(
 		"log",
-		"-n", strconv.Itoa(maxRecentCommits),
+		"-n", strconv.Itoa(maxRecentCommits+1),
 		"--date=unix",
 		"--format=%x1e%H%x1f%an%x1f%ae%x1f%at%x1f%s%x1f%D",
 		"--name-only",
 	)
 	if err == nil {
-		snapshot.RecentCommits, err = parseLog(logOutput, maxRecentCommits)
+		snapshot.RecentCommits, err = parseLog(logOutput, maxRecentCommits+1)
 		if err != nil {
 			return Snapshot{}, err
+		}
+		if len(snapshot.RecentCommits) > maxRecentCommits {
+			snapshot.RecentCommits = snapshot.RecentCommits[:maxRecentCommits]
+			snapshot.RecentCommitsTruncated = true
 		}
 	} else if !errors.Is(err, ErrCommandFailed) {
 		return Snapshot{}, err
@@ -255,16 +276,20 @@ func (s Service) Capture(ctx context.Context, root string) (Snapshot, error) {
 		}
 		unpushedOutput, unpushedErr := run(
 			"log",
-			"-n", strconv.Itoa(maxUnpushedCommits),
+			"-n", strconv.Itoa(maxUnpushedCommits+1),
 			"--date=unix",
 			"--format=%x1e%H%x1f%an%x1f%ae%x1f%at%x1f%s%x1f%D",
 			"--name-only",
 			snapshot.Status.Upstream+"..HEAD",
 		)
 		if unpushedErr == nil {
-			snapshot.UnpushedCommits, err = parseLog(unpushedOutput, maxUnpushedCommits)
+			snapshot.UnpushedCommits, err = parseLog(unpushedOutput, maxUnpushedCommits+1)
 			if err != nil {
 				return Snapshot{}, err
+			}
+			if len(snapshot.UnpushedCommits) > maxUnpushedCommits {
+				snapshot.UnpushedCommits = snapshot.UnpushedCommits[:maxUnpushedCommits]
+				snapshot.UnpushedCommitsTruncated = true
 			}
 		} else if !errors.Is(unpushedErr, ErrCommandFailed) {
 			return Snapshot{}, unpushedErr

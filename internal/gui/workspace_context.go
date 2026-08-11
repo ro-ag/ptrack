@@ -59,6 +59,12 @@ type WorkspaceContext struct {
 	// managers and must never expose a half-updated linked pair.
 	associationMu   sync.Mutex
 	taskTransitions *taskTransitionChallengeRegistry
+	ownershipMu     sync.Mutex
+	agentOwnership  map[string]agentTaskOwnershipClaim
+	worktreeMu      sync.Mutex
+	agentWorktrees  map[string]agentWorktreeClaim
+	handoffs        *agentHandoffRegistry
+	workflows       *agentWorkflowRegistry
 
 	mu                 sync.Mutex
 	closing            bool
@@ -102,6 +108,10 @@ func newWorkspaceContext(config workspaceContextConfig) *WorkspaceContext {
 		closeDone:        make(chan struct{}),
 		terminalSessions: make(map[string]TerminalSession),
 		taskTransitions:  newTaskTransitionChallengeRegistry(nil),
+		agentOwnership:   make(map[string]agentTaskOwnershipClaim),
+		agentWorktrees:   make(map[string]agentWorktreeClaim),
+		handoffs:         newAgentHandoffRegistry(nil),
+		workflows:        newAgentWorkflowRegistry(nil),
 	}
 }
 

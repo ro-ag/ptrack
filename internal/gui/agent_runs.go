@@ -7,6 +7,7 @@ import (
 
 	"github.com/ro-ag/ptrack/internal/agentrun"
 	"github.com/ro-ag/ptrack/internal/association"
+	"github.com/ro-ag/ptrack/internal/gitinfo"
 )
 
 type workspaceAgentRegistry interface {
@@ -44,10 +45,11 @@ type workspaceAgentRegistry interface {
 }
 
 type workspaceAgentResources struct {
-	registry    *agentrun.Registry
-	globalHome  string
-	root        string
-	integration *agentrun.IntegrationServer
+	registry       *agentrun.Registry
+	globalHome     string
+	root           string
+	integration    *agentrun.IntegrationServer
+	runtimeChanged func()
 }
 
 func newWorkspaceAgentResources(
@@ -64,11 +66,21 @@ func newWorkspaceAgentResources(
 	}
 	return &workspaceAgentResources{
 		registry: agentrun.NewRegistry(agentrun.Config{
-			ProjectRoot: root,
-			StatePath:   statePath,
+			ProjectRoot:            root,
+			StatePath:              statePath,
+			AdditionalCWDValidator: existingWorktreeCWDValidator(root),
 		}),
 		globalHome: globalHome,
 		root:       root,
+	}
+}
+
+func existingWorktreeCWDValidator(projectRoot string) func(string) bool {
+	return func(candidate string) bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		identity, err := (gitinfo.Service{}).InspectWorktree(ctx, projectRoot, candidate)
+		return err == nil && pathInside(identity.Root, candidate)
 	}
 }
 
@@ -77,15 +89,29 @@ func (r *workspaceAgentResources) Activate(generation uint64) error {
 		return nil
 	}
 	server, err := agentrun.StartIntegrationServer(r.registry, agentrun.IntegrationConfig{
-		GlobalHome:  r.globalHome,
-		ProjectRoot: r.root,
-		Generation:  generation,
+		GlobalHome:     r.globalHome,
+		ProjectRoot:    r.root,
+		Generation:     generation,
+		RuntimeChanged: r.runtimeChanged,
 	})
 	if err != nil {
 		return err
 	}
 	r.integration = server
 	return nil
+}
+
+func (a *App) bindWorkspaceRuntimeNotifications(workspace *WorkspaceContext) {
+	if workspace == nil {
+		return
+	}
+	resources, ok := workspace.agents.(*workspaceAgentResources)
+	if !ok {
+		return
+	}
+	resources.runtimeChanged = func() {
+		a.publishWorkspaceRuntimeChanged(workspace)
+	}
 }
 
 func (r *workspaceAgentResources) AgentEventEndpoint() string {

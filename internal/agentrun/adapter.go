@@ -32,10 +32,11 @@ type ProviderEvent struct {
 }
 
 type adapterMapping struct {
-	kind       EventKind
-	phase      EventPhase
-	outcome    EventOutcome
-	errorClass string
+	kind         EventKind
+	phase        EventPhase
+	outcome      EventOutcome
+	errorClass   string
+	notification EventNotificationKind
 }
 
 var providerEventAliases = map[string]map[string]adapterMapping{
@@ -43,45 +44,53 @@ var providerEventAliases = map[string]map[string]adapterMapping{
 		"sessionstart":       {kind: EventLifecycle, phase: EventStarted},
 		"turn.started":       {kind: EventLifecycle, phase: EventProgress},
 		"turn.completed":     {kind: EventLifecycle, phase: EventWaiting},
-		"turn.failed":        {kind: EventError, phase: EventFailed, outcome: EventUnsuccessful},
+		"turn.failed":        {kind: EventError, phase: EventFailed, outcome: EventUnsuccessful, notification: NotificationFailure},
 		"pretooluse":         {kind: EventTool, phase: EventStarted},
 		"posttooluse":        {kind: EventTool, phase: EventCompleted, outcome: EventSucceeded},
 		"posttoolusefailure": {kind: EventTool, phase: EventFailed, outcome: EventUnsuccessful},
-		"permissionrequest":  {kind: EventLifecycle, phase: EventWaiting},
+		"permissionrequest":  {kind: EventLifecycle, phase: EventWaiting, notification: NotificationApprovalRequested},
+		"question":           {kind: EventLifecycle, phase: EventWaiting, notification: NotificationQuestion},
 		"stop":               {kind: EventLifecycle, phase: EventWaiting},
-		"sessionend":         {kind: EventLifecycle, phase: EventCompleted, outcome: EventSucceeded},
+		"sessionend":         {kind: EventLifecycle, phase: EventCompleted, outcome: EventSucceeded, notification: NotificationCompletion},
 	},
 	"claude": {
 		"sessionstart":       {kind: EventLifecycle, phase: EventStarted},
 		"pretooluse":         {kind: EventTool, phase: EventStarted},
 		"posttooluse":        {kind: EventTool, phase: EventCompleted, outcome: EventSucceeded},
 		"posttoolusefailure": {kind: EventTool, phase: EventFailed, outcome: EventUnsuccessful},
-		"permissionrequest":  {kind: EventLifecycle, phase: EventWaiting},
+		"permissionrequest":  {kind: EventLifecycle, phase: EventWaiting, notification: NotificationApprovalRequested},
+		"question":           {kind: EventLifecycle, phase: EventWaiting, notification: NotificationQuestion},
 		"stop":               {kind: EventLifecycle, phase: EventWaiting},
-		"sessionend":         {kind: EventLifecycle, phase: EventCompleted, outcome: EventSucceeded},
+		"sessionend":         {kind: EventLifecycle, phase: EventCompleted, outcome: EventSucceeded, notification: NotificationCompletion},
 	},
 	"gemini": {
 		"sessionstart":      {kind: EventLifecycle, phase: EventStarted},
 		"beforetool":        {kind: EventTool, phase: EventStarted},
 		"aftertool":         {kind: EventTool, phase: EventCompleted, outcome: EventSucceeded},
 		"notification":      {kind: EventLifecycle, phase: EventProgress},
-		"permissionrequest": {kind: EventLifecycle, phase: EventWaiting},
-		"sessionend":        {kind: EventLifecycle, phase: EventCompleted, outcome: EventSucceeded},
+		"permissionrequest": {kind: EventLifecycle, phase: EventWaiting, notification: NotificationApprovalRequested},
+		"question":          {kind: EventLifecycle, phase: EventWaiting, notification: NotificationQuestion},
+		"sessionend":        {kind: EventLifecycle, phase: EventCompleted, outcome: EventSucceeded, notification: NotificationCompletion},
 	},
 	"agy": {
-		"session.started":   {kind: EventLifecycle, phase: EventStarted},
-		"session.waiting":   {kind: EventLifecycle, phase: EventWaiting},
-		"session.completed": {kind: EventLifecycle, phase: EventCompleted, outcome: EventSucceeded},
-		"session.failed":    {kind: EventLifecycle, phase: EventFailed, outcome: EventUnsuccessful},
+		"session.started":      {kind: EventLifecycle, phase: EventStarted},
+		"session.waiting":      {kind: EventLifecycle, phase: EventWaiting},
+		"session.completed":    {kind: EventLifecycle, phase: EventCompleted, outcome: EventSucceeded, notification: NotificationCompletion},
+		"session.failed":       {kind: EventLifecycle, phase: EventFailed, outcome: EventUnsuccessful, notification: NotificationFailure},
+		"session.question":     {kind: EventLifecycle, phase: EventWaiting, notification: NotificationQuestion},
+		"permission.requested": {kind: EventLifecycle, phase: EventWaiting, notification: NotificationApprovalRequested},
 	},
 	"opencode": {
-		"session.created":     {kind: EventLifecycle, phase: EventStarted},
-		"session.idle":        {kind: EventLifecycle, phase: EventWaiting},
-		"session.error":       {kind: EventError, phase: EventFailed, outcome: EventUnsuccessful, errorClass: "session_failure"},
-		"tool.execute.before": {kind: EventTool, phase: EventStarted},
-		"tool.execute.after":  {kind: EventTool, phase: EventCompleted, outcome: EventSucceeded},
-		"file.edited":         {kind: EventFile, phase: EventCompleted, outcome: EventSucceeded},
-		"command.executed":    {kind: EventCommand, phase: EventCompleted, outcome: EventSucceeded},
+		"session.created":      {kind: EventLifecycle, phase: EventStarted},
+		"session.idle":         {kind: EventLifecycle, phase: EventWaiting},
+		"session.error":        {kind: EventError, phase: EventFailed, outcome: EventUnsuccessful, errorClass: "session_failure", notification: NotificationFailure},
+		"session.completed":    {kind: EventLifecycle, phase: EventCompleted, outcome: EventSucceeded, notification: NotificationCompletion},
+		"session.question":     {kind: EventLifecycle, phase: EventWaiting, notification: NotificationQuestion},
+		"permission.requested": {kind: EventLifecycle, phase: EventWaiting, notification: NotificationApprovalRequested},
+		"tool.execute.before":  {kind: EventTool, phase: EventStarted},
+		"tool.execute.after":   {kind: EventTool, phase: EventCompleted, outcome: EventSucceeded},
+		"file.edited":          {kind: EventFile, phase: EventCompleted, outcome: EventSucceeded},
+		"command.executed":     {kind: EventCommand, phase: EventCompleted, outcome: EventSucceeded},
 	},
 }
 
@@ -130,9 +139,6 @@ func NormalizeProviderEvent(provider string, input ProviderEvent) (EventObservat
 			}
 		}
 	}
-	if !mapped {
-		return EventObservation{}, errors.New("unsupported provider event type")
-	}
 	if input.Category != "" && !(provider == "codex" && strings.HasPrefix(strings.ToLower(eventType), "item.")) {
 		return EventObservation{}, errors.New("provider event category is not allowed for this type")
 	}
@@ -140,6 +146,21 @@ func NormalizeProviderEvent(provider string, input ProviderEvent) (EventObservat
 		(mapping.kind == EventLifecycle || mapping.kind == EventCommand || mapping.kind == EventTest) {
 		mapping.phase = EventFailed
 		mapping.outcome = EventUnsuccessful
+		if mapping.notification != "" {
+			mapping.notification = NotificationFailure
+		}
+	}
+	if mapping.notification != "" {
+		return EventObservation{
+			ModelVersion: EventModelVersion, SourceID: input.ID,
+			SourceSequence: input.Sequence, Kind: mapping.kind, Phase: mapping.phase,
+			Outcome: mapping.outcome, ErrorClass: mapping.errorClass,
+			OccurredAt: input.OccurredAt, Notification: mapping.notification,
+			recognizedNotification: true,
+		}, nil
+	}
+	if !mapped {
+		return EventObservation{}, errors.New("unsupported provider event type")
 	}
 	errorClass := input.ErrorClass
 	if errorClass == "" {
@@ -199,5 +220,13 @@ func canonicalProviderEvent(eventType string) (adapterMapping, bool) {
 	} else if phase == EventFailed {
 		outcome = EventUnsuccessful
 	}
-	return adapterMapping{kind: kind, phase: phase, outcome: outcome}, true
+	notification := EventNotificationKind("")
+	if kind == EventLifecycle && phase == EventCompleted {
+		notification = NotificationCompletion
+	} else if kind == EventLifecycle && phase == EventFailed {
+		notification = NotificationFailure
+	}
+	return adapterMapping{
+		kind: kind, phase: phase, outcome: outcome, notification: notification,
+	}, true
 }

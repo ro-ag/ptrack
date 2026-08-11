@@ -129,6 +129,11 @@ type Config struct {
 	Now           func() time.Time
 	NewTicker     func(time.Duration) Ticker
 	MaxRecords    int
+	// AdditionalCWDValidator is a host-owned, read-only admission check for a
+	// host-launched CWD outside ProjectRoot (for example an existing sibling
+	// worktree). External/provider registrations never reach it. It grants no
+	// capability authority.
+	AdditionalCWDValidator func(string) bool
 	// EventPolicy is explicit so the zero value cannot silently enable
 	// collection. Nil selects DefaultEventPrivacyPolicy.
 	EventPolicy *EventPrivacyPolicy
@@ -153,14 +158,15 @@ type record struct {
 }
 
 type Registry struct {
-	projectRoot    string
-	leaseDuration  time.Duration
-	now            func() time.Time
-	ticker         Ticker
-	maxRecords     int
-	statePath      string
-	repositoryRoot string
-	eventPolicy    EventPrivacyPolicy
+	projectRoot            string
+	additionalCWDValidator func(string) bool
+	leaseDuration          time.Duration
+	now                    func() time.Time
+	ticker                 Ticker
+	maxRecords             int
+	statePath              string
+	repositoryRoot         string
+	eventPolicy            EventPrivacyPolicy
 	// persistenceWritable becomes false when a future history format is
 	// detected. The registry remains usable in memory but never clobbers the
 	// newer file on shutdown.
@@ -214,21 +220,22 @@ func NewRegistry(config Config) *Registry {
 		}
 	}
 	registry := &Registry{
-		projectRoot:         projectRoot,
-		leaseDuration:       leaseDuration,
-		now:                 now,
-		ticker:              newTicker(sweepInterval),
-		maxRecords:          maxRecords,
-		statePath:           config.StatePath,
-		repositoryRoot:      discoverEventRepositoryRoot(projectRoot),
-		eventPolicy:         eventPolicy,
-		persistenceWritable: true,
-		ctx:                 ctx,
-		cancel:              cancel,
-		records:             make(map[string]*record),
-		pendingEventTokens:  make(map[string]chan struct{}),
-		eventTokenRuns:      make(map[string]string),
-		shutdownDone:        make(chan struct{}),
+		projectRoot:            projectRoot,
+		additionalCWDValidator: config.AdditionalCWDValidator,
+		leaseDuration:          leaseDuration,
+		now:                    now,
+		ticker:                 newTicker(sweepInterval),
+		maxRecords:             maxRecords,
+		statePath:              config.StatePath,
+		repositoryRoot:         discoverEventRepositoryRoot(projectRoot),
+		eventPolicy:            eventPolicy,
+		persistenceWritable:    true,
+		ctx:                    ctx,
+		cancel:                 cancel,
+		records:                make(map[string]*record),
+		pendingEventTokens:     make(map[string]chan struct{}),
+		eventTokenRuns:         make(map[string]string),
+		shutdownDone:           make(chan struct{}),
 	}
 	if registry.statePath != "" {
 		// Best effort: a missing or damaged history must never block startup.
@@ -385,7 +392,8 @@ func (r *Registry) register(
 		registration.CWD = r.projectRoot
 	}
 	cwd := canonicalRegistryPath(registration.CWD)
-	if !pathWithin(r.projectRoot, cwd) {
+	if !pathWithin(r.projectRoot, cwd) && (kind != RegistrationLaunched ||
+		(r.additionalCWDValidator == nil || !r.additionalCWDValidator(cwd))) {
 		return Run{}, errors.New("AgentRun CWD is outside the project")
 	}
 	id, err := randomOpaqueValue()
@@ -896,25 +904,27 @@ func (r *Registry) recordNormalizedEventLocked(
 	}
 	entry.nextHostSequence++
 	event := Event{
-		ModelVersion:   EventModelVersion,
-		ID:             eventID,
-		RunID:          entry.run.ID,
-		Provider:       entry.run.Provider,
-		SourceID:       normalized.SourceID,
-		SourceSequence: normalized.SourceSequence,
-		HostSequence:   entry.nextHostSequence,
-		Kind:           normalized.Kind,
-		Phase:          normalized.Phase,
-		Outcome:        normalized.Outcome,
-		Subject:        normalized.Subject,
-		Paths:          append([]string{}, normalized.Paths...),
-		CommitSHA:      normalized.CommitSHA,
-		ExitCode:       cloneInt(normalized.ExitCode),
-		ErrorClass:     normalized.ErrorClass,
-		Summary:        normalized.Summary,
-		OccurredAt:     normalized.OccurredAt,
-		ObservedAt:     now.UTC(),
-		Correlation:    eventCorrelationForRun(entry.run, r.repositoryRoot),
+		ModelVersion:      EventModelVersion,
+		ID:                eventID,
+		RunID:             entry.run.ID,
+		Provider:          entry.run.Provider,
+		SourceID:          normalized.SourceID,
+		SourceSequence:    normalized.SourceSequence,
+		HostSequence:      entry.nextHostSequence,
+		LifecycleRevision: entry.lifecycleRevision,
+		Kind:              normalized.Kind,
+		Phase:             normalized.Phase,
+		Outcome:           normalized.Outcome,
+		Subject:           normalized.Subject,
+		Paths:             append([]string{}, normalized.Paths...),
+		CommitSHA:         normalized.CommitSHA,
+		ExitCode:          cloneInt(normalized.ExitCode),
+		ErrorClass:        normalized.ErrorClass,
+		Summary:           normalized.Summary,
+		OccurredAt:        normalized.OccurredAt,
+		ObservedAt:        now.UTC(),
+		Correlation:       eventCorrelationForRun(entry.run, r.repositoryRoot),
+		Notification:      normalized.Notification,
 	}
 	candidateEvents := append(entry.events, event)
 	retainedEvents, err := RetainEvents(candidateEvents, now, r.eventPolicy)
@@ -1043,6 +1053,7 @@ func (r *Registry) IntelligenceSnapshot(
 		r.persistLocked()
 	}
 	run := cloneRun(entry.run)
+	run.LifecycleRevision = entry.lifecycleRevision
 	intelligence := DeriveRunIntelligence(run, retained)
 	total := len(retained)
 	if limit <= 0 || limit > r.eventPolicy.RetainLast {

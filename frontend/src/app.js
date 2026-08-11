@@ -30,6 +30,7 @@ import {
 import {
   RefreshGate,
   RefreshLoop,
+  RuntimeRefreshCoalescer,
   WorkspaceController,
 } from "./workspace/controller";
 import {
@@ -39,7 +40,10 @@ import {
   taskTransitionResponseIsCurrent,
 } from "./workspace/task-transition";
 import {
+  agentActivityAnnouncement,
   agentIntelligenceLabel,
+  agentActivityPresentation,
+  driftPresentation,
   appVersionLabel,
   collapsedLaneStatuses,
   commandShortcut,
@@ -49,12 +53,14 @@ import {
   handoffPreviewResponseIsCurrent,
   heatmapWeeks,
   linkedTaskRuntimePresentation,
+  mutationFocusFallback,
   paletteTarget,
   preserveSectionOnError,
   runtimeAssociationLabel,
-  runtimeCountLabel,
   runtimeEventIsCurrent,
   shortcutIntent,
+  workflowMutationFocusKey,
+  worktreeSelectionForRerender,
   workspaceStateCopy,
 } from "./workspace/presentation";
 
@@ -137,9 +143,22 @@ const elements = {
   gitRemotes: document.querySelector("#git-remotes"),
   gitBranches: document.querySelector("#git-branches"),
   gitCommits: document.querySelector("#git-commits"),
-  runtimeTotal: document.querySelector("#runtime-total"),
-  terminalSessions: document.querySelector("#terminal-sessions"),
-  agentRuns: document.querySelector("#agent-runs"),
+  agentActivityTotal: document.querySelector("#agent-activity-total"),
+  agentActivitySummary: document.querySelector("#agent-activity-summary"),
+  agentActivity: document.querySelector("#agent-activity"),
+  agentActivityLive: document.querySelector("#agent-activity-live"),
+  agentHandoffForm: document.querySelector("#agent-handoff-form"),
+  agentHandoffSource: document.querySelector("#agent-handoff-source"),
+  agentHandoffTarget: document.querySelector("#agent-handoff-target"),
+  agentHandoffSend: document.querySelector("#agent-handoff-send"),
+  agentHandoffInbox: document.querySelector("#agent-handoff-inbox"),
+	agentWorkflowForm: document.querySelector("#agent-workflow-form"),
+	agentWorkflowRun: document.querySelector("#agent-workflow-run"),
+	agentWorkflowKind: document.querySelector("#agent-workflow-kind"),
+	agentWorkflowTarget: document.querySelector("#agent-workflow-target"),
+	agentWorkflowPrepare: document.querySelector("#agent-workflow-prepare"),
+	agentWorkflowInbox: document.querySelector("#agent-workflow-inbox"),
+  agentDrift: document.querySelector("#agent-drift"),
   blockers: document.querySelector("#overview-blockers"),
   notes: document.querySelector("#overview-notes"),
   drawer: document.querySelector("#task-drawer"),
@@ -272,6 +291,14 @@ const nativeEventDisposers = [];
 const refreshLoop = new RefreshLoop(() => {
   void loadSnapshot(board?.planId || 0, true);
 }, 15_000);
+const runtimeRefreshes = new RuntimeRefreshCoalescer((generation) => {
+  if (!runtimeEventIsCurrent(
+    generation,
+    workspaceController.state.generation,
+    workspaceController.state.status === "open",
+  )) return;
+  void loadSnapshot(board?.planId || 0, true);
+});
 
 let workspaceState = { status: "welcome", generation: 0 };
 let view = "board";
@@ -290,6 +317,7 @@ let terminalProjectRoot = "";
 let snapshotSequence = 0;
 let activeSnapshotRequest = null;
 let queuedSnapshotPlanId = 0;
+let agentActivityAnnouncementKey = "";
 let detailTask = null;
 let detailRequest = 0;
 let drawerReturnFocus = null;
@@ -1083,7 +1111,41 @@ function renderIntelligence() {
   });
 
   renderGitIntelligence(snapshot.git);
-  renderRuntimeIntelligence(snapshot.terminals, snapshot.agentRuns);
+  renderAgentActivity(snapshot.agentActivity);
+  renderDrift(snapshot.drift);
+}
+
+function renderDrift(section) {
+  elements.agentDrift.replaceChildren();
+  const drift = driftPresentation(section);
+  if (drift.incomplete) {
+    elements.agentDrift.append(
+      intelligenceItem(
+        "Work comparison incomplete",
+        "Bounded Git or agent evidence was omitted. No missing warning should be treated as proof of alignment.",
+        "stale",
+      ),
+    );
+  }
+  const copy = {
+    checkoutChangedPath: ["Shared checkout change", "Project-level and unattributed"],
+    untrackedFile: ["Untracked file", "Project-level and unattributed"],
+    unlinkedCommit: ["Unlinked commit", "Exact SHA has no p-track commit link"],
+    crossTaskPathOverlap: ["Possible cross-task path overlap", "Explicit owners on different tasks reported the same current path"],
+    taskDriftSignal: ["Possible task drift", "Provider-neutral structured evidence indicates a current scope mismatch"],
+  };
+  drift.findings.forEach((finding) => {
+    const [title, meaning] = copy[finding.kind];
+    const evidence = finding.path || finding.sha ||
+      finding.runIds.map((runId) => runId.slice(0, 8)).join(", ") || "structured evidence";
+    elements.agentDrift.append(
+      intelligenceItem(
+        title,
+        `${meaning} · ${evidence} · ${finding.evidenceCount} evidence signal${finding.evidenceCount === 1 ? "" : "s"}. This is advisory, not proof of drift.`,
+        finding.severity === "warning" ? "waiting" : "",
+      ),
+    );
+  });
 }
 
 function renderGitIntelligence(section) {
@@ -1169,52 +1231,373 @@ function renderGitIntelligence(section) {
   });
 }
 
-function renderRuntimeIntelligence(terminals, agents) {
-  elements.terminalSessions.replaceChildren();
-  elements.agentRuns.replaceChildren();
-  const sessions = terminals.sessions || [];
-  const runs = agents.runs || [];
-  const counts = runtimeCountLabel(sessions, runs);
-  const omitted = Number(terminals.bounds?.more || 0) +
-    Number(agents.bounds?.more || 0);
-  elements.runtimeTotal.textContent = counts.compact;
-  elements.runtimeTotal.title = omitted
-    ? `${counts.detail} · ${omitted} older entries omitted`
-    : counts.detail;
-  if (sessions.length === 0) {
-    elements.terminalSessions.append(emptyMemory("No terminal sessions."));
-  } else {
-    sessions.forEach((session) => {
-      elements.terminalSessions.append(
-        intelligenceItem(
-          `Terminal · ${session.profileKind}`,
-          `${session.live ? "live" : "historical"} · ${session.state} · ${session.profileKind} · ${runtimeAssociationLabel(session.association)}`,
-          session.state === "failed" ? "error" : "",
-        ),
-      );
-    });
+function renderAgentActivity(section) {
+  const focusKey = document.activeElement?.dataset?.mutationFocusKey || "";
+  const focusedWorktreeSelection = captureFocusedWorktreeSelection();
+  elements.agentActivity.replaceChildren();
+  elements.agentActivitySummary.replaceChildren();
+  const activity = agentActivityPresentation(section);
+  const announcement = agentActivityAnnouncement(activity, agentActivityAnnouncementKey);
+  if (announcement) {
+    agentActivityAnnouncementKey = announcement.key;
+    elements.agentActivityLive.textContent = announcement.text;
   }
-  if (runs.length === 0) {
-    elements.agentRuns.append(emptyMemory("No registered agent runs."));
+  renderAgentHandoffs(activity.items, activity.handoffs);
+	renderAgentWorkflows(
+		activity.items,
+		activity.workflows,
+		activity.workflowTargets,
+		activity.workflowTargetsIncomplete,
+	);
+  elements.agentActivityTotal.textContent = activity.compact;
+  elements.agentActivityTotal.title = activity.detail;
+  activity.counts.forEach(({ state, count }) => {
+    const tone = ["failed", "blocked"].includes(state)
+      ? "error"
+      : state === "waiting"
+        ? "warning"
+        : "";
+    elements.agentActivitySummary.append(pill(state, count, tone));
+  });
+  if (activity.analysisIncomplete) {
+    elements.agentActivity.append(
+      intelligenceItem(
+        "Overlap analysis incomplete",
+        "The bounded runtime snapshot omitted agents or conflict groups. Absence of another warning does not prove exclusive task ownership.",
+        "stale",
+      ),
+    );
+  }
+  if (activity.worktreesIncomplete) {
+    elements.agentActivity.append(
+      intelligenceItem(
+        "Worktree discovery incomplete",
+        "Only the bounded set of existing host-observed worktrees shown here may be selected.",
+        "stale",
+      ),
+    );
+  }
+  activity.conflicts.forEach((conflict) => {
+    const ownership = conflict.ownerCount
+      ? ` · ${conflict.ownerCount} explicit owner${conflict.ownerCount === 1 ? "" : "s"}`
+      : "";
+    elements.agentActivity.append(
+      intelligenceItem(
+        `Overlap warning · plan #${conflict.planId} · task #${conflict.taskId}`,
+        `${conflict.agentCount} active agents share this task${ownership}. Advisory only; no agent, association, or task was changed.`,
+        "blocked",
+      ),
+    );
+  });
+  if (activity.notificationsIncomplete) {
+    elements.agentActivity.append(
+      intelligenceItem(
+        "Notifications incomplete",
+        "Older structured events or agent rows were omitted by the workspace bounds.",
+        "stale",
+      ),
+    );
+  }
+  const notificationLabels = {
+    approvalRequested: ["Approval requested", "Attention required; no permission has been granted."],
+    question: ["Agent question", "The agent is waiting for user attention."],
+    failure: ["Agent failure", "The provider reported an explicit failure."],
+    completion: ["Agent completed", "The provider reported explicit lifecycle completion."],
+  };
+  activity.notifications.forEach((notification) => {
+    const [title, meaning] = notificationLabels[notification.kind];
+    elements.agentActivity.append(
+      intelligenceItem(
+        `${title} · agent ${notification.runId.slice(0, 8)}`,
+        `${meaning} · ${runtimeAssociationLabel(notification.association)} · ${relativeTime(notification.observedAt)}`,
+        ["approvalRequested", "question"].includes(notification.kind)
+          ? "waiting"
+          : notification.kind === "failure"
+            ? "failed"
+            : "completed",
+      ),
+    );
+  });
+  if (activity.items.length === 0) {
+    elements.agentActivity.append(emptyMemory("No registered agent activity."));
   } else {
-    runs.forEach((run) => {
-      const origin = run.terminalBacked
-        ? run.correspondingTerminal
-          ? `terminal-backed · terminal ${run.terminalId.slice(0, 8)}`
-          : run.terminalPresent
+    activity.items.forEach((item) => {
+      const origin = item.terminalBacked
+        ? item.correspondingTerminal
+          ? "terminal-backed"
+          : item.terminalPresent
             ? "terminal-backed · association does not correspond"
             : "terminal-backed · terminal unavailable"
         : "external";
-      elements.agentRuns.append(
-        intelligenceItem(
-          `${run.terminalBacked ? "Terminal-backed" : "External"} agent`,
-          `${run.live ? "live" : "historical"} · lifecycle ${run.state} · process ${run.processState} · lease ${run.leaseState} · ${origin} · ${runtimeAssociationLabel(run.association)}` +
-            `${agentIntelligenceLabel(run.intelligence) ? ` · ${agentIntelligenceLabel(run.intelligence)}` : ""}`,
-          ["stale", "unknown"].includes(run.state) ? "stale" : run.state === "exited" ? "" : "",
-        ),
-      );
+      const evidence = Number(item.evidenceCount || 0);
+      const events = Number(item.eventCount || 0);
+      const observed = item.lastEventAt ? ` · last event ${relativeTime(item.lastEventAt)}` : "";
+      const row = intelligenceItem(
+          `${item.state[0].toUpperCase()}${item.state.slice(1)} agent · ${item.runId.slice(0, 8)}`,
+          `${origin} · ${runtimeAssociationLabel(item.association)} · ${evidence} evidence signal${evidence === 1 ? "" : "s"} · ${events} structured event${events === 1 ? "" : "s"}${observed}`,
+          item.state,
+        );
+      if (item.ownership) {
+        row.querySelector(".intelligence-detail")?.append(
+          document.createTextNode(" · explicit task owner"),
+        );
+      }
+      if (item.worktree?.verified) {
+        row.querySelector(".intelligence-detail")?.append(
+          document.createTextNode(
+            ` · worktree verified · ${item.worktree.isolated ? "isolated checkout" : "project checkout"} · CWD ${item.worktree.cwdMatches ? "matches" : "does not match"}`,
+          ),
+        );
+      }
+      const taskId = Number(item.association?.taskId || 0);
+      const revision = Number(item.association?.revision || 0);
+      if (item.live && taskId > 0 && revision > 0) {
+        const owned = Boolean(item.ownership);
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "button-secondary agent-ownership-action";
+        button.dataset.mutationFocusKey = `ownership:${item.runId}`;
+        button.textContent = owned ? "Release ownership" : "Claim task";
+        button.setAttribute(
+          "aria-label",
+          `${owned ? "Release ownership of" : "Claim"} task #${taskId} for agent ${item.runId.slice(0, 8)}`,
+        );
+        button.addEventListener("click", () => {
+          void runMutation(
+            (generation) => api().SetAgentTaskOwnershipV2(
+              generation,
+              item.runId,
+              revision,
+              !owned,
+            ),
+            `${owned ? "Releasing" : "Claiming"} task #${taskId}…`,
+            `Could not ${owned ? "release" : "claim"} task ownership`,
+          );
+        });
+        row.append(button);
+      }
+      if (item.live && activity.worktrees.length > 0) {
+        const controls = document.createElement("div");
+        controls.className = "agent-worktree-controls";
+        const select = document.createElement("select");
+        select.dataset.mutationFocusKey = `worktree-select:${item.runId}`;
+        select.dataset.worktreeRunId = item.runId;
+        select.setAttribute(
+          "aria-label",
+          `Existing worktree for agent ${item.runId.slice(0, 8)}`,
+        );
+        activity.worktrees.forEach((worktree) => {
+          const option = document.createElement("option");
+          option.value = worktree.root;
+          option.textContent = `${worktree.branch || "detached"} · ${worktree.head.slice(0, 8)} · ${worktree.root}`;
+          select.append(option);
+        });
+        select.value = worktreeSelectionForRerender(
+          activity.worktrees.map((entry) => entry.root),
+          item.worktree?.identity?.root,
+          focusedWorktreeSelection,
+          item.runId,
+        );
+        const associate = document.createElement("button");
+        associate.type = "button";
+        associate.className = "button-secondary agent-ownership-action";
+        associate.dataset.mutationFocusKey = `worktree-associate:${item.runId}`;
+        associate.textContent = "Associate worktree";
+        associate.addEventListener("click", () => {
+          void runMutation(
+            (generation) => api().SetAgentWorktreeV2(
+              generation,
+              item.runId,
+              revision,
+              select.value,
+              true,
+            ),
+            "Verifying existing worktree…",
+            "Could not associate worktree",
+          );
+        });
+        controls.append(select, associate);
+        if (item.worktree) {
+          const detach = document.createElement("button");
+          detach.type = "button";
+          detach.className = "button-secondary agent-ownership-action";
+          detach.dataset.mutationFocusKey = `worktree-detach:${item.runId}`;
+          detach.textContent = "Detach worktree";
+          detach.addEventListener("click", () => {
+            void runMutation(
+              (generation) => api().SetAgentWorktreeV2(
+                generation,
+                item.runId,
+                revision,
+                "",
+                false,
+              ),
+              "Detaching worktree metadata…",
+              "Could not detach worktree",
+            );
+          });
+          controls.append(detach);
+        }
+        row.append(controls);
+      }
+      elements.agentActivity.append(row);
     });
   }
+  restoreMutationFocus(focusKey);
+}
+
+function captureFocusedWorktreeSelection() {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement)) return null;
+  const controls = active.closest(".agent-worktree-controls");
+  const select = controls?.querySelector("select[data-worktree-run-id]");
+  if (!(select instanceof HTMLSelectElement)) return null;
+  return { runId: select.dataset.worktreeRunId || "", value: select.value };
+}
+
+function renderAgentWorkflows(items, inbox, targets, targetsIncomplete) {
+	const previousRun = elements.agentWorkflowRun.value;
+	const previousTarget = elements.agentWorkflowTarget.value;
+	const live = items.filter((item) => item.live && item.runId);
+	elements.agentWorkflowRun.replaceChildren();
+	live.forEach((item) => {
+		const option = document.createElement("option");
+		option.value = item.runId;
+		option.textContent = `Agent ${item.runId.slice(0, 8)} · ${runtimeAssociationLabel(item.association)}`;
+		elements.agentWorkflowRun.append(option);
+	});
+	if (live.some((item) => item.runId === previousRun)) elements.agentWorkflowRun.value = previousRun;
+	elements.agentWorkflowTarget.replaceChildren();
+	targets.forEach((branch) => {
+		const option = document.createElement("option");
+		option.value = branch;
+		option.textContent = branch;
+		elements.agentWorkflowTarget.append(option);
+	});
+	if (targets.includes(previousTarget)) elements.agentWorkflowTarget.value = previousTarget;
+	const needsTarget = ["pullRequest", "merge"].includes(elements.agentWorkflowKind.value);
+	elements.agentWorkflowTarget.disabled = !needsTarget;
+	elements.agentWorkflowPrepare.disabled = live.length === 0 || (needsTarget && targets.length === 0);
+	elements.agentWorkflowInbox.replaceChildren();
+	if (targetsIncomplete) {
+		elements.agentWorkflowInbox.append(intelligenceItem(
+			"Target branches incomplete",
+			"Only branches present in the bounded read-only Git snapshot can be selected.",
+			"stale",
+		));
+	}
+	if (inbox.incomplete) {
+		elements.agentWorkflowInbox.append(intelligenceItem(
+			"Workflow inbox incomplete",
+			"Some bounded runtime rows were omitted; absence of a proposal is not conclusive.",
+			"stale",
+		));
+	}
+	if (inbox.items.length === 0) {
+		elements.agentWorkflowInbox.append(emptyMemory("No workflow proposals. Nothing has been approved or executed."));
+		return;
+	}
+	inbox.items.forEach((proposal) => {
+		const target = proposal.targetBranch
+			? ` → ${proposal.targetBranch} ${proposal.targetHead.slice(0, 8)}`
+			: "";
+		const status = proposal.status;
+		const row = intelligenceItem(
+			`${proposal.kind} · ${proposal.state} · agent ${proposal.runId.slice(0, 8)}`,
+			`${proposal.branch}${target} · ${proposal.head.slice(0, 8)} · staged ${status.staged} · unstaged ${status.unstaged} · untracked ${status.untracked} · conflicts ${status.conflicted} · proposal only; no execution`,
+			proposal.state === "approved" ? "completed" : "waiting",
+		);
+		if (proposal.state === "proposed") {
+			const approve = document.createElement("button");
+			approve.type = "button";
+			approve.className = "button-secondary agent-ownership-action";
+			approve.dataset.mutationFocusKey = workflowMutationFocusKey("approve", proposal.id);
+			approve.textContent = "Approve proposal";
+			approve.addEventListener("click", () => {
+				void runMutation(
+					(generation) => api().ApproveAgentWorkflowV2(generation, proposal.id),
+					"Revalidating workflow proposal…",
+					"Could not approve workflow proposal",
+				);
+			});
+			row.append(approve);
+		}
+		const dismiss = document.createElement("button");
+		dismiss.type = "button";
+		dismiss.className = "button-secondary agent-ownership-action";
+		dismiss.dataset.mutationFocusKey = workflowMutationFocusKey("dismiss", proposal.id);
+		dismiss.textContent = "Dismiss";
+		dismiss.addEventListener("click", () => {
+			void runMutation(
+				(generation) => api().DismissAgentWorkflowV2(generation, proposal.id),
+				"Dismissing workflow proposal…",
+				"Could not dismiss workflow proposal",
+			);
+		});
+		row.append(dismiss);
+		elements.agentWorkflowInbox.append(row);
+	});
+}
+
+function renderAgentHandoffs(items, inbox) {
+  const previousSource = elements.agentHandoffSource.value;
+  const previousTarget = elements.agentHandoffTarget.value;
+  elements.agentHandoffSource.replaceChildren();
+  elements.agentHandoffTarget.replaceChildren();
+  const live = items.filter((item) => item.live && item.runId);
+  live.forEach((item) => {
+    const label = `Agent ${item.runId.slice(0, 8)} · ${runtimeAssociationLabel(item.association)}`;
+    for (const select of [elements.agentHandoffSource, elements.agentHandoffTarget]) {
+      const option = document.createElement("option");
+      option.value = item.runId;
+      option.textContent = label;
+      select.append(option);
+    }
+  });
+  if (live.some((item) => item.runId === previousSource)) elements.agentHandoffSource.value = previousSource;
+  if (live.some((item) => item.runId === previousTarget)) elements.agentHandoffTarget.value = previousTarget;
+  if (elements.agentHandoffTarget.value === elements.agentHandoffSource.value && live.length > 1) {
+    elements.agentHandoffTarget.value = live[1].runId;
+  }
+  elements.agentHandoffSend.disabled = live.length < 2;
+  elements.agentHandoffInbox.replaceChildren();
+  if (inbox.incomplete) {
+    elements.agentHandoffInbox.append(
+      intelligenceItem("Handoff inbox incomplete", "Some runtime rows were omitted; proposals may be unavailable.", "stale"),
+    );
+  }
+  if (inbox.items.length === 0) {
+    elements.agentHandoffInbox.append(emptyMemory("No pending handoff proposals."));
+    return;
+  }
+  inbox.items.forEach((handoff) => {
+    const row = intelligenceItem(
+      `Handoff proposal · ${handoff.sourceRunId.slice(0, 8)} → ${handoff.targetRunId.slice(0, 8)}`,
+      `Created ${relativeTime(handoff.createdAt)} · expires ${relativeTime(handoff.expiresAt)} · proposal only; no authority granted.`,
+      "waiting",
+    );
+    const preview = document.createElement("pre");
+    preview.className = "intelligence-detail agent-handoff-preview";
+    preview.textContent = handoff.preview.text;
+    const acknowledge = document.createElement("button");
+    acknowledge.type = "button";
+    acknowledge.className = "button-secondary agent-ownership-action";
+    acknowledge.dataset.mutationFocusKey = `handoff:${handoff.id}`;
+    acknowledge.textContent = "Acknowledge / dismiss";
+    acknowledge.addEventListener("click", () => {
+      void runMutation(
+        (generation) => api().AcknowledgeAgentHandoffV2(
+          generation,
+          handoff.id,
+          handoff.targetRunId,
+        ),
+        "Acknowledging handoff proposal…",
+        "Could not acknowledge handoff proposal",
+      );
+    });
+    row.append(preview, acknowledge);
+    elements.agentHandoffInbox.append(row);
+  });
 }
 
 function snapshotDialogIsOpen() {
@@ -1326,11 +1709,13 @@ async function loadExactTaskTransitionSnapshot(planId, generation) {
 async function runMutation(operation, progress, failed) {
   if (!board || workspaceController.state.status !== "open") return;
   const ticket = workspaceController.capture();
+  const focusKey = document.activeElement?.dataset?.mutationFocusKey || "";
   setStatus(progress);
   try {
     const result = await operation(ticket.generation);
     if (result?.generation && !workspaceController.accepts(ticket, result.generation)) return;
     await loadSnapshot(board.planId);
+    restoreMutationFocus(focusKey);
     if (detailTask && !elements.drawer.hidden) {
       // Sync from the fresh snapshot, then reload the full detail.
       const fresh = board?.columns
@@ -1347,7 +1732,24 @@ async function runMutation(operation, progress, failed) {
       showError(error);
       setStatus(failed);
       await loadSnapshot(board.planId, true);
+      restoreMutationFocus(focusKey);
     }
+  }
+}
+
+function restoreMutationFocus(focusKey) {
+  if (!focusKey) return;
+  const exact = Array.from(document.querySelectorAll("[data-mutation-focus-key]"))
+    .find((element) => element.dataset.mutationFocusKey === focusKey);
+  if (exact instanceof HTMLElement) {
+    exact.focus();
+    return;
+  }
+  const fallback = mutationFocusFallback(focusKey);
+  if (fallback === "handoffSend") {
+    elements.agentHandoffSend.focus();
+  } else if (fallback === "workflowPrepare") {
+    elements.agentWorkflowPrepare.focus();
   }
 }
 
@@ -3190,6 +3592,9 @@ function renderWorkspaceState(state, focus = false) {
   activeSnapshotRequest = null;
   queuedSnapshotPlanId = 0;
   refreshGate.cancelQueued();
+  runtimeRefreshes.cancel();
+  agentActivityAnnouncementKey = "";
+  elements.agentActivityLive.textContent = "";
   closeAgentLaunchPicker(false, true);
   closeTerminalAssociationEditor(false, true);
   closeTerminalWriteback(false, true);
@@ -3566,8 +3971,7 @@ function registerNativeProjectActions() {
         workspaceController.state.generation,
         workspaceController.state.status === "open",
       )) return;
-      void loadSnapshot(board?.planId || 0, false);
-      if (detailTask && !elements.drawer.hidden) void loadTaskDetail(detailTask);
+      runtimeRefreshes.request(Number(generation));
     }),
   );
 }
@@ -3582,6 +3986,59 @@ window.addEventListener("resize", () => setSidebarWidth(sidebarWidth, false));
 
 elements.navBoard.addEventListener("click", () => setView("board"));
 elements.navOverview.addEventListener("click", () => setView("overview"));
+elements.agentHandoffForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const sourceRunId = elements.agentHandoffSource.value;
+  const targetRunId = elements.agentHandoffTarget.value;
+  if (!sourceRunId || !targetRunId || sourceRunId === targetRunId) {
+    showError(new Error("Choose two distinct live agents for the handoff."));
+    return;
+  }
+  const source = snapshot?.agentActivity?.items?.find((item) => item.runId === sourceRunId);
+  const target = snapshot?.agentActivity?.items?.find((item) => item.runId === targetRunId);
+  const sourceRevision = Number(source?.association?.revision || 0);
+  const targetRevision = Number(target?.association?.revision || 0);
+  void runMutation(
+    (generation) => api().SendAgentHandoffV2(
+      generation,
+      sourceRunId,
+      targetRunId,
+      sourceRevision,
+      targetRevision,
+    ),
+    "Sending bounded handoff proposal…",
+    "Could not send handoff proposal",
+  );
+});
+elements.agentWorkflowKind.addEventListener("change", () => {
+	const needsTarget = ["pullRequest", "merge"].includes(elements.agentWorkflowKind.value);
+	elements.agentWorkflowTarget.disabled = !needsTarget;
+	elements.agentWorkflowPrepare.disabled = !elements.agentWorkflowRun.value ||
+		(needsTarget && !elements.agentWorkflowTarget.value);
+});
+elements.agentWorkflowForm.addEventListener("submit", (event) => {
+	event.preventDefault();
+	const runId = elements.agentWorkflowRun.value;
+	const kind = elements.agentWorkflowKind.value;
+	const needsTarget = ["pullRequest", "merge"].includes(kind);
+	const target = needsTarget ? elements.agentWorkflowTarget.value : "";
+	const run = snapshot?.agentActivity?.items?.find((item) => item.runId === runId);
+	if (!runId || !run?.live || (needsTarget && !target)) {
+		showError(new Error("Choose a live agent and an eligible target branch."));
+		return;
+	}
+	void runMutation(
+		(generation) => api().PrepareAgentWorkflowV2(
+			generation,
+			runId,
+			Number(run.association?.revision || 0),
+			kind,
+			target,
+		),
+		"Preparing exact workflow proposal…",
+		"Could not prepare workflow proposal",
+	);
+});
 elements.navSettings.addEventListener("click", () => setView("settings"));
 
 window.addEventListener("focus", () => {
@@ -3876,6 +4333,7 @@ if ("ResizeObserver" in window) {
 window.addEventListener("beforeunload", () => {
   sidebarDragCleanup?.();
   refreshLoop.dispose();
+  runtimeRefreshes.cancel();
   disposeTerminalDock();
   nativeEventDisposers.splice(0).forEach((dispose) => dispose());
 });

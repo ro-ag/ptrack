@@ -47,6 +47,7 @@ type AgentRuntimeSummary struct {
 	ProcessState          agentrun.ProcessState     `json:"processState"`
 	LeaseState            agentrun.LeaseState       `json:"leaseState"`
 	Live                  bool                      `json:"live"`
+	ActivityState         agentrun.ActivityState    `json:"activityState"`
 	Association           *RuntimeAssociation       `json:"association,omitempty"`
 	Intelligence          *AgentIntelligenceSummary `json:"intelligence,omitempty"`
 }
@@ -80,13 +81,15 @@ type TaskLinkedRuntimeDetail struct {
 }
 
 type runtimeProjection struct {
-	terminals          []TerminalRuntimeSummary
-	agents             []AgentRuntimeSummary
-	terminalCandidates []TerminalRuntimeSummary
-	agentCandidates    []AgentRuntimeSummary
-	terminalBounds     BoundedSnapshot
-	agentBounds        BoundedSnapshot
-	sourcesTruncated   bool
+	terminals               []TerminalRuntimeSummary
+	agents                  []AgentRuntimeSummary
+	terminalCandidates      []TerminalRuntimeSummary
+	agentCandidates         []AgentRuntimeSummary
+	terminalBounds          BoundedSnapshot
+	agentBounds             BoundedSnapshot
+	sourcesTruncated        bool
+	exactAgentRuns          map[string]agentrun.Run
+	agentAnalysisIncomplete bool
 }
 
 func workspaceRuntimeProjection(
@@ -115,21 +118,52 @@ func workspaceRuntimeProjection(
 	}
 	runs := []agentrun.Run{}
 	agentTotal := 0
+	exactAgentRuns := make(map[string]agentrun.Run)
+	agentAnalysisIncomplete := false
 	if registry := workspace.agentRegistry(); registry != nil {
 		for _, session := range sessions {
 			registry.RecordTerminalActivityAt(session.ID, session.LastActivityAt)
 		}
 		runs, agentTotal = registry.RuntimeSnapshotBounded(linkedRuntimeCandidateLimit)
+		exactRuns := []agentrun.Run{}
+		exactErr := registry.WithExactRuntimeSnapshot(
+			linkedRuntimeCandidateLimit,
+			func(snapshot []agentrun.Run) error {
+				exactRuns = append(exactRuns, snapshot...)
+				return nil
+			},
+		)
+		agentAnalysisIncomplete = exactErr != nil
+		if exactErr == nil {
+			runs = exactRuns
+			agentTotal = max(agentTotal, len(exactRuns))
+			for _, run := range exactRuns {
+				exactAgentRuns[run.ID] = run
+			}
+		}
 	}
 	projection := buildRuntimeProjection(host, sessions, runs)
-	if intelligenceRegistry, ok := workspace.agents.(interface {
-		Intelligence(string) (agentrun.RunIntelligence, error)
-	}); ok {
+	projection.exactAgentRuns = exactAgentRuns
+	projection.agentAnalysisIncomplete = agentAnalysisIncomplete
+	if intelligenceRegistry, ok := workspace.agents.(agentIntelligenceRegistry); ok {
 		intelligenceByRun := make(map[string]AgentIntelligenceSummary, len(runs))
+		activityByRun := make(map[string]agentrun.ActivityState, len(runs))
 		for _, run := range runs {
-			intelligence, intelligenceErr := intelligenceRegistry.Intelligence(run.ID)
-			if intelligenceErr != nil {
+			expected, exact := exactAgentRuns[run.ID]
+			observed, events, total, _, intelligenceErr :=
+				intelligenceRegistry.IntelligenceSnapshot(run.ID, 0)
+			if intelligenceErr != nil || !exact ||
+				!exactAgentEvidenceSnapshot(expected, observed) {
+				projection.agentAnalysisIncomplete = true
 				continue
+			}
+			association := runtimeAssociationForRun(projection.agentCandidates, run.ID)
+			intelligence := agentrun.DeriveRunIntelligence(
+				expected,
+				currentAssociationEvents(expected, association, events),
+			)
+			if total > len(events) {
+				projection.agentAnalysisIncomplete = true
 			}
 			projected := projectAgentIntelligence(intelligence)
 			intelligenceByRun[run.ID] = AgentIntelligenceSummary{
@@ -139,18 +173,52 @@ func workspaceRuntimeProjection(
 				EventCount:    intelligence.EventCount,
 				LastEventAt:   projected.LastEventAt,
 			}
+			activityByRun[run.ID] = agentrun.DeriveActivityState(expected, intelligence)
 		}
-		applyAgentIntelligence(&projection, intelligenceByRun)
+		applyAgentIntelligence(&projection, intelligenceByRun, activityByRun)
 	}
 	projection.terminalBounds = snapshotBound(len(projection.terminals), terminalTotal)
 	projection.agentBounds = snapshotBound(len(projection.agents), agentTotal)
 	projection.sourcesTruncated = terminalTotal > len(sessions) || agentTotal > len(runs)
+	projection.agentAnalysisIncomplete = projection.agentAnalysisIncomplete ||
+		agentTotal > len(runs)
 	return projection, nil
+}
+
+func runtimeAssociationForRun(
+	runs []AgentRuntimeSummary,
+	runID string,
+) *RuntimeAssociation {
+	for _, run := range runs {
+		if run.RunID == runID {
+			return run.Association
+		}
+	}
+	return nil
+}
+
+// exactAgentEvidenceSnapshot fences structured evidence to the exact run
+// lifecycle and host association used to build the visible runtime row.
+// Heartbeat timestamps may advance without invalidating evidence, but an exit,
+// stale/revive transition, or reassociation must fail closed.
+func exactAgentEvidenceSnapshot(expected, observed agentrun.Run) bool {
+	if expected.ID == "" || expected.ID != observed.ID ||
+		expected.LifecycleRevision == 0 ||
+		expected.LifecycleRevision != observed.LifecycleRevision ||
+		expected.ProjectRoot != observed.ProjectRoot ||
+		expected.TerminalID != observed.TerminalID || expected.Kind != observed.Kind {
+		return false
+	}
+	if expected.Association == nil || observed.Association == nil {
+		return expected.Association == nil && observed.Association == nil
+	}
+	return *expected.Association == *observed.Association
 }
 
 func applyAgentIntelligence(
 	projection *runtimeProjection,
 	intelligenceByRun map[string]AgentIntelligenceSummary,
+	activityByRun map[string]agentrun.ActivityState,
 ) {
 	if projection == nil {
 		return
@@ -158,11 +226,13 @@ func applyAgentIntelligence(
 	apply := func(runs []AgentRuntimeSummary) {
 		for index := range runs {
 			intelligence, exists := intelligenceByRun[runs[index].RunID]
-			if !exists {
-				continue
+			if exists {
+				copy := intelligence
+				runs[index].Intelligence = &copy
 			}
-			copy := intelligence
-			runs[index].Intelligence = &copy
+			if activity, activityExists := activityByRun[runs[index].RunID]; activityExists {
+				runs[index].ActivityState = activity
+			}
 		}
 	}
 	apply(projection.agents)
@@ -225,6 +295,7 @@ func buildRuntimeProjection(
 			ProcessState:          run.ProcessState,
 			LeaseState:            run.LeaseState,
 			Live:                  agentRunIsLive(run),
+			ActivityState:         agentrun.DeriveActivityState(run, agentrun.RunIntelligence{}),
 			Association:           associationSummary,
 		})
 	}

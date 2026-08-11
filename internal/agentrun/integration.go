@@ -27,6 +27,9 @@ type IntegrationConfig struct {
 	GlobalHome  string
 	ProjectRoot string
 	Generation  uint64
+	// RuntimeChanged is host-owned presentation invalidation. It conveys no
+	// run data or authority and is invoked only after an accepted mutation.
+	RuntimeChanged func()
 }
 
 type IntegrationDescriptor struct {
@@ -92,6 +95,7 @@ type IntegrationServer struct {
 	listener       net.Listener
 	httpServer     *http.Server
 	descriptorPath string
+	runtimeChanged func()
 
 	serveDone chan struct{}
 	serveErr  error
@@ -125,13 +129,14 @@ func StartIntegrationServer(
 		return nil, fmt.Errorf("listen for AgentRun integration: %w", err)
 	}
 	server := &IntegrationServer{
-		registry:     registry,
-		projectRoot:  filepath.Clean(projectRoot),
-		generation:   config.Generation,
-		token:        token,
-		listener:     listener,
-		serveDone:    make(chan struct{}),
-		shutdownDone: make(chan struct{}),
+		registry:       registry,
+		projectRoot:    filepath.Clean(projectRoot),
+		generation:     config.Generation,
+		token:          token,
+		listener:       listener,
+		runtimeChanged: config.RuntimeChanged,
+		serveDone:      make(chan struct{}),
+		shutdownDone:   make(chan struct{}),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/runs/register", server.handleRegister)
@@ -206,6 +211,7 @@ func (s *IntegrationServer) handleRegister(
 		http.Error(response, "AgentRun registration rejected", http.StatusBadRequest)
 		return
 	}
+	s.notifyRuntimeChanged()
 	response.Header().Set("Content-Type", "application/json")
 	response.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(response).Encode(struct {
@@ -242,6 +248,7 @@ func (s *IntegrationServer) handleRun(
 			http.Error(response, "AgentRun lease rejected", http.StatusUnauthorized)
 			return
 		}
+		s.notifyRuntimeChanged()
 	case "exit":
 		var result struct {
 			Code   int    `json:"code"`
@@ -254,6 +261,7 @@ func (s *IntegrationServer) handleRun(
 			http.Error(response, "AgentRun lease rejected", http.StatusUnauthorized)
 			return
 		}
+		s.notifyRuntimeChanged()
 	case "events":
 		if err := s.registry.AuthenticateEventLease(id, token); err != nil {
 			http.Error(response, "AgentRun lease rejected", http.StatusUnauthorized)
@@ -272,6 +280,7 @@ func (s *IntegrationServer) handleRun(
 			}
 			return
 		}
+		s.notifyRuntimeChanged()
 		writeEventReceipt(response, event)
 		return
 	default:
@@ -309,7 +318,14 @@ func (s *IntegrationServer) handleLaunchedEvent(
 		}
 		return
 	}
+	s.notifyRuntimeChanged()
 	writeEventReceipt(response, event)
+}
+
+func (s *IntegrationServer) notifyRuntimeChanged() {
+	if s.runtimeChanged != nil {
+		s.runtimeChanged()
+	}
 }
 
 func writeEventReceipt(response http.ResponseWriter, event Event) {
