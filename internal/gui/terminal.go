@@ -713,6 +713,7 @@ func (a *App) onStartup(ctx context.Context) {
 	if workspace != nil {
 		a.startWorkspaceWatcher(workspace)
 	}
+	a.startUpdater()
 }
 
 func (a *App) onShutdown(ctx context.Context) {
@@ -744,6 +745,7 @@ func (a *App) onShutdown(ctx context.Context) {
 			waitTimeout = 3 * time.Second
 		}
 		waitForLifecycleGroup(&a.terminalOps, waitTimeout)
+		waitForLifecycleGroup(&a.updateOps, waitTimeout)
 		waitForLifecycleGroup(&a.monitorWG, waitTimeout)
 		a.lifecycleMu.Lock()
 		if a.monitorCancel != nil {

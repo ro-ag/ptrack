@@ -6,6 +6,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-08-11
+
+### Added
+- Terminal profiles now provide bounded renderer, theme, scrollback, working
+  directory, exit, and non-secret environment policies while preserving agent
+  executable identity and capability boundaries.
+- Terminal compatibility now includes cross-platform PTY and shell-integration
+  handling, resize and lifecycle hardening, content-free diagnostics and
+  recovery actions, and renderer retry/fallback behavior.
+- The desktop app now provides an accessible, app-level About & Updates flow
+  for explicit or opt-in startup checks against stable GitHub Releases,
+  separate verified download and installation actions, bounded progress,
+  cancellation, and restart-safe recovery.
+- Native release updates use exact OS/architecture assets and `checksums.txt`:
+  pinned Developer ID and Gatekeeper verification before macOS DMG handoff,
+  verified ZIP reveal on Windows, and user-owned atomic replacement with
+  rollback and crash recovery on Linux. Generated source archives,
+  prereleases, downgrades, development builds, and arbitrary URLs are refused.
+
 ## [0.20.0] - 2026-08-10
 
 ### Added
@@ -494,7 +513,8 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
-[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.20.0...HEAD
+[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.21.0...HEAD
+[0.21.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.21.0
 [0.20.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.20.0
 [0.19.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.19.0
 [0.18.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.18.0

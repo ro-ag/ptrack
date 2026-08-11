@@ -87,6 +87,10 @@ func newWorkspaceCoordinator(
 		terminalAttachAfter: time.After,
 		startupReady:        make(chan struct{}),
 		shutdownStarted:     make(chan struct{}),
+		updateState: UpdateState{
+			Phase:          UpdateIdle,
+			CurrentVersion: store.WriterVersion,
+		},
 	}
 }
 

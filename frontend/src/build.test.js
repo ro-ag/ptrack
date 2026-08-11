@@ -31,7 +31,24 @@ describe("production asset layout", () => {
     );
     expect(index).toContain('src="/app.js"');
     expect(index).toContain('href="/style.css"');
-    expect(index).toMatch(/id="app-version"[^>]*>dev<\/p>/);
+    expect(index).toMatch(
+      /id="app-version"[^>]*tabindex="0"[^>]*aria-haspopup="dialog"[^>]*>dev<\/button>/,
+    );
+    expect(styles).toMatch(
+      /\.app-version\{[^}]*position:relative[^}]*z-index:1[^}]*--wails-draggable:\s*no-drag/,
+    );
+    expect(index).toMatch(
+      /id="updates-modal"[\s\S]*role="dialog"[\s\S]*aria-modal="true"[\s\S]*id="updates-automatic"[\s\S]*aria-label="Update download progress"[\s\S]*id="updates-primary"/,
+    );
+    expect(index).toContain("Automatic checks never download or install anything");
+    expect(app).toContain("GetUpdateState");
+    expect(app).toContain("CheckForUpdates");
+    expect(app).toContain("DownloadUpdate");
+    expect(app).toContain("ApplyUpdate");
+    expect(app).toContain("CancelUpdateOperation");
+    expect(app).toContain("update:state-changed");
+    expect(app).not.toContain("releases/download");
+    expect(app).not.toContain("checksums.txt");
     expect(index).toMatch(/id="terminal-tabs"[\s\S]*role="tablist"/);
     expect(index).not.toMatch(/id="terminal-tabs"[^>]*aria-live/);
     expect(index).toMatch(

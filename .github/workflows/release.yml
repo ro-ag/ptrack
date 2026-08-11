@@ -22,6 +22,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Validate stable release tag
+        shell: bash
+        run: |
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Release tags must be canonical stable SemVer (vX.Y.Z)."
+            exit 1
+          fi
+
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
@@ -69,17 +77,26 @@ jobs:
             archive_os: windows
             goarch: arm64
 
-    # Secrets cannot be referenced in step-level `if` conditions, so they are
-    # resolved into job-level environment flags once. SIGNING_ENABLED turns on
-    # Developer ID signing; NOTARY_ENABLED additionally staples Apple
-    # notarization tickets once the App Store Connect API key secrets exist.
+    # Secrets cannot be referenced in step-level `if` conditions, so complete
+    # credential sets are resolved into job-level flags once. macOS release
+    # assets must satisfy both flags because the updater rejects anything that
+    # does not pass Developer ID and Gatekeeper verification.
     env:
-      SIGNING_ENABLED: ${{ secrets.APPLE_CERTIFICATE_BASE64 != '' }}
-      NOTARY_ENABLED: ${{ secrets.APPLE_API_KEY != '' }}
+      SIGNING_ENABLED: ${{ secrets.APPLE_CERTIFICATE_BASE64 != '' && secrets.APPLE_CERTIFICATE_PASSWORD != '' && secrets.KEYCHAIN_PASSWORD != '' && secrets.APPLE_SIGNING_IDENTITY != '' }}
+      NOTARY_ENABLED: ${{ secrets.APPLE_API_KEY != '' && secrets.APPLE_API_KEY_ID != '' && secrets.APPLE_API_ISSUER != '' }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Require updater-compatible macOS credentials
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          if [ "${SIGNING_ENABLED}" != "true" ] || [ "${NOTARY_ENABLED}" != "true" ]; then
+            echo "::error::macOS releases require complete Developer ID and notarization credentials."
+            exit 1
+          fi
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -257,6 +274,17 @@ jobs:
           xcrun stapler validate "$dmg"
           rm "$RUNNER_TEMP/AuthKey.p8"
 
+      - name: Verify macOS updater trust contract
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          dmg="dist/p-track_${version}_darwin_${{ matrix.goarch }}.dmg"
+          requirement='anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "3CAJR4ZDMQ"'
+          hdiutil verify "$dmg"
+          codesign --verify --strict --verbose=2 -R="$requirement" "$dmg"
+          spctl --assess --type open --context context:primary-signature "$dmg"
+
       - name: Package Windows archive
         if: runner.os == 'Windows'
         shell: pwsh
@@ -309,6 +337,7 @@ jobs:
             found { print }
           ' CHANGELOG.md > release-notes.md
           test -s release-notes.md
+          test "$(wc -c < release-notes.md)" -le 32768
 
       - name: Publish GitHub release
         shell: bash
