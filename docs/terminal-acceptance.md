@@ -28,6 +28,44 @@ issue_ids: <IDs only, or none>
 rows have current passing evidence on that platform. Never turn an unavailable
 tool into a hidden skip or claim interactive support from compilation alone.
 
+## Plan 6 result records
+
+```text
+date_utc: 2026-08-11
+ptrack_commit: e3f243270476e02b0e78ab0cc6c30a266207f4a1
+os: macos
+os_version: 26.5.2
+architecture: arm64
+webview: wkwebview
+result: pass
+failed_checks: none
+issue_ids: none
+```
+
+```text
+date_utc: 2026-08-11
+ptrack_commit: e3f243270476e02b0e78ab0cc6c30a266207f4a1
+os: windows
+os_version: 10.0.26200.8873
+architecture: arm64
+webview: webview2
+result: pass
+failed_checks: none
+issue_ids: none
+```
+
+```text
+date_utc: 2026-08-11
+ptrack_commit: e3f243270476e02b0e78ab0cc6c30a266207f4a1
+os: linux
+os_version: Ubuntu 24.04.3 LTS
+architecture: arm64
+webview: webkitgtk
+result: pass
+failed_checks: none
+issue_ids: none
+```
+
 ## Setup
 
 1. Start from a clean checkout and build the application with `make build`.
