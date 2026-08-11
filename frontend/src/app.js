@@ -10,6 +10,7 @@ import {
 import { initTheme } from "./theme";
 import {
   formatUpdateBytes,
+  updateModalOpenTransition,
   updatePresentation,
   updateProgress,
   updateStateIsNewer,
@@ -17,8 +18,13 @@ import {
 import {
   canEnableCapability,
   canStartCapabilitySave,
+  capabilityActionAccessibleName,
+  capabilityAnnouncement,
+  capabilityFocusKey,
+  capabilityFocusRestoreKey,
   capabilityResponseIsCurrent,
   capabilityRiskGrants,
+  capabilityScopeFieldState,
   capabilityStateLabel,
   diagnosticLabel,
   gitCapabilityNeedsSSH,
@@ -33,6 +39,15 @@ import {
   sidebarWidthStorageKey,
   storedSidebarWidth,
 } from "./workspace/layout";
+import {
+  applicationOverlayKeyboardPolicy,
+  ApplicationOverlayCoordinator,
+} from "./workspace/application-overlay";
+import {
+  nativeMenuCommandAllowed,
+  nativeMenuViewTarget,
+  registerNativeMenuActions,
+} from "./workspace/native-menu";
 import {
   RefreshGate,
   RefreshLoop,
@@ -92,6 +107,8 @@ const elements = {
   workspace: document.querySelector("#workspace"),
   overviewPage: document.querySelector("#overview-page"),
   settingsPage: document.querySelector("#settings-page"),
+  overviewHeading: document.querySelector("#overview-heading"),
+  capabilitiesHeading: document.querySelector("#capabilities-heading"),
   navBoard: document.querySelector("#nav-board"),
   navOverview: document.querySelector("#nav-overview"),
   navSettings: document.querySelector("#nav-settings"),
@@ -249,6 +266,7 @@ const elements = {
   planRing: document.querySelector("#plan-ring"),
   heatmap: document.querySelector("#activity-heatmap"),
   capabilityNew: document.querySelector("#capability-new"),
+  capabilityStatus: document.querySelector("#capability-status"),
   capabilityClear: document.querySelector("#capability-clear"),
   capabilityForm: document.querySelector("#capability-form"),
   capabilityEditorTitle: document.querySelector("#capability-editor-title"),
@@ -304,8 +322,11 @@ const elements = {
   capabilityRiskSummary: document.querySelector("#capability-risk-summary"),
   capabilityDiagnostic: document.querySelector("#capability-diagnostic"),
   capabilityTotal: document.querySelector("#capability-total"),
+  capabilityListHeading: document.querySelector("#capability-list-heading"),
   capabilityList: document.querySelector("#capability-list"),
   capabilityAuditList: document.querySelector("#capability-audit-list"),
+  capabilityAuditHeading: document.querySelector("#capability-audit-heading"),
+  capabilityAuditItems: document.querySelector("#capability-audit-items"),
   toast: document.querySelector("#toast"),
 };
 
@@ -331,6 +352,7 @@ let board = null;
 let draggedTask = null;
 let editingTask = null;
 let dialogMode = "rename";
+let dialogReturnFocus = null;
 let toastTimer = null;
 let memoryModalReturnFocus = null;
 let updatesModalReturnFocus = null;
@@ -513,6 +535,15 @@ function showError(error) {
 
 function setStatus(message) {
   elements.status.textContent = message;
+}
+
+function setCapabilityStatus(action, phase) {
+  elements.capabilityStatus.textContent = capabilityAnnouncement(action, phase);
+}
+
+function showCapabilityError(action) {
+  setCapabilityStatus(action, "failure");
+  showError(new Error(capabilityAnnouncement(action, "failure")));
 }
 
 function relativeTime(value) {
@@ -1629,24 +1660,46 @@ function renderAgentHandoffs(items, inbox) {
 }
 
 function snapshotDialogIsOpen() {
-  return (
-    !elements.modal.hidden ||
-    !elements.memoryModal.hidden ||
-    !elements.updatesModal.hidden ||
-    !elements.confirmModal.hidden ||
-    !elements.agentLaunchModal.hidden ||
-    !elements.terminalAssociationModal.hidden ||
-    !elements.terminalWritebackModal.hidden ||
-    !elements.taskTransitionModal.hidden ||
-    !elements.drawer.hidden ||
-    !elements.palette.hidden ||
-    Boolean(
-      document.querySelector(
-        "#terminal-paste-modal:not([hidden]), #terminal-context-menu:not([hidden])",
-      ),
-    )
-  );
+  return applicationOverlayCoordinator.isOpen();
 }
+
+const applicationOverlaySelector =
+  "body > .modal, body > [data-terminal-overlay]";
+
+function applicationOverlayChanges(records = []) {
+  return records.flatMap((record) => {
+    const overlay = record.target;
+    if (
+      record.attributeName !== "hidden" ||
+      !(overlay instanceof HTMLElement) ||
+      !overlay.matches(applicationOverlaySelector)
+    ) return [];
+    return [{ overlay, open: record.oldValue !== null }];
+  });
+}
+
+function syncApplicationOverlayState(records = []) {
+  applicationOverlayCoordinator.reconcile(applicationOverlayChanges(records));
+}
+
+function hideApplicationOverlay(overlay) {
+  overlay.hidden = true;
+  applicationOverlayCoordinator.reconcile([{ overlay, open: false }]);
+}
+
+const applicationOverlayCoordinator = new ApplicationOverlayCoordinator(() =>
+  document.querySelectorAll(applicationOverlaySelector),
+  elements.app,
+);
+const applicationOverlayObserver = new MutationObserver(syncApplicationOverlayState);
+applicationOverlayObserver.observe(document.body, {
+  attributes: true,
+  attributeFilter: ["hidden"],
+  attributeOldValue: true,
+  subtree: true,
+});
+nativeEventDisposers.push(() => applicationOverlayObserver.disconnect());
+syncApplicationOverlayState();
 
 async function loadSnapshot(
   planId = board?.planId || 0,
@@ -1844,7 +1897,7 @@ function closeTaskTransition(
   taskTransitionSequence += 1;
   taskTransitionBusy = false;
   taskTransitionRequest = null;
-  elements.taskTransitionModal.hidden = true;
+  hideApplicationOverlay(elements.taskTransitionModal);
   elements.taskTransitionCancel.disabled = false;
   elements.taskTransitionSubmit.disabled = false;
   if (request?.invoker instanceof HTMLSelectElement) {
@@ -1997,6 +2050,9 @@ async function confirmTaskTransition() {
 function openRename(task) {
   dialogMode = "rename";
   editingTask = task;
+  dialogReturnFocus = document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : null;
   elements.dialogEyebrow.textContent = "Edit card";
   elements.dialogHeading.textContent = `Rename task #${task.id}`;
   elements.dialogLabel.textContent = "Task title";
@@ -2016,6 +2072,9 @@ function openRename(task) {
 function openMemory(task) {
   dialogMode = "memory";
   editingTask = task;
+  dialogReturnFocus = document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : null;
   elements.dialogEyebrow.textContent = "p-track memory";
   elements.dialogHeading.textContent = `Record context for task #${task.id}`;
   elements.dialogLabel.textContent = "Decision or observation";
@@ -2031,8 +2090,11 @@ function openMemory(task) {
 }
 
 function closeDialog() {
+  if (elements.modal.hidden) return;
   editingTask = null;
-  elements.modal.hidden = true;
+  hideApplicationOverlay(elements.modal);
+  dialogReturnFocus?.focus?.();
+  dialogReturnFocus = null;
 }
 
 function openMemoryHistory() {
@@ -2042,7 +2104,7 @@ function openMemoryHistory() {
 }
 
 function closeMemoryHistory() {
-  elements.memoryModal.hidden = true;
+  hideApplicationOverlay(elements.memoryModal);
   memoryModalReturnFocus?.focus();
   memoryModalReturnFocus = null;
 }
@@ -2110,17 +2172,28 @@ async function refreshUpdateState() {
 }
 
 function openAboutUpdates(invoker = document.activeElement) {
-  if (elements.updatesModal.hidden && snapshotDialogIsOpen()) return;
-  updatesModalReturnFocus = invoker instanceof HTMLElement ? invoker : null;
-  elements.updatesModal.hidden = false;
+  const competingOverlayOpen = nativeMenuOpenOverlayIDs().some(
+    (overlayID) => overlayID !== "updates-modal",
+  );
+  if (competingOverlayOpen) return false;
+  const transition = updateModalOpenTransition(
+    elements.updatesModal.hidden,
+    updatesModalReturnFocus,
+    invoker instanceof HTMLElement ? invoker : null,
+  );
+  updatesModalReturnFocus = transition.returnFocus;
+  if (transition.makeVisible) elements.updatesModal.hidden = false;
   renderUpdateState(updateState);
   void refreshUpdateState();
-  requestAnimationFrame(() => elements.updatesClose.focus());
+  if (transition.scheduleOpeningFocus) {
+    requestAnimationFrame(() => elements.updatesClose.focus());
+  }
+  return true;
 }
 
 function closeAboutUpdates() {
   if (elements.updatesModal.hidden) return;
-  elements.updatesModal.hidden = true;
+  hideApplicationOverlay(elements.updatesModal);
   updatesModalReturnFocus?.focus?.();
   updatesModalReturnFocus = null;
 }
@@ -2198,7 +2271,7 @@ function closePalette() {
   if (elements.palette.hidden) return;
   window.clearTimeout(paletteTimer);
   paletteSequence += 1;
-  elements.palette.hidden = true;
+  hideApplicationOverlay(elements.palette);
   paletteItems = [];
   paletteActive = -1;
   paletteReturnFocus?.focus?.();
@@ -2620,7 +2693,7 @@ function openTaskDetail(task) {
 
 function closeTaskDetail() {
   if (elements.drawer.hidden) return;
-  elements.drawer.hidden = true;
+  hideApplicationOverlay(elements.drawer);
   detailRequest += 1;
   const taskId = detailTask?.id;
   detailTask = null;
@@ -2715,7 +2788,7 @@ function closeAgentLaunchPicker(restoreFocus = true, force = false) {
   agentLaunchBusy = false;
   agentLaunchRequest = null;
   agentLaunchProfiles = [];
-  elements.agentLaunchModal.hidden = true;
+  hideApplicationOverlay(elements.agentLaunchModal);
   elements.agentLaunchSelect.disabled = true;
   elements.agentLaunchCancel.disabled = false;
   elements.agentLaunchSubmit.disabled = true;
@@ -2799,7 +2872,7 @@ function closeTerminalAssociationEditor(restoreFocus = true, force = false) {
   terminalAssociationSequence += 1;
   terminalAssociationBusy = false;
   terminalAssociationRequest = null;
-  elements.terminalAssociationModal.hidden = true;
+  hideApplicationOverlay(elements.terminalAssociationModal);
   elements.terminalAssociationTarget.disabled = true;
   elements.terminalAssociationCancel.disabled = false;
   elements.terminalAssociationDetach.disabled = true;
@@ -2931,7 +3004,7 @@ function closeTerminalWriteback(restoreFocus = true, force = false) {
   terminalWritebackSequence += 1;
   terminalWritebackBusy = false;
   terminalWritebackRequest = null;
-  elements.terminalWritebackModal.hidden = true;
+  hideApplicationOverlay(elements.terminalWritebackModal);
   elements.terminalWritebackContent.value = "";
   elements.terminalWritebackContent.disabled = false;
   elements.terminalWritebackKind.disabled = false;
@@ -3133,7 +3206,7 @@ function finishWorkspaceConfirmation(confirmed) {
   if (!confirmResolve) return;
   const resolve = confirmResolve;
   confirmResolve = null;
-  elements.confirmModal.hidden = true;
+  hideApplicationOverlay(elements.confirmModal);
   confirmReturnFocus?.focus();
   confirmReturnFocus = null;
   resolve(confirmed);
@@ -3260,9 +3333,15 @@ function capabilityDraftFromForm() {
 
 function syncCapabilityScopeFields() {
   const kind = elements.capabilityKind.value;
-  elements.capabilityHTTPFields.hidden = kind !== "http";
-  elements.capabilityGitFields.hidden = kind !== "git";
-  elements.capabilitySSHFields.hidden = kind !== "ssh";
+  const selected = capabilityScopeFieldState(kind);
+  for (const [fieldset, active] of [
+    [elements.capabilityHTTPFields, selected.http],
+    [elements.capabilityGitFields, selected.git],
+    [elements.capabilitySSHFields, selected.ssh],
+  ]) {
+    fieldset.hidden = !active;
+    fieldset.disabled = !active;
+  }
 }
 
 function invalidateCapabilityForm() {
@@ -3388,37 +3467,45 @@ function showCapabilityPreview(view, diagnostic = null) {
 function capabilityEmpty(message) {
   const empty = document.createElement("div");
   empty.className = "capability-empty";
+  empty.setAttribute("role", "listitem");
   empty.textContent = message;
   return empty;
 }
 
-function capabilityButton(label, action, disabled = false) {
+function capabilityButton(label, actionName, capability, action, disabled = false) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "button-secondary";
   button.textContent = label;
+  button.setAttribute(
+    "aria-label",
+    capabilityActionAccessibleName(actionName, capability),
+  );
+  button.dataset.capabilityFocusKey = capabilityFocusKey(
+    capability.id,
+    actionName,
+  );
   button.disabled = disabled;
   button.addEventListener("click", action);
   return button;
 }
 
-async function runCapabilityAction(operation, progress, failed) {
+async function runCapabilityAction(operation, action) {
   if (workspaceController.state.status !== "open") return null;
   invalidateCapabilityResponses();
   const ticket = workspaceController.capture();
-  setStatus(progress);
+  setCapabilityStatus(action, "progress");
   try {
     const result = await operation(ticket.generation);
     if (!workspaceController.accepts(ticket, Number(result?.generation || 0))) {
       return null;
     }
     await loadCapabilities();
-    setStatus("Capability settings ready");
+    setCapabilityStatus(action, "success");
     return result;
-  } catch (error) {
+  } catch {
     if (ticket.epoch === workspaceController.capture().epoch) {
-      showError(error);
-      setStatus(failed);
+      showCapabilityError(action);
     }
     return null;
   }
@@ -3434,8 +3521,7 @@ async function enableCapability(view) {
   await runCapabilityAction(
     (generation) =>
       api().EnableCapabilityV2(generation, Number(view.capability.id), digest),
-    `Enabling capability #${view.capability.id}…`,
-    `Could not enable capability #${view.capability.id}`,
+    "enable",
   );
 }
 
@@ -3443,6 +3529,7 @@ async function loadCapabilityAudits(view) {
   if (workspaceController.state.status !== "open") return;
   const request = ++capabilityAuditRequest;
   const ticket = workspaceController.capture();
+  setCapabilityStatus("audit", "progress");
   try {
     const result = await api().GetCapabilityAuditsV2(
       ticket.generation,
@@ -3453,28 +3540,29 @@ async function loadCapabilityAudits(view) {
       request !== capabilityAuditRequest ||
       !workspaceController.accepts(ticket, Number(result.generation))
     ) return;
-    elements.capabilityAuditList.replaceChildren();
-    const heading = document.createElement("p");
-    heading.className = "section-label";
-    heading.textContent = `Recent audit metadata · #${view.capability.id}`;
-    elements.capabilityAuditList.append(heading);
+    elements.capabilityAuditHeading.textContent =
+      `Recent audit metadata · capability #${view.capability.id}`;
+    elements.capabilityAuditItems.replaceChildren();
     if (!result.audits?.length) {
-      elements.capabilityAuditList.append(capabilityEmpty("No audit records."));
+      elements.capabilityAuditItems.append(capabilityEmpty("No audit records."));
     } else {
       result.audits.forEach((audit) => {
         const item = document.createElement("div");
         item.className = "capability-audit-item";
         const outcome = audit.success ? "allowed" : `denied · ${audit.error_class}`;
         item.textContent = `${audit.operation} · ${audit.target} · ${outcome} · ${audit.duration_millis} ms · ${relativeTime(audit.created_at)}`;
-        elements.capabilityAuditList.append(item);
+        elements.capabilityAuditItems.append(item);
       });
     }
     elements.capabilityAuditList.hidden = false;
-  } catch (error) {
+    setCapabilityStatus("audit", "success");
+  } catch {
     if (
       request === capabilityAuditRequest &&
       ticket.epoch === workspaceController.capture().epoch
-    ) showError(error);
+    ) {
+      showCapabilityError("audit");
+    }
   }
 }
 
@@ -3482,7 +3570,7 @@ async function testCapability() {
   const draft = capabilityDraftFromForm();
   const sshID = numberValue(elements.capabilityGitSSHID);
   if (gitCapabilityNeedsSSH(draft) && sshID <= 0) {
-    setStatus("Select a separate approved SSH capability ID before testing Git over SSH");
+    setCapabilityStatus("test", "blocked");
     elements.capabilityGitSSHID.focus();
     return;
   }
@@ -3490,7 +3578,7 @@ async function testCapability() {
   const request = ++capabilityTestRequest;
   const revision = capabilityFormRevision;
   const ticket = workspaceController.capture();
-  setStatus("Testing connection without changing remote state…");
+  setCapabilityStatus("test", "progress");
   try {
     const result = await api().TestCapabilityV2(ticket.generation, draft, sshID);
     if (
@@ -3499,37 +3587,79 @@ async function testCapability() {
       ) || !workspaceController.accepts(ticket, Number(result.generation))
     ) return;
     showCapabilityPreview(capabilityPreview || { capability: draft }, result.diagnostic);
-    setStatus(diagnosticLabel(result.diagnostic));
-  } catch (error) {
+    setCapabilityStatus(
+      "test",
+      result.diagnostic?.success ? "success" : "failure",
+    );
+  } catch {
     if (
       capabilityResponseIsCurrent(
         request, capabilityTestRequest, revision, capabilityFormRevision,
       ) && ticket.epoch === workspaceController.capture().epoch
     ) {
-      showError(error);
-      setStatus("Connection test failed");
+      showCapabilityError("test");
     }
   }
 }
 
+function captureCapabilityListFocus() {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || !elements.capabilityList.contains(active)) {
+    return null;
+  }
+  const card = active.closest("[data-capability-id]");
+  const cards = Array.from(
+    elements.capabilityList.querySelectorAll("[data-capability-id]"),
+  );
+  return {
+    key: active.dataset.capabilityFocusKey || card?.dataset.capabilityFocusKey || "",
+    index: Math.max(0, cards.indexOf(card)),
+  };
+}
+
+function restoreCapabilityListFocus(previous) {
+  if (!previous) return;
+  const focusTargets = Array.from(
+    document.querySelectorAll("[data-capability-focus-key]"),
+  ).filter(
+    (target) =>
+      !(target instanceof HTMLButtonElement) || !target.disabled,
+  );
+  const key = capabilityFocusRestoreKey(
+    previous.key,
+    previous.index,
+    capabilityViews.map((view) => view.capability.id),
+    focusTargets.map((target) => target.dataset.capabilityFocusKey),
+  );
+  focusTargets.find((target) => target.dataset.capabilityFocusKey === key)?.focus();
+}
+
 function renderCapabilities() {
+  const previousFocus = captureCapabilityListFocus();
   elements.capabilityTotal.textContent = String(capabilityViews.length);
   elements.capabilityList.replaceChildren();
   if (!capabilityViews.length) {
     elements.capabilityList.append(
       capabilityEmpty("No capabilities. Broker tools are denied by default."),
     );
+    restoreCapabilityListFocus(previousFocus);
     return;
   }
   capabilityViews.forEach((view) => {
     const capability = view.capability;
     const card = document.createElement("article");
     card.className = "capability-card";
+    card.setAttribute("role", "listitem");
+    card.tabIndex = -1;
+    card.dataset.capabilityId = String(capability.id);
+    card.dataset.capabilityFocusKey = capabilityFocusKey(capability.id);
     const heading = document.createElement("div");
     heading.className = "capability-card-heading";
     const title = document.createElement("div");
     const name = document.createElement("h3");
+    name.id = `capability-${capability.id}-heading`;
     name.textContent = capability.name;
+    card.setAttribute("aria-labelledby", name.id);
     const metadata = document.createElement("p");
     metadata.className = "intelligence-meta";
     metadata.textContent = `${capability.kind.toUpperCase()} · ${capability.agent_profile} · revision ${capability.revision}`;
@@ -3553,11 +3683,11 @@ function renderCapabilities() {
     const actions = document.createElement("div");
     actions.className = "capability-card-actions";
     actions.append(
-      capabilityButton("Edit", () => fillCapabilityForm(view)),
-      capabilityButton("Test", () => {
+      capabilityButton("Edit", "edit", capability, () => fillCapabilityForm(view)),
+      capabilityButton("Test", "test", capability, () => {
         fillCapabilityForm(view);
         if (gitCapabilityNeedsSSH(capability)) {
-          setStatus("Select a separate approved SSH capability ID before testing Git over SSH");
+          setCapabilityStatus("test", "blocked");
           elements.capabilityGitSSHID.focus();
           return;
         }
@@ -3566,20 +3696,18 @@ function renderCapabilities() {
     );
     if (view.state === "enabled") {
       actions.append(
-        capabilityButton("Disable", () =>
+        capabilityButton("Disable", "disable", capability, () =>
           void runCapabilityAction(
             (generation) =>
               api().DisableCapabilityV2(generation, Number(capability.id)),
-            `Disabling capability #${capability.id}…`,
-            `Could not disable capability #${capability.id}`,
+            "disable",
           ),
         ),
-        capabilityButton("Expire now", () =>
+        capabilityButton("Expire now", "expire", capability, () =>
           void runCapabilityAction(
             (generation) =>
               api().ExpireCapabilityV2(generation, Number(capability.id)),
-            `Expiring capability #${capability.id}…`,
-            `Could not expire capability #${capability.id}`,
+            "expire",
           ),
         ),
       );
@@ -3587,26 +3715,29 @@ function renderCapabilities() {
       actions.append(
         capabilityButton(
           "Review and enable",
+          "enable",
+          capability,
           () => void enableCapability(view),
           !canEnableCapability(view, capability.scope_digest),
         ),
       );
     }
     actions.append(
-      capabilityButton("Audit", () => void loadCapabilityAudits(view)),
-      capabilityButton("Remove", async () => {
+      capabilityButton("Audit", "audit", capability, () =>
+        void loadCapabilityAudits(view)),
+      capabilityButton("Remove", "remove", capability, async () => {
         if (!window.confirm(`Remove capability “${capability.name}”?`)) return;
         await runCapabilityAction(
           (generation) =>
             api().RemoveCapabilityV2(generation, Number(capability.id)),
-          `Removing capability #${capability.id}…`,
-          `Could not remove capability #${capability.id}`,
+          "remove",
         );
       }),
     );
     card.append(heading, scope, risk, actions);
     elements.capabilityList.append(card);
   });
+  restoreCapabilityListFocus(previousFocus);
 }
 
 async function loadCapabilities() {
@@ -3621,15 +3752,17 @@ async function loadCapabilities() {
     ) return;
     capabilityViews = result.capabilities || [];
     renderCapabilities();
-  } catch (error) {
+  } catch {
     if (
       request === capabilityRequest &&
       ticket.epoch === workspaceController.capture().epoch
     ) {
+      const previousFocus = captureCapabilityListFocus();
       elements.capabilityList.replaceChildren(
         capabilityEmpty("Capabilities could not be loaded."),
       );
-      showError(error);
+      restoreCapabilityListFocus(previousFocus);
+      showError(new Error("Capabilities could not be loaded."));
     }
   }
 }
@@ -3639,6 +3772,7 @@ async function previewCapability() {
   const request = ++capabilityPreviewRequest;
   const revision = capabilityFormRevision;
   const ticket = workspaceController.capture();
+  setCapabilityStatus("preview", "progress");
   try {
     const result = await api().PreviewCapabilityV2(
       ticket.generation,
@@ -3650,12 +3784,15 @@ async function previewCapability() {
       ) || !workspaceController.accepts(ticket, Number(result.generation))
     ) return;
     showCapabilityPreview(result.view);
-  } catch (error) {
+    setCapabilityStatus("preview", "success");
+  } catch {
     if (
       capabilityResponseIsCurrent(
         request, capabilityPreviewRequest, revision, capabilityFormRevision,
       ) && ticket.epoch === workspaceController.capture().epoch
-    ) showError(error);
+    ) {
+      showCapabilityError("preview");
+    }
   }
 }
 
@@ -3668,8 +3805,7 @@ async function saveCapability() {
   try {
     const result = await runCapabilityAction(
       (generation) => api().SaveCapabilityV2(generation, draft),
-      "Saving disabled capability draft…",
-      "Could not save capability",
+      "save",
     );
     if (result?.view && revision === capabilityFormRevision) {
       fillCapabilityForm(result.view);
@@ -3697,7 +3833,7 @@ function applyView() {
   terminalHandle?.setVisible(open && view === "board");
 }
 
-function setView(nextView) {
+function setView(nextView, focusHeading = false) {
   view = ["overview", "settings"].includes(nextView) ? nextView : "board";
   applyView();
   if (view === "overview") {
@@ -3705,6 +3841,18 @@ function setView(nextView) {
     void loadHeatmap();
   }
   if (view === "settings") void loadCapabilities();
+  if (focusHeading) {
+    const focusedView = view;
+    requestAnimationFrame(() => {
+      if (view !== focusedView || workspaceController.state.status !== "open") return;
+      const heading = {
+        board: elements.planTitle,
+        overview: elements.overviewHeading,
+        settings: elements.capabilitiesHeading,
+      }[focusedView];
+      heading?.focus();
+    });
+  }
 }
 
 function renderWorkspaceState(state, focus = false) {
@@ -4032,6 +4180,7 @@ async function ensureTerminalDock(generation, projectRoot) {
     });
     terminalHandle = handle;
     handle.setVisible(workspaceState.status === "open" && view === "board");
+    applicationOverlayCoordinator.setDock(handle);
     await handle.ready;
     const current = workspaceController.state;
     if (
@@ -4040,7 +4189,10 @@ async function ensureTerminalDock(generation, projectRoot) {
       !["open", "loading"].includes(current.status)
     ) {
       handle.dispose();
-      if (terminalHandle === handle) terminalHandle = null;
+      if (terminalHandle === handle) {
+        terminalHandle = null;
+        applicationOverlayCoordinator.setDock(null);
+      }
       return;
     }
   } catch (error) {
@@ -4055,6 +4207,7 @@ function disposeTerminalDock() {
   closeTerminalAssociationEditor(false, true);
   closeTerminalWriteback(false, true);
   closeTaskTransition(false, false, true);
+  applicationOverlayCoordinator.setDock(null);
   terminalHandle?.dispose();
   terminalHandle = null;
   terminalGeneration = 0;
@@ -4081,23 +4234,46 @@ function boardShortcutIsBlocked(event) {
   return interactive || terminalFocused || snapshotDialogIsOpen();
 }
 
+function nativeMenuOpenOverlayIDs() {
+  return Array.from(
+    document.querySelectorAll("body > .modal, body > [data-terminal-overlay]"),
+  ).filter((overlay) => !overlay.hidden).map((overlay) =>
+    overlay.id || (overlay.hasAttribute("data-terminal-overlay")
+      ? "terminal-overlay"
+      : "application-overlay")
+  );
+}
+
+function nativeMenuFocusTarget() {
+  const active = document.activeElement;
+  if (active instanceof Element && active.closest("#terminal-dock")) {
+    return "terminal";
+  }
+  if (
+    active instanceof HTMLElement &&
+    (["INPUT", "SELECT", "TEXTAREA"].includes(active.tagName) ||
+      active.isContentEditable)
+  ) return "input";
+  return "other";
+}
+
+function nativeCommandAllowed(command) {
+  return nativeMenuCommandAllowed(command, {
+    workspaceStatus: workspaceController.state.status,
+    openOverlayIDs: nativeMenuOpenOverlayIDs(),
+    focusTarget: nativeMenuFocusTarget(),
+  });
+}
+
 function trapModalFocus(event) {
   if (event.key !== "Tab") return;
-  const modal = [
-    elements.palette,
-    elements.confirmModal,
-    elements.updatesModal,
-    elements.agentLaunchModal,
-    elements.terminalAssociationModal,
-    elements.terminalWritebackModal,
-    elements.taskTransitionModal,
-    elements.modal,
-    elements.memoryModal,
-    elements.drawer,
-  ].find(
-    (candidate) => !candidate.hidden,
+  const modal = applicationOverlayCoordinator.activeOverlay;
+  if (!(modal instanceof HTMLElement)) return;
+  const policy = applicationOverlayKeyboardPolicy(
+    modal.id,
+    modal.hasAttribute("data-terminal-overlay"),
   );
-  if (!modal) return;
+  if (!policy.trapTab) return;
   const focusable = Array.from(
     modal.querySelectorAll(
       [
@@ -4118,6 +4294,32 @@ function trapModalFocus(event) {
   (focusable[next] || first).focus();
 }
 
+function closeActiveApplicationOverlay(event) {
+  if (event.key !== "Escape" || event.defaultPrevented) return false;
+  const modal = applicationOverlayCoordinator.activeOverlay;
+  if (!(modal instanceof HTMLElement)) return false;
+  const { escapeAction } = applicationOverlayKeyboardPolicy(
+    modal.id,
+    modal.hasAttribute("data-terminal-overlay"),
+  );
+  if (!escapeAction) return false;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  if (escapeAction === "dialog") closeDialog();
+  else if (escapeAction === "memory") closeMemoryHistory();
+  else if (escapeAction === "updates") closeAboutUpdates();
+  else if (escapeAction === "drawer") closeTaskDetail();
+  else if (escapeAction === "agent-launch") closeAgentLaunchPicker();
+  else if (escapeAction === "terminal-association") {
+    closeTerminalAssociationEditor();
+  } else if (escapeAction === "terminal-writeback") closeTerminalWriteback();
+  else if (escapeAction === "task-transition") closeTaskTransition();
+  else if (escapeAction === "workspace-confirm") {
+    finishWorkspaceConfirmation(false);
+  } else if (escapeAction === "palette") closePalette();
+  return true;
+}
+
 function eventsOn(name, callback) {
   const runtime = window.runtime;
   if (typeof runtime?.EventsOnMultiple !== "function") return () => {};
@@ -4125,12 +4327,53 @@ function eventsOn(name, callback) {
 }
 
 function registerNativeProjectActions() {
+  const showNativeView = (command) => {
+    if (!nativeCommandAllowed(command)) return;
+    const target = nativeMenuViewTarget(command);
+    if (target) setView(target, true);
+  };
   nativeEventDisposers.push(
-    eventsOn("workspace:open-requested", () => void requestOpenProject()),
-    eventsOn("workspace:switch-requested", () => void requestOpenProject()),
-    eventsOn("workspace:close-requested", () => void requestCloseProject()),
-    eventsOn("workspace:capabilities-requested", () => setView("settings")),
-    eventsOn("update:open-requested", () => openAboutUpdates(elements.appVersion)),
+    ...registerNativeMenuActions(eventsOn, {
+      openProject: () => {
+        if (nativeCommandAllowed("openProject")) void requestOpenProject();
+      },
+      switchProject: () => {
+        if (nativeCommandAllowed("switchProject")) void requestOpenProject();
+      },
+      closeProject: () => {
+        if (nativeCommandAllowed("closeProject")) void requestCloseProject();
+      },
+      showSettings: () => {
+        showNativeView("showSettings");
+      },
+      showCapabilities: () => {
+        showNativeView("showCapabilities");
+      },
+      showBoard: () => {
+        showNativeView("showBoard");
+      },
+      showIntelligence: () => {
+        showNativeView("showIntelligence");
+      },
+      toggleTerminalPanel: () => {
+        if (nativeCommandAllowed("toggleTerminalPanel")) {
+          document.querySelector("#terminal-panel-toggle")?.click();
+        }
+      },
+      toggleCommandPalette: () => {
+        if (!nativeCommandAllowed("toggleCommandPalette")) return;
+        if (elements.palette.hidden) openPalette();
+        else closePalette();
+      },
+      installShellCommand: () => {
+        if (nativeCommandAllowed("installShellCommand")) {
+          void api().InstallShellCommand();
+        }
+      },
+      checkForUpdates: () => {
+        if (openAboutUpdates(elements.appVersion)) void runUpdateAction("check");
+      },
+    }),
     eventsOn("update:state-changed", (state) => renderUpdateState(state)),
     eventsOn("workspace:data-changed", () =>
       void loadSnapshot(board?.planId || 0, true),
@@ -4437,45 +4680,8 @@ document.querySelectorAll("[data-close-task-transition]").forEach((element) => {
 
 document.addEventListener("keydown", (event) => {
   trapModalFocus(event);
-  if (event.key === "Escape" && !elements.updatesModal.hidden) {
-    event.preventDefault();
-    closeAboutUpdates();
-    return;
-  }
-  if (event.key === "Escape" && !elements.confirmModal.hidden) {
-    event.preventDefault();
-    finishWorkspaceConfirmation(false);
-    return;
-  }
-  if (event.key === "Escape" && !elements.agentLaunchModal.hidden) {
-    event.preventDefault();
-    closeAgentLaunchPicker();
-    return;
-  }
-  if (event.key === "Escape" && !elements.terminalAssociationModal.hidden) {
-    event.preventDefault();
-    closeTerminalAssociationEditor();
-    return;
-  }
-  if (event.key === "Escape" && !elements.terminalWritebackModal.hidden) {
-    event.preventDefault();
-    closeTerminalWriteback();
-    return;
-  }
-  if (event.key === "Escape" && !elements.taskTransitionModal.hidden) {
-    event.preventDefault();
-    closeTaskTransition();
-    return;
-  }
-  if (event.key === "Escape" && !elements.modal.hidden) closeDialog();
-  if (event.key === "Escape" && !elements.memoryModal.hidden) closeMemoryHistory();
-  if (
-    event.key === "Escape" &&
-    !elements.drawer.hidden &&
-    elements.modal.hidden &&
-    elements.memoryModal.hidden
-  ) {
-    closeTaskDetail();
+  if (event.key === "Escape") {
+    if (event.defaultPrevented || closeActiveApplicationOverlay(event)) return;
   }
   const command = commandShortcut({
     key: event.key,
@@ -4496,9 +4702,9 @@ document.addEventListener("keydown", (event) => {
   }
   if (command && !boardShortcutIsBlocked(event)) {
     event.preventDefault();
-    if (command === "board") setView("board");
-    if (command === "overview") setView("overview");
-    if (command === "settings") setView("settings");
+    if (command === "board") setView("board", true);
+    if (command === "overview") setView("overview", true);
+    if (command === "settings") setView("settings", true);
     if (command === "addTask") {
       setView("board");
       elements.taskTitle.focus();

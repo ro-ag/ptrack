@@ -192,6 +192,7 @@ describe("renderer resource policies", () => {
     const policy = (workspaceViewVisible: boolean, selected: boolean) =>
       terminalPanePresentationPolicy({
         workspaceViewVisible,
+        applicationOverlayOpen: false,
         terminalHidden: false,
         documentVisible: true,
         activeTab: true,
@@ -238,6 +239,7 @@ describe("renderer resource policies", () => {
   ])("applies %s presentation policy", (_name, override, paneVisible, webglAllowed) => {
     expect(terminalPanePresentationPolicy({
       workspaceViewVisible: true,
+      applicationOverlayOpen: false,
       terminalHidden: false,
       documentVisible: true,
       activeTab: true,
@@ -248,5 +250,50 @@ describe("renderer resource policies", () => {
       dockVisible: true,
       ...override,
     })).toMatchObject({ paneVisible, webglAllowed });
+  });
+
+  it.each([
+    ["resource-backed running pane", true],
+    ["stopped pane without resources", false],
+  ])("suppresses and safely restores a %s around application overlays", (_name, hasResources) => {
+    const presentation = (
+      applicationOverlayOpen: boolean,
+      activeTab = true,
+      workspaceViewVisible = true,
+    ) =>
+      terminalPanePresentationPolicy({
+        workspaceViewVisible,
+        applicationOverlayOpen,
+        terminalHidden: false,
+        documentVisible: true,
+        activeTab,
+        selected: true,
+        hasResources,
+        hostVisible: hasResources,
+        bodyVisible: true,
+        dockVisible: true,
+      });
+
+    expect(presentation(false)).toMatchObject({ paneVisible: true, webglAllowed: true });
+    expect(presentation(true)).toEqual({
+      paneVisible: false,
+      webglAllowed: false,
+      foreground: false,
+    });
+    expect(presentation(false)).toMatchObject({
+      paneVisible: true,
+      webglAllowed: true,
+      foreground: hasResources,
+    });
+    expect(presentation(false, false)).toMatchObject({
+      paneVisible: false,
+      webglAllowed: false,
+      foreground: false,
+    });
+    expect(presentation(false, true, false)).toMatchObject({
+      paneVisible: false,
+      webglAllowed: false,
+      foreground: false,
+    });
   });
 });

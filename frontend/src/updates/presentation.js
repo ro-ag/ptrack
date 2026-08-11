@@ -10,6 +10,18 @@ export function updateStateIsNewer(current, incoming) {
   return Number(incoming?.revision || 0) >= Number(current?.revision || 0);
 }
 
+export function updateModalOpenTransition(
+  wasHidden,
+  currentReturnFocus,
+  requestedReturnFocus,
+) {
+  return {
+    returnFocus: wasHidden ? requestedReturnFocus : currentReturnFocus,
+    makeVisible: wasHidden,
+    scheduleOpeningFocus: wasHidden,
+  };
+}
+
 export function updatePresentation(state = {}) {
   const phase = String(state.phase || "idle");
   const release = state.release || null;

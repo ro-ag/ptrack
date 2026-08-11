@@ -339,6 +339,23 @@ Like the terminal dashboard, the GUI opens the database only for each action.
 The CLI and AI agents can therefore keep reading and writing the same project
 without the board retaining bbolt's write lock.
 
+### Desktop keyboard shortcuts
+
+| Action | macOS | Windows and Linux |
+|---|---|---|
+| Open project | `⌘O` | File → Open Project |
+| Settings | `⌘,` | Project → Settings |
+| Board / Intelligence / Capabilities | `⌘1` / `⌘2` / `⌘3` | `Ctrl+1` / `Ctrl+2` / `Ctrl+3` |
+| Command palette | `⌘K` | `Ctrl+K` |
+| Refresh board / add task | `R` / `/` | `R` / `/` |
+| Toggle terminal panel | View → Toggle Terminal Panel | View → Toggle Terminal Panel |
+| Close project | File → Close Project | File → Close Project |
+
+Board and view shortcuts pause while a dialog is open or focus is in a text
+control or terminal; the command palette shortcut remains global. Native menu
+commands remain available when focus is retained, but never claim
+`⌘W`/`Ctrl+W` or terminal control-key combinations.
+
 ## Organize tasks
 
 Move a task without recreating it:

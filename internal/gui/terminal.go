@@ -716,14 +716,55 @@ func (a *App) onStartup(ctx context.Context) {
 	a.startUpdater()
 }
 
+func (a *App) onBeforeClose(_ context.Context) (prevent bool) {
+	a.lifecycleMu.Lock()
+	if a.shuttingDown {
+		a.lifecycleMu.Unlock()
+		return false
+	}
+	if a.frontendClosing {
+		a.lifecycleMu.Unlock()
+		return true
+	}
+	a.frontendClosing = true
+	a.frontendCloseEpoch++
+	epoch := a.frontendCloseEpoch
+	waitTimeout := a.runtimeCallTimeout
+	if waitTimeout <= 0 {
+		waitTimeout = 250 * time.Millisecond
+	}
+	a.lifecycleMu.Unlock()
+
+	if waitForLifecycleGroup(&a.runtimeCalls, waitTimeout) {
+		return false
+	}
+
+	a.lifecycleMu.Lock()
+	if !a.shuttingDown && a.frontendClosing && a.frontendCloseEpoch == epoch {
+		a.frontendClosing = false
+		a.lifecycleMu.Unlock()
+		return true
+	}
+	a.lifecycleMu.Unlock()
+	return false
+}
+
 func (a *App) onShutdown(ctx context.Context) {
 	a.shutdownOnce.Do(func() {
 		a.lifecycleMu.Lock()
 		a.shuttingDown = true
+		a.frontendClosing = true
+		a.frontendCloseEpoch++
+		a.wailsContext = nil
+		runtimeWaitTimeout := a.runtimeCallTimeout
+		if runtimeWaitTimeout <= 0 {
+			runtimeWaitTimeout = 250 * time.Millisecond
+		}
 		a.shutdownSignalOnce.Do(func() {
 			close(a.shutdownStarted)
 		})
 		a.lifecycleMu.Unlock()
+		waitForLifecycleGroup(&a.runtimeCalls, runtimeWaitTimeout)
 		a.transitionMu.Lock()
 		a.clearConfirmationLocked()
 		a.workspaceMu.Lock()
@@ -801,14 +842,31 @@ func (a *App) workspaceIsPublished(workspace *WorkspaceContext) bool {
 }
 
 func (a *App) emitTerminalEvent(name string, payload any) {
-	a.lifecycleMu.Lock()
-	ctx := a.wailsContext
+	ctx, release, ok := a.acquireRuntimeCall()
+	if !ok {
+		return
+	}
+	defer release()
 	emitter := a.emitTerminal
-	a.lifecycleMu.Unlock()
-	if ctx == nil || emitter == nil {
+	if emitter == nil {
 		return
 	}
 	emitter(ctx, name, payload)
+}
+
+func (a *App) acquireRuntimeCall() (context.Context, func(), bool) {
+	a.lifecycleMu.Lock()
+	if a.shuttingDown || a.frontendClosing || a.wailsContext == nil {
+		a.lifecycleMu.Unlock()
+		return nil, nil, false
+	}
+	ctx := a.wailsContext
+	a.runtimeCalls.Add(1)
+	a.lifecycleMu.Unlock()
+	var once sync.Once
+	return ctx, func() {
+		once.Do(a.runtimeCalls.Done)
+	}, true
 }
 
 func (a *App) monitorTerminalExit(
