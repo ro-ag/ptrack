@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   commitClipboardPaste,
+  isTerminalCompositionEvent,
   prepareClipboardPaste,
   terminalTextToBytes,
   terminalShortcutAction,
@@ -126,6 +127,7 @@ describe("terminalShortcutAction", () => {
       ctrlKey: boolean;
       shiftKey: boolean;
       altKey: boolean;
+      code: string;
     }> = {},
   ) => ({
     key: value,
@@ -223,6 +225,16 @@ describe("terminalShortcutAction", () => {
     expect(terminalShortcutAction(key("0", { ctrlKey: true }), "linux", false)).toBe(
       "zoom-reset",
     );
+    expect(terminalShortcutAction(
+      key("é", { ctrlKey: true, code: "Digit0" }),
+      "windows",
+      false,
+    )).toBe("zoom-reset");
+    expect(terminalShortcutAction(
+      key(")", { metaKey: true, code: "Equal" }),
+      "mac",
+      false,
+    )).toBe("zoom-in");
     expect(terminalShortcutAction(key("k", { metaKey: true }), "mac", false)).toBe(
       "clear",
     );
@@ -244,5 +256,30 @@ describe("terminalShortcutAction", () => {
         false,
       ),
     ).toBe(null);
+    expect(
+      terminalShortcutAction(
+        key("@", { ctrlKey: true, altKey: true, code: "Digit0" }),
+        "windows",
+        false,
+      ),
+    ).toBe(null);
+    expect(terminalShortcutAction(key("Dead", { metaKey: true }), "mac", false)).toBe(
+      null,
+    );
+    expect(terminalShortcutAction(key("ф", { metaKey: true }), "mac", false)).toBe(
+      null,
+    );
+  });
+});
+
+describe("isTerminalCompositionEvent", () => {
+  it.each([
+    [{ key: "a", isComposing: true }, true],
+    [{ key: "a", keyCode: 229 }, true],
+    [{ key: "Process" }, true],
+    [{ key: "Dead" }, false],
+    [{ key: "a", isComposing: false, keyCode: 65 }, false],
+  ])("classifies IME boundary event %#", (event, expected) => {
+    expect(isTerminalCompositionEvent(event)).toBe(expected);
   });
 });

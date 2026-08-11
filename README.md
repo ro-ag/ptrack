@@ -242,6 +242,48 @@ font size from the toolbar or standard zoom shortcuts, and clear or reset the
 emulator without stopping its shell. WebGL rendering retries after a lost GPU
 context and keeps xterm's built-in renderer as its fallback.
 
+Terminal profiles can set renderer and launch policy without storing the
+inherited process environment. Put a strict version-1 configuration at
+`~/.ptrack/terminal-profiles.json` (or under `PTRACK_HOME`), then reopen the
+project workspace. Each profile keeps its executable and argument array
+separate and may set a named `default`, `platinum`, or `high-contrast` theme,
+font family and size, bounded scrollback, explicit non-secret environment
+overrides, `requested`/`project`/`fixed` working-directory policy, and
+`keep`/`close-on-success`/`close` exit behavior. Toolbar zoom is remembered per
+profile. Custom configured profiles are shells. An installed agent profile may
+override only its name, renderer settings, scrollback, and exit behavior; its
+executable, arguments, environment, provider, and working-directory policy must
+stay identical so an existing capability approval cannot move to a different
+process identity. For example:
+
+```json
+{
+  "version": 1,
+  "profiles": [
+    {
+      "id": "shell-focused",
+      "name": "Focused shell",
+      "kind": "shell",
+      "executable": "/bin/zsh",
+      "args": ["-l"],
+      "env": {"EDITOR": "vim"},
+      "theme": "high-contrast",
+      "fontFamily": "Iosevka, monospace",
+      "fontSize": 15,
+      "scrollback": 50000,
+      "cwdPolicy": "project",
+      "exitBehavior": "keep"
+    }
+  ]
+}
+```
+
+Profile files are private, atomically replaced, size-bounded, and strictly
+decoded. `PTRACK_*` keys and credential-like environment names are rejected;
+credentials still belong in the tool's native credential store, never in a
+terminal profile. Automatic process restart is deliberately not an exit policy
+because it would silently execute a fresh process with new runtime authority.
+
 The top-right panel controls can independently hide the project sidebar, board,
 or terminal; hiding the board gives the terminal the full workspace height
 without restarting its session. The sidebar remains pointer- and

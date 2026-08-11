@@ -17,10 +17,17 @@ export type TerminalShortcutAction =
 
 interface ShortcutEvent {
   key: string;
+  code?: string;
   metaKey: boolean;
   ctrlKey: boolean;
   shiftKey: boolean;
   altKey: boolean;
+}
+
+interface CompositionEvent {
+  key: string;
+  keyCode?: number;
+  isComposing?: boolean;
 }
 
 export interface ClipboardPasteRequest {
@@ -91,6 +98,10 @@ export async function commitClipboardPaste(
   return true;
 }
 
+export function isTerminalCompositionEvent(event: CompositionEvent): boolean {
+  return event.isComposing === true || event.keyCode === 229 || event.key === "Process";
+}
+
 export function terminalShortcutAction(
   event: ShortcutEvent,
   platform: TerminalPlatform,
@@ -121,9 +132,18 @@ export function terminalShortcutAction(
     return "search";
   }
   if (zoomModifier) {
-    if (event.key === "+" || event.key === "=") return "zoom-in";
-    if (event.key === "-" && !event.shiftKey) return "zoom-out";
-    if (event.key === "0" && !event.shiftKey) return "zoom-reset";
+    if (
+      event.key === "+" || event.key === "=" ||
+      event.code === "Equal" || event.code === "NumpadAdd"
+    ) return "zoom-in";
+    if (
+      !event.shiftKey &&
+      (event.key === "-" || event.code === "Minus" || event.code === "NumpadSubtract")
+    ) return "zoom-out";
+    if (
+      !event.shiftKey &&
+      (event.key === "0" || event.code === "Digit0" || event.code === "Numpad0")
+    ) return "zoom-reset";
   }
   if (
     platform === "mac" &&

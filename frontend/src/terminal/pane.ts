@@ -10,6 +10,15 @@ import "@xterm/xterm/css/xterm.css";
 
 import { TerminalStreamClient } from "./client";
 import type { StreamState } from "./client";
+import { terminalPaneInputLabel } from "./accessibility";
+import {
+  terminalDiagnosticView,
+  type TerminalDiagnosticInput,
+  type TerminalDiagnosticLayout,
+  type TerminalDiagnosticProcess,
+  type TerminalDiagnosticRenderer,
+  type TerminalDiagnosticStream,
+} from "./diagnostics";
 import {
   completeLinkedLaunchTransaction,
   installedAgentProfiles,
@@ -36,6 +45,7 @@ import {
 import {
   binaryStringToBytes,
   commitClipboardPaste,
+  isTerminalCompositionEvent,
   prepareClipboardPaste,
   splitTerminalInput,
   terminalTextToBytes,
@@ -52,10 +62,40 @@ import {
   minimumTerminalFontSize,
   maximumTerminalFontSize,
   readTerminalFontSize,
+  readTerminalProfileFontSize,
   terminalZoomLabel,
-  writeTerminalFontSize,
+  writeTerminalProfileFontSize,
 } from "./preferences";
+import {
+  normalizeTerminalProfileSettings,
+  terminalRendererOptions,
+  terminalProfileClosesAfterExit,
+  type NormalizedTerminalProfileSettings,
+} from "./profile-settings";
+import {
+  maximumWebglRecoveryAttempts,
+  webglAttachAllowed,
+  webglRecoveryDelay,
+  type WebglAttachSource,
+} from "./renderer-recovery";
+import {
+  forceStopTerminalRecovery,
+  resetTerminalWorkspaceRecovery,
+  restartTerminalRecovery,
+  retryTerminalRendererRecovery,
+} from "./recovery-actions";
+import { TerminalResizeDispatcher } from "./resize-dispatch";
 import { terminalSearchResultLabel } from "./search";
+import {
+  applyShellSignal,
+  initialShellState,
+  nextShellCWDValidation,
+  parseShellOSC,
+  shellStatusLabel,
+  type ShellIntegrationDescriptor,
+  type ShellSignal,
+  type ShellState,
+} from "./shell-integration";
 import {
   acknowledgePaneActivity,
   aggregateTabIndicator,
@@ -144,6 +184,7 @@ interface TerminalSession {
   streamUrl: string;
   associationRevision?: number;
   linkedLaunch?: boolean;
+  shellIntegration?: ShellIntegrationDescriptor;
 }
 
 interface TerminalExit {
@@ -231,6 +272,11 @@ export interface TerminalDockHandle {
 
 interface PaneResources {
   host: HTMLElement;
+  profileId: string;
+  fontSize: number;
+  shellState: ShellState;
+  shellCWDRequest: number;
+  lastShellCWD: string;
   terminal: Terminal;
   fit: FitAddon;
   search: SearchAddon;
@@ -242,11 +288,10 @@ interface PaneResources {
   subscriptions: IDisposable[];
   eventDisposers: Array<() => void>;
   animationFrame: number | null;
-  resizeTimer: number | null;
+  resizeDispatcher: TerminalResizeDispatcher | null;
   webglRecoveryTimer: number | null;
   webglRecoveryAttempts: number;
-  pendingSize: { rows: number; columns: number } | null;
-  lastResizeAt: number;
+  diagnosticChangedAt: number;
   disposed: boolean;
 }
 
@@ -259,9 +304,7 @@ interface LinkedTabStage {
 
 const minimumDockHeight = 180;
 const defaultDockHeight = 300;
-const resizeIntervalMilliseconds = 100;
 const terminalFontSizeStep = 1;
-const maximumWebglRecoveryAttempts = 3;
 
 function requiredElement<T extends HTMLElement>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -332,6 +375,29 @@ class TerminalDock {
   readonly #open = requiredElement<HTMLButtonElement>("#terminal-open");
   readonly #restart = requiredElement<HTMLButtonElement>("#terminal-restart");
   readonly #close = requiredElement<HTMLButtonElement>("#terminal-close");
+  readonly #forceStop = requiredElement<HTMLButtonElement>("#terminal-force-stop");
+  readonly #rendererRetry = requiredElement<HTMLButtonElement>(
+    "#terminal-renderer-retry",
+  );
+  readonly #diagnosticsToggle = requiredElement<HTMLButtonElement>(
+    "#terminal-diagnostics-toggle",
+  );
+  readonly #diagnostics = requiredElement<HTMLElement>("#terminal-diagnostics");
+  readonly #diagnosticProcess = requiredElement<HTMLElement>(
+    "#terminal-diagnostic-process",
+  );
+  readonly #diagnosticStream = requiredElement<HTMLElement>(
+    "#terminal-diagnostic-stream",
+  );
+  readonly #diagnosticRenderer = requiredElement<HTMLElement>(
+    "#terminal-diagnostic-renderer",
+  );
+  readonly #diagnosticLayout = requiredElement<HTMLElement>(
+    "#terminal-diagnostic-layout",
+  );
+  readonly #diagnosticUpdated = requiredElement<HTMLElement>(
+    "#terminal-diagnostic-updated",
+  );
   readonly #association = requiredElement<HTMLButtonElement>(
     "#terminal-link-context",
   );
@@ -414,6 +480,8 @@ class TerminalDock {
   #defaultProfileId = "";
   #profiles: TerminalProfile[] = [];
   #profileKinds = new Map<string, TerminalProfileKind>();
+  #profileSettings = new Map<string, NormalizedTerminalProfileSettings>();
+  #profileFontSizes = new Map<string, number>();
   #earlyExit = new Map<string, TerminalExit>();
   #dragCleanup: (() => void) | null = null;
   #pasteResolve: ((confirmed: boolean) => void) | null = null;
@@ -425,6 +493,10 @@ class TerminalDock {
   #pasteRequest = 0;
   #disposed = false;
   #resetPromise: Promise<void> | null = null;
+  #diagnosticsOpen = false;
+  #layoutDiagnosticState: TerminalDiagnosticLayout = "default";
+  #layoutRepairCount = 0;
+  #layoutDiagnosticChangedAt = Date.now();
   readonly #linkedPersistenceStage = new LinkedLaunchPersistenceStage();
   #linkedLaunchPaneIds = new Set<string>();
   #authorizedRuntimeRemoval = new Set<string>();
@@ -441,6 +513,12 @@ class TerminalDock {
       (message) => this.#showError(new Error(message)),
     );
     this.#loadedPersistedWorkspace = restored.workspace !== null;
+    this.#layoutDiagnosticState = restored.invalidReason !== null
+      ? "discarded"
+      : restored.workspace !== null
+        ? "restored"
+        : "default";
+    this.#layoutDiagnosticChangedAt = Date.now();
     this.#dockRatio = restored.dockRatio;
     this.#persistenceScheduler = new WorkspacePersistenceScheduler(
       {
@@ -527,6 +605,19 @@ class TerminalDock {
     this.#listen(this.#close, "click", () =>
       void this.#closeTerminal(this.#activeRuntime()),
     );
+    this.#listen(this.#forceStop, "click", () =>
+      void this.#runOperation((runtime) => this.#forceStopTerminal(runtime)),
+    );
+    this.#listen(this.#rendererRetry, "click", () => this.#retryActiveRenderer());
+    this.#listen(this.#diagnosticsToggle, "click", () =>
+      this.#setDiagnosticsOpen(!this.#diagnosticsOpen),
+    );
+    this.#listen(this.#diagnostics, "keydown", (event) => {
+      const keyEvent = event as KeyboardEvent;
+      if (keyEvent.key !== "Escape") return;
+      keyEvent.preventDefault();
+      this.#setDiagnosticsOpen(false, true);
+    });
     this.#listen(this.#resetWorkspace, "click", () =>
       void this.#resetTerminalWorkspace(),
     );
@@ -542,9 +633,11 @@ class TerminalDock {
     this.#listen(this.#modernUnicode, "change", () =>
       this.#setModernUnicode(this.#modernUnicode.checked),
     );
-    this.#listen(this.#profile, "change", () =>
-      this.#updateEditableDescriptor({ profileId: this.#profile.value }),
-    );
+    this.#listen(this.#profile, "change", () => {
+      this.#updateEditableDescriptor({ profileId: this.#profile.value });
+      this.#syncActiveProfileFontSize();
+      this.#renderZoomState();
+    });
     this.#listen(this.#cwd, "change", () =>
       this.#updateEditableDescriptor({ cwd: this.#cwd.value }),
     );
@@ -555,7 +648,7 @@ class TerminalDock {
       this.#setFontSize(this.#fontSize - terminalFontSizeStep),
     );
     this.#listen(this.#zoomReset, "click", () =>
-      this.#setFontSize(defaultTerminalFontSize),
+      this.#setFontSize(this.#activeProfileDefaultFontSize()),
     );
     this.#listen(this.#zoomIn, "click", () =>
       this.#setFontSize(this.#fontSize + terminalFontSizeStep),
@@ -644,6 +737,9 @@ class TerminalDock {
     );
     this.#listen(window, "beforeunload", () => this.dispose());
     this.#listen(window, "pagehide", () => this.#flushPersistence());
+    this.#listen(window, "focus", () => this.#recoverTerminalPresentation());
+    this.#listen(window, "pageshow", () => this.#recoverTerminalPresentation());
+    this.#listen(window, "resize", () => this.#recoverTerminalPresentation());
     this.#listen(document, "visibilitychange", () =>
       this.#handleDocumentVisibilityChange(),
     );
@@ -660,8 +756,16 @@ class TerminalDock {
       this.#profiles = profiles.map((profile) => ({ ...profile }));
       this.#profile.replaceChildren();
       this.#profileKinds.clear();
+      this.#profileSettings.clear();
+      this.#profileFontSizes.clear();
       for (const profile of profiles) {
         this.#profileKinds.set(profile.id, profile.kind);
+        const settings = normalizeTerminalProfileSettings(profile);
+        this.#profileSettings.set(profile.id, settings);
+        this.#profileFontSizes.set(
+          profile.id,
+          readTerminalProfileFontSize(localStorage, profile.id, settings.fontSize),
+        );
         const option = document.createElement("option");
         option.value = profile.id;
         option.textContent = `${profile.name}${profile.kind === "agent" ? " · agent" : ""}`;
@@ -671,6 +775,7 @@ class TerminalDock {
         throw new Error("No installed terminal profiles were discovered");
       }
       this.#defaultProfileId = profiles[0].id;
+      this.#syncActiveProfileFontSize();
       const savedCwds = savedWorkspaceCwds(this.#tabController.workspace);
       let cwdValidations: TerminalCWDValidation[] | null = [];
       let cwdValidationUnavailable = false;
@@ -693,6 +798,16 @@ class TerminalDock {
       if (repair.workspace !== this.#tabController.workspace) {
         this.#tabController.replace(repair.workspace);
         this.#flushPersistence();
+      }
+      if (
+        repair.repairedProfiles > 0 ||
+        repair.repairedCwds > 0 ||
+        cwdValidationUnavailable
+      ) {
+        this.#layoutDiagnosticState = "repaired";
+        this.#layoutRepairCount = repair.repairedProfiles + repair.repairedCwds +
+          (cwdValidationUnavailable ? 1 : 0);
+        this.#layoutDiagnosticChangedAt = Date.now();
       }
       if (
         this.#loadedPersistedWorkspace &&
@@ -858,16 +973,16 @@ class TerminalDock {
 
   async #restartTerminal(runtime: DockPaneRuntime): Promise<void> {
     const descriptor = this.#descriptorFor(runtime.paneId);
-    if (this.#paneIsLinked(runtime, descriptor?.association)) {
-      throw new Error(
-        "Linked agent tabs must be launched again from their plan or task",
-      );
-    }
-    await this.#lifecycle.close(runtime.paneId);
-    if (this.#disposed || !this.#descriptorFor(runtime.paneId)) return;
-    this.#lifecycle.prepareOpen(runtime.paneId);
-    runtime.busy = true;
-    await this.#openTerminal(runtime);
+    await restartTerminalRecovery({
+      linked: this.#paneIsLinked(runtime, descriptor?.association),
+      close: () => this.#lifecycle.close(runtime.paneId),
+      accepted: () => !this.#disposed && Boolean(this.#descriptorFor(runtime.paneId)),
+      open: async () => {
+        this.#lifecycle.prepareOpen(runtime.paneId);
+        runtime.busy = true;
+        await this.#openTerminal(runtime);
+      },
+    });
   }
 
   async #closeTerminal(runtime: DockPaneRuntime): Promise<void> {
@@ -887,6 +1002,28 @@ class TerminalDock {
     } catch (error) {
       if (!this.#disposed && this.#isActive(runtime)) this.#renderState();
       this.#showError(error);
+    }
+  }
+
+  async #forceStopTerminal(runtime: DockPaneRuntime): Promise<void> {
+    const result = await forceStopTerminalRecovery({
+      capture: () => this.#runtimes.capture(runtime.paneId),
+      currentSessionId: () => runtime.session?.sessionId ?? null,
+      closing: () => runtime.closing,
+      confirm: () => this.#confirmTermination(1, true),
+      accepted: (ticket) => this.#accepts(runtime, ticket),
+      close: () => {
+        const closing = this.#lifecycle.close(runtime.paneId, true);
+        if (this.#isActive(runtime)) this.#renderState();
+        return closing;
+      },
+    });
+    if (result !== "stopped") return;
+    if (this.#isActive(runtime)) this.#renderState();
+    this.#pruneEarlyExits();
+    if (!this.#disposed) {
+      this.#tabBar.refresh();
+      this.#focusWorkspaceSurvivor();
     }
   }
 
@@ -979,11 +1116,15 @@ class TerminalDock {
 
   #setFontSize(fontSize: number): void {
     this.#fontSize = clampTerminalFontSize(fontSize);
-    writeTerminalFontSize(localStorage, this.#fontSize);
+    const profileId = activeTerminalDescriptor(this.#tabController.workspace)?.pane.profileId;
+    if (!profileId) return;
+    this.#profileFontSizes.set(profileId, this.#fontSize);
+    writeTerminalProfileFontSize(localStorage, profileId, this.#fontSize);
     this.#renderZoomState();
     for (const runtime of this.#runtimes.values()) {
       const resources = runtime.resources;
-      if (!resources || resources.disposed) continue;
+      if (!resources || resources.disposed || resources.profileId !== profileId) continue;
+      resources.fontSize = this.#fontSize;
       resources.terminal.options.fontSize = this.#fontSize;
       if (this.#isPaneVisible(runtime.paneId)) {
         this.#fit(runtime, resources, true);
@@ -994,7 +1135,10 @@ class TerminalDock {
 
   #renderZoomState(): void {
     const resources = this.#activeRuntime().resources;
-    this.#zoomReset.textContent = terminalZoomLabel(this.#fontSize);
+    this.#zoomReset.textContent = terminalZoomLabel(
+      this.#fontSize,
+      this.#activeProfileDefaultFontSize(),
+    );
     this.#zoomReset.disabled = !resources;
     this.#zoomOut.disabled =
       !resources || this.#fontSize <= minimumTerminalFontSize;
@@ -1026,6 +1170,7 @@ class TerminalDock {
     ticket: PaneRuntimeTicket,
   ): void {
     resources.terminal.attachCustomKeyEventHandler((event) => {
+      if (isTerminalCompositionEvent(event)) return true;
       const paneShortcut = paneFocusShortcutIntent(
         event,
         platform() === "mac",
@@ -1038,7 +1183,6 @@ class TerminalDock {
         }
         return false;
       }
-      if (event.isComposing) return true;
       const action = terminalShortcutAction(
         event,
         platform(),
@@ -1097,10 +1241,6 @@ class TerminalDock {
       }
     };
     const dismiss = () => this.#hideContextMenu();
-    const recoverRenderer = () => {
-      this.#scheduleWebglRecovery(runtime, resources, ticket);
-      this.#acknowledgeIfForeground(runtime);
-    };
 
     resources.host.addEventListener("paste", interceptPaste, true);
     resources.host.addEventListener("mousedown", interceptRightMouseDown, true);
@@ -1109,7 +1249,6 @@ class TerminalDock {
     document.addEventListener("keydown", dismissOnKey);
     window.addEventListener("blur", dismiss);
     window.addEventListener("resize", dismiss);
-    window.addEventListener("focus", recoverRenderer);
     resources.eventDisposers.push(() => {
       resources.host.removeEventListener("paste", interceptPaste, true);
       resources.host.removeEventListener("mousedown", interceptRightMouseDown, true);
@@ -1118,7 +1257,6 @@ class TerminalDock {
       document.removeEventListener("keydown", dismissOnKey);
       window.removeEventListener("blur", dismiss);
       window.removeEventListener("resize", dismiss);
-      window.removeEventListener("focus", recoverRenderer);
     });
   }
 
@@ -1141,7 +1279,7 @@ class TerminalDock {
     } else if (action === "zoom-out") {
       this.#setFontSize(this.#fontSize - terminalFontSizeStep);
     } else if (action === "zoom-reset") {
-      this.#setFontSize(defaultTerminalFontSize);
+      this.#setFontSize(this.#activeProfileDefaultFontSize());
     } else if (action === "zoom-in") {
       this.#setFontSize(this.#fontSize + terminalFontSizeStep);
     } else if (action === "clear") {
@@ -1179,10 +1317,10 @@ class TerminalDock {
     resources: PaneResources,
   ): Promise<void> {
     if (resources.disposed || runtime.state !== "running" || this.#pasteBusy) return;
-    this.#pasteBusy = true;
-    const requestID = ++this.#pasteRequest;
     const ticket = this.#runtimes.capture(runtime.paneId);
     if (!ticket) return;
+    this.#pasteBusy = true;
+    const requestID = ++this.#pasteRequest;
     try {
       await this.#clipboardWrite;
       if (!this.#canPaste(runtime, resources, ticket, requestID)) return;
@@ -1275,7 +1413,7 @@ class TerminalDock {
     focusable[next].focus();
   }
 
-  #confirmTermination(paneCount: number): Promise<boolean> {
+  #confirmTermination(paneCount: number, force = false): Promise<boolean> {
     if (this.#disposed) return Promise.resolve(false);
     if (this.#terminationPromise) return this.#terminationPromise;
     this.#terminationInvoker = document.activeElement instanceof HTMLElement
@@ -1283,9 +1421,12 @@ class TerminalDock {
       : null;
     this.#finishPasteConfirmation(false);
     this.#hideContextMenu();
-    this.#terminationDetail.textContent = paneCount === 1
-      ? "The live terminal will be terminated and its access revoked before closing."
-      : `${paneCount} terminal panes will be terminated and their access revoked before closing.`;
+    this.#terminationDetail.textContent = force
+      ? "The selected terminal will be killed immediately after its access is revoked."
+      : paneCount === 1
+        ? "The live terminal will be terminated and its access revoked before closing."
+        : `${paneCount} terminal panes will be terminated and their access revoked before closing.`;
+    this.#terminationConfirm.textContent = force ? "Force stop" : "Terminate";
     this.#terminationModal.hidden = false;
     this.#terminationCancel.focus();
     this.#terminationPromise = new Promise<boolean>((resolve) => {
@@ -1404,6 +1545,11 @@ class TerminalDock {
     runtime: DockPaneRuntime,
     ticket: PaneRuntimeTicket,
   ): PaneResources {
+    const descriptor = this.#descriptorFor(runtime.paneId);
+    const profileId = descriptor?.pane.profileId || this.#defaultProfileId;
+    const settings = this.#profileSettings.get(profileId) ??
+      normalizeTerminalProfileSettings({});
+    const fontSize = this.#profileFontSizes.get(profileId) ?? settings.fontSize;
     const host = document.createElement("div");
     host.className = "terminal-pane-host";
     host.hidden = !this.#isPaneVisible(runtime.paneId);
@@ -1411,17 +1557,8 @@ class TerminalDock {
     const terminal = new Terminal({
       allowProposedApi: true,
       cursorBlink: true,
-      fontFamily:
-        '"SFMono-Regular", "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "DejaVu Sans Mono", "Apple Color Emoji", "Segoe UI Emoji", monospace',
-      fontSize: this.#fontSize,
       rescaleOverlappingGlyphs: true,
-      scrollback: 25_000,
-      theme: {
-        background: "#090d12",
-        foreground: "#e6e9f0",
-        cursor: "#3dd6a3",
-        selectionBackground: "#31594f",
-      },
+      ...terminalRendererOptions(settings, fontSize),
     });
     const fit = new FitAddon();
     terminal.loadAddon(fit);
@@ -1441,9 +1578,22 @@ class TerminalDock {
       }),
     );
     terminal.open(host);
+    const tab = this.#tabController.workspace.tabs.find((candidate) =>
+      paneIds(candidate.root).includes(runtime.paneId)
+    );
+    const paneIndex = tab ? paneIds(tab.root).indexOf(runtime.paneId) + 1 : 1;
+    terminal.textarea?.setAttribute(
+      "aria-label",
+      terminalPaneInputLabel(tab?.title ?? "Terminal", paneIndex),
+    );
 
     const resources: PaneResources = {
       host,
+      profileId,
+      fontSize,
+      shellState: initialShellState,
+      shellCWDRequest: 0,
+      lastShellCWD: "",
       terminal,
       fit,
       search,
@@ -1455,13 +1605,46 @@ class TerminalDock {
       subscriptions: [],
       eventDisposers: [],
       animationFrame: null,
-      resizeTimer: null,
+      resizeDispatcher: null,
       webglRecoveryTimer: null,
       webglRecoveryAttempts: 0,
-      pendingSize: null,
-      lastResizeAt: 0,
+      diagnosticChangedAt: Date.now(),
       disposed: false,
     };
+    resources.resizeDispatcher = new TerminalResizeDispatcher({
+      now: () => performance.now(),
+      setTimer: (callback, delay) => window.setTimeout(callback, delay),
+      clearTimer: (timer) => window.clearTimeout(timer),
+      accepted: () => Boolean(
+        runtime.session && !resources.disposed && this.#accepts(runtime, ticket)
+      ),
+      dispatch: (size) => {
+        const sessionID = runtime.session?.sessionId;
+        if (!sessionID) return;
+        void this.#backend.ResizeTerminal(sessionID, size.rows, size.columns).catch((error) => {
+          resources.resizeDispatcher?.invalidate(size);
+          if (!this.#disposed && this.#accepts(runtime, ticket) && !resources.disposed) {
+            this.#showError(error);
+          }
+        });
+      },
+    });
+
+    for (const identifier of [7, 133, 633] as const) {
+      resources.subscriptions.push(
+        terminal.parser.registerOscHandler(identifier, (payload) => {
+          if (!this.#accepts(runtime, ticket) ||
+            this.#profileKinds.get(profileId) === "agent") return true;
+          const signal = parseShellOSC(
+            identifier,
+            payload,
+            runtime.session?.shellIntegration?.nonce ?? "",
+          );
+          if (signal) this.#handleShellSignal(runtime, resources, ticket, signal);
+          return true;
+        }),
+      );
+    }
 
     this.#configureTerminalInput(runtime, resources, ticket);
     resources.subscriptions.push(
@@ -1508,17 +1691,21 @@ class TerminalDock {
     runtime: DockPaneRuntime,
     resources: PaneResources,
     ticket: PaneRuntimeTicket,
+    source: WebglAttachSource = "policy",
   ): void {
-    if (
-      resources.disposed ||
-      resources.webgl ||
-      !this.#accepts(runtime, ticket) ||
-      !this.#shouldUseWebgl(runtime.paneId) ||
-      this.#terminalHidden ||
-      document.visibilityState === "hidden"
-    ) return;
+    if (!webglAttachAllowed({
+      disposed: resources.disposed,
+      attached: resources.webgl !== null,
+      timerPending: resources.webglRecoveryTimer !== null,
+      attempts: resources.webglRecoveryAttempts,
+      accepted: this.#accepts(runtime, ticket),
+      preferred: this.#shouldUseWebgl(runtime.paneId),
+      terminalHidden: this.#terminalHidden,
+      documentHidden: document.visibilityState === "hidden",
+    }, source)) return;
+    let webgl: WebglAddon | null = null;
     try {
-      const webgl = new WebglAddon();
+      webgl = new WebglAddon();
       resources.terminal.loadAddon(webgl);
       resources.webgl = webgl;
       if (resources.webglRecoveryTimer !== null) {
@@ -1526,6 +1713,7 @@ class TerminalDock {
         resources.webglRecoveryTimer = null;
       }
       resources.webglRecoveryAttempts = 0;
+      resources.diagnosticChangedAt = Date.now();
       const contextLoss = webgl.onContextLoss(() => {
         contextLoss.dispose();
         if (resources.webgl === webgl) {
@@ -1534,12 +1722,22 @@ class TerminalDock {
         }
         webgl.dispose();
         if (resources.disposed || !this.#accepts(runtime, ticket)) return;
+        resources.diagnosticChangedAt = Date.now();
         resources.terminal.refresh(0, resources.terminal.rows - 1);
         this.#scheduleWebglRecovery(runtime, resources, ticket);
+        if (this.#isActive(runtime)) this.#renderState();
       });
       resources.webglContextLoss = contextLoss;
+      if (this.#isActive(runtime)) this.#renderState();
     } catch {
+      try {
+        webgl?.dispose();
+      } catch {
+        // A partial activation is abandoned within the bounded retry policy.
+      }
+      resources.diagnosticChangedAt = Date.now();
       this.#scheduleWebglRecovery(runtime, resources, ticket);
+      if (this.#isActive(runtime)) this.#renderState();
     }
   }
 
@@ -1548,21 +1746,23 @@ class TerminalDock {
     resources: PaneResources,
     ticket: PaneRuntimeTicket,
   ): void {
-    if (
-      resources.disposed ||
-      resources.webgl ||
-      resources.webglRecoveryTimer !== null ||
-      resources.webglRecoveryAttempts >= maximumWebglRecoveryAttempts ||
-      !this.#accepts(runtime, ticket) ||
-      !this.#shouldUseWebgl(runtime.paneId) ||
-      this.#terminalHidden ||
-      document.visibilityState === "hidden"
-    ) return;
-    const delay = 250 * 2 ** resources.webglRecoveryAttempts;
+    const delay = webglRecoveryDelay({
+      disposed: resources.disposed,
+      attached: resources.webgl !== null,
+      timerPending: resources.webglRecoveryTimer !== null,
+      attempts: resources.webglRecoveryAttempts,
+      accepted: this.#accepts(runtime, ticket),
+      preferred: this.#shouldUseWebgl(runtime.paneId),
+      terminalHidden: this.#terminalHidden,
+      documentHidden: document.visibilityState === "hidden",
+    });
+    if (delay === null) return;
+    resources.diagnosticChangedAt = Date.now();
     resources.webglRecoveryTimer = window.setTimeout(() => {
       resources.webglRecoveryTimer = null;
       resources.webglRecoveryAttempts += 1;
-      this.#attachWebgl(runtime, resources, ticket);
+      resources.diagnosticChangedAt = Date.now();
+      this.#attachWebgl(runtime, resources, ticket, "retry");
     }, delay);
   }
 
@@ -1604,6 +1804,9 @@ class TerminalDock {
       detail,
     });
     if (!transition) return;
+    const resources = runtime.resources;
+    resources?.resizeDispatcher?.dispose();
+    if (resources) resources.resizeDispatcher = null;
     runtime.activity = recordExit(
       runtime.activity,
       runtime.activity.profileKind,
@@ -1614,6 +1817,57 @@ class TerminalDock {
     );
     this.#acknowledgeIfForeground(runtime);
     this.#setState(runtime, transition.state, transition.detail);
+    const behavior = this.#profileSettings.get(runtime.session?.profileId ?? "")
+      ?.exitBehavior ?? "keep";
+    if (terminalProfileClosesAfterExit(behavior, result.exitCode)) {
+      void this.#lifecycle.close(runtime.paneId).then(() => {
+        if (!this.#disposed && this.#isActive(runtime)) this.#renderState();
+      }).catch((error) => {
+        if (!this.#disposed) this.#showError(error);
+      });
+    }
+  }
+
+  #handleShellSignal(
+    runtime: DockPaneRuntime,
+    resources: PaneResources,
+    ticket: PaneRuntimeTicket,
+    signal: ShellSignal,
+  ): void {
+    if (!this.#accepts(runtime, ticket) || resources.disposed) return;
+    resources.shellState = applyShellSignal(resources.shellState, signal, performance.now());
+    if (this.#isActive(runtime)) this.#renderState();
+    if (signal.kind !== "cwd" || !signal.authenticated || !runtime.session) return;
+
+    const decision = nextShellCWDValidation(
+      resources.shellCWDRequest,
+      resources.lastShellCWD,
+      signal.cwd,
+    );
+    resources.shellCWDRequest = decision.request;
+    if (!decision.validate) return;
+    const request = decision.request;
+    const sessionId = runtime.session.sessionId;
+    void this.#backend.ValidateTerminalCWDs([signal.cwd]).then((results) => {
+      if (!this.#accepts(runtime, ticket) || resources.disposed ||
+        request !== resources.shellCWDRequest ||
+        runtime.session?.sessionId !== sessionId) return;
+      const validation = results[0];
+      if (!validation || validation.requested !== signal.cwd ||
+        !validation.valid || !validation.cwd) return;
+      const descriptor = this.#descriptorFor(runtime.paneId);
+      if (!descriptor) return;
+      resources.lastShellCWD = validation.cwd;
+      this.#tabController.dispatch({
+        type: "update-pane",
+        tabId: descriptor.tabId,
+        paneId: runtime.paneId,
+        changes: { cwd: validation.cwd },
+      });
+    }).catch(() => {
+      // OSC paths are untrusted terminal presentation hints. Invalid or stale
+      // candidates are ignored without surfacing their content in diagnostics.
+    });
   }
 
   #recordPaneOutput(
@@ -1655,10 +1909,21 @@ class TerminalDock {
       this.#updateWebglPolicy();
       return;
     }
-    const runtime = this.#activeRuntime();
+    this.#recoverTerminalPresentation();
+  }
+
+  #recoverTerminalPresentation(): void {
+    if (this.#disposed || document.visibilityState === "hidden") return;
+    for (const paneId of this.#activeTabPaneIds()) {
+      const resources = this.#runtimes.get(paneId)?.resources;
+      if (resources && !resources.disposed && resources.webgl === null &&
+        resources.webglRecoveryTimer === null) {
+        resources.webglRecoveryAttempts = 0;
+      }
+    }
     this.#updateWebglPolicy();
     this.#fitPanes(this.#activeTabPaneIds());
-    this.#acknowledgeIfForeground(runtime);
+    this.#acknowledgeIfForeground(this.#activeRuntime());
   }
 
   #markPersistenceDirty(): void {
@@ -1699,7 +1964,11 @@ class TerminalDock {
       sessionId: runtime.session?.sessionId ?? null,
       eventSessionId: sessionId,
     })) return;
-    if (state === "connecting") return;
+    if (runtime.resources) runtime.resources.diagnosticChangedAt = Date.now();
+    if (state === "connecting") {
+      if (this.#isActive(runtime)) this.#renderState();
+      return;
+    }
     const transition = paneRuntimeTransition(runtime.state, {
       kind: state === "open"
         ? "stream-open"
@@ -1719,7 +1988,8 @@ class TerminalDock {
       resources.disposed ||
       resources.host.hidden ||
       this.#body.hidden ||
-      resources.host.clientWidth === 0
+      resources.host.clientWidth === 0 ||
+      resources.host.clientHeight === 0
     ) return;
     const buffer = resources.terminal.buffer.active;
     const wasAtBottom = buffer.viewportY === buffer.baseY;
@@ -1746,46 +2016,13 @@ class TerminalDock {
   }
 
   #scheduleBackendResize(
-    runtime: DockPaneRuntime,
+    _runtime: DockPaneRuntime,
     resources: PaneResources,
   ): void {
-    resources.pendingSize = {
+    resources.resizeDispatcher?.queue({
       rows: resources.terminal.rows,
       columns: resources.terminal.cols,
-    };
-    if (resources.resizeTimer !== null) return;
-    const elapsed = performance.now() - resources.lastResizeAt;
-    const delay = Math.max(0, resizeIntervalMilliseconds - elapsed);
-    const ticket = this.#runtimes.capture(runtime.paneId);
-    if (!ticket) return;
-    resources.resizeTimer = window.setTimeout(() => {
-      resources.resizeTimer = null;
-      const size = resources.pendingSize;
-      const sessionID = runtime.session?.sessionId;
-      resources.pendingSize = null;
-      if (
-        !size ||
-        !sessionID ||
-        resources.disposed ||
-        !this.#accepts(runtime, ticket)
-      ) return;
-      resources.lastResizeAt = performance.now();
-      void this.#backend
-        .ResizeTerminal(sessionID, size.rows, size.columns)
-        .catch((error) => {
-          if (
-            !this.#disposed &&
-            this.#accepts(runtime, ticket) &&
-            !resources.disposed
-          ) this.#showError(error);
-        });
-      if (
-        !this.#disposed &&
-        this.#accepts(runtime, ticket) &&
-        !resources.disposed &&
-        resources.pendingSize
-      ) this.#scheduleBackendResize(runtime, resources);
-    }, delay);
+    });
   }
 
   #disposeResources(resources: PaneResources): void {
@@ -1794,7 +2031,8 @@ class TerminalDock {
     resources.client?.close();
     resources.observer?.disconnect();
     if (resources.animationFrame !== null) cancelAnimationFrame(resources.animationFrame);
-    if (resources.resizeTimer !== null) window.clearTimeout(resources.resizeTimer);
+    resources.resizeDispatcher?.dispose();
+    resources.resizeDispatcher = null;
     if (resources.webglRecoveryTimer !== null) {
       window.clearTimeout(resources.webglRecoveryTimer);
     }
@@ -1825,15 +2063,132 @@ class TerminalDock {
     if (this.#isActive(runtime) && state === "closed") this.#setBoardHidden(false);
     runtime.state = state;
     runtime.detail = detail;
+    if (runtime.resources) runtime.resources.diagnosticChangedAt = Date.now();
     if (state === "closed") runtime.title = "";
     if (state !== "opening") this.#pruneEarlyExits();
     if (this.#isActive(runtime)) this.#renderState();
     else this.#tabBar.refresh();
   }
 
-  #renderState(): void {
+  #diagnosticInput(
+    runtime: DockPaneRuntime,
+    resources: PaneResources | null,
+  ): TerminalDiagnosticInput {
+    const process: TerminalDiagnosticProcess = runtime.closing
+      ? "stopping"
+      : {
+        closed: "stopped",
+        opening: "starting",
+        running: "running",
+        exited: "exited",
+        failed: "failed",
+      }[runtime.state];
+    const clientState = resources?.client?.state;
+    const stream: TerminalDiagnosticStream = !runtime.session || !clientState
+      ? "idle"
+      : {
+        closed: "disconnected",
+        connecting: "connecting",
+        open: "connected",
+        error: "failed",
+      }[clientState];
+    const visible = Boolean(
+      resources &&
+      !resources.disposed &&
+      !resources.host.hidden &&
+      this.#isPaneVisible(runtime.paneId) &&
+      document.visibilityState === "visible",
+    );
+    let renderer: TerminalDiagnosticRenderer = "none";
+    if (resources) {
+      renderer = resources.webgl
+        ? "webgl"
+        : resources.webglRecoveryTimer !== null
+          ? "recovering"
+          : resources.webglRecoveryAttempts >= maximumWebglRecoveryAttempts &&
+              this.#shouldUseWebgl(runtime.paneId) && visible
+            ? "fallback"
+            : "dom";
+    }
+    const activeAssociation = this.#tabController.workspace.tabs.find(
+      (tab) => tab.id === this.#tabController.workspace.activeTabId,
+    )?.association;
+    return {
+      stream,
+      renderer,
+      process,
+      layout: this.#layoutDiagnosticState,
+      rendererAttempts: resources?.webglRecoveryAttempts ?? 0,
+      layoutRepairs: this.#layoutRepairCount,
+      changedAt: Math.max(
+        this.#layoutDiagnosticChangedAt,
+        resources?.diagnosticChangedAt ?? 0,
+      ),
+      hasSession: runtime.session !== null,
+      linked: this.#paneIsLinked(runtime, activeAssociation),
+      busy: runtime.busy || runtime.closing,
+      selected: this.#isActive(runtime),
+      visible,
+    };
+  }
+
+  #renderDiagnostics(
+    view: ReturnType<typeof terminalDiagnosticView>,
+  ): void {
+    const values = new Map(view.rows.map((row) => [row.key, row.value]));
+    this.#diagnosticProcess.textContent = values.get("process") ?? "Stopped";
+    this.#diagnosticStream.textContent = values.get("stream") ?? "Idle";
+    this.#diagnosticRenderer.textContent = values.get("renderer") ?? "Not created";
+    this.#diagnosticLayout.textContent = values.get("layout") ?? "Default";
+    this.#diagnosticUpdated.textContent = values.get("updated") ?? "Not recorded";
+  }
+
+  #setDiagnosticsOpen(open: boolean, restoreFocus = false): void {
+    this.#diagnosticsOpen = open;
+    this.#diagnostics.hidden = !open;
+    this.#diagnosticsToggle.setAttribute("aria-expanded", String(open));
+    const label = open ? "Hide terminal diagnostics" : "Show terminal diagnostics";
+    this.#diagnosticsToggle.setAttribute("aria-label", label);
+    this.#diagnosticsToggle.title = label;
+    if (open) {
+      const runtime = this.#activeRuntime();
+      this.#renderDiagnostics(
+        terminalDiagnosticView(this.#diagnosticInput(runtime, runtime.resources)),
+      );
+      this.#diagnostics.focus();
+    } else if (restoreFocus) {
+      this.#diagnosticsToggle.focus();
+    }
+  }
+
+  #retryActiveRenderer(): void {
     const runtime = this.#activeRuntime();
     const resources = runtime.resources;
+    if (!resources || resources.disposed) return;
+    const view = terminalDiagnosticView(this.#diagnosticInput(runtime, resources));
+    retryTerminalRendererRecovery({
+      allowed: view.canRetryRenderer,
+      capture: () => this.#runtimes.capture(runtime.paneId),
+      accepted: (ticket) => this.#accepts(runtime, ticket),
+      reset: () => {
+        resources.webglRecoveryAttempts = 0;
+        resources.diagnosticChangedAt = Date.now();
+      },
+      refresh: () => resources.terminal.refresh(0, resources.terminal.rows - 1),
+      attach: (ticket) => this.#attachWebgl(runtime, resources, ticket, "policy"),
+      fit: () => this.#fit(runtime, resources, false),
+      render: () => {
+        if (this.#isActive(runtime)) this.#renderState();
+      },
+    });
+  }
+
+  #renderState(): void {
+    this.#syncTerminalInputLabels();
+    const runtime = this.#activeRuntime();
+    const resources = runtime.resources;
+    const diagnosticInput = this.#diagnosticInput(runtime, resources);
+    const diagnosticView = terminalDiagnosticView(diagnosticInput);
     const activeTab = this.#tabController.workspace.tabs.find(
       (tab) => tab.id === this.#tabController.workspace.activeTabId,
     );
@@ -1847,6 +2202,9 @@ class TerminalDock {
       (!activeTab || paneIds(activeTab.root).length === 1);
     this.#message.textContent = runtime.detail;
     this.#message.hidden = runtime.detail === "";
+    const shellLabel = runtime.state === "running" && resources
+      ? shellStatusLabel(resources.shellState)
+      : null;
     this.#status.textContent = runtime.closing
       ? "Closing…"
       : runtime.activity.signal === "failed"
@@ -1856,23 +2214,23 @@ class TerminalDock {
         : {
         closed: "Closed",
         opening: "Opening…",
-        running: "Running",
+        running: shellLabel ?? "Running",
         exited: "Exited",
         failed: "Failed",
       }[runtime.state];
     this.#open.hidden = runtime.state !== "closed";
-    this.#restart.hidden =
-      runtime.state !== "exited" &&
-      !(runtime.state === "failed" && runtime.session === null);
+    this.#restart.hidden = runtime.state !== "exited" && runtime.state !== "failed";
     this.#close.hidden =
       runtime.state === "closed" ||
       (runtime.state === "failed" && runtime.session === null);
+    this.#rendererRetry.hidden = diagnosticInput.renderer !== "fallback";
+    this.#forceStop.hidden = !diagnosticInput.hasSession ||
+      !["starting", "running", "failed"].includes(diagnosticInput.process);
     this.#boardToggle.disabled = !dockInteractionEligible;
     const terminalActionsDisabled = !resources;
     this.#searchOpen.disabled = terminalActionsDisabled;
     this.#zoomReset.disabled = terminalActionsDisabled;
     this.#clear.disabled = terminalActionsDisabled;
-    this.#renderZoomState();
     const workspace = this.#tabController.workspace;
     const descriptor = activeTerminalDescriptor(workspace);
     const activeAssociation = workspace.tabs.find(
@@ -1881,8 +2239,10 @@ class TerminalDock {
     const linked = this.#paneIsLinked(runtime, activeAssociation);
     this.#open.disabled = runtime.busy || runtime.closing || linked ||
       !descriptor?.pane.profileId;
-    this.#restart.disabled = runtime.busy || runtime.closing || linked;
+    this.#restart.disabled = !diagnosticView.canRestart;
     this.#close.disabled = runtime.busy || runtime.closing;
+    this.#rendererRetry.disabled = !diagnosticView.canRetryRenderer;
+    this.#forceStop.disabled = !diagnosticView.canForceStop;
     const associationState = this.associationState();
     this.#association.disabled = associationState === null;
     const associationLabel = associationState?.pointer
@@ -1890,19 +2250,34 @@ class TerminalDock {
       : associationState && associationState.revision > 0
         ? "Relink detached terminal context"
         : "Link terminal context";
-    this.#association.textContent = associationState?.pointer ? "Relink" : "Link context";
     this.#association.setAttribute("aria-label", associationLabel);
     this.#association.title = associationLabel;
     this.#writeback.disabled = associationState?.pointer === undefined;
+    this.#resetWorkspace.title = diagnosticView.canResetLayout
+      ? "Reset repaired terminal workspace for this project"
+      : "Reset terminal workspace for this project";
     const descriptorEditable = runtimeDescriptorEditable(runtime);
     this.#profile.disabled = !descriptorEditable || linked;
     this.#cwd.disabled = !descriptorEditable || linked;
     this.#syncDescriptorEditor();
+    this.#renderZoomState();
     this.#title.textContent = runtime.state === "closed"
       ? "Stopped"
       : runtime.title || this.#selectedProfileName();
+    this.#renderDiagnostics(diagnosticView);
     this.#renderPanelVisibility();
     this.#tabBar.refresh();
+  }
+
+  #syncTerminalInputLabels(): void {
+    for (const tab of this.#tabController.workspace.tabs) {
+      paneIds(tab.root).forEach((paneId, index) => {
+        this.#runtimes.get(paneId)?.resources?.terminal.textarea?.setAttribute(
+          "aria-label",
+          terminalPaneInputLabel(tab.title, index + 1),
+        );
+      });
+    }
   }
 
   #activeRuntime(): DockPaneRuntime {
@@ -2015,6 +2390,7 @@ class TerminalDock {
         const webgl = resources.webgl;
         resources.webgl = null;
         webgl?.dispose();
+        resources.webglRecoveryAttempts = 0;
         continue;
       }
       const ticket = this.#runtimes.capture(runtime.paneId);
@@ -2153,28 +2529,42 @@ class TerminalDock {
   }
 
   async #performTerminalWorkspaceReset(): Promise<void> {
-    const paneIdList = this.#tabController.workspace.tabs.flatMap((tab) =>
+    const workspaceAtStart = this.#tabController.workspace;
+    const paneIdList = workspaceAtStart.tabs.flatMap((tab) =>
       paneIds(tab.root)
     );
     const runtimes = paneIdList.map((paneId) => this.#runtimes.ensure(paneId));
     try {
-      if (!(await closeIntentConfirmed(
-        runtimes,
-        () => this.#confirmTermination(paneIdList.length),
-      ))) return;
-      await this.#lifecycle.closeMany(paneIdList);
-      if (this.#disposed) return;
-      for (const paneId of paneIdList) this.#authorizedRuntimeRemoval.add(paneId);
-      const replacement = createWorkspace(this.#ids, {
-        profileId: this.#profile.value || this.#defaultProfileId,
-        cwd: "",
+      const result = await resetTerminalWorkspaceRecovery({
+        confirm: () => closeIntentConfirmed(
+          runtimes,
+          () => this.#confirmTermination(paneIdList.length),
+        ),
+        close: () => this.#lifecycle.closeMany(paneIdList),
+        accepted: () =>
+          !this.#disposed && this.#tabController.workspace === workspaceAtStart,
+        replace: () => {
+          for (const paneId of paneIdList) this.#authorizedRuntimeRemoval.add(paneId);
+          const replacement = createWorkspace(this.#ids, {
+            profileId: this.#profile.value || this.#defaultProfileId,
+            cwd: "",
+          });
+          const replaced = this.#tabController.replace(replacement);
+          if (!replaced) {
+            for (const paneId of paneIdList) {
+              this.#authorizedRuntimeRemoval.delete(paneId);
+            }
+          }
+          return replaced;
+        },
+        clear: (replaced) => {
+          clearTerminalWorkspaceAfterReplace(localStorage, this.#projectRoot, replaced);
+        },
       });
-      const replaced = this.#tabController.replace(replacement);
-      if (!replaced) {
-        for (const paneId of paneIdList) this.#authorizedRuntimeRemoval.delete(paneId);
-        return;
-      }
-      clearTerminalWorkspaceAfterReplace(localStorage, this.#projectRoot, replaced);
+      if (result !== "reset") return;
+      this.#layoutDiagnosticState = "default";
+      this.#layoutRepairCount = 0;
+      this.#layoutDiagnosticChangedAt = Date.now();
       this.#dockRatio = defaultDockRatio;
       this.#setDockHeight(this.#heightForDockRatio(defaultDockRatio), false);
       this.#markPersistenceDirty();
@@ -2258,6 +2648,21 @@ class TerminalDock {
     if (!active) return;
     this.#profile.value = active.pane.profileId;
     this.#cwd.value = active.pane.cwd;
+    this.#syncActiveProfileFontSize();
+  }
+
+  #syncActiveProfileFontSize(): void {
+    const profileId = activeTerminalDescriptor(this.#tabController.workspace)?.pane.profileId ||
+      this.#profile.value || this.#defaultProfileId;
+    const settings = this.#profileSettings.get(profileId);
+    this.#fontSize = this.#profileFontSizes.get(profileId) ??
+      settings?.fontSize ?? defaultTerminalFontSize;
+  }
+
+  #activeProfileDefaultFontSize(): number {
+    const profileId = activeTerminalDescriptor(this.#tabController.workspace)?.pane.profileId ||
+      this.#profile.value || this.#defaultProfileId;
+    return this.#profileSettings.get(profileId)?.fontSize ?? defaultTerminalFontSize;
   }
 
   #selectedProfileName(): string {

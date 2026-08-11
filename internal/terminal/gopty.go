@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	gopty "github.com/aymanbagabas/go-pty"
 )
@@ -28,29 +29,43 @@ func (GoPTYFactory) Start(request StartRequest) (PTYProcess, error) {
 	command := terminalPTY.Command(request.Executable, request.Args...)
 	command.Dir = request.CWD
 	command.Env = append([]string(nil), request.Env...)
+	platform, err := preparePTYBeforeStart(command)
+	if err != nil {
+		return cleanup(fmt.Errorf("prepare PTY process: %w", err))
+	}
 	if err := command.Start(); err != nil {
-		return cleanup(fmt.Errorf("start PTY process: %w", err))
+		return cleanup(errors.Join(
+			fmt.Errorf("start PTY process: %w", err),
+			closePlatformProcess(&platform),
+		))
 	}
 
-	process := &goPTYProcess{pty: terminalPTY, command: command}
-	if err := preparePTYAfterStart(terminalPTY); err != nil {
-		_ = command.Process.Kill()
-		_ = command.Wait()
-		return nil, errors.Join(fmt.Errorf("prepare PTY after start: %w", err), process.Close())
+	platform, err = preparePTYAfterStart(terminalPTY, command.Process, platform)
+	process := &goPTYProcess{pty: terminalPTY, command: command, platform: platform}
+	if err != nil {
+		return nil, errors.Join(
+			fmt.Errorf("prepare PTY after start: %w", err),
+			process.cleanupFailedStart(),
+		)
 	}
 	return process, nil
 }
 
+const failedPTYStartWaitTimeout = 5 * time.Second
+
 type goPTYProcess struct {
-	pty     gopty.Pty
-	command *gopty.Cmd
+	pty      gopty.Pty
+	command  *gopty.Cmd
+	platform platformProcessState
 
 	waitOnce sync.Once
 	waitCode int
 	waitErr  error
 
-	closeOnce sync.Once
-	closeErr  error
+	ptyCloseOnce      sync.Once
+	ptyCloseErr       error
+	platformCloseOnce sync.Once
+	platformCloseErr  error
 }
 
 func (p *goPTYProcess) PID() int {
@@ -92,19 +107,47 @@ func (p *goPTYProcess) Terminate() error {
 	if p.command.Process == nil {
 		return os.ErrProcessDone
 	}
-	return terminateProcess(p.command.Process, p.Close)
+	return terminateProcess(p.command.Process, &p.platform, p.closePTY)
 }
 
 func (p *goPTYProcess) Kill() error {
 	if p.command.Process == nil {
 		return os.ErrProcessDone
 	}
-	return killProcess(p.command.Process)
+	return killProcess(p.command.Process, &p.platform)
 }
 
 func (p *goPTYProcess) Close() error {
-	p.closeOnce.Do(func() {
-		p.closeErr = closePlatformPTY(p.pty)
+	p.platformCloseOnce.Do(func() {
+		p.platformCloseErr = closePlatformProcess(&p.platform)
 	})
-	return p.closeErr
+	return errors.Join(p.closePTY(), p.platformCloseErr)
+
+}
+
+func (p *goPTYProcess) cleanupFailedStart() error {
+	killErr := p.Kill()
+	closeErr := p.Close()
+	waitDone := make(chan error, 1)
+	go func() {
+		_, err := p.Wait()
+		waitDone <- err
+	}()
+	select {
+	case waitErr := <-waitDone:
+		return errors.Join(killErr, closeErr, waitErr)
+	case <-time.After(failedPTYStartWaitTimeout):
+		return errors.Join(
+			killErr,
+			closeErr,
+			fmt.Errorf("timed out after %s waiting for failed PTY process cleanup", failedPTYStartWaitTimeout),
+		)
+	}
+}
+
+func (p *goPTYProcess) closePTY() error {
+	p.ptyCloseOnce.Do(func() {
+		p.ptyCloseErr = closePlatformPTY(p.pty)
+	})
+	return p.ptyCloseErr
 }

@@ -260,6 +260,28 @@ describe("terminal workspace persistence", () => {
     expect(warn).toHaveBeenCalledOnce();
   });
 
+  it("never retains attacker-controlled field names in quarantine metadata", () => {
+    const storage = new MemoryStorage();
+    const workspace = createWorkspace(ids());
+    const secret = "SECRET_PROPERTY_NAME_CANARY";
+    Object.assign(workspace.tabs[0].root as unknown as Record<string, unknown>, {
+      [secret]: true,
+    });
+    const key = terminalWorkspaceStorageKey("/repo");
+    storage.setItem(key, JSON.stringify({ version: 1, workspace, dockRatio: 0.3 }));
+    const warnings: string[] = [];
+    const result = loadTerminalWorkspace(storage, "/repo", (warning) => {
+      warnings.push(warning);
+    });
+    const retained = JSON.stringify({
+      result,
+      warnings,
+      quarantine: storage.getItem(`${key}:invalid`),
+    });
+    expect(retained).not.toContain(secret);
+    expect(result.invalidReason).toBe("tabs[0].root contains unsupported fields");
+  });
+
   it("rejects oversized, duplicate, unknown, and out-of-bound data", () => {
     const workspace = createWorkspace(ids(), { profileId: "shell", cwd: "/repo" });
     const invalid = [

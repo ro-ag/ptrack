@@ -25,6 +25,10 @@ describe("production asset layout", () => {
     const index = readFileSync(indexPath, "utf8");
     const app = readFileSync(resolve(distRoot, "app.js"), "utf8");
     const styles = readFileSync(resolve(distRoot, "style.css"), "utf8");
+    const paneSource = readFileSync(
+      resolve(frontendRoot, "src/terminal/pane.ts"),
+      "utf8",
+    );
     expect(index).toContain('src="/app.js"');
     expect(index).toContain('href="/style.css"');
     expect(index).toMatch(/id="app-version"[^>]*>dev<\/p>/);
@@ -48,7 +52,31 @@ describe("production asset layout", () => {
       /id="terminal-termination-modal"[\s\S]*aria-modal="true"[\s\S]*>Terminate<\/button>/,
     );
     expect(index).toMatch(
+      /id="terminal-paste-form"[\s\S]*aria-modal="true"[\s\S]*aria-describedby="terminal-paste-detail"/,
+    );
+    expect(index).toMatch(
       /id="terminal-link-context"[\s\S]*aria-label="Link terminal context"[\s\S]*disabled/,
+    );
+    expect(index).toMatch(
+      /class="terminal-actions"[\s\S]*aria-label="Terminal actions"[\s\S]*id="terminal-open"[\s\S]*aria-label="Open terminal"[\s\S]*<svg/,
+    );
+    expect(index).toMatch(
+      /id="terminal-close"[\s\S]*class="terminal-action-button terminal-action-stop"[\s\S]*aria-label="Close terminal"/,
+    );
+    expect(index).toMatch(
+      /id="terminal-diagnostics-toggle"[\s\S]*aria-controls="terminal-diagnostics"[\s\S]*aria-expanded="false"[\s\S]*<svg[^>]*aria-hidden="true"/,
+    );
+    expect(index).toMatch(
+      /id="terminal-renderer-retry"[\s\S]*aria-label="Retry terminal renderer"[\s\S]*<svg[^>]*aria-hidden="true"/,
+    );
+    expect(index).toMatch(
+      /id="terminal-force-stop"[\s\S]*class="terminal-action-button terminal-action-stop"[\s\S]*aria-label="Force stop terminal"[\s\S]*<svg[^>]*aria-hidden="true"/,
+    );
+    expect(index).toMatch(
+      /id="terminal-diagnostics"[\s\S]*aria-live="polite"[\s\S]*Content-free state only\. Restart creates a fresh session; streams are never reconnected\./,
+    );
+    expect(styles).toMatch(
+      /\.terminal-diagnostics\s*\{[\s\S]*max-height:[^;]+;[\s\S]*overflow-y:\s*auto/,
     );
     expect(index).toMatch(
       /id="terminal-association-modal"[\s\S]*role="dialog"[\s\S]*aria-modal="true"[\s\S]*id="terminal-association-target"[\s\S]*>Detach<\/button>/,
@@ -81,6 +109,11 @@ describe("production asset layout", () => {
     expect(styles).toContain("touch-action:none");
     expect(styles).toMatch(
       /data-state=(?:"closed"|closed)\]\[data-layout-interactive=(?:"false"|false)\]/,
+    );
+    expect(styles).toMatch(/data-board-hidden=(?:"true"|true)\] \.terminal-dock\{height:100%/);
+    expect(styles).toMatch(/data-terminal-hidden=(?:"true"|true)\] \.terminal-dock\{display:none/);
+    expect(paneSource).toMatch(
+      /action === "zoom-reset"\) \{\s*this\.#setFontSize\(this\.#activeProfileDefaultFontSize\(\)\)/,
     );
   });
 });

@@ -123,6 +123,21 @@ describe("TerminalStreamClient", () => {
     expect(states).toEqual(["connecting", "error"]);
   });
 
+  it("consumes stream authority on the first connection attempt", () => {
+    const socket = new FakeWebSocket();
+    const client = new TerminalStreamClient({
+      createWebSocket: () => socket,
+      writeOutput: vi.fn(),
+      onStateChange: vi.fn(),
+    });
+
+    client.connect("ws://127.0.0.1/terminal/session?token=single-use");
+    socket.remoteClose();
+    expect(() =>
+      client.connect("ws://127.0.0.1/terminal/session?token=single-use")
+    ).toThrow("terminal stream authority is single-use");
+  });
+
   it("writes output sequentially and ACKs exact bytes only after each write callback", () => {
     const socket = new FakeWebSocket();
     const writes: Array<{ bytes: Uint8Array; done: () => void }> = [];

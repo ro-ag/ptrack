@@ -71,6 +71,24 @@ describe("PaneLifecycleCoordinator", () => {
     expect(runtime.activity).toMatchObject({ signal: "none", unread: false });
   });
 
+  it("force-closes the exact current session once", async () => {
+    const { registry, lifecycle, closeSession, disposeResources } = fixture();
+    const runtime = registry.ensure("pane-a");
+    runtime.state = "running";
+    runtime.session = { sessionId: "session-force" };
+    runtime.resources = { name: "renderer-force" };
+
+    const first = lifecycle.close(runtime.paneId, true);
+    const duplicate = lifecycle.close(runtime.paneId, true);
+    expect(duplicate).toBe(first);
+    await Promise.all([first, duplicate]);
+
+    expect(closeSession).toHaveBeenCalledOnce();
+    expect(closeSession).toHaveBeenCalledWith("session-force", true);
+    expect(disposeResources).toHaveBeenCalledOnce();
+    expect(runtime).toMatchObject({ state: "closed", session: null, resources: null });
+  });
+
   it("does not repeat a successful backend close when local disposal is retried", async () => {
     const registry = new PaneRuntimeRegistry<TestSession, TestResources>();
     const closeSession = vi.fn(async () => {});

@@ -3008,6 +3008,37 @@ button.modal-backdrop:active {
   background: var(--surface-soft);
 }
 
+.terminal-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.terminal-toolbar .terminal-action-button {
+  width: 30px;
+  min-height: 30px;
+  height: 30px;
+  border: 0;
+  border-right: 1px solid var(--line-subtle);
+  border-radius: 0;
+  color: var(--muted);
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+.terminal-toolbar .terminal-action-button:last-child {
+  border-right: 0;
+}
+
+.terminal-toolbar .terminal-action-stop {
+  color: var(--blocked);
+}
+
 .terminal-toolbar .terminal-tool-button,
 .terminal-toolbar .terminal-zoom-reset {
   min-height: 30px;
@@ -3069,20 +3100,24 @@ button.modal-backdrop:active {
 .terminal-toolbar .terminal-tool-button:hover:not(:disabled),
 .terminal-toolbar .terminal-tool-button:focus-visible,
 .terminal-toolbar .terminal-zoom-reset:hover:not(:disabled),
-.terminal-toolbar .terminal-zoom-reset:focus-visible {
+.terminal-toolbar .terminal-zoom-reset:focus-visible,
+.terminal-toolbar .terminal-action-button:hover:not(:disabled),
+.terminal-toolbar .terminal-action-button:focus-visible {
   color: var(--text);
   background: var(--fill-strong);
   box-shadow: none;
 }
 
 .terminal-toolbar .terminal-tool-button:disabled,
-.terminal-toolbar .terminal-zoom-reset:disabled {
+.terminal-toolbar .terminal-zoom-reset:disabled,
+.terminal-toolbar .terminal-action-button:disabled {
   cursor: default;
   color: var(--faint);
   opacity: 0.5;
 }
 
-.terminal-tool-button svg {
+.terminal-tool-button svg,
+.terminal-action-button svg {
   width: 14px;
   height: 14px;
   fill: none;
@@ -3090,6 +3125,64 @@ button.modal-backdrop:active {
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 1.35;
+}
+
+.terminal-diagnostics {
+  --terminal-diagnostics-top: clamp(6px, 82px, calc(100% - 94px));
+  position: absolute;
+  z-index: 6;
+  top: var(--terminal-diagnostics-top);
+  right: var(--space-150);
+  width: min(310px, calc(100% - 24px));
+  max-height: calc(100% - var(--terminal-diagnostics-top) - 6px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text-soft);
+  background: var(--overlay-bg);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  padding: var(--space-150);
+  box-shadow: var(--shadow-2);
+  font-size: 0.6875rem;
+}
+
+.terminal-diagnostics:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.terminal-diagnostics dl {
+  display: grid;
+  gap: var(--space-050);
+  margin: var(--space-100) 0;
+}
+
+.terminal-diagnostics dl div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: var(--space-100);
+}
+
+.terminal-diagnostics dt {
+  color: var(--muted);
+}
+
+.terminal-diagnostics dd {
+  overflow: hidden;
+  margin: 0;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-diagnostics-help {
+  margin: var(--space-100) 0 0;
+  color: var(--muted);
+  line-height: 1.4;
 }
 
 .terminal-body {

@@ -53,14 +53,15 @@ type TerminalProfilesV2 struct {
 }
 
 type TerminalSessionV2 struct {
-	Generation          uint64                `json:"generation"`
-	SessionID           string                `json:"sessionId"`
-	ProfileID           string                `json:"profileId"`
-	CWD                 string                `json:"cwd"`
-	State               terminal.SessionState `json:"state"`
-	StreamURL           string                `json:"streamUrl"`
-	AssociationRevision uint64                `json:"associationRevision,omitempty"`
-	LinkedLaunch        bool                  `json:"linkedLaunch,omitempty"`
+	Generation          uint64                              `json:"generation"`
+	SessionID           string                              `json:"sessionId"`
+	ProfileID           string                              `json:"profileId"`
+	CWD                 string                              `json:"cwd"`
+	State               terminal.SessionState               `json:"state"`
+	StreamURL           string                              `json:"streamUrl"`
+	AssociationRevision uint64                              `json:"associationRevision,omitempty"`
+	LinkedLaunch        bool                                `json:"linkedLaunch,omitempty"`
+	ShellIntegration    terminal.ShellIntegrationDescriptor `json:"shellIntegration"`
 }
 
 type managedTerminalSession struct {
@@ -77,6 +78,7 @@ type managedTerminalSession struct {
 	exitResults      <-chan terminal.ExitResult
 	attachSignal     <-chan struct{}
 	expireUnattached func() bool
+	ShellIntegration terminal.ShellIntegrationDescriptor
 }
 
 type terminalManager interface {
@@ -182,6 +184,7 @@ func (m productionTerminalManager) wrapSession(
 		exitResults:      session.ExitResults(),
 		attachSignal:     session.AttachmentSignal(),
 		expireUnattached: session.ExpireUnattached,
+		ShellIntegration: session.ShellIntegration(),
 	}, nil
 }
 
@@ -333,10 +336,16 @@ func safeTerminalProfiles(profiles []terminal.Profile) []terminal.Profile {
 	copies := make([]terminal.Profile, len(profiles))
 	for index, profile := range profiles {
 		copies[index] = terminal.Profile{
-			ID:       profile.ID,
-			Name:     profile.Name,
-			Kind:     profile.Kind,
-			Provider: profile.Provider,
+			ID:           profile.ID,
+			Name:         profile.Name,
+			Kind:         profile.Kind,
+			Provider:     profile.Provider,
+			Theme:        profile.Theme,
+			FontFamily:   profile.FontFamily,
+			FontSize:     profile.FontSize,
+			Scrollback:   profile.Scrollback,
+			CWDPolicy:    profile.CWDPolicy,
+			ExitBehavior: profile.ExitBehavior,
 		}
 	}
 	terminal.SortProfiles(copies)
@@ -511,12 +520,13 @@ func (a *App) CreateTerminalV2(
 		}
 	}
 	result := TerminalSessionV2{
-		Generation: workspace.Generation(),
-		SessionID:  session.SessionID,
-		ProfileID:  session.ProfileID,
-		CWD:        session.CWD,
-		State:      session.State,
-		StreamURL:  session.StreamURL,
+		Generation:       workspace.Generation(),
+		SessionID:        session.SessionID,
+		ProfileID:        session.ProfileID,
+		CWD:              session.CWD,
+		State:            session.State,
+		StreamURL:        session.StreamURL,
+		ShellIntegration: session.ShellIntegration,
 	}
 	workspace.recordTerminal(TerminalSession{
 		SessionID: session.SessionID,

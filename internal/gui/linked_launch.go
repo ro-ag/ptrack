@@ -214,6 +214,7 @@ func (a *App) LaunchLinkedAgentV2(
 		StreamURL:           session.StreamURL,
 		AssociationRevision: terminalAssociation.Revision,
 		LinkedLaunch:        true,
+		ShellIntegration:    session.ShellIntegration,
 	}
 	workspace.recordTerminal(TerminalSession{
 		SessionID: session.SessionID,
