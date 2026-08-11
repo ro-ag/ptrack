@@ -6,7 +6,7 @@ Keep goals, plans, tasks, decisions, issues, and commit context alive across
 terminal sessions—without a server or a cloud account.
 
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
-[![Release](https://img.shields.io/badge/release-v0.19.0-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.19.0)
+[![Release](https://img.shields.io/badge/release-v0.20.0-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.20.0)
 [![License](https://img.shields.io/badge/License-Apache--2.0-3DD6A3)](LICENSE)
 [![Storage](https://img.shields.io/badge/Storage-local--first-AFA8FF)](#storage-and-safety)
 
@@ -165,11 +165,11 @@ native directory picker to open or switch projects, or close a project without
 exiting the app. p-track confirms before a transition stops active terminals or
 registered agent runs.
 
-The project-memory rail combines a bounded tracking snapshot with repository
-and storage status, read-only Git status/remotes/branches/commits/divergence,
-active terminals, and explicitly registered agent runs. Select a plan from the
-header, drag cards between Todo, Doing, Blocked, and Done, or use the status
-selector on a card. Add tasks from the board header,
+The project workspace combines a bounded tracking snapshot with repository and
+storage status, read-only Git status/remotes/branches/commits/divergence,
+multi-session terminals, and explicitly registered agent runs. Select a plan
+from the sidebar, drag cards between Todo, Doing, Blocked, and Done, or use the
+status selector on a card. Add tasks from the board header,
 double-click a card to rename it, or record durable task context with **Memory**.
 Cards surface linked notes, commits, and open issues, while the project-memory
 rail keeps the goal, agent handoff, project status, issues, and recent decisions
@@ -207,15 +207,32 @@ credential or reasoning content. It retains at most 128 structured events per
 run for 14 days and revalidates retained events on restart. Project,
 repository, terminal, plan, and task correlation always comes from the
 host-owned run association. The desktop derives conservative
-working/waiting/blocked/completed/failed/drift indicators from this evidence,
-offers read-only context suggestions, and generates handoffs only when the user
-presses **Preview handoff**. A preview never changes project memory.
+running/waiting/blocked/completed/failed/stale indicators from this evidence,
+offers read-only context suggestions, and reports drift only from bounded,
+observable Git and structured-event evidence. Explicit task ownership and
+overlap warnings are advisory. Agent handoffs are bounded, single-use,
+memory-only proposals that grant no authority and change no task.
+
+An agent can be associated with an existing worktree only after p-track proves
+that the canonical path belongs to the open repository's host-observed
+worktree list. User-approved validation, commit, pull-request, and merge
+workflow proposals are bound to the current lifecycle, association, worktree,
+repository, source HEAD/status, and target OID; approval records the proposal
+but executes no command, Git operation, hosting action, or capability grant.
+
+Settings also exposes deny-by-default HTTP, Git, and SSH capabilities scoped to
+one agent profile and project. Preview and test the normalized scope before
+enabling it. Approval expires automatically; request/response bodies, headers,
+credentials, terminal contents, and raw arguments are excluded from the
+bounded audit metadata.
 
 ![p-track task-memory dialog](docs/assets/gui-memory.png)
 
-The bottom dock hosts one resizable embedded terminal at the project root.
-Choose the default login shell or a detected installed-agent profile, then use
-an interactive PTY-backed shell. Copy, paste, selection-aware `Ctrl+C`,
+The bottom dock hosts a multi-session terminal workspace at the project root.
+Create tabs, split a tab horizontally or vertically, and resize panes while
+each PTY-backed shell or detected agent profile remains live independently.
+Only bounded layout descriptors persist; restored panes start stopped and mint
+fresh runtime authority when restarted. Copy, paste, selection-aware `Ctrl+C`,
 platform shortcuts, and the right-click terminal menu use the native clipboard.
 Multiline text is held behind a bounded review dialog and sent through xterm's
 bracketed-paste behavior only after confirmation. Exited sessions show their
