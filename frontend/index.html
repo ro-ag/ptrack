@@ -159,6 +159,7 @@
           </div>
         </header>
 
+        <main id="main-content" class="canvas-main" aria-label="Workspace content">
         <section
           id="workspace-state-screen"
           class="workspace-state-screen"
@@ -180,14 +181,14 @@
           </div>
         </section>
 
-        <main id="workspace" class="workspace" hidden>
+        <section id="workspace" class="workspace" hidden>
           <div class="work-area">
             <section class="board-shell">
               <header class="board-heading">
                 <div class="plan-context">
                   <p class="eyebrow">Current plan</p>
                   <div class="title-row">
-                    <h2 id="plan-title">Loading board…</h2>
+                    <h2 id="plan-title" tabindex="-1">Loading board…</h2>
                     <span id="plan-progress-label" class="progress-label"></span>
                   </div>
                   <div class="progress-track" aria-hidden="true">
@@ -551,7 +552,7 @@
               </div>
             </section>
           </div>
-        </main>
+        </section>
 
         <section
           id="overview-page"
@@ -561,7 +562,7 @@
         >
           <header class="overview-heading">
             <p class="eyebrow">Project memory</p>
-            <h2>Overview</h2>
+            <h2 id="overview-heading" tabindex="-1">Overview</h2>
           </header>
 
           <div class="overview-grid">
@@ -682,38 +683,55 @@
         <section
           id="settings-page"
           class="settings-page"
-          aria-label="Capability settings"
+          aria-labelledby="capabilities-heading"
           hidden
         >
           <header class="overview-heading settings-heading">
             <div>
               <p class="eyebrow">Deny by default</p>
-              <h2>Network capabilities</h2>
+              <h2 id="capabilities-heading" tabindex="-1">Network capabilities</h2>
               <p class="settings-intro">
                 Grants apply only to p-track broker tools for one project and agent profile.
                 Normal terminal processes are not an OS-level network sandbox.
               </p>
+              <p
+                id="capability-status"
+                class="capability-status"
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+              >Capability settings ready.</p>
             </div>
             <button id="capability-new" type="button">Add capability</button>
           </header>
 
           <div class="settings-grid">
-            <section class="memory-section capability-editor">
+            <section
+              class="memory-section capability-editor"
+              aria-labelledby="capability-editor-title"
+            >
               <div class="section-heading">
-                <p id="capability-editor-title" class="section-label">New capability</p>
+                <h3 id="capability-editor-title" class="section-label">New capability</h3>
                 <button id="capability-clear" class="button-secondary" type="button">Clear</button>
               </div>
-              <form id="capability-form" class="capability-form">
+              <form
+                id="capability-form"
+                class="capability-form"
+                aria-labelledby="capability-editor-title"
+              >
                 <input id="capability-id" type="hidden" value="0" />
                 <label>Name <input id="capability-name" required maxlength="128" /></label>
                 <label>Agent profile <input id="capability-profile" required value="agent-codex" /></label>
                 <label>Kind
-                  <select id="capability-kind">
+                  <select id="capability-kind" aria-describedby="capability-kind-help">
                     <option value="http">HTTP</option>
                     <option value="git">Git</option>
                     <option value="ssh">SSH</option>
                   </select>
                 </label>
+                <p id="capability-kind-help" class="intelligence-meta">
+                  Only the selected kind's scope fields are active and included in the draft.
+                </p>
                 <div class="capability-row">
                   <label>Approval minutes <input id="capability-duration" type="number" min="1" max="43200" value="60" /></label>
                   <label>Timeout seconds <input id="capability-timeout" type="number" min="1" max="300" value="30" /></label>
@@ -737,7 +755,7 @@
                   <label>Path prefixes <textarea id="capability-http-paths" rows="2" placeholder="/v1"></textarea></label>
                 </fieldset>
 
-                <fieldset id="capability-git-fields" class="capability-scope-fields" hidden>
+                <fieldset id="capability-git-fields" class="capability-scope-fields" hidden disabled>
                   <legend>Git scope</legend>
                   <div class="capability-row">
                     <label>Remote name <input id="capability-git-name" value="origin" /></label>
@@ -754,7 +772,7 @@
                   </div>
                 </fieldset>
 
-                <fieldset id="capability-ssh-fields" class="capability-scope-fields" hidden>
+                <fieldset id="capability-ssh-fields" class="capability-scope-fields" hidden disabled>
                   <legend>SSH scope</legend>
                   <div class="capability-row">
                     <label>Alias <input id="capability-ssh-alias" /></label>
@@ -786,24 +804,51 @@
                   <button id="capability-save" type="submit">Save draft</button>
                 </div>
               </form>
-              <div id="capability-preview-result" class="capability-preview" hidden>
-                <p class="section-label">Effective approved scope</p>
+              <section
+                id="capability-preview-result"
+                class="capability-preview"
+                aria-labelledby="capability-preview-heading"
+                hidden
+              >
+                <h3 id="capability-preview-heading" class="section-label">Effective approved scope</h3>
                 <code id="capability-effective-scope"></code>
-                <p id="capability-risk-summary" class="settings-warning"></p>
+                <p id="capability-risk-summary" class="settings-warning" role="note"></p>
                 <p id="capability-diagnostic" class="intelligence-meta"></p>
-              </div>
+              </section>
             </section>
 
-            <section class="memory-section capability-list-section">
+            <section
+              class="memory-section capability-list-section"
+              aria-labelledby="capability-list-heading"
+            >
               <div class="section-heading">
-                <p class="section-label">Project capabilities</p>
+                <h3
+                  id="capability-list-heading"
+                  class="section-label"
+                  tabindex="-1"
+                  data-capability-focus-key="capability:list"
+                >Project capabilities</h3>
                 <span id="capability-total" class="section-count">0</span>
               </div>
-              <div id="capability-list" class="capability-list"></div>
-              <div id="capability-audit-list" class="capability-audit-list" hidden></div>
+              <div
+                id="capability-list"
+                class="capability-list"
+                role="list"
+                aria-labelledby="capability-list-heading"
+              ></div>
+              <section
+                id="capability-audit-list"
+                class="capability-audit-list"
+                aria-labelledby="capability-audit-heading"
+                hidden
+              >
+                <h3 id="capability-audit-heading" class="section-label">Recent audit metadata</h3>
+                <div id="capability-audit-items"></div>
+              </section>
             </section>
           </div>
         </section>
+        </main>
       </div>
     </div>
 

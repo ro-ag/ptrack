@@ -3,8 +3,11 @@ package gui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
+	"runtime"
 
+	"github.com/ro-ag/ptrack/internal/cli"
 	"github.com/ro-ag/ptrack/internal/store"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -53,7 +56,16 @@ func RunBindings(assets fs.FS) error {
 }
 
 func runWails(app *App, assets fs.FS) error {
-	return wails.Run(&options.App{
+	return wails.Run(newWailsAppOptions(app, assets, runtime.GOOS, cli.VersionString()))
+}
+
+func newWailsAppOptions(
+	app *App,
+	assets fs.FS,
+	goos string,
+	version string,
+) *options.App {
+	return &options.App{
 		Title:     "p-track Project Workspace",
 		Width:     1440,
 		Height:    900,
@@ -66,14 +78,28 @@ func runWails(app *App, assets fs.FS) error {
 			A: 255,
 		},
 		AssetServer: &assetserver.Options{Assets: assets},
-		Menu:        newProjectWorkspaceMenu(app),
+		Menu: newProjectWorkspaceMenuForGOOS(
+			app,
+			goos,
+			func(ctx context.Context, url string) {
+				wailsruntime.BrowserOpenURL(ctx, url)
+			},
+		),
 		Mac: &mac.Options{
 			TitleBar:             mac.TitleBarHiddenInset(),
 			WebviewIsTransparent: false,
 			WindowIsTranslucent:  true,
+			About: &mac.AboutInfo{
+				Title: "p-track",
+				Message: fmt.Sprintf(
+					"Version %s\n\nPersistent project memory for humans and AI agents.\n\n© 2026 ro-ag · Apache License 2.0",
+					version,
+				),
+			},
 		},
-		Bind:       []interface{}{app},
-		OnStartup:  app.onStartup,
-		OnShutdown: app.onShutdown,
-	})
+		Bind:          []interface{}{app},
+		OnStartup:     app.onStartup,
+		OnBeforeClose: app.onBeforeClose,
+		OnShutdown:    app.onShutdown,
+	}
 }

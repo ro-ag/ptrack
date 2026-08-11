@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  capabilityActionAccessibleName,
+  capabilityAnnouncement,
+  capabilityFocusKey,
+  capabilityFocusRestoreKey,
   canEnableCapability,
   canStartCapabilitySave,
   capabilityResponseIsCurrent,
   capabilityRiskGrants,
+  capabilityScopeFieldState,
   capabilityStateLabel,
   diagnosticLabel,
   gitCapabilityNeedsSSH,
@@ -51,5 +56,81 @@ describe("capability settings presentation", () => {
   it("serializes capability saves", () => {
     expect(canStartCapabilitySave(false)).toBe(true);
     expect(canStartCapabilitySave(true)).toBe(false);
+  });
+
+  it("gives repeated actions bounded capability-specific names", () => {
+    expect(capabilityActionAccessibleName("remove", {
+      id: 17,
+      kind: "ssh",
+      name: "Production deploy",
+    })).toBe('Remove “Production deploy” (SSH capability #17)');
+    const unsafe = capabilityActionAccessibleName("edit", {
+      id: "not-an-id",
+      kind: "other",
+      name: `line\n${"x".repeat(100)}`,
+    });
+    expect(unsafe).not.toContain("\n");
+    expect(unsafe).toContain("Unknown capability draft");
+    expect(unsafe.length).toBeLessThan(100);
+  });
+
+  it("uses fixed bounded live announcements that cannot echo sensitive values", () => {
+    for (const action of [
+      "preview",
+      "test",
+      "save",
+      "enable",
+      "disable",
+      "expire",
+      "audit",
+      "remove",
+    ]) {
+      for (const phase of ["progress", "success", "failure"]) {
+        const announcement = capabilityAnnouncement(action, phase);
+        expect(announcement.length).toBeLessThan(80);
+        expect(announcement).not.toMatch(/digest|authorization|credential|header|response body/i);
+      }
+    }
+    expect(capabilityAnnouncement("test", "blocked")).toBe(
+      "Choose an approved SSH capability before testing.",
+    );
+    expect(capabilityAnnouncement("secret-token", "raw-args")).toBe(
+      "Capability status changed.",
+    );
+  });
+
+  it("activates only the selected kind fieldset", () => {
+    expect(capabilityScopeFieldState("git")).toEqual({
+      http: false,
+      git: true,
+      ssh: false,
+    });
+    expect(capabilityScopeFieldState("unknown")).toEqual({
+      http: false,
+      git: false,
+      ssh: false,
+    });
+  });
+
+  it("restores stable action focus and falls forward after removal", () => {
+    const edit7 = capabilityFocusKey(7, "edit");
+    expect(capabilityFocusRestoreKey(edit7, 0, [7, 8], [
+      "capability:list",
+      edit7,
+    ])).toBe(edit7);
+
+    const remove7 = capabilityFocusKey(7, "remove");
+    const remove8 = capabilityFocusKey(8, "remove");
+    expect(capabilityFocusRestoreKey(remove7, 0, [8, 9], [
+      "capability:list",
+      remove8,
+    ])).toBe(remove8);
+    expect(capabilityFocusRestoreKey(remove7, 0, [], ["capability:list"]))
+      .toBe("capability:list");
+    expect(capabilityFocusRestoreKey(remove7, 0, [8], [
+      "capability:list",
+      capabilityFocusKey(8),
+    ])).toBe(capabilityFocusKey(8));
+    expect(capabilityFocusRestoreKey(null, 0, [8], [remove8])).toBeNull();
   });
 });

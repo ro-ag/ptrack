@@ -416,6 +416,10 @@ describe("workspace presentation policy", () => {
   it("cycles focus in both directions", () => {
     expect(focusCycleIndex(3, 2, false)).toBe(0);
     expect(focusCycleIndex(3, 0, true)).toBe(2);
+    expect(focusCycleIndex(3, 1, false)).toBe(2);
+    expect(focusCycleIndex(2, 1, false)).toBe(0);
+    expect(focusCycleIndex(2, 0, true)).toBe(1);
+    expect(focusCycleIndex(3, -1, false)).toBe(0);
   });
 
   it("retains a successful section as stale when a partial refresh fails", () => {

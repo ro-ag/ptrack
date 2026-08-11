@@ -39,6 +39,7 @@ type App struct {
 	monitorWG           lifecycleGroup
 	terminalOps         lifecycleGroup
 	updateOps           lifecycleGroup
+	runtimeCalls        lifecycleGroup
 	watcherCancel       context.CancelFunc
 	watcherGeneration   uint64
 	startupReady        chan struct{}
@@ -48,6 +49,9 @@ type App struct {
 	shutdownSignalOnce  sync.Once
 	shutdownOnce        sync.Once
 	shutdownWaitTimeout time.Duration
+	runtimeCallTimeout  time.Duration
+	frontendClosing     bool
+	frontendCloseEpoch  uint64
 	terminalAttachLease time.Duration
 	terminalAttachAfter func(time.Duration) <-chan time.Time
 

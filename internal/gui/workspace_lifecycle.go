@@ -83,6 +83,7 @@ func newWorkspaceCoordinator(
 		gitWorktrees:        gitinfo.Service{},
 		confirmationTTL:     time.Minute,
 		shutdownWaitTimeout: 3 * time.Second,
+		runtimeCallTimeout:  250 * time.Millisecond,
 		terminalAttachLease: 30 * time.Second,
 		terminalAttachAfter: time.After,
 		startupReady:        make(chan struct{}),

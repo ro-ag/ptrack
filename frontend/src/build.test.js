@@ -29,6 +29,14 @@ describe("production asset layout", () => {
       resolve(frontendRoot, "src/terminal/pane.ts"),
       "utf8",
     );
+    const appSource = readFileSync(
+      resolve(frontendRoot, "src/app.js"),
+      "utf8",
+    );
+    const applicationOverlaySource = readFileSync(
+      resolve(frontendRoot, "src/workspace/application-overlay.ts"),
+      "utf8",
+    );
     expect(index).toContain('src="/app.js"');
     expect(index).toContain('href="/style.css"');
     expect(index).toMatch(
@@ -36,6 +44,10 @@ describe("production asset layout", () => {
     );
     expect(styles).toMatch(
       /\.app-version\{[^}]*position:relative[^}]*z-index:1[^}]*--wails-draggable:\s*no-drag/,
+    );
+    expect(styles).toMatch(/\.state-card\{[^}]*box-shadow:/);
+    expect(styles).not.toMatch(
+      /\.state-card\{[^}]*(?:animation|transform|opacity):/,
     );
     expect(index).toMatch(
       /id="updates-modal"[\s\S]*role="dialog"[\s\S]*aria-modal="true"[\s\S]*id="updates-automatic"[\s\S]*aria-label="Update download progress"[\s\S]*id="updates-primary"/,
@@ -63,6 +75,10 @@ describe("production asset layout", () => {
     expect(app).toContain("aria-controls");
     expect(app).toContain("aria-labelledby");
     expect(app).toContain("setVisible");
+    expect(app).toContain("setApplicationOverlayOpen");
+    expect(app).toContain("body > .modal, body > [data-terminal-overlay]");
+    expect(app).toContain("MutationObserver");
+    expect(app).toContain("subtree:!0");
     expect(index).toContain('id="terminal-cwd"');
     expect(index).toContain('id="terminal-reset-workspace"');
     expect(index).toMatch(
@@ -129,8 +145,105 @@ describe("production asset layout", () => {
     );
     expect(styles).toMatch(/data-board-hidden=(?:"true"|true)\] \.terminal-dock\{height:100%/);
     expect(styles).toMatch(/data-terminal-hidden=(?:"true"|true)\] \.terminal-dock\{display:none/);
+    expect(styles).toMatch(
+      /\.board-heading\{[^}]*min-width:0[^}]*flex-wrap:wrap/,
+    );
+    expect(styles).toMatch(
+      /\.title-row h2\{[^}]*min-width:0[^}]*flex:1 1 auto[^}]*text-overflow:ellipsis/,
+    );
+    expect(styles).toMatch(
+      /\.board-actions\{[^}]*min-width:0[^}]*flex-wrap:wrap[^}]*justify-content:flex-end/,
+    );
+    expect(styles).toMatch(
+      /\.add-form input\{[^}]*min-width:120px[^}]*flex:1 1 170px/,
+    );
+    expect(styles).toMatch(
+      /@media\(max-width:960px\)\{[^}]*#app[^}]*\}[^}]*\.board-heading[^}]*\}\.plan-context,\.board-actions\{width:100%;min-width:0;max-width:100%;flex:0 0 100%\}\.board-actions\{justify-content:flex-start\}\.add-form\{min-width:0;flex-basis:250px\}/,
+    );
+    expect(styles).toMatch(
+      /\.panel-toggle:focus-visible,[^{]*\.terminal-context-menu button:focus-visible\{[^}]*outline:2px solid var\(--accent\)[^}]*outline-offset:-2px/,
+    );
     expect(paneSource).toMatch(
       /action === "zoom-reset"\) \{\s*this\.#setFontSize\(this\.#activeProfileDefaultFontSize\(\)\)/,
     );
+    expect(paneSource).toMatch(
+      /setApplicationOverlayOpen\(open: boolean, focusTerminal: false\): void \{[\s\S]*?#renderPanelVisibility\(focusTerminal\)/,
+    );
+    expect(paneSource).toContain("revision !== this.#panelVisibilityRevision");
+    expect(paneSource).toContain("webglRecoveryPaused");
+    expect(paneSource).toContain("webglRecoveryAfterSuppression");
+    expect(paneSource).toContain("webglRecoveryPolicyAction");
+    expect(applicationOverlaySource).toContain("class ApplicationOverlayCoordinator");
+    expect(applicationOverlaySource).toContain("this.#lastOpen !== open");
+    expect(applicationOverlaySource).toContain("setApplicationOverlayOpen(open, false)");
+    expect(applicationOverlaySource).toContain('setAttribute("aria-hidden", "true")');
+    expect(applicationOverlaySource).toContain("this.#background.inert = true");
+    expect(applicationOverlaySource).toContain("get activeOverlay()");
+    expect(applicationOverlaySource).toContain('"data-application-overlay-layer", "active"');
+    expect(applicationOverlaySource).toContain('"data-application-overlay-layer", "underlay"');
+    expect(appSource).toContain("attributeOldValue: true");
+    expect(appSource).toContain(
+      "const modal = applicationOverlayCoordinator.activeOverlay",
+    );
+    expect(appSource).toContain("applicationOverlayKeyboardPolicy(");
+    expect(appSource).toContain("if (!policy.trapTab) return");
+    expect(appSource).toContain("closeActiveApplicationOverlay(event)");
+    expect(appSource).toContain("event.stopImmediatePropagation()");
+    expect(appSource).not.toMatch(
+      /event\.key === "Escape" && !elements\.[A-Za-z]+\.hidden/,
+    );
+    expect(paneSource).toMatch(
+      /!this\.#pasteModal\.hidden && event\.key === "Tab"[\s\S]*this\.#trapPasteFocus\(event\)/,
+    );
+    expect(paneSource).toMatch(
+      /const dismissOnKey = \(event: KeyboardEvent\) => \{[\s\S]*if \(event\.defaultPrevented\) return;[\s\S]*!this\.#pasteModal\.hidden && event\.key === "Tab"[\s\S]*!this\.#pasteModal\.hidden[\s\S]*this\.#finishPasteConfirmation\(false\)/,
+    );
+    expect(paneSource).toMatch(
+      /this\.#terminationModal, "keydown"[\s\S]*keyEvent\.key === "Tab"[\s\S]*this\.#trapTerminationFocus\(keyEvent\)/,
+    );
+    expect(paneSource).toMatch(
+      /#trapPasteFocus[\s\S]*focusCycleIndex\(focusable\.length, current, event\.shiftKey\)/,
+    );
+    expect(paneSource).toMatch(
+      /#trapTerminationFocus[\s\S]*focusCycleIndex\(focusable\.length, current, event\.shiftKey\)/,
+    );
+    expect(styles).toMatch(/data-application-overlay-layer=(?:active|"active")/);
+    expect(styles).toMatch(/data-application-overlay-layer=(?:underlay|"underlay")/);
+    expect(index).toMatch(
+      /<main[^>]*id="main-content"[^>]*class="canvas-main"[^>]*aria-label="Workspace content"[\s\S]*id="settings-page"[^>]*aria-labelledby="capabilities-heading"[\s\S]*id="capabilities-heading"[^>]*tabindex="-1"/,
+    );
+    expect(index).toMatch(
+      /<main[^>]*id="main-content"[^>]*class="canvas-main"[\s\S]*id="overview-page"[^>]*aria-label="Project overview"/,
+    );
+    expect(styles).toMatch(
+      /\.canvas-main\s*\{[^}]*min-width:\s*0[^}]*min-height:\s*0[^}]*flex:\s*1 1 auto[^}]*display:\s*flex[^}]*flex-direction:\s*column/s,
+    );
+    expect(index).toMatch(
+      /id="capability-status"[^>]*role="status"[^>]*aria-live="polite"[^>]*aria-atomic="true"/,
+    );
+    expect(index).toMatch(
+      /class="memory-section capability-editor"[^>]*aria-labelledby="capability-editor-title"[\s\S]*id="capability-preview-result"[^>]*aria-labelledby="capability-preview-heading"/,
+    );
+    expect(index).toMatch(
+      /class="memory-section capability-list-section"[^>]*aria-labelledby="capability-list-heading"[\s\S]*id="capability-audit-list"[^>]*aria-labelledby="capability-audit-heading"/,
+    );
+    expect(index).toMatch(
+      /id="capability-git-fields"[^>]*hidden[^>]*disabled[\s\S]*id="capability-ssh-fields"[^>]*hidden[^>]*disabled/,
+    );
+    expect(appSource).toContain("setCapabilityStatus(action, phase)");
+    expect(appSource).toContain("showCapabilityError(action)");
+    expect(appSource).toContain(
+      'showError(new Error(capabilityAnnouncement(action, "failure")))',
+    );
+    for (const action of ["audit", "test", "preview"]) {
+      expect(appSource).toContain(`showCapabilityError("${action}")`);
+    }
+    expect(appSource).toContain("capabilityFocusRestoreKey(");
+    expect(appSource).toContain('empty.setAttribute("role", "listitem")');
+    expect(appSource).toContain("fieldset.disabled = !active");
+    expect(appSource).toContain('EnableCapabilityV2(generation, Number(view.capability.id), digest)');
+    expect(appSource).toContain("canEnableCapability(view, digest)");
+    expect(appSource).toContain('setView("settings", true)');
+    expect(appSource).not.toContain('setStatus("Testing connection');
   });
 });

@@ -84,13 +84,11 @@ func registerGUIProjectBestEffort(root string) {
 // PickProjectDirectory opens the platform-native directory browser. An empty
 // result means the user cancelled.
 func (a *App) PickProjectDirectory() (string, error) {
-	a.lifecycleMu.Lock()
-	ctx := a.wailsContext
-	shuttingDown := a.shuttingDown
-	a.lifecycleMu.Unlock()
-	if shuttingDown || ctx == nil {
+	ctx, release, ok := a.acquireRuntimeCall()
+	if !ok {
 		return "", errors.New("application window is unavailable")
 	}
+	defer release()
 	defaultDirectory := ""
 	if state := a.GetWorkspaceState(); state.Project != nil {
 		defaultDirectory = state.Project.Root

@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,36 +23,35 @@ const (
 // ~/.zprofile. Safe to invoke repeatedly: an existing managed block is left
 // untouched. Reports the outcome with a native dialog.
 func (a *App) InstallShellCommand() {
+	ctx, release, ok := a.acquireRuntimeCall()
+	if !ok {
+		return
+	}
+	defer release()
 	binDir, err := cliBinaryDir()
 	if err != nil {
-		a.shellCommandDialog("Shell Command", err.Error())
+		a.shellCommandDialog(ctx, "Shell Command", err.Error())
 		return
 	}
 	profile, err := zprofilePath()
 	if err != nil {
-		a.shellCommandDialog("Shell Command", err.Error())
+		a.shellCommandDialog(ctx, "Shell Command", err.Error())
 		return
 	}
 	changed, err := ensureShellPath(profile, binDir)
 	switch {
 	case err != nil:
-		a.shellCommandDialog("Shell Command", err.Error())
+		a.shellCommandDialog(ctx, "Shell Command", err.Error())
 	case changed:
-		a.shellCommandDialog("Shell Command",
+		a.shellCommandDialog(ctx, "Shell Command",
 			fmt.Sprintf("Added to PATH in %s:\n\n%s\n\nOpen a new terminal window, then run `ptrack`.", profile, binDir))
 	default:
-		a.shellCommandDialog("Shell Command",
+		a.shellCommandDialog(ctx, "Shell Command",
 			fmt.Sprintf("Already on PATH via %s:\n\n%s", profile, binDir))
 	}
 }
 
-func (a *App) shellCommandDialog(title, message string) {
-	a.lifecycleMu.Lock()
-	ctx := a.wailsContext
-	a.lifecycleMu.Unlock()
-	if ctx == nil {
-		return
-	}
+func (a *App) shellCommandDialog(ctx context.Context, title, message string) {
 	wailsruntime.MessageDialog(ctx, wailsruntime.MessageDialogOptions{
 		Type:    wailsruntime.InfoDialog,
 		Title:   title,

@@ -75,7 +75,9 @@ import {
 import {
   maximumWebglRecoveryAttempts,
   webglAttachAllowed,
+  webglRecoveryAfterSuppression,
   webglRecoveryDelay,
+  webglRecoveryPolicyAction,
   type WebglAttachSource,
 } from "./renderer-recovery";
 import {
@@ -151,9 +153,9 @@ import {
   type TerminalCWDValidation,
   WorkspacePersistenceScheduler,
 } from "../workspace/persistence";
+import { focusCycleIndex } from "../workspace/presentation";
 import type { WorkspaceAction } from "../workspace/reducer";
 import {
-  restoreConnectedFocus,
   structuralCloseFocusTarget,
   WorkspaceTabBar,
 } from "../workspace/tab-bar";
@@ -267,6 +269,7 @@ export interface TerminalDockHandle {
     accepts?: () => boolean,
   ): Promise<TerminalWritebackResult>;
   setVisible(visible: boolean): void;
+  setApplicationOverlayOpen(open: boolean, focusTerminal: false): void;
   dispose(): void;
 }
 
@@ -291,6 +294,7 @@ interface PaneResources {
   resizeDispatcher: TerminalResizeDispatcher | null;
   webglRecoveryTimer: number | null;
   webglRecoveryAttempts: number;
+  webglRecoveryPaused: boolean;
   diagnosticChangedAt: number;
   disposed: boolean;
 }
@@ -475,6 +479,8 @@ class TerminalDock {
   #boardHidden = false;
   #terminalHidden = false;
   #workspaceViewVisible = true;
+  #applicationOverlayOpen = false;
+  #panelVisibilityRevision = 0;
   #modernUnicodeEnabled = true;
   #fontSize = defaultTerminalFontSize;
   #defaultProfileId = "";
@@ -718,19 +724,24 @@ class TerminalDock {
       this.#hideContextMenu();
       const resources = this.#activeRuntime().resources;
       resources?.terminal.selectAll();
-      resources?.terminal.focus();
+      this.#focusAfterApplicationOverlayClose(resources?.terminal);
     });
     this.#listen(this.#menuSearch, "click", () => {
       this.#hideContextMenu();
-      this.#openSearch();
+      this.#openSearch(false);
+      this.#focusAfterApplicationOverlayClose(this.#searchInput);
     });
     this.#listen(this.#menuClear, "click", () => {
       this.#hideContextMenu();
-      this.#clearBuffer();
+      const resources = this.#activeRuntime().resources;
+      this.#clearBuffer(false);
+      this.#focusAfterApplicationOverlayClose(resources?.terminal);
     });
     this.#listen(this.#menuReset, "click", () => {
       this.#hideContextMenu();
-      this.#resetTerminal();
+      const resources = this.#activeRuntime().resources;
+      this.#resetTerminal(false);
+      this.#focusAfterApplicationOverlayClose(resources?.terminal);
     });
     this.#listen(this.#contextMenu, "keydown", (event) =>
       this.#navigateContextMenu(event as KeyboardEvent),
@@ -1044,13 +1055,15 @@ class TerminalDock {
     }
   }
 
-  #openSearch(): void {
+  #openSearch(focus = true): void {
     const resources = this.#activeRuntime().resources;
     if (!resources || resources.disposed) return;
     this.#hideContextMenu();
     this.#searchForm.hidden = false;
-    this.#searchInput.focus();
-    this.#searchInput.select();
+    if (focus) {
+      this.#searchInput.focus();
+      this.#searchInput.select();
+    }
     if (this.#searchInput.value) this.#updateSearch(false);
   }
 
@@ -1146,22 +1159,22 @@ class TerminalDock {
       !resources || this.#fontSize >= maximumTerminalFontSize;
   }
 
-  #clearBuffer(): void {
+  #clearBuffer(focus = true): void {
     const resources = this.#activeRuntime().resources;
     if (!resources || resources.disposed) return;
     this.#closeSearch(false);
     resources.terminal.clear();
-    resources.terminal.focus();
+    if (focus) resources.terminal.focus();
   }
 
-  #resetTerminal(): void {
+  #resetTerminal(focus = true): void {
     const runtime = this.#activeRuntime();
     const resources = runtime.resources;
     if (!resources || resources.disposed) return;
     this.#closeSearch(false);
     resources.terminal.reset();
     this.#fit(runtime, resources, true);
-    resources.terminal.focus();
+    if (focus) resources.terminal.focus();
   }
 
   #configureTerminalInput(
@@ -1223,6 +1236,7 @@ class TerminalDock {
     };
     const dismissOnKey = (event: KeyboardEvent) => {
       if (!this.#isActive(runtime)) return;
+      if (event.defaultPrevented) return;
       if (!this.#pasteModal.hidden && event.key === "Tab") {
         this.#trapPasteFocus(event);
         return;
@@ -1234,7 +1248,7 @@ class TerminalDock {
       } else if (!this.#contextMenu.hidden) {
         event.preventDefault();
         this.#hideContextMenu();
-        resources.terminal.focus();
+        this.#focusAfterApplicationOverlayClose(resources.terminal);
       } else if (!this.#searchForm.hidden) {
         event.preventDefault();
         this.#closeSearch();
@@ -1402,13 +1416,7 @@ class TerminalDock {
   #trapPasteFocus(event: KeyboardEvent): void {
     const focusable = [this.#pasteCancel, this.#pastePreview, this.#pasteConfirm];
     const current = focusable.indexOf(document.activeElement as HTMLElement);
-    const next = event.shiftKey
-      ? current <= 0
-        ? focusable.length - 1
-        : current - 1
-      : current < 0 || current === focusable.length - 1
-        ? 0
-        : current + 1;
+    const next = focusCycleIndex(focusable.length, current, event.shiftKey);
     event.preventDefault();
     focusable[next].focus();
   }
@@ -1443,15 +1451,13 @@ class TerminalDock {
     this.#terminationInvoker = null;
     this.#terminationModal.hidden = true;
     if (resolve) resolve(confirmed);
-    restoreConnectedFocus(invoker);
+    this.#focusAfterApplicationOverlayClose(invoker);
   }
 
   #trapTerminationFocus(event: KeyboardEvent): void {
     const focusable = [this.#terminationCancel, this.#terminationConfirm];
     const current = focusable.indexOf(document.activeElement as HTMLButtonElement);
-    const next = event.shiftKey
-      ? current <= 0 ? focusable.length - 1 : current - 1
-      : current < 0 || current === focusable.length - 1 ? 0 : current + 1;
+    const next = focusCycleIndex(focusable.length, current, event.shiftKey);
     event.preventDefault();
     focusable[next].focus();
   }
@@ -1486,11 +1492,26 @@ class TerminalDock {
     this.#contextMenu.hidden = true;
   }
 
+  #focusAfterApplicationOverlayClose(
+    target: { readonly isConnected?: boolean; focus(): void } | null | undefined,
+  ): void {
+    if (!target) return;
+    requestAnimationFrame(() => {
+      if (
+        !this.#disposed &&
+        !this.#applicationOverlayOpen &&
+        target.isConnected !== false
+      ) target.focus();
+    });
+  }
+
   #navigateContextMenu(event: KeyboardEvent): void {
     if (event.key === "Escape") {
       event.preventDefault();
       this.#hideContextMenu();
-      this.#activeRuntime().resources?.terminal.focus();
+      this.#focusAfterApplicationOverlayClose(
+        this.#activeRuntime().resources?.terminal,
+      );
       return;
     }
     const buttons = [
@@ -1608,6 +1629,7 @@ class TerminalDock {
       resizeDispatcher: null,
       webglRecoveryTimer: null,
       webglRecoveryAttempts: 0,
+      webglRecoveryPaused: false,
       diagnosticChangedAt: Date.now(),
       disposed: false,
     };
@@ -1713,6 +1735,7 @@ class TerminalDock {
         resources.webglRecoveryTimer = null;
       }
       resources.webglRecoveryAttempts = 0;
+      resources.webglRecoveryPaused = false;
       resources.diagnosticChangedAt = Date.now();
       const contextLoss = webgl.onContextLoss(() => {
         contextLoss.dispose();
@@ -1764,6 +1787,7 @@ class TerminalDock {
       resources.diagnosticChangedAt = Date.now();
       this.#attachWebgl(runtime, resources, ticket, "retry");
     }, delay);
+    resources.webglRecoveryPaused = false;
   }
 
   #routeTerminalExit(payload: TerminalExit): void {
@@ -1916,9 +1940,11 @@ class TerminalDock {
     if (this.#disposed || document.visibilityState === "hidden") return;
     for (const paneId of this.#activeTabPaneIds()) {
       const resources = this.#runtimes.get(paneId)?.resources;
-      if (resources && !resources.disposed && resources.webgl === null &&
+      if (!this.#applicationOverlayOpen && resources && !resources.disposed &&
+        resources.webgl === null &&
         resources.webglRecoveryTimer === null) {
         resources.webglRecoveryAttempts = 0;
+        resources.webglRecoveryPaused = false;
       }
     }
     this.#updateWebglPolicy();
@@ -2172,6 +2198,7 @@ class TerminalDock {
       accepted: (ticket) => this.#accepts(runtime, ticket),
       reset: () => {
         resources.webglRecoveryAttempts = 0;
+        resources.webglRecoveryPaused = false;
         resources.diagnosticChangedAt = Date.now();
       },
       refresh: () => resources.terminal.refresh(0, resources.terminal.rows - 1),
@@ -2337,6 +2364,7 @@ class TerminalDock {
   #isPaneVisible(paneId: string): boolean {
     return terminalPanePresentationPolicy({
       workspaceViewVisible: this.#workspaceViewVisible,
+      applicationOverlayOpen: this.#applicationOverlayOpen,
       terminalHidden: this.#terminalHidden,
       documentVisible: document.visibilityState === "visible",
       activeTab: this.#activeTabPaneIds().includes(paneId),
@@ -2353,6 +2381,7 @@ class TerminalDock {
     const tab = workspace.tabs.find((candidate) => candidate.id === workspace.activeTabId);
     const policy = terminalPanePresentationPolicy({
       workspaceViewVisible: this.#workspaceViewVisible,
+      applicationOverlayOpen: this.#applicationOverlayOpen,
       terminalHidden: this.#terminalHidden,
       documentVisible: document.visibilityState === "visible",
       activeTab: Boolean(tab),
@@ -2381,6 +2410,11 @@ class TerminalDock {
       const resources = runtime.resources;
       if (!resources || resources.disposed) continue;
       if (!preferred.has(runtime.paneId)) {
+        const recovery = webglRecoveryAfterSuppression({
+          attempts: resources.webglRecoveryAttempts,
+          timerPending: resources.webglRecoveryTimer !== null,
+          paused: resources.webglRecoveryPaused,
+        }, this.#applicationOverlayOpen);
         if (resources.webglRecoveryTimer !== null) {
           window.clearTimeout(resources.webglRecoveryTimer);
           resources.webglRecoveryTimer = null;
@@ -2390,11 +2424,22 @@ class TerminalDock {
         const webgl = resources.webgl;
         resources.webgl = null;
         webgl?.dispose();
-        resources.webglRecoveryAttempts = 0;
+        resources.webglRecoveryAttempts = recovery.attempts;
+        resources.webglRecoveryPaused = recovery.paused;
         continue;
       }
       const ticket = this.#runtimes.capture(runtime.paneId);
-      if (ticket) this.#attachWebgl(runtime, resources, ticket);
+      if (!ticket) continue;
+      const recoveryAction = webglRecoveryPolicyAction({
+        attempts: resources.webglRecoveryAttempts,
+        timerPending: resources.webglRecoveryTimer !== null,
+        paused: resources.webglRecoveryPaused,
+      });
+      if (recoveryAction === "attach") {
+        this.#attachWebgl(runtime, resources, ticket);
+      } else if (recoveryAction === "schedule") {
+        this.#scheduleWebglRecovery(runtime, resources, ticket);
+      }
     }
   }
 
@@ -2420,6 +2465,7 @@ class TerminalDock {
   #isGenuinelyForeground(runtime: DockPaneRuntime): boolean {
     return terminalPanePresentationPolicy({
       workspaceViewVisible: this.#workspaceViewVisible,
+      applicationOverlayOpen: this.#applicationOverlayOpen,
       terminalHidden: this.#terminalHidden,
       documentVisible: document.visibilityState === "visible",
       activeTab: this.#activeTabPaneIds().includes(runtime.paneId),
@@ -2681,7 +2727,8 @@ class TerminalDock {
     this.#renderPanelVisibility();
   }
 
-  #renderPanelVisibility(): void {
+  #renderPanelVisibility(focusTerminal = true): void {
+    const revision = ++this.#panelVisibilityRevision;
     this.#workArea.dataset.boardHidden = String(this.#boardHidden);
     this.#workArea.dataset.terminalHidden = String(this.#terminalHidden);
     this.#boardToggle.setAttribute("aria-pressed", String(this.#boardHidden));
@@ -2704,13 +2751,20 @@ class TerminalDock {
     this.#updateWebglPolicy();
     const runtime = this.#activeRuntime();
     const resources = runtime.resources;
-    if (this.#terminalHidden || !this.#workspaceViewVisible) return;
+    if (
+      this.#terminalHidden || !this.#workspaceViewVisible || this.#applicationOverlayOpen
+    ) return;
     this.#acknowledgeIfForeground(runtime);
     requestAnimationFrame(() => {
-      if (this.#disposed || this.#terminalHidden || !this.#workspaceViewVisible) return;
+      if (
+        this.#disposed || this.#terminalHidden || !this.#workspaceViewVisible ||
+        this.#applicationOverlayOpen || revision !== this.#panelVisibilityRevision
+      ) return;
       this.#fitPanes(this.#activeTabPaneIds());
       this.#updateWebglPolicy();
-      if (resources && !resources.disposed && this.#isActive(runtime)) {
+      if (
+        focusTerminal && resources && !resources.disposed && this.#isActive(runtime)
+      ) {
         resources.terminal.focus();
       }
     });
@@ -3133,6 +3187,12 @@ class TerminalDock {
     this.#workspaceViewVisible = visible;
     this.#renderPanelVisibility();
   }
+
+  setApplicationOverlayOpen(open: boolean, focusTerminal: false): void {
+    if (this.#disposed || this.#applicationOverlayOpen === open) return;
+    this.#applicationOverlayOpen = open;
+    this.#renderPanelVisibility(focusTerminal);
+  }
 }
 
 export function mountTerminalDock(
@@ -3166,6 +3226,8 @@ export function mountTerminalDock(
       );
     },
     setVisible: (visible) => dock.setVisible(visible),
+    setApplicationOverlayOpen: (open, focusTerminal) =>
+      dock.setApplicationOverlayOpen(open, focusTerminal),
     dispose: () => dock.dispose(),
   };
 }

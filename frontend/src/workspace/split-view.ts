@@ -192,6 +192,7 @@ export function activeTabDockInteractionEligible(input: {
 
 export function terminalPanePresentationPolicy(input: {
   workspaceViewVisible: boolean;
+  applicationOverlayOpen: boolean;
   terminalHidden: boolean;
   documentVisible: boolean;
   activeTab: boolean;
@@ -201,7 +202,8 @@ export function terminalPanePresentationPolicy(input: {
   bodyVisible: boolean;
   dockVisible: boolean;
 }): TerminalPanePresentationPolicy {
-  const paneVisible = input.workspaceViewVisible && !input.terminalHidden && input.activeTab;
+  const paneVisible = input.workspaceViewVisible && !input.applicationOverlayOpen &&
+    !input.terminalHidden && input.activeTab;
   const webglAllowed = paneVisible && input.documentVisible;
   return {
     paneVisible,

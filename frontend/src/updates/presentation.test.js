@@ -1,12 +1,28 @@
 import { describe, expect, it } from "vitest";
 import {
   formatUpdateBytes,
+  updateModalOpenTransition,
   updatePresentation,
   updateProgress,
   updateStateIsNewer,
 } from "./presentation";
 
 describe("update presentation", () => {
+  it("captures modal focus only for the hidden-to-visible transition", () => {
+    const original = { id: "original" };
+    const later = { id: "later" };
+    expect(updateModalOpenTransition(true, null, original)).toEqual({
+      returnFocus: original,
+      makeVisible: true,
+      scheduleOpeningFocus: true,
+    });
+    expect(updateModalOpenTransition(false, original, later)).toEqual({
+      returnFocus: original,
+      makeVisible: false,
+      scheduleOpeningFocus: false,
+    });
+  });
+
   it.each([
     ["idle", "check", false],
     ["recovering", null, false],
