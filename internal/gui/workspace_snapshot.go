@@ -106,13 +106,15 @@ type AgentRunSnapshot struct {
 }
 
 type WorkspaceSnapshot struct {
-	Generation uint64           `json:"generation"`
-	CapturedAt string           `json:"capturedAt"`
-	Project    ProjectOverview  `json:"project"`
-	Tracking   TrackingSnapshot `json:"tracking"`
-	Git        GitSnapshot      `json:"git"`
-	Terminals  TerminalSnapshot `json:"terminals"`
-	AgentRuns  AgentRunSnapshot `json:"agentRuns"`
+	Generation    uint64                `json:"generation"`
+	CapturedAt    string                `json:"capturedAt"`
+	Project       ProjectOverview       `json:"project"`
+	Tracking      TrackingSnapshot      `json:"tracking"`
+	Git           GitSnapshot           `json:"git"`
+	AgentActivity AgentActivitySnapshot `json:"agentActivity"`
+	Terminals     TerminalSnapshot      `json:"terminals"`
+	AgentRuns     AgentRunSnapshot      `json:"agentRuns"`
+	Drift         DriftSnapshot         `json:"drift"`
 }
 
 // GetWorkspaceSnapshot returns one generation-scoped, bounded project view.
@@ -161,6 +163,20 @@ func (a *App) GetWorkspaceSnapshot(
 		return WorkspaceSnapshot{}, err
 	}
 	applyLinkedRuntimeToBoard(&tracking.Board, runtimeProjection)
+	agentActivity := buildAgentActivitySnapshot(runtimeProjection)
+	applyAgentOwnership(workspace, &agentActivity, runtimeProjection)
+	applyAgentWorktrees(workspace, &agentActivity, runtimeProjection)
+	agentActivity.Notifications, agentActivity.NotificationBounds,
+		agentActivity.NotificationsIncomplete = buildAgentNotifications(
+		workspace,
+		runtimeProjection,
+	)
+	agentActivity.Handoffs = buildAgentHandoffInbox(workspace, runtimeProjection)
+	agentActivity.Workflows = buildAgentWorkflowInbox(workspace, runtimeProjection)
+	linkedCommits, err := s.ListCommits()
+	if err != nil {
+		return WorkspaceSnapshot{}, err
+	}
 	snapshot := WorkspaceSnapshot{
 		Generation: workspace.Generation(),
 		CapturedAt: time.Now().UTC().Format(time.RFC3339),
@@ -169,7 +185,8 @@ func (a *App) GetWorkspaceSnapshot(
 			Root:    workspace.root,
 			Storage: inspectProjectStorage(workspace.dbPath, meta),
 		},
-		Tracking: tracking,
+		Tracking:      tracking,
+		AgentActivity: agentActivity,
 		Terminals: TerminalSnapshot{
 			State:    SnapshotReady,
 			Sessions: runtimeProjection.terminals,
@@ -199,12 +216,24 @@ func (a *App) GetWorkspaceSnapshot(
 			State: SnapshotError,
 			Error: fmt.Sprintf("Git snapshot unavailable: %v", gitErr),
 		}
+		snapshot.AgentActivity.WorktreesIncomplete = true
 	} else {
 		snapshot.Git = GitSnapshot{
 			State:    SnapshotReady,
 			Snapshot: gitSnapshot,
 		}
+		snapshot.AgentActivity.Worktrees = append(
+			[]gitinfo.ExistingWorktree(nil), gitSnapshot.Worktrees...,
+		)
+		snapshot.AgentActivity.WorktreeBounds = gitSnapshot.WorktreeBounds
+		snapshot.AgentActivity.WorktreesIncomplete = gitSnapshot.WorktreesIncomplete
+		snapshot.AgentActivity.WorkflowTargets,
+			snapshot.AgentActivity.WorkflowTargetsIncomplete = workflowTargetBranches(gitSnapshot)
 	}
+	snapshot.Drift = buildDriftSnapshot(
+		workspace, runtimeProjection, agentActivity, snapshot.Git, linkedCommits,
+		meta.CreatedAt,
+	)
 	return snapshot, nil
 }
 

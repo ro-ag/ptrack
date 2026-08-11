@@ -1,6 +1,11 @@
 package gitinfo
 
-import "testing"
+import (
+	"fmt"
+	"reflect"
+	"strings"
+	"testing"
+)
 
 func TestParsePorcelainV2Status(t *testing.T) {
 	input := []byte(
@@ -27,6 +32,11 @@ func TestParsePorcelainV2Status(t *testing.T) {
 		status.Untracked != 1 || status.Ignored != 1 {
 		t.Fatalf("file counts = %#v", status)
 	}
+	if !reflect.DeepEqual(status.ChangedPaths, []string{
+		"conflict.go", "old.go", "renamed.go", "staged.go", "unstaged.go",
+	}) || !reflect.DeepEqual(status.UntrackedPaths, []string{"new.go"}) {
+		t.Fatalf("status paths = changed %#v untracked %#v", status.ChangedPaths, status.UntrackedPaths)
+	}
 }
 
 func TestParsePorcelainV2DetachedAndInitial(t *testing.T) {
@@ -50,6 +60,27 @@ func TestParsePorcelainV2DetachedAndInitial(t *testing.T) {
 				t.Fatalf("status = %#v", status)
 			}
 		})
+	}
+}
+
+func TestParsePorcelainV2StatusRejectsEscapingPathsAndBoundsOutput(t *testing.T) {
+	for _, path := range []string{"../secret", "/absolute", "nested/../../secret"} {
+		if _, err := parsePorcelainV2Status([]byte("? " + path + "\x00")); err == nil {
+			t.Fatalf("accepted escaping status path %q", path)
+		}
+	}
+	var input strings.Builder
+	for index := 0; index < maxStatusPaths+3; index++ {
+		input.WriteString(fmt.Sprintf("? path-%04d\x00", index))
+	}
+	status, err := parsePorcelainV2Status([]byte(input.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(status.UntrackedPaths) != maxStatusPaths ||
+		status.UntrackedPathBounds.Total != maxStatusPaths+3 ||
+		status.UntrackedPathBounds.More != 3 {
+		t.Fatalf("untracked bounds = %#v len=%d", status.UntrackedPathBounds, len(status.UntrackedPaths))
 	}
 }
 

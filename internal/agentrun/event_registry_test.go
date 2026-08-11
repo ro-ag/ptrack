@@ -91,6 +91,52 @@ func TestRegistryRecordsNormalizedBoundedEventsForAuthenticatedRun(t *testing.T)
 	}
 }
 
+func TestRegistryPersistsOnlyAdapterRecognizedNotificationKind(t *testing.T) {
+	directory := t.TempDir()
+	statePath := filepath.Join(directory, "agent-runs.json")
+	config := Config{ProjectRoot: directory, StatePath: statePath}
+	first := NewRegistry(config)
+	lease, err := first.RegisterExternal(Registration{
+		Profile: "wrapper", Provider: "codex", CWD: directory,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.RecordEvent(lease.Run.ID, lease.LeaseToken, EventObservation{
+		ModelVersion: EventModelVersion, SourceID: "forged-1", SourceSequence: 1,
+		Kind: EventLifecycle, Phase: EventWaiting,
+		Notification: NotificationApprovalRequested,
+	}); err == nil {
+		t.Fatal("direct observation self-asserted an approval request")
+	}
+	recorded, err := first.RecordProviderEvent(lease.Run.ID, lease.LeaseToken, ProviderEvent{
+		ModelVersion: ProviderEventModelVersion, ID: "approval-1", Sequence: 1,
+		Type: "PermissionRequest", Summary: "QUESTION_SECRET_CANARY",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recorded.Notification != NotificationApprovalRequested || recorded.Summary != "" {
+		t.Fatalf("recorded notification = %#v", recorded)
+	}
+	if err := first.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(contents), "QUESTION_SECRET_CANARY") {
+		t.Fatal("notification history retained provider content")
+	}
+	second := newEventRegistryForTest(t, config)
+	events, total, err := second.EventSnapshot(lease.Run.ID, 10)
+	if err != nil || total != 1 || len(events) != 1 ||
+		events[0].Notification != NotificationApprovalRequested {
+		t.Fatalf("restored notifications = %#v total=%d err=%v", events, total, err)
+	}
+}
+
 func TestRegistryRestoresSanitizedEventsAndRejectsReplayedSequence(t *testing.T) {
 	directory := t.TempDir()
 	statePath := filepath.Join(directory, "agent-runs.json")

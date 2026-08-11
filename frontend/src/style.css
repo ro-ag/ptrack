@@ -1076,8 +1076,20 @@ select option {
 }
 
 .intelligence-item[data-state="stale"],
+.intelligence-item[data-state="unknown"],
+.intelligence-item[data-state="blocked"],
+.intelligence-item[data-state="failed"],
 .intelligence-item[data-state="error"] {
   border-left-color: var(--blocked);
+}
+
+.intelligence-item[data-state="waiting"] {
+  border-left-color: var(--doing);
+}
+
+.intelligence-item[data-state="running"],
+.intelligence-item[data-state="completed"] {
+  border-left-color: var(--accent);
 }
 
 .intelligence-title,
@@ -1086,6 +1098,46 @@ select option {
   margin: 0;
   line-height: 1.4;
   text-overflow: ellipsis;
+}
+
+.agent-ownership-action {
+  min-height: 26px;
+  margin-top: var(--space-050);
+  padding: 2px var(--space-100);
+  font-size: 0.625rem;
+}
+
+.agent-worktree-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-050);
+  margin-top: var(--space-050);
+}
+
+.agent-worktree-controls select {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.agent-handoff-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: var(--space-100);
+  margin: var(--space-100) 0;
+}
+
+.agent-handoff-form label {
+  display: grid;
+  gap: var(--space-050);
+  color: var(--faint);
+  font-size: 0.625rem;
+}
+
+.agent-handoff-preview {
+  max-height: 160px;
+  margin-top: var(--space-050);
+  overflow: auto;
+  white-space: pre-wrap;
 }
 
 .intelligence-title {
@@ -3439,4 +3491,15 @@ button.modal-backdrop:active {
   .terminal-unicode-setting span {
     display: none;
   }
+}
+:where(.visually-hidden) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }

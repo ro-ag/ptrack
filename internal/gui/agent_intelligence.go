@@ -114,6 +114,8 @@ func buildAgentIntelligenceV2(
 	}
 	association := currentRuntimeAssociation(host, run.ID, run.Association)
 	workspace.associationMu.Unlock()
+	events = currentAssociationEvents(run, association, events)
+	intelligence = agentrun.DeriveRunIntelligence(run, events)
 	suggestions, total, err := buildAgentSuggestions(s, run, association, events)
 	if err != nil {
 		return AgentIntelligenceV2{}, err
@@ -305,11 +307,14 @@ func eventRelevantToCurrentAssociation(
 	event agentrun.Event,
 ) bool {
 	if event.RunID != run.ID || event.Correlation.ProjectRoot != run.ProjectRoot ||
-		event.Correlation.TerminalID != run.TerminalID {
+		event.Correlation.TerminalID != run.TerminalID ||
+		event.LifecycleRevision != run.LifecycleRevision {
 		return false
 	}
 	if association == nil {
-		return event.Correlation.PlanID == 0 && event.Correlation.TaskID == 0
+		return event.Correlation.PlanID == 0 && event.Correlation.TaskID == 0 &&
+			event.Correlation.Generation == 0 &&
+			event.Correlation.AssociationRevision == 0
 	}
 	if run.Association == nil {
 		return false
@@ -318,6 +323,20 @@ func eventRelevantToCurrentAssociation(
 		event.Correlation.TaskID == association.TaskID &&
 		event.Correlation.Generation == run.Association.Generation &&
 		event.Correlation.AssociationRevision == association.Revision
+}
+
+func currentAssociationEvents(
+	run agentrun.Run,
+	association *RuntimeAssociation,
+	events []agentrun.Event,
+) []agentrun.Event {
+	current := make([]agentrun.Event, 0, len(events))
+	for _, event := range events {
+		if eventRelevantToCurrentAssociation(run, association, event) {
+			current = append(current, event)
+		}
+	}
+	return current
 }
 
 func memoryRelevantToAssociation(

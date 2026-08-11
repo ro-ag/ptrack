@@ -103,6 +103,9 @@ func gitEnvironment(source []string) []string {
 		if !found {
 			continue
 		}
+		if strings.HasPrefix(strings.ToUpper(key), "GIT_") {
+			continue
+		}
 		overridden := false
 		for overrideKey := range overrides {
 			if strings.EqualFold(key, overrideKey) {

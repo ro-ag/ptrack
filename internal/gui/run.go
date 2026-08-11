@@ -24,6 +24,7 @@ func Run(startPath string, initialPlan uint64, assets fs.FS) error {
 	switch {
 	case err == nil:
 		candidate.setGeneration(1)
+		app.bindWorkspaceRuntimeNotifications(candidate)
 		if activateErr := candidate.activate(); activateErr != nil {
 			app.workspaceStatus = WorkspaceError
 			app.workspaceError = activateErr.Error()

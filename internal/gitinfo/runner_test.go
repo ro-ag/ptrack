@@ -29,6 +29,9 @@ func TestGitEnvironmentDisablesWritesPagerAndPrompts(t *testing.T) {
 		"LANG=fr_FR",
 		"GIT_OPTIONAL_LOCKS=1",
 		"GIT_PAGER=less",
+		"GIT_DIR=/attacker/repository",
+		"GIT_WORK_TREE=/attacker/worktree",
+		"GIT_CONFIG_COUNT=1",
 	})
 	joined := strings.Join(env, "\n")
 	for _, want := range []string{
@@ -42,7 +45,8 @@ func TestGitEnvironmentDisablesWritesPagerAndPrompts(t *testing.T) {
 			t.Fatalf("environment missing %q:\n%s", want, joined)
 		}
 	}
-	if strings.Contains(joined, "LANG=fr_FR") || strings.Contains(joined, "GIT_OPTIONAL_LOCKS=1") {
+	if strings.Contains(joined, "LANG=fr_FR") || strings.Contains(joined, "GIT_OPTIONAL_LOCKS=1") ||
+		strings.Contains(joined, "/attacker/") || strings.Contains(joined, "GIT_CONFIG_COUNT") {
 		t.Fatalf("environment retained overridden values:\n%s", joined)
 	}
 }

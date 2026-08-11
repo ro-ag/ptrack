@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -282,5 +283,118 @@ func TestRunHistoryRejectsRecordsOutsideCurrentProject(t *testing.T) {
 	t.Cleanup(func() { _ = registry.Shutdown(context.Background()) })
 	if snapshot := registry.Snapshot(10); len(snapshot) != 0 {
 		t.Fatalf("restored cross-project records: %#v", snapshot)
+	}
+}
+
+func TestRunHistoryRestoresValidatedLaunchedSiblingWorktreeWithBoundedEvents(t *testing.T) {
+	projectRoot := t.TempDir()
+	siblingRoot := t.TempDir()
+	cwd := filepath.Join(siblingRoot, "nested")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cwd = canonicalRegistryPath(cwd)
+	statePath := filepath.Join(t.TempDir(), "agent-runs.json")
+	clock := &fakeClock{now: time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)}
+	policy := DefaultEventPrivacyPolicy()
+	policy.RetainLast = 2
+	validator := func(candidate string) bool { return candidate == cwd }
+
+	first := NewRegistry(Config{
+		ProjectRoot: projectRoot, StatePath: statePath,
+		Now: clock.Now, NewTicker: clock.NewTicker,
+		AdditionalCWDValidator: validator, EventPolicy: &policy,
+	})
+	token, err := first.IssueLaunchedEventToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := first.RegisterLaunched(Registration{
+		Profile: "agent-codex", Provider: "codex", PID: 42,
+		TerminalID: "terminal-sibling", CWD: cwd,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.BindLaunchedEventToken(token, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	for sequence := 1; sequence <= 3; sequence++ {
+		clock.Advance(time.Second)
+		if _, err := first.RecordLaunchedProviderEvent(token, ProviderEvent{
+			ModelVersion: ProviderEventModelVersion,
+			ID:           fmt.Sprintf("sibling-event-%d", sequence),
+			Sequence:     uint64(sequence),
+			Type:         "question",
+		}); err != nil {
+			t.Fatalf("record launched event %d: %v", sequence, err)
+		}
+	}
+	if err := first.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	validated := 0
+	second := NewRegistry(Config{
+		ProjectRoot: projectRoot, StatePath: statePath,
+		Now: clock.Now, NewTicker: clock.NewTicker, EventPolicy: &policy,
+		AdditionalCWDValidator: func(candidate string) bool {
+			validated++
+			return candidate == cwd
+		},
+	})
+	t.Cleanup(func() { _ = second.Shutdown(context.Background()) })
+	restored := second.Snapshot(10)
+	if len(restored) != 1 || restored[0].ID != run.ID ||
+		restored[0].State != StateStale ||
+		restored[0].ProcessState != ProcessUnknown || restored[0].CWD != cwd {
+		t.Fatalf("restored sibling run = %#v", restored)
+	}
+	if validated != 1 {
+		t.Fatalf("sibling validator calls = %d, want 1", validated)
+	}
+	events, total, err := second.EventSnapshot(run.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || total != 2 || events[0].SourceSequence != 2 ||
+		events[1].SourceSequence != 3 {
+		t.Fatalf("restored bounded events = %#v total=%d", events, total)
+	}
+}
+
+func TestRunHistoryNeverUsesSiblingValidatorForExternalRun(t *testing.T) {
+	projectRoot := t.TempDir()
+	siblingRoot := t.TempDir()
+	statePath := filepath.Join(t.TempDir(), "agent-runs.json")
+	state := persistedRegistryState{
+		Version: persistedStateVersion,
+		Runs: []persistedRecord{{Run: Run{
+			ID: "external-sibling", Profile: "wrapper", Provider: "codex",
+			ProjectRoot: projectRoot, CWD: siblingRoot, Kind: RegistrationExternal,
+			State: StateRunning, ProcessState: ProcessUnknown, LeaseState: LeaseActive,
+		}}},
+	}
+	contents, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statePath, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	validatorCalled := false
+	registry := NewRegistry(Config{
+		ProjectRoot: projectRoot, StatePath: statePath,
+		AdditionalCWDValidator: func(string) bool {
+			validatorCalled = true
+			return true
+		},
+	})
+	t.Cleanup(func() { _ = registry.Shutdown(context.Background()) })
+	if snapshot := registry.Snapshot(10); len(snapshot) != 0 {
+		t.Fatalf("restored provider-controlled sibling run: %#v", snapshot)
+	}
+	if validatorCalled {
+		t.Fatal("external persisted CWD reached host-only sibling validator")
 	}
 }

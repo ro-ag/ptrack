@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  agentActivityAnnouncement,
+  agentActivityPresentation,
   agentIntelligenceLabel,
   appVersionLabel,
   collapsedLaneStatuses,
@@ -12,13 +14,17 @@ import {
   heatmapWeeks,
   handoffPreviewResponseIsCurrent,
   linkedTaskRuntimePresentation,
+  mutationFocusFallback,
   paletteTarget,
   preserveSectionOnError,
   runtimeAssociationLabel,
   runtimeCountLabel,
   runtimeEventIsCurrent,
   shortcutIntent,
+  workflowMutationFocusKey,
+  worktreeSelectionForRerender,
   workspaceStateCopy,
+  driftPresentation,
 } from "./presentation";
 
 describe("workspace presentation policy", () => {
@@ -123,6 +129,281 @@ describe("workspace presentation policy", () => {
       confidence: "very",
       eventCount: "many",
     })).toBe("");
+  });
+
+  it("does not reannounce unchanged heartbeat-only activity", () => {
+    const initial = agentActivityAnnouncement({
+      items: [{ runId: "run-1", state: "running", lastEventAt: "first" }],
+      notifications: [{ id: "notice-1" }],
+    });
+    expect(initial?.text).toContain("1 running");
+    expect(agentActivityAnnouncement({
+      items: [{ runId: "run-1", state: "running", lastEventAt: "later" }],
+      notifications: [{ id: "notice-1" }],
+    }, initial?.key || "")).toBeNull();
+    expect(agentActivityAnnouncement({
+      items: [{ runId: "run-1", state: "waiting" }],
+      notifications: [{ id: "notice-1" }],
+    }, initial?.key || "")?.text).toContain("1 waiting");
+    expect(agentActivityAnnouncement({
+      items: [{ runId: "run-1", state: "running" }],
+      notifications: [{ id: "notice-2" }],
+    }, initial?.key || "")).not.toBeNull();
+  });
+
+  it("keeps workflow actions focus-distinct with a safe removed-row fallback", () => {
+    const approve = workflowMutationFocusKey("approve", "proposal-1");
+    const dismiss = workflowMutationFocusKey("dismiss", "proposal-1");
+    expect(approve).toBe("workflow:approve:proposal-1");
+    expect(dismiss).toBe("workflow:dismiss:proposal-1");
+    expect(approve).not.toBe(dismiss);
+    expect(mutationFocusFallback(approve)).toBe("workflowPrepare");
+    expect(mutationFocusFallback(dismiss)).toBe("workflowPrepare");
+    expect(mutationFocusFallback("ownership:run-1")).toBe("");
+  });
+
+  it("preserves only an available focused worktree choice across rerender", () => {
+    const options = ["/repo", "/sibling"];
+    expect(worktreeSelectionForRerender(options, "/repo", null, "run-1")).toBe("/repo");
+
+    const unsubmitted = { runId: "run-1", value: "/sibling" };
+    expect(worktreeSelectionForRerender(
+      options, "/repo", unsubmitted, "run-1",
+    )).toBe("/sibling");
+    expect(worktreeSelectionForRerender(
+      options, "/repo", unsubmitted, "run-2",
+    )).toBe("/repo");
+    expect(worktreeSelectionForRerender(
+      ["/repo"], "/repo", unsubmitted, "run-1",
+    )).toBe("/repo");
+    expect(worktreeSelectionForRerender(
+      options, "/sibling", null, "run-1",
+    )).toBe("/sibling");
+  });
+
+  it("presents bounded unified agent activity with explicit unknown state", () => {
+    expect(agentActivityPresentation({
+      items: [
+        { runId: "run-1", state: "running" },
+        { runId: "run-2", state: "waiting" },
+        { runId: "run-3", state: "invented" },
+      ],
+      bounds: { shown: 3, total: 5, more: 2 },
+    })).toEqual({
+      items: [
+        { runId: "run-1", state: "running" },
+        { runId: "run-2", state: "waiting" },
+        { runId: "run-3", state: "unknown" },
+      ],
+      counts: [
+        { state: "running", count: 1 },
+        { state: "waiting", count: 1 },
+        { state: "unknown", count: 1 },
+      ],
+      conflicts: [],
+      analysisIncomplete: false,
+      notifications: [],
+      notificationsIncomplete: false,
+      handoffs: { items: [], incomplete: false },
+      worktrees: [],
+		worktreesIncomplete: false,
+		workflows: { items: [], incomplete: false },
+		workflowTargets: [],
+		workflowTargetsIncomplete: false,
+      compact: "3/5",
+      detail: "5 registered agents · 2 older entries omitted",
+    });
+  });
+
+  it("allowlists unified activity fields and bounds malformed rows", () => {
+    const presented = agentActivityPresentation({
+      items: [{
+        runId: "run-1",
+        state: "running",
+        live: true,
+        association: { planId: 5, taskId: 37, revision: 2, prompt: "private" },
+        terminalId: "terminal-private",
+        projectRoot: "/private/repo",
+        cwd: "/private/repo",
+        summary: "private",
+      }],
+    });
+    expect(presented.items).toEqual([{
+      runId: "run-1",
+      state: "running",
+      live: true,
+      association: { planId: 5, taskId: 37, revision: 2 },
+    }]);
+    expect(JSON.stringify(presented.items)).not.toContain("private");
+  });
+
+	it("allowlists bounded existing worktree metadata", () => {
+    const activity = agentActivityPresentation({
+      items: [{
+        runId: "run-1",
+        state: "running",
+        worktree: {
+          identity: {
+            root: "/repo", branch: "main", head: "a".repeat(40),
+            gitDir: "/private/git", commonGitDir: "/private/common",
+          },
+          verified: true,
+          isolated: true,
+          cwdMatches: true,
+        },
+      }],
+      worktrees: [
+        { root: "/repo", branch: "main", head: "a".repeat(40), remote: "secret" },
+        { root: "/bad", branch: "bad", head: "not-a-sha" },
+      ],
+      worktreeBounds: { more: 1 },
+	});
+
+    expect(activity.worktrees).toEqual([
+      { root: "/repo", branch: "main", head: "a".repeat(40) },
+    ]);
+    expect(activity.items[0].worktree).toEqual({
+      identity: {
+        root: "/repo", branch: "main", head: "a".repeat(40), linked: false,
+      },
+      verified: true,
+      isolated: true,
+      cwdMatches: true,
+    });
+    expect(JSON.stringify(activity.items[0])).not.toContain("private");
+    expect(agentActivityPresentation({ worktreesIncomplete: true }).worktreesIncomplete).toBe(true);
+  });
+
+	it("allowlists closed no-execution workflow proposals", () => {
+		const presented = agentActivityPresentation({
+			workflows: { items: [
+				{ id: "wf-1", runId: "run-1", kind: "pullRequest", state: "proposed", branch: "feature", head: "b".repeat(40), targetBranch: "main", targetHead: "d".repeat(40), status: { staged: 1, untracked: 2 }, command: "git push --force" },
+				{ id: "wf-2", runId: "run-1", kind: "deploy", state: "approved", branch: "feature", head: "c".repeat(40) },
+			], incomplete: true },
+			workflowTargets: ["main", "bad\nbranch"],
+		});
+		expect(presented.workflows).toEqual({
+			items: [{
+				id: "wf-1", runId: "run-1", kind: "pullRequest", state: "proposed",
+				branch: "feature", head: "b".repeat(40), targetBranch: "main", targetHead: "d".repeat(40),
+				status: { staged: 1, unstaged: 0, untracked: 2, conflicted: 0, ahead: 0, behind: 0 },
+			}],
+			incomplete: true,
+		});
+		expect(presented.workflowTargets).toEqual(["main"]);
+	});
+
+  it("preserves bounded ownership conflicts and incomplete analysis", () => {
+    expect(agentActivityPresentation({
+      items: [{
+        runId: "run-1",
+        state: "running",
+        ownership: { planId: 5, taskId: 38, associationRevision: 2 },
+      }],
+      conflicts: [{
+        planId: 5,
+        taskId: 38,
+        agentCount: 3,
+        ownerCount: 1,
+        runIds: ["run-1", "run-2", "run-3"],
+      }],
+      conflictBounds: { shown: 1, total: 2, more: 1 },
+      analysisIncomplete: true,
+    })).toMatchObject({
+      items: [{
+        runId: "run-1",
+        state: "running",
+        ownership: { planId: 5, taskId: 38, associationRevision: 2 },
+      }],
+      conflicts: [{
+        planId: 5,
+        taskId: 38,
+        agentCount: 3,
+        ownerCount: 1,
+        runIds: ["run-1", "run-2", "run-3"],
+      }],
+      analysisIncomplete: true,
+    });
+  });
+
+  it("presents only closed content-free agent notifications", () => {
+    expect(agentActivityPresentation({
+      notifications: [
+        { id: "n-1", runId: "run-1", kind: "approvalRequested", observedAt: "2026-08-10T20:00:00Z", terminalBacked: true },
+        { id: "n-2", runId: "run-1", kind: "question", observedAt: "2026-08-10T20:01:00Z" },
+        { id: "n-3", runId: "run-1", kind: "failure", observedAt: "2026-08-10T20:02:00Z" },
+        { id: "n-4", runId: "run-1", kind: "completion", observedAt: "2026-08-10T20:03:00Z" },
+        { id: "n-5", runId: "run-1", kind: "approvalGranted", observedAt: "2026-08-10T20:04:00Z", text: "secret" },
+      ],
+      notificationsIncomplete: true,
+    })).toMatchObject({
+      notifications: [
+        { id: "n-1", runId: "run-1", kind: "approvalRequested", observedAt: "2026-08-10T20:00:00Z", terminalBacked: true },
+        { id: "n-2", runId: "run-1", kind: "question", observedAt: "2026-08-10T20:01:00Z", terminalBacked: false },
+        { id: "n-3", runId: "run-1", kind: "failure", observedAt: "2026-08-10T20:02:00Z", terminalBacked: false },
+        { id: "n-4", runId: "run-1", kind: "completion", observedAt: "2026-08-10T20:03:00Z", terminalBacked: false },
+      ],
+      notificationsIncomplete: true,
+    });
+  });
+
+  it("allowlists bounded immutable handoff proposals", () => {
+    expect(agentActivityPresentation({
+      handoffs: {
+        items: [{
+          id: "handoff-1",
+          sourceRunId: "source-1",
+          targetRunId: "target-1",
+          createdAt: "2026-08-10T20:00:00Z",
+          expiresAt: "2026-08-10T20:30:00Z",
+          preview: {
+            text: "Agent run state: working.",
+            includedEventIds: Array.from({ length: 12 }, (_, index) => `event-${index}`),
+          },
+        }, {
+          id: "forged",
+          sourceRunId: "same",
+          targetRunId: "same",
+          createdAt: "now",
+          expiresAt: "later",
+          preview: { text: "forged" },
+        }],
+        incomplete: true,
+      },
+    }).handoffs).toEqual({
+      items: [{
+        id: "handoff-1",
+        sourceRunId: "source-1",
+        targetRunId: "target-1",
+        createdAt: "2026-08-10T20:00:00Z",
+        expiresAt: "2026-08-10T20:30:00Z",
+        preview: {
+          text: "Agent run state: working.",
+          includedEventIds: Array.from({ length: 8 }, (_, index) => `event-${index}`),
+          truncated: false,
+        },
+      }],
+      incomplete: true,
+    });
+  });
+
+  it("allowlists bounded conservative drift findings", () => {
+    expect(driftPresentation({
+      findings: [
+        { kind: "untrackedFile", severity: "warning", scope: "projectUnattributed", path: "frontend/new.ts", evidenceCount: 1 },
+        { kind: "unlinkedCommit", severity: "info", scope: "projectUnattributed", sha: "abcdef0123456789", evidenceCount: 1 },
+        { kind: "crossTaskPathOverlap", severity: "warning", scope: "taskComparison", path: "internal/shared.go", runIds: ["one", "two"], evidenceCount: 2 },
+        { kind: "certainDrift", severity: "critical", scope: "agent", path: "/secret", evidenceCount: 99 },
+      ],
+      incomplete: true,
+    })).toEqual({
+      findings: [
+        { kind: "untrackedFile", severity: "warning", scope: "projectUnattributed", path: "frontend/new.ts", sha: "", runIds: [], evidenceCount: 1 },
+        { kind: "unlinkedCommit", severity: "info", scope: "projectUnattributed", path: "", sha: "abcdef0123456789", runIds: [], evidenceCount: 1 },
+        { kind: "crossTaskPathOverlap", severity: "warning", scope: "taskComparison", path: "internal/shared.go", sha: "", runIds: ["one", "two"], evidenceCount: 2 },
+      ],
+      incomplete: true,
+    });
   });
 
   it("accepts runtime refresh events only for the open generation", () => {

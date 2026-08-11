@@ -18,10 +18,12 @@ func TestIntegrationServerRegisterHeartbeatExitAndCleanup(t *testing.T) {
 	projectRoot := t.TempDir()
 	globalHome := t.TempDir()
 	registry := NewRegistry(Config{ProjectRoot: projectRoot})
+	runtimeChanges := make(chan struct{}, 8)
 	server, err := StartIntegrationServer(registry, IntegrationConfig{
-		GlobalHome:  globalHome,
-		ProjectRoot: projectRoot,
-		Generation:  4,
+		GlobalHome:     globalHome,
+		ProjectRoot:    projectRoot,
+		Generation:     4,
+		RuntimeChanged: func() { runtimeChanges <- struct{}{} },
 	})
 	if err != nil {
 		t.Fatalf("StartIntegrationServer: %v", err)
@@ -236,6 +238,9 @@ func TestIntegrationServerRegisterHeartbeatExitAndCleanup(t *testing.T) {
 	run := registry.Snapshot(1)[0]
 	if run.State != StateExited || run.Exit == nil || run.Exit.Result != "done" {
 		t.Fatalf("run after exit = %#v", run)
+	}
+	if len(runtimeChanges) != 4 {
+		t.Fatalf("runtime change callbacks = %d, want register, heartbeat, event, and exit", len(runtimeChanges))
 	}
 
 	descriptorPath := server.DescriptorPath()

@@ -66,6 +66,11 @@ describe("production asset layout", () => {
     expect(app).toContain("Stale task transition response ignored");
     expect(app).toContain("Stale terminal association response ignored");
     expect(app).toContain("Linking changes context only and grants no capabilities.");
+    expect(index).not.toMatch(/id="agent-activity"[^>]*aria-live/);
+    expect(index).toMatch(
+      /id="agent-activity-live"[^>]*role="status"[^>]*aria-live="polite"[^>]*aria-atomic="true"/,
+    );
+    expect(app).toContain("mutationFocusKey");
     expect(styles).toContain(".terminal-tab-indicator");
     expect(styles).toMatch(/\[data-indicator=(?:"failed"|failed)\]/);
     expect(styles).toMatch(/\[data-unread=(?:"true"|true)\]/);

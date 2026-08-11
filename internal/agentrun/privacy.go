@@ -100,6 +100,16 @@ func NormalizeEventObservation(
 	if observation.Outcome != "" && !observation.Outcome.Valid() {
 		return EventObservation{}, errors.New("unsupported agent event outcome")
 	}
+	if observation.Notification != "" {
+		if !observation.Notification.Valid() || !observation.recognizedNotification {
+			return EventObservation{}, errors.New("unsupported agent event notification")
+		}
+		if !validNotificationEvent(observation) {
+			return EventObservation{}, errors.New("agent event notification does not match lifecycle evidence")
+		}
+	} else if observation.recognizedNotification {
+		return EventObservation{}, errors.New("agent event notification is required")
+	}
 
 	sourceID, err := normalizeEventScalar(observation.SourceID, maxEventSourceIDBytes, false)
 	if err != nil || !stableEventSourceID.MatchString(sourceID) ||
@@ -175,6 +185,27 @@ func NormalizeEventObservation(
 	normalized.Summary = summary
 	normalized.OccurredAt = occurredAt.UTC()
 	return normalized, nil
+}
+
+func validNotificationEvent(observation EventObservation) bool {
+	if observation.Subject != "" || len(observation.Paths) != 0 ||
+		observation.CommitSHA != "" || observation.ExitCode != nil ||
+		observation.Summary != "" {
+		return false
+	}
+	switch observation.Notification {
+	case NotificationApprovalRequested, NotificationQuestion:
+		return observation.Kind == EventLifecycle && observation.Phase == EventWaiting &&
+			observation.Outcome == "" && observation.ErrorClass == ""
+	case NotificationFailure:
+		return (observation.Kind == EventLifecycle || observation.Kind == EventError) &&
+			observation.Phase == EventFailed && observation.Outcome == EventUnsuccessful
+	case NotificationCompletion:
+		return observation.Kind == EventLifecycle && observation.Phase == EventCompleted &&
+			observation.Outcome == EventSucceeded && observation.ErrorClass == ""
+	default:
+		return false
+	}
 }
 
 func normalizeEventScalar(value string, maximum int, optional bool) (string, error) {

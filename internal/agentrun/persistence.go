@@ -223,8 +223,15 @@ func (r *Registry) restoreLocked() error {
 		run := persisted.Run
 		run.ProjectRoot = canonicalRegistryPath(run.ProjectRoot)
 		run.CWD = canonicalRegistryPath(run.CWD)
-		if run.ID == "" || run.ProjectRoot != r.projectRoot ||
-			!pathWithin(r.projectRoot, run.CWD) {
+		if run.ID == "" || run.ProjectRoot != r.projectRoot {
+			continue
+		}
+		cwdAllowed := pathWithin(r.projectRoot, run.CWD)
+		if !cwdAllowed && run.Kind == RegistrationLaunched &&
+			r.additionalCWDValidator != nil {
+			cwdAllowed = r.additionalCWDValidator(run.CWD)
+		}
+		if !cwdAllowed {
 			continue
 		}
 		if run.Kind == RegistrationLaunched && run.State != StateExited {
@@ -242,6 +249,7 @@ func (r *Registry) restoreLocked() error {
 		events := r.restoreEventsLocked(run, persisted.Events)
 		lastSourceSequence := persisted.LastSourceSequence
 		nextHostSequence := persisted.NextHostSequence
+		lifecycleRevision := uint64(1)
 		for _, event := range events {
 			if event.SourceSequence > lastSourceSequence {
 				lastSourceSequence = event.SourceSequence
@@ -249,11 +257,14 @@ func (r *Registry) restoreLocked() error {
 			if event.HostSequence > nextHostSequence {
 				nextHostSequence = event.HostSequence
 			}
+			if event.LifecycleRevision >= lifecycleRevision {
+				lifecycleRevision = event.LifecycleRevision + 1
+			}
 		}
 		r.records[run.ID] = &record{
 			run:                run,
 			leaseToken:         persisted.LeaseToken,
-			lifecycleRevision:  1,
+			lifecycleRevision:  lifecycleRevision,
 			events:             events,
 			lastSourceSequence: lastSourceSequence,
 			nextHostSequence:   nextHostSequence,
@@ -301,19 +312,21 @@ func (r *Registry) restoreEventsLocked(run Run, persisted []Event) []Event {
 			event.ObservedAt,
 			r.eventPolicy,
 			EventObservation{
-				ModelVersion:   event.ModelVersion,
-				SourceID:       event.SourceID,
-				SourceSequence: event.SourceSequence,
-				Kind:           event.Kind,
-				Phase:          event.Phase,
-				Outcome:        event.Outcome,
-				Subject:        event.Subject,
-				Paths:          event.Paths,
-				CommitSHA:      event.CommitSHA,
-				ExitCode:       event.ExitCode,
-				ErrorClass:     event.ErrorClass,
-				Summary:        event.Summary,
-				OccurredAt:     event.OccurredAt,
+				ModelVersion:           event.ModelVersion,
+				SourceID:               event.SourceID,
+				SourceSequence:         event.SourceSequence,
+				Kind:                   event.Kind,
+				Phase:                  event.Phase,
+				Outcome:                event.Outcome,
+				Subject:                event.Subject,
+				Paths:                  event.Paths,
+				CommitSHA:              event.CommitSHA,
+				ExitCode:               event.ExitCode,
+				ErrorClass:             event.ErrorClass,
+				Summary:                event.Summary,
+				OccurredAt:             event.OccurredAt,
+				Notification:           event.Notification,
+				recognizedNotification: event.Notification.Valid(),
 			},
 		)
 		if err != nil {
@@ -327,6 +340,13 @@ func (r *Registry) restoreEventsLocked(run Run, persisted []Event) []Event {
 		event.ErrorClass = normalized.ErrorClass
 		event.Summary = normalized.Summary
 		event.OccurredAt = normalized.OccurredAt
+		event.Notification = normalized.Notification
+		if event.LifecycleRevision == 0 {
+			event.LifecycleRevision = 1
+		}
+		if event.LifecycleRevision == ^uint64(0) {
+			continue
+		}
 		validated = append(validated, cloneEvent(event))
 		seenIDs[event.ID] = true
 		lastSourceSequence = event.SourceSequence
