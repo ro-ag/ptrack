@@ -6,10 +6,38 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-08-10
+
+### Added
+- Multi-session terminal workspaces now support persistent tab and split
+  layouts, independent live sessions, bounded descriptor-only restore, and
+  explicit lifecycle cleanup without persisting terminal contents or tokens.
+- Project- and agent-profile-scoped HTTP, Git, and SSH capabilities now use
+  explicit approval windows, bounded operations, connection diagnostics, and
+  metadata-only audit records. Capabilities remain disabled until approved and
+  never store credentials.
+- Terminals and AgentRuns can be linked to plans and tasks through
+  generation-scoped associations, with explicit relink, detach, typed
+  write-back, and resource-fenced task-transition confirmation.
+- Provider-neutral AgentRun intelligence accepts authenticated, allowlisted
+  structured evidence from Codex, Claude, Gemini, Agy, and OpenCode while
+  excluding prompts, reasoning, tool payloads, terminal output, and secrets.
+- Unified agent coordination adds conservative activity states, explicit task
+  ownership and overlap warnings, content-free notifications, single-use
+  handoffs, evidence-only drift warnings, read-only existing-worktree
+  association, and user-approved workflow proposals that execute nothing.
+
 ### Changed
 - The product display name is consistently styled as `p-track` across the
   desktop app, CLI prose, documentation, terminal environment, and release
   artifacts. The all-caps form remains reserved for terminal wordmark artwork.
+- The desktop app displays the resolved build version and coalesces agent
+  runtime refreshes without re-announcing unchanged activity or discarding
+  focused controls and pending worktree selections.
+
+### Fixed
+- Embedded terminal panes now fill and resize with their dock, split, and
+  window while retaining the correct live session.
 
 ## [0.19.0] - 2026-08-09
 
@@ -466,7 +494,8 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
-[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.20.0
 [0.19.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.19.0
 [0.18.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.18.0
 [0.17.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.17.0
