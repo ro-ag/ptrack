@@ -108,6 +108,103 @@ func TestIntegrationServerRegisterHeartbeatExitAndCleanup(t *testing.T) {
 	}
 	_ = heartbeat.Body.Close()
 
+	eventResponse := integrationRequest(
+		t,
+		http.MethodPost,
+		descriptor.URL+"/v1/runs/"+leaseResponse.ID+"/events",
+		leaseResponse.LeaseToken,
+		ProviderEvent{
+			ModelVersion: ProviderEventModelVersion,
+			ID:           "lifecycle-1",
+			Sequence:     1,
+			Type:         "lifecycle.progress",
+			Subject:      "working",
+		},
+	)
+	if eventResponse.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(eventResponse.Body)
+		t.Fatalf("event status = %d: %s", eventResponse.StatusCode, body)
+	}
+	var receipt struct {
+		ID           string `json:"id"`
+		HostSequence uint64 `json:"hostSequence"`
+	}
+	if err := json.NewDecoder(eventResponse.Body).Decode(&receipt); err != nil {
+		t.Fatal(err)
+	}
+	_ = eventResponse.Body.Close()
+	if receipt.ID == "" || receipt.HostSequence != 1 {
+		t.Fatalf("event receipt = %#v", receipt)
+	}
+	events, total, err := registry.EventSnapshot(leaseResponse.ID, 10)
+	if err != nil || total != 1 || len(events) != 1 ||
+		events[0].Provider != "external-test" || events[0].Kind != EventLifecycle {
+		t.Fatalf("recorded integration events = %#v total=%d err=%v", events, total, err)
+	}
+
+	unauthorizedEvent := integrationRequest(
+		t,
+		http.MethodPost,
+		descriptor.URL+"/v1/runs/"+leaseResponse.ID+"/events",
+		"wrong",
+		ProviderEvent{ModelVersion: 1, ID: "event-2", Sequence: 2, Type: "tool.started"},
+	)
+	if unauthorizedEvent.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthorized event status = %d", unauthorizedEvent.StatusCode)
+	}
+	_ = unauthorizedEvent.Body.Close()
+
+	unknownFieldEvent := integrationRequest(
+		t,
+		http.MethodPost,
+		descriptor.URL+"/v1/runs/"+leaseResponse.ID+"/events",
+		leaseResponse.LeaseToken,
+		map[string]any{
+			"modelVersion": 1, "id": "event-2", "sequence": 2,
+			"type": "lifecycle.progress", "prompt": "MUST_NOT_BE_ACCEPTED",
+		},
+	)
+	if unknownFieldEvent.StatusCode != http.StatusBadRequest {
+		t.Fatalf("unknown-field event status = %d", unknownFieldEvent.StatusCode)
+	}
+	_ = unknownFieldEvent.Body.Close()
+
+	unauthorizedMalformed, err := http.NewRequest(
+		http.MethodPost,
+		descriptor.URL+"/v1/runs/"+leaseResponse.ID+"/events",
+		strings.NewReader(`{"modelVersion":1`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unauthorizedMalformed.Header.Set("Authorization", "Bearer wrong")
+	unauthorizedMalformedResponse, err := http.DefaultClient.Do(unauthorizedMalformed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unauthorizedMalformedResponse.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthorized malformed event status = %d", unauthorizedMalformedResponse.StatusCode)
+	}
+	_ = unauthorizedMalformedResponse.Body.Close()
+
+	malformedRequest, err := http.NewRequest(
+		http.MethodPost,
+		descriptor.URL+"/v1/runs/"+leaseResponse.ID+"/events",
+		strings.NewReader(`{"modelVersion":1`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	malformedRequest.Header.Set("Authorization", "Bearer "+leaseResponse.LeaseToken)
+	malformedResponse, err := http.DefaultClient.Do(malformedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if malformedResponse.StatusCode != http.StatusBadRequest {
+		t.Fatalf("malformed event status = %d", malformedResponse.StatusCode)
+	}
+	_ = malformedResponse.Body.Close()
+
 	exit := integrationRequest(
 		t,
 		http.MethodPost,
@@ -119,6 +216,23 @@ func TestIntegrationServerRegisterHeartbeatExitAndCleanup(t *testing.T) {
 		t.Fatalf("exit status = %d", exit.StatusCode)
 	}
 	_ = exit.Body.Close()
+
+	postExitEvent := integrationRequest(
+		t,
+		http.MethodPost,
+		descriptor.URL+"/v1/runs/"+leaseResponse.ID+"/events",
+		leaseResponse.LeaseToken,
+		ProviderEvent{
+			ModelVersion: ProviderEventModelVersion,
+			ID:           "lifecycle-2",
+			Sequence:     2,
+			Type:         "lifecycle.progress",
+		},
+	)
+	if postExitEvent.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("post-exit event status = %d", postExitEvent.StatusCode)
+	}
+	_ = postExitEvent.Body.Close()
 	run := registry.Snapshot(1)[0]
 	if run.State != StateExited || run.Exit == nil || run.Exit.Result != "done" {
 		t.Fatalf("run after exit = %#v", run)
@@ -161,6 +275,89 @@ func TestIntegrationServerRejectsExternalAssociationClaims(t *testing.T) {
 	if len(registry.Snapshot(10)) != 0 {
 		t.Fatal("rejected association claim registered a run")
 	}
+}
+
+func TestIntegrationServerBindsLaunchedEventTokenToOwnedRun(t *testing.T) {
+	projectRoot := t.TempDir()
+	registry := NewRegistry(Config{ProjectRoot: projectRoot})
+	server, err := StartIntegrationServer(registry, IntegrationConfig{
+		GlobalHome: t.TempDir(), ProjectRoot: projectRoot, Generation: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = server.Shutdown(context.Background())
+		_ = registry.Shutdown(context.Background())
+	})
+	token, err := registry.IssueLaunchedEventToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerEvent := ProviderEvent{
+		ModelVersion: ProviderEventModelVersion, ID: "item-1", Sequence: 1,
+		Type: "item.completed", Category: EventFile, Paths: []string{"internal/agentrun/event.go"},
+	}
+	encoded, err := json.Marshal(providerEvent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type requestResult struct {
+		response *http.Response
+		err      error
+	}
+	pendingResult := make(chan requestResult, 1)
+	go func() {
+		request, requestErr := http.NewRequest(
+			http.MethodPost,
+			server.EventEndpoint(),
+			bytes.NewReader(encoded),
+		)
+		if requestErr != nil {
+			pendingResult <- requestResult{err: requestErr}
+			return
+		}
+		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("Content-Type", "application/json")
+		response, requestErr := (&http.Client{Timeout: 3 * time.Second}).Do(request)
+		pendingResult <- requestResult{response: response, err: requestErr}
+	}()
+	run, err := registry.RegisterLaunched(Registration{
+		Profile: "agent-codex", Provider: "codex", PID: os.Getpid(),
+		TerminalID: "terminal-1", CWD: projectRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.BindLaunchedEventToken(token, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	result := <-pendingResult
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	accepted := result.response
+	if accepted.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(accepted.Body)
+		t.Fatalf("launched event status = %d: %s", accepted.StatusCode, body)
+	}
+	_ = accepted.Body.Close()
+	events, total, err := registry.EventSnapshot(run.ID, 10)
+	if err != nil || total != 1 || len(events) != 1 ||
+		events[0].Correlation.TerminalID != "terminal-1" {
+		t.Fatalf("launched events = %#v total=%d err=%v", events, total, err)
+	}
+	if !registry.RecordTerminalExit("terminal-1", 0, "done") {
+		t.Fatal("launched terminal exit was not recorded")
+	}
+	postExit := integrationRequest(t, http.MethodPost, server.EventEndpoint(), token, ProviderEvent{
+		ModelVersion: ProviderEventModelVersion, ID: "item-2", Sequence: 2,
+		Type: "item.completed", Category: EventFile,
+	})
+	if postExit.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("revoked launched token status = %d", postExit.StatusCode)
+	}
+	_ = postExit.Body.Close()
 }
 
 func TestOlderIntegrationServerCannotRemoveNewSameProjectDescriptor(t *testing.T) {

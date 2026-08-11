@@ -423,43 +423,88 @@ func (a *App) CreateTerminalV2(
 	if cwd == "" {
 		cwd = workspace.root
 	}
-	var capabilityToken string
-	if broker := workspace.capabilityBroker(); broker != nil {
-		isAgent, profileErr := terminalProfileIsAgent(manager, profileID)
-		if profileErr != nil {
-			return TerminalSessionV2{}, profileErr
-		}
-		if isAgent {
-			capabilityToken, err = broker.IssueSessionToken(profileID)
-			if err != nil {
-				return TerminalSessionV2{}, err
-			}
+	environment := map[string]string{}
+	eventResources, _ := workspace.agents.(linkedAgentEventResources)
+	eventEndpoint := ""
+	if eventResources != nil {
+		eventEndpoint = eventResources.AgentEventEndpoint()
+	}
+	broker := workspace.capabilityBroker()
+	isAgent := false
+	if broker != nil || eventEndpoint != "" {
+		isAgent, err = terminalProfileIsAgent(manager, profileID)
+		if err != nil {
+			return TerminalSessionV2{}, err
 		}
 	}
+	eventToken := ""
+	if isAgent && eventEndpoint != "" {
+		eventToken, err = eventResources.IssueLaunchedEventToken()
+		if err != nil {
+			return TerminalSessionV2{}, err
+		}
+		environment[AgentEventEndpointEnvironment] = eventEndpoint
+		environment[AgentEventTokenEnvironment] = eventToken
+	}
+	var capabilityToken string
+	if broker != nil && isAgent {
+		capabilityToken, err = broker.IssueSessionToken(profileID)
+		if err != nil {
+			if eventToken != "" {
+				eventResources.RevokeLaunchedEventToken(eventToken)
+			}
+			return TerminalSessionV2{}, err
+		}
+		environment["PTRACK_CAPABILITY_TOKEN"] = capabilityToken
+		environment["PTRACK_CAPABILITY_PROJECT"] = workspace.root
+		environment["PTRACK_CAPABILITY_GENERATION"] = fmt.Sprint(workspace.Generation())
+		environment["PTRACK_CAPABILITY_PROFILE"] = profileID
+	}
 	var session managedTerminalSession
-	if capabilityToken != "" {
+	if len(environment) != 0 {
 		environmentManager, ok := manager.(terminalEnvironmentManager)
 		if !ok {
-			workspace.capabilityBroker().RevokeToken(capabilityToken)
-			return TerminalSessionV2{}, errors.New("terminal manager cannot inject capability identity")
+			if eventToken != "" {
+				eventResources.RevokeLaunchedEventToken(eventToken)
+			}
+			if capabilityToken != "" {
+				workspace.capabilityBroker().RevokeToken(capabilityToken)
+			}
+			return TerminalSessionV2{}, errors.New("terminal manager cannot inject agent identity")
 		}
-		session, err = environmentManager.CreateWithEnv(profileID, cwd, rows, columns, map[string]string{
-			"PTRACK_CAPABILITY_TOKEN":      capabilityToken,
-			"PTRACK_CAPABILITY_PROJECT":    workspace.root,
-			"PTRACK_CAPABILITY_GENERATION": fmt.Sprint(workspace.Generation()),
-			"PTRACK_CAPABILITY_PROFILE":    profileID,
-		})
+		session, err = environmentManager.CreateWithEnv(
+			profileID, cwd, rows, columns, environment,
+		)
 	} else {
 		session, err = manager.Create(profileID, cwd, rows, columns)
 	}
 	if err != nil {
+		if eventToken != "" {
+			eventResources.RevokeLaunchedEventToken(eventToken)
+		}
 		if capabilityToken != "" {
 			workspace.capabilityBroker().RevokeToken(capabilityToken)
 		}
 		return TerminalSessionV2{}, err
 	}
+	if isAgent && session.ProfileKind != terminal.ProfileAgent {
+		if eventToken != "" {
+			eventResources.RevokeLaunchedEventToken(eventToken)
+		}
+		if capabilityToken != "" {
+			workspace.capabilityBroker().RevokeToken(capabilityToken)
+		}
+		closeErr := manager.Close(session.SessionID, true)
+		return TerminalSessionV2{}, errors.Join(
+			errors.New("terminal manager returned a shell for an agent profile"),
+			closeErr,
+		)
+	}
 	if capabilityToken != "" {
 		if err := workspace.capabilityBroker().BindSession(capabilityToken, session.SessionID); err != nil {
+			if eventToken != "" {
+				eventResources.RevokeLaunchedEventToken(eventToken)
+			}
 			workspace.capabilityBroker().RevokeToken(capabilityToken)
 			closeErr := manager.Close(session.SessionID, true)
 			return TerminalSessionV2{}, errors.Join(err, closeErr)
@@ -482,13 +527,23 @@ func (a *App) CreateTerminalV2(
 	})
 	if session.ProfileKind == terminal.ProfileAgent {
 		if registry := workspace.agentRegistry(); registry != nil {
-			if _, registerErr := registry.RegisterLaunched(agentrun.Registration{
+			run, registerErr := registry.RegisterLaunched(agentrun.Registration{
 				Profile:    session.ProfileID,
 				Provider:   session.Provider,
 				PID:        session.PID,
 				TerminalID: session.SessionID,
 				CWD:        session.CWD,
-			}); registerErr != nil {
+			})
+			if registerErr == nil && eventToken != "" {
+				registerErr = eventResources.BindLaunchedEventToken(eventToken, run.ID)
+				if registerErr != nil {
+					registry.RollbackLaunched(run.ID, session.SessionID)
+				}
+			}
+			if registerErr != nil {
+				if eventToken != "" {
+					eventResources.RevokeLaunchedEventToken(eventToken)
+				}
 				workspace.removeTerminal(session.SessionID)
 				if broker := workspace.capabilityBroker(); broker != nil {
 					broker.RevokeSession(session.SessionID)
@@ -496,6 +551,8 @@ func (a *App) CreateTerminalV2(
 				closeErr := manager.Close(session.SessionID, true)
 				return TerminalSessionV2{}, errors.Join(registerErr, closeErr)
 			}
+		} else if eventToken != "" {
+			eventResources.RevokeLaunchedEventToken(eventToken)
 		}
 	}
 	a.publishWorkspaceTerminalStatus(workspace, TerminalStatus{
@@ -544,6 +601,9 @@ func (a *App) monitorTerminalAttachmentLease(
 		// close so an unattached agent cannot retain network authority.
 		if broker := workspace.capabilityBroker(); broker != nil {
 			broker.RevokeSession(session.SessionID)
+		}
+		if registry := workspace.agentRegistry(); registry != nil {
+			registry.RevokeLaunchedEventTokenForTerminal(session.SessionID)
 		}
 		// CloseSession transfers this ID out of manager ownership before it
 		// waits for process teardown, including error returns. The lease still
@@ -603,6 +663,9 @@ func (a *App) CloseTerminalV2(
 	// failed or delayed process close must never leave network authority live.
 	if broker := workspace.capabilityBroker(); broker != nil {
 		broker.RevokeSession(sessionID)
+	}
+	if registry := workspace.agentRegistry(); registry != nil {
+		registry.RevokeLaunchedEventTokenForTerminal(sessionID)
 	}
 	if err := manager.Close(sessionID, force); err != nil &&
 		!errors.Is(err, terminal.ErrSessionNotFound) {

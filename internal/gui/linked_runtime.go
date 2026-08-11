@@ -48,6 +48,17 @@ type AgentRuntimeSummary struct {
 	LeaseState            agentrun.LeaseState       `json:"leaseState"`
 	Live                  bool                      `json:"live"`
 	Association           *RuntimeAssociation       `json:"association,omitempty"`
+	Intelligence          *AgentIntelligenceSummary `json:"intelligence,omitempty"`
+}
+
+// AgentIntelligenceSummary is deliberately content-free: only the derived
+// state and evidence counts/timestamp cross the Wails boundary.
+type AgentIntelligenceSummary struct {
+	State         agentrun.IntelligenceState      `json:"state"`
+	Confidence    agentrun.IntelligenceConfidence `json:"confidence"`
+	EvidenceCount int                             `json:"evidenceCount"`
+	EventCount    int                             `json:"eventCount"`
+	LastEventAt   string                          `json:"lastEventAt,omitempty"`
 }
 
 type TaskLinkedRuntimeSummary struct {
@@ -111,10 +122,51 @@ func workspaceRuntimeProjection(
 		runs, agentTotal = registry.RuntimeSnapshotBounded(linkedRuntimeCandidateLimit)
 	}
 	projection := buildRuntimeProjection(host, sessions, runs)
+	if intelligenceRegistry, ok := workspace.agents.(interface {
+		Intelligence(string) (agentrun.RunIntelligence, error)
+	}); ok {
+		intelligenceByRun := make(map[string]AgentIntelligenceSummary, len(runs))
+		for _, run := range runs {
+			intelligence, intelligenceErr := intelligenceRegistry.Intelligence(run.ID)
+			if intelligenceErr != nil {
+				continue
+			}
+			projected := projectAgentIntelligence(intelligence)
+			intelligenceByRun[run.ID] = AgentIntelligenceSummary{
+				State:         intelligence.State,
+				Confidence:    intelligence.Confidence,
+				EvidenceCount: len(intelligence.Evidence),
+				EventCount:    intelligence.EventCount,
+				LastEventAt:   projected.LastEventAt,
+			}
+		}
+		applyAgentIntelligence(&projection, intelligenceByRun)
+	}
 	projection.terminalBounds = snapshotBound(len(projection.terminals), terminalTotal)
 	projection.agentBounds = snapshotBound(len(projection.agents), agentTotal)
 	projection.sourcesTruncated = terminalTotal > len(sessions) || agentTotal > len(runs)
 	return projection, nil
+}
+
+func applyAgentIntelligence(
+	projection *runtimeProjection,
+	intelligenceByRun map[string]AgentIntelligenceSummary,
+) {
+	if projection == nil {
+		return
+	}
+	apply := func(runs []AgentRuntimeSummary) {
+		for index := range runs {
+			intelligence, exists := intelligenceByRun[runs[index].RunID]
+			if !exists {
+				continue
+			}
+			copy := intelligence
+			runs[index].Intelligence = &copy
+		}
+	}
+	apply(projection.agents)
+	apply(projection.agentCandidates)
 }
 
 func buildRuntimeProjection(

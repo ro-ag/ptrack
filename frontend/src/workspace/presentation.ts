@@ -190,6 +190,62 @@ export interface RuntimeAssociationSummary {
   revision?: number;
 }
 
+export interface AgentIntelligencePresentation {
+  state?: unknown;
+  confidence?: unknown;
+  eventCount?: unknown;
+}
+
+export function agentIntelligenceLabel(
+  intelligence: AgentIntelligencePresentation | null | undefined,
+): string {
+  const states = [
+    "unknown",
+    "working",
+    "waiting",
+    "blocked",
+    "completed",
+    "failed",
+    "potentiallyDrifting",
+  ];
+  if (typeof intelligence?.state !== "string" ||
+    !states.includes(intelligence.state)) return "";
+  const confidence = ["low", "medium", "high"].includes(
+    String(intelligence.confidence),
+  )
+    ? ` · ${String(intelligence.confidence)} confidence`
+    : "";
+  const rawCount = Number(intelligence.eventCount);
+  const eventCount = Number.isFinite(rawCount)
+    ? Math.max(0, Math.trunc(rawCount))
+    : 0;
+  return `intelligence ${intelligence.state}${confidence} · ${eventCount} structured event${eventCount === 1 ? "" : "s"}`;
+}
+
+export interface IntelligenceAssociation {
+  planId?: number;
+  taskId?: number;
+  revision?: number;
+}
+
+// A handoff preview belongs to the exact task association shown when its
+// request started. Workspace generation alone cannot fence a same-generation
+// detach or relink.
+export function handoffPreviewResponseIsCurrent(
+  requestedTaskId: number,
+  expected: IntelligenceAssociation | null | undefined,
+  received: IntelligenceAssociation | null | undefined,
+  currentTaskId: number,
+): boolean {
+  if (!expected || !received || requestedTaskId <= 0 || currentTaskId !== requestedTaskId) {
+    return false;
+  }
+  return Number(expected.planId || 0) === Number(received.planId || 0) &&
+    Number(expected.taskId || 0) === requestedTaskId &&
+    Number(received.taskId || 0) === requestedTaskId &&
+    Number(expected.revision || 0) === Number(received.revision || 0);
+}
+
 export function runtimeAssociationLabel(
   association: RuntimeAssociationSummary | null | undefined,
 ): string {

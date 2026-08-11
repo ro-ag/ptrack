@@ -23,7 +23,9 @@ type workspaceAgentRegistry interface {
 		association.PointerV1,
 	) (agentrun.Run, error)
 	RollbackLinkedLaunched(runID, terminalID string) bool
+	RollbackLaunched(runID, terminalID string) bool
 	RollbackLinkedTerminal(terminalID string) int
+	RevokeLaunchedEventTokenForTerminal(terminalID string) bool
 	HasLinkedTerminal(terminalID string) bool
 	IsLinkedLaunchRun(runID string) bool
 	Associate(string, *association.Host, association.PointerV1) (association.AssociationV1, error)
@@ -86,6 +88,25 @@ func (r *workspaceAgentResources) Activate(generation uint64) error {
 	return nil
 }
 
+func (r *workspaceAgentResources) AgentEventEndpoint() string {
+	if r.integration == nil {
+		return ""
+	}
+	return r.integration.EventEndpoint()
+}
+
+func (r *workspaceAgentResources) IssueLaunchedEventToken() (string, error) {
+	return r.registry.IssueLaunchedEventToken()
+}
+
+func (r *workspaceAgentResources) BindLaunchedEventToken(token, runID string) error {
+	return r.registry.BindLaunchedEventToken(token, runID)
+}
+
+func (r *workspaceAgentResources) RevokeLaunchedEventToken(token string) {
+	r.registry.RevokeLaunchedEventToken(token)
+}
+
 func (r *workspaceAgentResources) ActiveCount() int {
 	return r.registry.ActiveCount()
 }
@@ -104,6 +125,30 @@ func (r *workspaceAgentResources) SnapshotBounded(limit int) ([]agentrun.Run, in
 
 func (r *workspaceAgentResources) RuntimeSnapshotBounded(limit int) ([]agentrun.Run, int) {
 	return r.registry.RuntimeSnapshotBounded(limit)
+}
+
+func (r *workspaceAgentResources) Intelligence(
+	runID string,
+) (agentrun.RunIntelligence, error) {
+	return r.registry.Intelligence(runID)
+}
+
+func (r *workspaceAgentResources) IntelligenceSnapshot(
+	runID string,
+	limit int,
+) (agentrun.Run, []agentrun.Event, int, agentrun.RunIntelligence, error) {
+	return r.registry.IntelligenceSnapshot(runID, limit)
+}
+
+func (r *workspaceAgentResources) Run(runID string) (agentrun.Run, error) {
+	return r.registry.Run(runID)
+}
+
+func (r *workspaceAgentResources) EventSnapshot(
+	runID string,
+	limit int,
+) ([]agentrun.Event, int, error) {
+	return r.registry.EventSnapshot(runID, limit)
 }
 
 func (r *workspaceAgentResources) WithExactRuntimeSnapshot(
@@ -131,8 +176,16 @@ func (r *workspaceAgentResources) RollbackLinkedLaunched(runID, terminalID strin
 	return r.registry.RollbackLinkedLaunched(runID, terminalID)
 }
 
+func (r *workspaceAgentResources) RollbackLaunched(runID, terminalID string) bool {
+	return r.registry.RollbackLaunched(runID, terminalID)
+}
+
 func (r *workspaceAgentResources) RollbackLinkedTerminal(terminalID string) int {
 	return r.registry.RollbackLinkedTerminal(terminalID)
+}
+
+func (r *workspaceAgentResources) RevokeLaunchedEventTokenForTerminal(terminalID string) bool {
+	return r.registry.RevokeLaunchedEventTokenForTerminal(terminalID)
 }
 
 func (r *workspaceAgentResources) HasLinkedTerminal(terminalID string) bool {
