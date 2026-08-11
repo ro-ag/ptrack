@@ -12,6 +12,7 @@ import (
 
 	"github.com/ro-ag/ptrack/internal/model"
 	"github.com/ro-ag/ptrack/internal/store"
+	"github.com/ro-ag/ptrack/internal/updater"
 )
 
 var statuses = []model.TaskStatus{
@@ -37,6 +38,7 @@ type App struct {
 	monitorCancel       context.CancelFunc
 	monitorWG           lifecycleGroup
 	terminalOps         lifecycleGroup
+	updateOps           lifecycleGroup
 	watcherCancel       context.CancelFunc
 	watcherGeneration   uint64
 	startupReady        chan struct{}
@@ -61,6 +63,22 @@ type App struct {
 	confirmationTimer *time.Timer
 	gitSnapshots      gitSnapshotter
 	gitWorktrees      gitWorktreeInspector
+
+	updateMu           sync.Mutex
+	updatePreferenceMu sync.Mutex
+	updateState        UpdateState
+	updateClient       updateClient
+	updateInstaller    updateInstaller
+	updatePreferences  updatePreferenceStore
+	updateRoot         func() (string, error)
+	updateCandidate    *updater.Candidate
+	stagedUpdate       *updater.StagedUpdate
+	updateCancel       context.CancelFunc
+	updateOperation    uint64
+	updateActive       bool
+	updateAutomatic    bool
+	updateRecovering   bool
+	updateBlocked      bool
 }
 
 // Board is the complete snapshot rendered by the frontend.

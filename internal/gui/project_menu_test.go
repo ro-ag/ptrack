@@ -61,12 +61,23 @@ func TestProjectWorkspaceMenuExposesLifecycleActions(t *testing.T) {
 		t.Fatal("Settings menu is missing")
 	}
 	foundCapabilities := false
+	foundUpdates := false
 	for _, item := range settingsMenu.Items {
+		if item.Label == "Updates…" {
+			foundUpdates = true
+			item.Click(&menu.CallbackData{MenuItem: item})
+			if got := events[len(events)-1]; got != updatesMenuEvent {
+				t.Fatalf("updates event = %q, want %q", got, updatesMenuEvent)
+			}
+		}
 		if item.Label == "Network Capabilities…" {
 			foundCapabilities = true
 			item.Click(&menu.CallbackData{MenuItem: item})
 			break
 		}
+	}
+	if !foundUpdates {
+		t.Fatal("Updates menu item is missing")
 	}
 	if !foundCapabilities {
 		t.Fatal("Network Capabilities menu item is missing")

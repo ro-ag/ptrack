@@ -6,7 +6,7 @@ Keep goals, plans, tasks, decisions, issues, and commit context alive across
 terminal sessions—without a server or a cloud account.
 
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
-[![Release](https://img.shields.io/badge/release-v0.20.0-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.20.0)
+[![Release](https://img.shields.io/badge/release-v0.21.0-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.21.0)
 [![License](https://img.shields.io/badge/License-Apache--2.0-3DD6A3)](LICENSE)
 [![Storage](https://img.shields.io/badge/Storage-local--first-AFA8FF)](#storage-and-safety)
 
@@ -31,6 +31,7 @@ holding a long-lived lock.
 ## Contents
 
 - [Install](#install)
+- [Updates](#updates)
 - [Quick start](#quick-start)
 - [The terminal dashboard](#the-terminal-dashboard)
 - [The desktop project workspace](#the-desktop-project-workspace)
@@ -58,6 +59,42 @@ tags, CGO setup, and native linker flags that `go install module@version` cannot
 apply. p-track rejects plain Go application builds instead of producing a
 binary whose `--gui` option fails at runtime. Building from source requires Go
 1.26 or newer and the Wails prerequisites for your platform.
+
+## Updates
+
+The desktop app can check the stable releases published on the
+[p-track GitHub repository](https://github.com/ro-ag/ptrack/releases). Open
+**About & Updates** from the version in the sidebar, or choose
+**Settings → Updates…** from the native menu. Manual checks work without an
+open project. Automatic checks are off by default and contact GitHub only after
+you opt in; they never download or install anything. Every download and
+installation step requires a separate action.
+
+The updater selects only the exact packaged asset for the running OS and CPU,
+plus `checksums.txt`: a DMG on macOS, a ZIP on Windows, or a tarball on Linux.
+GitHub's generated source archives, prereleases, development builds,
+downgrades, arbitrary URLs, and ambiguous assets are rejected. Downloads are
+size-bounded, staged privately, checked with SHA-256, and revalidated before
+handoff. The release checksum detects corruption, but because it is published
+by the same GitHub Release it is not an independent signature against a
+compromised release account.
+
+- **macOS:** p-track verifies the whole DMG, its Developer ID signature from the
+  pinned p-track team, and Gatekeeper acceptance before opening it. Complete the
+  app installation in Finder; the updater never replaces one file inside the
+  signed app bundle.
+- **Windows:** p-track verifies the ZIP and reveals it in Explorer. Close the
+  running app before replacing the executable manually.
+- **Linux:** p-track can atomically replace only the current standalone
+  executable when it and its directory are safely owned and writable by the
+  current user. It uses a rollback link, durable recovery record, version probe,
+  and automatic rollback on failure. System-managed installations are refused
+  rather than elevated with `sudo`.
+
+Interrupted local stages are revalidated on the next launch. Ambiguous recovery
+state blocks further update actions for manual attention. See
+[`docs/updater-security.md`](docs/updater-security.md) for the complete trust and
+failure model.
 
 ## Quick start
 
@@ -395,11 +432,14 @@ p-track is local-first and has no server process.
 | Project | `.ptrack/ptrack.db` | Goal, summary, milestones, plans, tasks, issues, notes, and commit records. |
 | Global | `~/.ptrack/global.db` | Configuration, the project registry, and backup metadata. |
 | Backups | `~/.ptrack/backups/` | Timestamped copies created by `ptrack backup` or `B` in the TUI. |
+| Updates | `~/.ptrack/updates/` | Private verified release stages and bounded crash-recovery state. |
 
-Set `PTRACK_HOME` to move the global store and backups. Project discovery walks
-upward from the current directory, similar to git. Values are encoded Go
-structures stored in [bbolt](https://github.com/etcd-io/bbolt); JSON is produced
-only when a command is explicitly asked for `--json` output.
+Set `PTRACK_HOME` to move the global store, backups, and update staging. The
+persisted automatic-check opt-in is ordinary configuration in `global.db`; no
+GitHub credential or asset URL is stored. Project discovery walks upward from
+the current directory, similar to git. Values are encoded Go structures stored
+in [bbolt](https://github.com/etcd-io/bbolt); JSON is produced only when a
+command is explicitly asked for `--json` output.
 
 ## Development
 

@@ -12,6 +12,7 @@ const (
 	projectMenuSwitchEvent = "workspace:switch-requested"
 	projectMenuCloseEvent  = "workspace:close-requested"
 	capabilitiesMenuEvent  = "workspace:capabilities-requested"
+	updatesMenuEvent       = "update:open-requested"
 )
 
 func newProjectWorkspaceMenu(app *App) *menu.Menu {
@@ -31,6 +32,9 @@ func newProjectWorkspaceMenu(app *App) *menu.Menu {
 		app.emitTerminalEvent(projectMenuCloseEvent, nil)
 	})
 	settings := result.AddSubmenu("Settings")
+	settings.AddText("Updates…", nil, func(*menu.CallbackData) {
+		app.emitTerminalEvent(updatesMenuEvent, nil)
+	})
 	settings.AddText("Network Capabilities…", nil, func(*menu.CallbackData) {
 		app.emitTerminalEvent(capabilitiesMenuEvent, nil)
 	})

@@ -20,6 +20,7 @@ func Run(startPath string, initialPlan uint64, assets fs.FS) error {
 		wailsruntime.EventsEmit(ctx, name, payload)
 	})
 	app := newWorkspaceCoordinator(buildProductionWorkspace, emitter)
+	configureProductionUpdater(app)
 	candidate, err := buildProductionWorkspace(startPath, initialPlan)
 	switch {
 	case err == nil:

@@ -9,6 +9,12 @@ import {
 } from "./terminal/writeback";
 import { initTheme } from "./theme";
 import {
+  formatUpdateBytes,
+  updatePresentation,
+  updateProgress,
+  updateStateIsNewer,
+} from "./updates/presentation";
+import {
   canEnableCapability,
   canStartCapabilitySave,
   capabilityResponseIsCurrent,
@@ -97,6 +103,24 @@ const elements = {
   recents: document.querySelector("#recent-project-list"),
   board: document.querySelector("#board"),
   appVersion: document.querySelector("#app-version"),
+  updatesModal: document.querySelector("#updates-modal"),
+  updatesClose: document.querySelector("#updates-close"),
+  updatesCurrentVersion: document.querySelector("#updates-current-version"),
+  updatesAutomatic: document.querySelector("#updates-automatic"),
+  updatesStatus: document.querySelector("#updates-status"),
+  updatesStatusTitle: document.querySelector("#updates-status-title"),
+  updatesStatusDetail: document.querySelector("#updates-status-detail"),
+  updatesProgressWrap: document.querySelector("#updates-progress-wrap"),
+  updatesProgress: document.querySelector("#updates-progress"),
+  updatesProgressLabel: document.querySelector("#updates-progress-label"),
+  updatesRelease: document.querySelector("#updates-release"),
+  updatesReleaseVersion: document.querySelector("#updates-release-version"),
+  updatesReleaseMeta: document.querySelector("#updates-release-meta"),
+  updatesReleaseNotes: document.querySelector("#updates-release-notes"),
+  updatesReleasePage: document.querySelector("#updates-release-page"),
+  updatesVerified: document.querySelector("#updates-verified"),
+  updatesCancel: document.querySelector("#updates-cancel"),
+  updatesPrimary: document.querySelector("#updates-primary"),
   projectName: document.querySelector("#project-name"),
   planTitle: document.querySelector("#plan-title"),
   planTotal: document.querySelector("#plan-total"),
@@ -309,6 +333,10 @@ let editingTask = null;
 let dialogMode = "rename";
 let toastTimer = null;
 let memoryModalReturnFocus = null;
+let updatesModalReturnFocus = null;
+let updateState = { revision: 0, phase: "idle", currentVersion: "dev" };
+let updateActionBusy = false;
+let updateCancelRequested = false;
 let confirmReturnFocus = null;
 let confirmResolve = null;
 let terminalHandle = null;
@@ -1604,6 +1632,7 @@ function snapshotDialogIsOpen() {
   return (
     !elements.modal.hidden ||
     !elements.memoryModal.hidden ||
+    !elements.updatesModal.hidden ||
     !elements.confirmModal.hidden ||
     !elements.agentLaunchModal.hidden ||
     !elements.terminalAssociationModal.hidden ||
@@ -2016,6 +2045,135 @@ function closeMemoryHistory() {
   elements.memoryModal.hidden = true;
   memoryModalReturnFocus?.focus();
   memoryModalReturnFocus = null;
+}
+
+function renderUpdateState(nextState) {
+  if (!nextState || !updateStateIsNewer(updateState, nextState)) return;
+  updateState = nextState;
+  const presentation = updatePresentation(nextState);
+  const release = nextState.release || null;
+  const progress = updateProgress(nextState);
+  const currentVersion = appVersionLabel(nextState.currentVersion || "dev");
+
+  setUpdateText(elements.updatesCurrentVersion, `Current version: ${currentVersion}`);
+  elements.updatesAutomatic.checked = Boolean(nextState.automaticChecks);
+  elements.updatesStatus.dataset.tone = presentation.tone;
+  elements.updatesStatus.toggleAttribute("aria-busy", presentation.busy);
+  setUpdateText(elements.updatesStatusTitle, presentation.title);
+  setUpdateText(elements.updatesStatusDetail, presentation.detail);
+  elements.updatesProgressWrap.hidden = nextState.phase !== "downloading";
+  elements.updatesProgress.value = progress.percent;
+  elements.updatesProgressLabel.textContent = progress.total > 0
+    ? `${progress.percent}% · ${formatUpdateBytes(progress.downloaded)} of ${formatUpdateBytes(progress.total)}`
+    : `${formatUpdateBytes(progress.downloaded)} downloaded`;
+
+  elements.updatesRelease.hidden = !release;
+  elements.updatesReleaseVersion.textContent = release ? `Version ${release.version}` : "";
+  elements.updatesReleaseMeta.textContent = release ? updateReleaseMeta(release) : "";
+  elements.updatesReleaseNotes.textContent = release?.notes || "No release notes were provided.";
+  elements.updatesReleasePage.hidden = !release?.pageUrl;
+  elements.updatesVerified.hidden = !nextState.checksumVerified;
+  elements.updatesCancel.hidden = !presentation.cancel;
+  elements.updatesCancel.disabled = !presentation.cancel;
+  elements.updatesPrimary.hidden = !presentation.primaryAction;
+  elements.updatesPrimary.disabled = updateActionBusy || !presentation.primaryAction;
+  elements.updatesPrimary.dataset.action = presentation.primaryAction || "";
+  elements.updatesPrimary.textContent = presentation.primaryLabel;
+}
+
+function setUpdateText(element, value) {
+  if (element.textContent !== value) element.textContent = value;
+}
+
+function updateReleaseMeta(release) {
+  const parts = [];
+  if (release.publishedAt) {
+    const published = new Date(release.publishedAt);
+    if (Number.isFinite(published.getTime())) {
+      parts.push(published.toLocaleDateString(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+      }));
+    }
+  }
+  if (Number(release.sizeBytes) > 0) parts.push(formatUpdateBytes(release.sizeBytes));
+  return parts.join(" · ");
+}
+
+async function refreshUpdateState() {
+  try {
+    renderUpdateState(await api().GetUpdateState());
+  } catch {
+    showError(new Error("Could not load update status."));
+  }
+}
+
+function openAboutUpdates(invoker = document.activeElement) {
+  if (elements.updatesModal.hidden && snapshotDialogIsOpen()) return;
+  updatesModalReturnFocus = invoker instanceof HTMLElement ? invoker : null;
+  elements.updatesModal.hidden = false;
+  renderUpdateState(updateState);
+  void refreshUpdateState();
+  requestAnimationFrame(() => elements.updatesClose.focus());
+}
+
+function closeAboutUpdates() {
+  if (elements.updatesModal.hidden) return;
+  elements.updatesModal.hidden = true;
+  updatesModalReturnFocus?.focus?.();
+  updatesModalReturnFocus = null;
+}
+
+async function runUpdateAction(action) {
+  if (updateActionBusy) return;
+  if (!["check", "download", "apply"].includes(action)) return;
+  updateCancelRequested = false;
+  const version = updateState.release?.version || "";
+  if ((action === "download" || action === "apply") && !version) {
+    await refreshUpdateState();
+    return;
+  }
+  updateActionBusy = true;
+  renderUpdateState(updateState);
+  try {
+    let state;
+    if (action === "check") state = await api().CheckForUpdates();
+    if (action === "download") state = await api().DownloadUpdate(version);
+    if (action === "apply") state = await api().ApplyUpdate(version);
+    if (state) renderUpdateState(state);
+  } catch {
+    await refreshUpdateState();
+    if (!updateCancelRequested) {
+      showError(new Error("The update action could not continue safely."));
+    }
+  } finally {
+    updateActionBusy = false;
+    updateCancelRequested = false;
+    renderUpdateState(updateState);
+  }
+}
+
+async function setAutomaticUpdateChecks(enabled) {
+  elements.updatesAutomatic.disabled = true;
+  try {
+    renderUpdateState(await api().SetAutomaticUpdateChecks(Boolean(enabled)));
+  } catch {
+    await refreshUpdateState();
+    showError(new Error("Could not save the automatic update preference."));
+  } finally {
+    elements.updatesAutomatic.disabled = false;
+  }
+}
+
+function openUpdateReleasePage() {
+  const page = updateState.release?.pageUrl || "";
+  if (!page.startsWith("https://github.com/ro-ag/ptrack/releases/")) return;
+  if (typeof window.runtime?.BrowserOpenURL === "function") {
+    window.runtime.BrowserOpenURL(page);
+    return;
+  }
+  window.open(page, "_blank", "noopener,noreferrer");
 }
 
 const paletteKindLabels = {
@@ -3555,7 +3713,10 @@ function renderWorkspaceState(state, focus = false) {
   if (typeof state.version === "string") {
     const version = appVersionLabel(state.version);
     elements.appVersion.textContent = version;
-    elements.appVersion.setAttribute("aria-label", `p-track version ${version}`);
+    elements.appVersion.setAttribute(
+      "aria-label",
+      `About p-track version ${version} and check for updates`,
+    );
   }
   const open = state.status === "open";
   if (open && !wasOpen) view = "board";
@@ -3925,6 +4086,7 @@ function trapModalFocus(event) {
   const modal = [
     elements.palette,
     elements.confirmModal,
+    elements.updatesModal,
     elements.agentLaunchModal,
     elements.terminalAssociationModal,
     elements.terminalWritebackModal,
@@ -3938,7 +4100,13 @@ function trapModalFocus(event) {
   if (!modal) return;
   const focusable = Array.from(
     modal.querySelectorAll(
-      'button:not([disabled]), input:not([disabled]):not([hidden]), textarea:not([disabled]):not([hidden]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      [
+        'button:not([disabled]):not([tabindex="-1"])',
+        'input:not([disabled]):not([hidden])',
+        'textarea:not([disabled]):not([hidden])',
+        'select:not([disabled])',
+        '[tabindex]:not([tabindex="-1"])',
+      ].join(", "),
     ),
   ).filter((item) => !item.hidden && !item.closest("[hidden]"));
   if (focusable.length === 0) return;
@@ -3962,6 +4130,8 @@ function registerNativeProjectActions() {
     eventsOn("workspace:switch-requested", () => void requestOpenProject()),
     eventsOn("workspace:close-requested", () => void requestCloseProject()),
     eventsOn("workspace:capabilities-requested", () => setView("settings")),
+    eventsOn("update:open-requested", () => openAboutUpdates(elements.appVersion)),
+    eventsOn("update:state-changed", (state) => renderUpdateState(state)),
     eventsOn("workspace:data-changed", () =>
       void loadSnapshot(board?.planId || 0, true),
     ),
@@ -4098,6 +4268,31 @@ elements.switchProject.addEventListener("click", () => void requestOpenProject()
 elements.closeProject.addEventListener("click", () => void requestCloseProject());
 elements.stateOpen.addEventListener("click", () => void requestOpenProject());
 elements.activityMore.addEventListener("click", openMemoryHistory);
+elements.appVersion.addEventListener("click", (event) => {
+  openAboutUpdates(event.currentTarget);
+});
+elements.updatesClose.addEventListener("click", closeAboutUpdates);
+document.querySelectorAll("[data-close-updates]").forEach((element) => {
+  element.addEventListener("click", closeAboutUpdates);
+});
+elements.updatesAutomatic.addEventListener("change", (event) => {
+  void setAutomaticUpdateChecks(event.currentTarget.checked);
+});
+elements.updatesPrimary.addEventListener("click", () => {
+  void runUpdateAction(elements.updatesPrimary.dataset.action);
+});
+elements.updatesCancel.addEventListener("click", async () => {
+  updateCancelRequested = true;
+  try {
+    renderUpdateState(await api().CancelUpdateOperation());
+  } catch {
+    updateCancelRequested = false;
+    await refreshUpdateState();
+    showError(new Error("The update operation could not be canceled."));
+  }
+  if (!updateActionBusy) updateCancelRequested = false;
+});
+elements.updatesReleasePage.addEventListener("click", openUpdateReleasePage);
 elements.planLaunchAgent.addEventListener("click", (event) => {
   if (!board?.planId) return;
   void openAgentLaunchPicker(
@@ -4242,6 +4437,11 @@ document.querySelectorAll("[data-close-task-transition]").forEach((element) => {
 
 document.addEventListener("keydown", (event) => {
   trapModalFocus(event);
+  if (event.key === "Escape" && !elements.updatesModal.hidden) {
+    event.preventDefault();
+    closeAboutUpdates();
+    return;
+  }
   if (event.key === "Escape" && !elements.confirmModal.hidden) {
     event.preventDefault();
     finishWorkspaceConfirmation(false);
