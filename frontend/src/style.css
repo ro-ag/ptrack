@@ -1303,9 +1303,16 @@ select option {
 
 .settings-heading {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-250);
+}
+
+.settings-heading-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: var(--space-100);
 }
 
 .settings-intro {

@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "productVersion": "0.21.0",
+  "entries": [
+    {
+      "title": "Start Here",
+      "summary": "Create a first p-track project, plan, and task, then resume work safely.",
+      "headings": ["First project", "First plan", "First task", "Resume work"],
+      "keywords": ["init", "context", "next", "onboarding"],
+      "url": "start-here/"
+    },
+    {
+      "title": "Desktop",
+      "summary": "Use the board, task drawer, Overview, navigation, and project switching.",
+      "headings": ["Board", "Task drawer", "Overview", "Project switching"],
+      "keywords": ["gui", "workspace", "kanban", "sidebar"],
+      "url": "desktop/"
+    },
+    {
+      "title": "Terminals",
+      "summary": "Manage terminal sessions, tabs, splits, search, paste safety, profiles, and recovery.",
+      "headings": ["Sessions", "Tabs and splits", "Paste safety", "Profiles", "Recovery"],
+      "keywords": ["shell", "pane", "search", "renderer", "scrollback"],
+      "url": "terminals/"
+    },
+    {
+      "title": "Agents & Capabilities",
+      "summary": "Understand agent associations, handoffs, worktrees, drift, and explicit broker grants.",
+      "headings": ["Agents", "Associations", "Handoffs", "Worktrees", "Capabilities"],
+      "keywords": ["ownership", "workflow", "network", "git", "ssh", "security"],
+      "url": "agents-and-capabilities/"
+    },
+    {
+      "title": "Reference",
+      "summary": "Look up CLI commands, TUI keys, desktop shortcuts, and project search behavior.",
+      "headings": ["CLI", "TUI", "Desktop shortcuts", "Project search"],
+      "keywords": ["command", "keyboard", "palette", "shortcut"],
+      "url": "reference/"
+    },
+    {
+      "title": "Keyboard shortcuts",
+      "summary": "Use p-track's TUI and desktop keyboard shortcuts.",
+      "headings": ["Desktop", "Terminal", "TUI"],
+      "keywords": ["keyboard", "shortcut", "accelerator", "hotkey"],
+      "url": "reference/shortcuts/"
+    },
+    {
+      "title": "Install & Safety",
+      "summary": "Install and update p-track, locate local data, and plan backups or migration.",
+      "headings": ["Install", "Updates", "Security", "Privacy", "Data paths", "Backup", "Migration"],
+      "keywords": ["download", "release", "storage", "database", "restore"],
+      "url": "install-and-safety/"
+    },
+    {
+      "title": "Troubleshooting",
+      "summary": "Diagnose project, terminal, agent, capability, and updater problems.",
+      "headings": ["Diagnostics", "Recovery", "FAQ"],
+      "keywords": ["error", "stopped", "stale", "failed", "recovery"],
+      "url": "troubleshooting/"
+    }
+  ]
+}

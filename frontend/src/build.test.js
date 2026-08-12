@@ -94,6 +94,16 @@ describe("production asset layout", () => {
       /class="terminal-actions"[\s\S]*aria-label="Terminal actions"[\s\S]*id="terminal-open"[\s\S]*aria-label="Open terminal"[\s\S]*<svg/,
     );
     expect(index).toMatch(
+      /id="terminal-help"[\s\S]*aria-label="Open terminal guide"/,
+    );
+    expect(index).toMatch(
+      /class="settings-heading-actions"[\s\S]*id="capability-help"[\s\S]*>Capability guide<\/button>/,
+    );
+    expect(app).toContain("OpenHelpDestination");
+    expect(appSource).toContain('openHelpDestination("terminals")');
+    expect(appSource).toContain('openHelpDestination("capabilities")');
+    expect(appSource).not.toContain("ro-ag.github.io/ptrack/help");
+    expect(index).toMatch(
       /id="terminal-close"[\s\S]*class="terminal-action-button terminal-action-stop"[\s\S]*aria-label="Close terminal"/,
     );
     expect(index).toMatch(

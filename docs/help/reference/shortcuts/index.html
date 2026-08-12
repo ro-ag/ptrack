@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Keyboard shortcuts for p-track Desktop, native macOS menus, terminal panes, tabs, search, and the TUI.">
+    <meta name="ptrack-version" content="0.21.0">
+    <title>Keyboard Shortcuts · p-track Help Center</title>
+    <link rel="icon" href="../../assets/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="../../assets/style.css">
+  </head>
+  <body data-help-root="../../">
+    <a class="skip-link" href="#main">Skip to main content</a>
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="brand" href="../../" aria-label="p-track Help Center home">
+          <span class="brand-mark" aria-hidden="true">p·</span>
+          <span>p-track Help</span>
+          <span class="version-badge">v0.21.0</span>
+        </a>
+        <nav class="primary-nav" aria-label="Primary">
+          <ul>
+            <li><a href="../../start-here/">Start Here</a></li>
+            <li><a href="../../desktop/">Desktop</a></li>
+            <li><a href="../../terminals/">Terminals</a></li>
+            <li><a href="../../agents-and-capabilities/">Agents &amp; Capabilities</a></li>
+            <li><a href="../" aria-current="page">Reference</a></li>
+            <li><a href="../../install-and-safety/">Install &amp; Safety</a></li>
+            <li><a href="../../troubleshooting/">Troubleshooting</a></li>
+          </ul>
+        </nav>
+        <button class="theme-toggle" type="button" data-theme-toggle aria-label="Use light theme" title="Use light theme">☀</button>
+      </div>
+    </header>
+
+    <main class="page-shell" id="main">
+      <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <ol>
+          <li><a href="../../">Help Center</a></li>
+          <li><a href="../">Reference</a></li>
+          <li aria-current="page">Keyboard Shortcuts</li>
+        </ol>
+      </nav>
+
+      <form class="search-panel" role="search" data-help-search>
+        <label class="search-label" for="help-search">Search p-track Help</label>
+        <input class="search-input" id="help-search" type="search" autocomplete="off" placeholder="Try “terminal search” or “switch pane”" disabled>
+        <p class="search-help">Search runs in this browser and never sends your query off-device.</p>
+        <p class="search-status" data-search-status role="status" aria-live="polite">Loading the local search index…</p>
+        <ul class="search-results" data-search-results aria-label="Search results"></ul>
+        <noscript><p class="search-help">JavaScript is off. Use the navigation and page contents below.</p></noscript>
+      </form>
+
+      <div class="article-layout">
+        <article class="article">
+          <p class="eyebrow">Keyboard reference</p>
+          <h1>Desktop and terminal shortcuts</h1>
+          <p class="lede">Desktop handles workspace shortcuts inside its webview; terminal-focused shortcuts preserve common shell behavior where a selection or platform convention changes the result.</p>
+
+          <h2 id="desktop-shortcuts">Desktop workspace</h2>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Action</th><th>macOS</th><th>Windows/Linux</th><th>Availability</th></tr></thead>
+              <tbody>
+                <tr><td>Open command palette</td><td><kbd>Cmd+K</kbd></td><td><kbd>Ctrl+K</kbd></td><td>Global within the Desktop webview.</td></tr>
+                <tr><td>Board</td><td><kbd>Cmd+1</kbd></td><td><kbd>Ctrl+1</kbd></td><td>Blocked by dialogs, text entry, or terminal focus.</td></tr>
+                <tr><td>Overview</td><td><kbd>Cmd+2</kbd></td><td><kbd>Ctrl+2</kbd></td><td>Blocked by dialogs, text entry, or terminal focus.</td></tr>
+                <tr><td>Capabilities</td><td><kbd>Cmd+3</kbd></td><td><kbd>Ctrl+3</kbd></td><td>Blocked by dialogs, text entry, or terminal focus.</td></tr>
+                <tr><td>Open Board and add task</td><td><kbd>Cmd+N</kbd></td><td><kbd>Ctrl+N</kbd></td><td>Switches to Board; blocked by dialogs, text entry, or terminal focus.</td></tr>
+                <tr><td>Refresh Board snapshot</td><td colspan="2"><kbd>R</kbd></td><td>Unmodified key; ignored during composition/repeat, in a dialog, or in a text/terminal target.</td></tr>
+                <tr><td>Focus Add task on Board</td><td colspan="2"><kbd>/</kbd></td><td>Unmodified key; same focus and modal restrictions as refresh.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h2 id="native-menu">Native menu accelerators</h2>
+          <p>Only macOS assigns native application-menu accelerators: <kbd>Cmd+O</kbd> opens a project, <kbd>Cmd+,</kbd> opens Settings, and <kbd>Cmd+1</kbd>/<kbd>Cmd+2</kbd>/<kbd>Cmd+3</kbd> select Board/Intelligence (Overview)/Capabilities. The Windows and Linux native menus deliberately do not assign these accelerators. The separate Desktop webview shortcuts above may still handle their <kbd>Ctrl</kbd> forms while the webview has focus.</p>
+          <p>Switch Project, Close Project, Network Capabilities, Toggle Terminal Panel, and Command Palette have no native menu accelerator.</p>
+
+          <h2 id="terminal-shortcuts">Terminal input and display</h2>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Action</th><th>macOS</th><th>Windows/Linux</th></tr></thead>
+              <tbody>
+                <tr><td>Search scrollback</td><td><kbd>Cmd+F</kbd></td><td><kbd>Ctrl+Shift+F</kbd></td></tr>
+                <tr><td>Next / previous search match</td><td colspan="2"><kbd>Enter</kbd> / <kbd>Shift+Enter</kbd>; <kbd>Esc</kbd> closes search.</td></tr>
+                <tr><td>Zoom in / out / reset</td><td><kbd>Cmd++</kbd>, <kbd>Cmd+-</kbd>, <kbd>Cmd+0</kbd></td><td><kbd>Ctrl++</kbd>, <kbd>Ctrl+-</kbd>, <kbd>Ctrl+0</kbd></td></tr>
+                <tr><td>Clear terminal</td><td><kbd>Cmd+K</kbd></td><td>Use the terminal toolbar.</td></tr>
+                <tr><td>Copy selection</td><td><kbd>Cmd+C</kbd></td><td><kbd>Ctrl+C</kbd>, <kbd>Ctrl+Shift+C</kbd>, or <kbd>Ctrl+Insert</kbd></td></tr>
+                <tr><td>Paste</td><td><kbd>Cmd+V</kbd></td><td><kbd>Ctrl+V</kbd> or <kbd>Shift+Insert</kbd></td></tr>
+                <tr><td>Select all scrollback</td><td><kbd>Cmd+A</kbd></td><td><kbd>Ctrl+Shift+A</kbd></td></tr>
+                <tr><td>Open terminal context menu</td><td colspan="2"><kbd>Menu</kbd> or <kbd>Shift+F10</kbd></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="callout warning">
+            <p><strong><kbd>Ctrl+C</kbd> keeps shell semantics when nothing is selected.</strong> On Windows/Linux it copies only when terminal text is selected; without a selection it remains available to interrupt the running process. <kbd>Ctrl+Shift+C</kbd> is the unambiguous copy chord.</p>
+          </div>
+
+          <h2 id="panes-tabs">Panes and tabs</h2>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Action</th><th>macOS</th><th>Windows/Linux</th></tr></thead>
+              <tbody>
+                <tr><td>Focus pane left/right/up/down</td><td><kbd>Cmd+Alt+Arrow</kbd></td><td><kbd>Ctrl+Alt+Arrow</kbd></td></tr>
+                <tr><td>Move tab focus</td><td colspan="2"><kbd>Left</kbd>/<kbd>Right</kbd> wrap through tabs; <kbd>Home</kbd>/<kbd>End</kbd> jump to first/last.</td></tr>
+                <tr><td>Begin tab rename</td><td colspan="2"><kbd>F2</kbd></td></tr>
+                <tr><td>Commit / cancel tab rename</td><td colspan="2"><kbd>Enter</kbd> / <kbd>Esc</kbd></td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h2 id="palette-keys">Command palette</h2>
+          <p>After opening the palette with <kbd>Cmd+K</kbd> or <kbd>Ctrl+K</kbd>, type to search plans, tasks, and notes. Use <kbd>↑</kbd>/<kbd>↓</kbd> to select, <kbd>Enter</kbd> to activate, and <kbd>Esc</kbd> to close. The palette searches project records; it does not execute commands.</p>
+
+          <h2 id="tui-link">TUI keys</h2>
+          <p>The terminal interface supports arrow keys and Vim-style <kbd>h</kbd>/<kbd>j</kbd>/<kbd>k</kbd>/<kbd>l</kbd> navigation where a screen has horizontal and vertical selection. <kbd>?</kbd> or <kbd>F1</kbd> opens its command menu, <kbd>1</kbd>–<kbd>5</kbd> select screens, and <kbd>q</kbd> or <kbd>Ctrl+C</kbd> quits. See the <a href="../#tui-screens">complete TUI key table</a> for global, menu, detail, and screen-specific actions.</p>
+        </article>
+
+        <aside class="page-toc" aria-label="On this page">
+          <strong>On this page</strong>
+          <ul>
+            <li><a href="#desktop-shortcuts">Desktop workspace</a></li>
+            <li><a href="#native-menu">Native menu</a></li>
+            <li><a href="#terminal-shortcuts">Terminal</a></li>
+            <li><a href="#panes-tabs">Panes and tabs</a></li>
+            <li><a href="#palette-keys">Command palette</a></li>
+            <li><a href="#tui-link">TUI keys</a></li>
+          </ul>
+        </aside>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <div class="site-footer-inner">
+        <p>p-track Help Center · Content for the current stable release</p>
+        <p><a href="https://github.com/ro-ag/ptrack">Source on GitHub</a> · <a href="https://github.com/ro-ag/ptrack/issues">Report a documentation issue</a></p>
+      </div>
+    </footer>
+    <script src="../../assets/help.js" defer></script>
+  </body>
+</html>

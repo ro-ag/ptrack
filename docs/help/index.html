@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Official guides and reference for p-track, the local project memory and terminal workspace.">
+    <meta name="ptrack-version" content="0.21.0">
+    <title>p-track Help Center</title>
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="assets/style.css">
+  </head>
+  <body data-help-root="./">
+    <a class="skip-link" href="#main">Skip to main content</a>
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="brand" href="./" aria-label="p-track Help Center home">
+          <span class="brand-mark" aria-hidden="true">p·</span>
+          <span>p-track Help</span>
+          <span class="version-badge">v0.21.0</span>
+        </a>
+        <nav class="primary-nav" aria-label="Primary">
+          <ul>
+            <li><a href="start-here/">Start Here</a></li>
+            <li><a href="desktop/">Desktop</a></li>
+            <li><a href="terminals/">Terminals</a></li>
+            <li><a href="agents-and-capabilities/">Agents &amp; Capabilities</a></li>
+            <li><a href="reference/">Reference</a></li>
+            <li><a href="install-and-safety/">Install &amp; Safety</a></li>
+            <li><a href="troubleshooting/">Troubleshooting</a></li>
+          </ul>
+        </nav>
+        <button class="theme-toggle" type="button" data-theme-toggle aria-label="Use light theme" title="Use light theme">☀</button>
+      </div>
+    </header>
+
+    <main class="page-shell" id="main">
+      <section class="hero" aria-labelledby="hero-title">
+        <p class="eyebrow">Local-first project memory</p>
+        <h1 id="hero-title">Keep your place. Move work forward.</h1>
+        <p class="lede">Learn p-track's desktop workspace, durable project model, multi-session terminals, and explicit agent capabilities—from your first task to safe recovery.</p>
+        <p class="release-note"><span aria-hidden="true">●</span> Current Help for p-track 0.21.0</p>
+      </section>
+
+      <form class="search-panel" role="search" data-help-search>
+        <label class="search-label" for="help-search">Search p-track Help</label>
+        <input class="search-input" id="help-search" type="search" autocomplete="off" placeholder="Try “restore terminal” or “capabilities”" disabled>
+        <p class="search-help">Search runs in this browser and never sends your query off-device.</p>
+        <p class="search-status" data-search-status role="status" aria-live="polite">Loading the local search index…</p>
+        <ul class="search-results" data-search-results aria-label="Search results"></ul>
+        <noscript><p class="search-help">JavaScript is off. Browse every guide below.</p></noscript>
+      </form>
+
+      <section aria-labelledby="browse-title">
+        <h2 class="section-heading" id="browse-title">Browse the Help Center</h2>
+        <ul class="card-grid">
+          <li><a class="card" href="start-here/"><span class="card-kicker">01 · Begin</span><h3>Start Here</h3><p>Create a project, activate a plan, start a task, and resume with useful context.</p></a></li>
+          <li><a class="card" href="desktop/"><span class="card-kicker">02 · Navigate</span><h3>Desktop</h3><p>Work with the board, drawer, Overview, project switcher, and workspace views.</p></a></li>
+          <li><a class="card" href="terminals/"><span class="card-kicker">03 · Run</span><h3>Terminals</h3><p>Use tabs and splits, search output, configure profiles, and recover safely.</p></a></li>
+          <li><a class="card" href="agents-and-capabilities/"><span class="card-kicker">04 · Coordinate</span><h3>Agents &amp; Capabilities</h3><p>Understand associations, handoffs, worktrees, drift, and explicit broker grants.</p></a></li>
+          <li><a class="card" href="reference/"><span class="card-kicker">05 · Look up</span><h3>Reference</h3><p>Find CLI commands, TUI keys, desktop shortcuts, and project-search behavior.</p></a></li>
+          <li><a class="card" href="install-and-safety/"><span class="card-kicker">06 · Protect</span><h3>Install &amp; Safety</h3><p>Install and update p-track, find local data, and plan backups and migration.</p></a></li>
+          <li><a class="card" href="troubleshooting/"><span class="card-kicker">07 · Recover</span><h3>Troubleshooting</h3><p>Diagnose project, terminal, agent, capability, and updater problems.</p></a></li>
+        </ul>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="site-footer-inner">
+        <p>p-track Help Center · Content for the current stable release</p>
+        <p><a href="https://github.com/ro-ag/ptrack">Source on GitHub</a> · <a href="https://github.com/ro-ag/ptrack/issues">Report a documentation issue</a></p>
+      </div>
+    </footer>
+    <script src="assets/help.js" defer></script>
+  </body>
+</html>

@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Diagnose p-track project, database, Desktop, terminal, agent, capability, and updater problems without weakening safety boundaries.">
+    <meta name="ptrack-version" content="0.21.0">
+    <title>Troubleshooting · p-track Help Center</title>
+    <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="../assets/style.css">
+  </head>
+  <body data-help-root="../">
+    <a class="skip-link" href="#main">Skip to main content</a>
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="brand" href="../" aria-label="p-track Help Center home">
+          <span class="brand-mark" aria-hidden="true">p·</span>
+          <span>p-track Help</span>
+          <span class="version-badge">v0.21.0</span>
+        </a>
+        <nav class="primary-nav" aria-label="Primary">
+          <ul>
+            <li><a href="../start-here/">Start Here</a></li>
+            <li><a href="../desktop/">Desktop</a></li>
+            <li><a href="../terminals/">Terminals</a></li>
+            <li><a href="../agents-and-capabilities/">Agents &amp; Capabilities</a></li>
+            <li><a href="../reference/">Reference</a></li>
+            <li><a href="../install-and-safety/">Install &amp; Safety</a></li>
+            <li><a href="./" aria-current="page">Troubleshooting</a></li>
+          </ul>
+        </nav>
+        <button class="theme-toggle" type="button" data-theme-toggle aria-label="Use light theme" title="Use light theme">☀</button>
+      </div>
+    </header>
+
+    <main class="page-shell" id="main">
+      <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <ol>
+          <li><a href="../">Help Center</a></li>
+          <li aria-current="page">Troubleshooting</li>
+        </ol>
+      </nav>
+
+      <form class="search-panel" role="search" data-help-search>
+        <label class="search-label" for="help-search">Search p-track Help</label>
+        <input class="search-input" id="help-search" type="search" autocomplete="off" placeholder="Try “database busy” or “stale agent”" disabled>
+        <p class="search-help">Search runs in this browser and never sends your query off-device.</p>
+        <p class="search-status" data-search-status role="status" aria-live="polite">Loading the local search index…</p>
+        <ul class="search-results" data-search-results aria-label="Search results"></ul>
+        <noscript><p class="search-help">JavaScript is off. Use the navigation and page contents below.</p></noscript>
+      </form>
+
+      <div class="article-layout">
+        <article class="article">
+          <p class="eyebrow">Diagnostics and bounded recovery</p>
+          <h1>Recover without bypassing p-track safeguards</h1>
+          <p class="lede">Start with the narrowest diagnostic, preserve authoritative data and recovery artifacts, and use destructive controls only when their stated scope is acceptable.</p>
+
+          <h2 id="project-and-database">Project and database errors</h2>
+          <h3>“No p-track project found”</h3>
+          <p>p-track searches upward only to the nearest Git boundary. Confirm where you are, then change to the repository that owns the project:</p>
+          <pre><code>pwd
+git rev-parse --show-toplevel
+cd /path/to/repository
+ptrack context</code></pre>
+          <p>If this repository has never been initialized, run <code>ptrack init</code> once at its intended root. Do not initialize a different directory merely to silence the error; see <a href="../start-here/#first-project">Start Here</a>.</p>
+
+          <h3>Database busy or read timeout</h3>
+          <p>Project and global databases wait for their file lock for one second. Let an active p-track operation finish, close an unintended duplicate p-track process that has the same database open, and retry. Do not delete <code>.ptrack/ptrack.db</code> or invent a lock-file cleanup.</p>
+
+          <h3>Database format is newer than this p-track</h3>
+          <p>Install a compatible newer p-track binary and retry. The older binary refuses the database and leaves it untouched. Do not force it open, downgrade it, or attempt a schema edit. Review the documented <a href="../install-and-safety/#migration">migration boundary</a>.</p>
+
+          <h2 id="desktop-and-board">Desktop project and board state</h2>
+          <p>If <strong>Open Project</strong> or <strong>Switch Project</strong> reports active terminals, agent runs, or resource operations, inspect the confirmation instead of repeating the action. Confirming stops the counted resources and cleans up the current project before switching; canceling keeps the current workspace. If the confirmation expires or resources change, start the switch again so p-track can recount them.</p>
+          <p>A task transition confirmation is tied to the exact task, status, linked resources, and association revisions shown. If the board says the task or linked resources changed, the status was not updated. Close the stale prompt, refresh the workspace, inspect the current task and live resources, then request the transition again.</p>
+
+          <h2 id="terminal-recovery">Terminal recovery</h2>
+          <p>Restored tabs and split descriptors start as stopped panes. Opening one creates a new session. The prior process, terminal contents, output, and scrollback are not restored.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Control</th><th>Use it for</th><th>Boundary</th></tr></thead>
+              <tbody>
+                <tr><td>Restart terminal</td><td>An ordinary pane with a failed or exited process or stream.</td><td>Closes the old session and creates a fresh one.</td></tr>
+                <tr><td>Relaunch linked agent</td><td>A linked-agent pane that stopped.</td><td>Launch again from its plan or task; ordinary restart is intentionally unavailable so fresh authority can be bound.</td></tr>
+                <tr><td>Retry terminal renderer</td><td>A selected, visible pane using the fallback renderer.</td><td>Rebuilds rendering without restarting the PTY.</td></tr>
+                <tr><td>Force stop terminal</td><td>A selected current session that cannot stop normally.</td><td>Requires confirmation and targets that session.</td></tr>
+                <tr><td>Reset terminal workspace</td><td>A repaired or discarded layout that remains unusable.</td><td>Replaces the saved layout and terminates every live session represented by the workspace.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Terminal diagnostics are content-free: they report bounded process, stream, renderer, layout, update-time, retry, and repair state. They do not include terminal output, commands, clipboard text, environment values, credentials, or stream URLs. See <a href="../terminals/#diagnostics-and-recovery">terminal diagnostics and recovery</a>.</p>
+
+          <h2 id="agents-and-authority">Agents, associations, and stale runs</h2>
+          <p>After a Desktop restart, a previously launched agent is marked stale because its hosting terminal ended and the new process cannot know its outcome. Relaunch it from the intended plan or task. An external agent may resume heartbeats only with its existing lease token; otherwise its lease expires and the run becomes stale.</p>
+          <ul>
+            <li>An association provides validated project, plan, or task context. It grants no task, filesystem, network, command, Git, or capability authority.</li>
+            <li>A worktree claim only records a verified, existing host-observed worktree that contains the run's working directory. It does not create a worktree, move the agent, change its CWD, or run Git.</li>
+            <li>A handoff is a bounded proposal and preview. Sending or acknowledging it grants no authority and changes no task or project memory.</li>
+            <li>A workflow proposal remains a proposal when approved. It executes no command, Git or hosting action, task change, or capability grant.</li>
+          </ul>
+          <p>When one of these actions is rejected as stale, refresh Overview and repeat it against the current live run and association revision. Read the full <a href="../agents-and-capabilities/#boundary-summary">authority boundary summary</a>.</p>
+
+          <h2 id="capability-denials">Capability denials and connection tests</h2>
+          <p>A broker call is denied when its grant is missing, disabled, expired, materially edited, for another agent profile, or outside the exact normalized scope. Return to <strong>Capabilities</strong>, inspect <strong>Preview scope</strong>, correct the draft if needed, save it, and explicitly enable the exact previewed scope again. Do not broaden the scope merely to make a failing call pass.</p>
+          <p><code>ptrack capability call</code> also requires the broker session token and matching project descriptor supplied inside a p-track-launched agent terminal. Calling it from an ordinary or stale shell fails closed; relaunch the agent from the correct project context instead of copying tokens.</p>
+          <p><strong>Test connection</strong> is a separate, explicit, non-mutating diagnostic for the draft. Use its normalized error class to check reachability or configuration before enabling a grant. A successful test does not enable the capability, approve a scope, or prove that a later broker call is authorized. See <a href="../agents-and-capabilities/#grant-lifecycle">grant lifecycle</a>.</p>
+
+          <h2 id="updater-recovery">Updater recovery</h2>
+          <p>If the updater enters recovery-required state, close p-track and preserve the update state under <code>$PTRACK_HOME/updates</code> or <code>~/.ptrack/updates</code>. On Linux, keep every <code>.pending-apply-*.json</code> journal with its sibling <code>.ptrack-backup-*</code> executable until the installed target is identified.</p>
+          <p>Do not delete a journal or backup, and do not copy a staged payload into place. Reinstall the same or a newer package from the <a href="https://github.com/ro-ag/ptrack/releases">official GitHub Releases page</a> as the conservative fallback. The <a href="../install-and-safety/#update-recovery">update recovery guide</a> describes the artifacts and platform-specific boundary.</p>
+
+          <h2 id="faq">Frequently asked corrections</h2>
+          <dl>
+            <dt>Does selecting a plan in the Desktop sidebar change the CLI active plan?</dt>
+            <dd>No. It changes the Desktop view only. Use <code>ptrack plan use &lt;id&gt;</code> to change the CLI active plan.</dd>
+            <dt>Does p-track check for updates automatically?</dt>
+            <dd>Not by default. Automatic checks remain off until you explicitly opt in; a manual check does not silently download or install.</dd>
+            <dt>Are capabilities an operating-system sandbox?</dt>
+            <dd>No. They authorize exact typed broker calls. Ordinary shell processes retain whatever network and filesystem access the operating system gives them.</dd>
+            <dt>Does <code>ptrack backup</code> capture everything, and can p-track restore it?</dt>
+            <dd>No. It copies the project database, not runtime state or WebView <code>localStorage</code>, and there is no built-in restore command. Follow the documented <a href="../install-and-safety/#backup">backup limits</a>; this page does not prescribe an unverified restore procedure.</dd>
+            <dt>Are interactive terminal paths verified on every platform?</dt>
+            <dd>No. End-to-end clipboard, shortcut, context-menu, restart, and shutdown acceptance is verified on macOS only. Windows and Linux implementations exist, but this Help Center does not claim those interactive paths passed end to end.</dd>
+          </dl>
+        </article>
+
+        <aside class="page-toc" aria-label="On this page">
+          <strong>On this page</strong>
+          <ul>
+            <li><a href="#project-and-database">Project and database</a></li>
+            <li><a href="#desktop-and-board">Desktop and board</a></li>
+            <li><a href="#terminal-recovery">Terminal recovery</a></li>
+            <li><a href="#agents-and-authority">Agents and authority</a></li>
+            <li><a href="#capability-denials">Capability denials</a></li>
+            <li><a href="#updater-recovery">Updater recovery</a></li>
+            <li><a href="#faq">FAQ</a></li>
+          </ul>
+        </aside>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <div class="site-footer-inner">
+        <p>p-track Help Center · Content for the current stable release</p>
+        <p><a href="https://github.com/ro-ag/ptrack">Source on GitHub</a> · <a href="https://github.com/ro-ag/ptrack/issues">Report a documentation issue</a></p>
+      </div>
+    </footer>
+    <script src="../assets/help.js" defer></script>
+  </body>
+</html>

@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Navigate p-track Desktop, switch projects safely, manage tasks on the Board, inspect project intelligence, and open Capabilities.">
+    <meta name="ptrack-version" content="0.21.0">
+    <title>Desktop · p-track Help Center</title>
+    <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="../assets/style.css">
+  </head>
+  <body data-help-root="../">
+    <a class="skip-link" href="#main">Skip to main content</a>
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="brand" href="../" aria-label="p-track Help Center home">
+          <span class="brand-mark" aria-hidden="true">p·</span>
+          <span>p-track Help</span>
+          <span class="version-badge">v0.21.0</span>
+        </a>
+        <nav class="primary-nav" aria-label="Primary">
+          <ul>
+            <li><a href="../start-here/">Start Here</a></li>
+            <li><a href="./" aria-current="page">Desktop</a></li>
+            <li><a href="../terminals/">Terminals</a></li>
+            <li><a href="../agents-and-capabilities/">Agents &amp; Capabilities</a></li>
+            <li><a href="../reference/">Reference</a></li>
+            <li><a href="../install-and-safety/">Install &amp; Safety</a></li>
+            <li><a href="../troubleshooting/">Troubleshooting</a></li>
+          </ul>
+        </nav>
+        <button class="theme-toggle" type="button" data-theme-toggle aria-label="Use light theme" title="Use light theme">☀</button>
+      </div>
+    </header>
+
+    <main class="page-shell" id="main">
+      <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <ol>
+          <li><a href="../">Help Center</a></li>
+          <li aria-current="page">Desktop</li>
+        </ol>
+      </nav>
+
+      <form class="search-panel" role="search" data-help-search>
+        <label class="search-label" for="help-search">Search p-track Help</label>
+        <input class="search-input" id="help-search" type="search" autocomplete="off" placeholder="Try “task drawer” or “switch project”" disabled>
+        <p class="search-help">Search runs in this browser and never sends your query off-device.</p>
+        <p class="search-status" data-search-status role="status" aria-live="polite">Loading the local search index…</p>
+        <ul class="search-results" data-search-results aria-label="Search results"></ul>
+        <noscript><p class="search-help">JavaScript is off. Use the navigation and page contents below.</p></noscript>
+      </form>
+
+      <div class="article-layout">
+        <article class="article">
+          <p class="eyebrow">Desktop workspace</p>
+          <h1>Move through projects, plans, and tasks</h1>
+          <p class="lede">p-track Desktop has three primary project views: Board, Overview, and Capabilities. The Board is the working surface for plans and tasks; its terminal dock stays with that view.</p>
+
+          <div class="callout">
+            <p><strong>Viewing a plan is not activating it.</strong> Selecting a plan in the Desktop sidebar changes the snapshot shown on the Board. It does not change the active plan used by CLI defaults. Run <code>ptrack plan use &lt;id&gt;</code> when you intend to change the CLI active plan.</p>
+          </div>
+
+          <h2 id="open-project">Open, switch, or close a project</h2>
+          <p>When no project is open, the project chooser shows an <strong>Open Project…</strong> button and recent projects. Choose a directory containing a p-track project. Once it opens, the workspace shows the project name, its plans, and the three primary views.</p>
+          <p>Use <strong>Switch Project…</strong> to choose another project without first returning to the welcome screen. Use <strong>Close Project</strong> to leave the current project and return to the chooser. The same project actions are available from the application menu.</p>
+          <div class="callout warning">
+            <p><strong>Active resources require confirmation.</strong> Switching or closing prompts before leaving when the project has active terminal sessions, agent runs, or pending resource admissions. Review the counts before continuing. The confirmation is tied to the observed project state, expires after one minute, and becomes invalid if that state changes.</p>
+          </div>
+          <figure class="screenshot-pair">
+            <img class="screenshot-dark" src="../assets/screenshots/project-switch-dark.png" width="1552" height="1012" loading="lazy" decoding="async" alt="Dark p-track workspace dimmed behind a confirmation that closing the project will stop one active terminal">
+            <img class="screenshot-light" src="../assets/screenshots/project-switch-light.png" width="1552" height="1012" loading="lazy" decoding="async" alt="Light p-track workspace dimmed behind the same active-project-resource confirmation">
+            <figcaption>Leaving a project with active resources requires an explicit, current confirmation.</figcaption>
+          </figure>
+
+          <h2 id="workspace-navigation">Navigate the workspace</h2>
+          <p>The sidebar provides the project views and plan list. Choose:</p>
+          <ul>
+            <li><strong>Board</strong> to add tasks, move work through statuses, open task details, launch agents, and use the terminal dock.</li>
+            <li><strong>Overview</strong> to read project memory, progress, repository information, and agent coordination signals.</li>
+            <li><strong>Capabilities</strong> to inspect and configure the selected project's broker capability records.</li>
+          </ul>
+          <p>The plan list shows each plan's ID, title, progress, and an indicator for the CLI active plan. Selecting a row loads that plan's Board snapshot only. The sidebar can be hidden or resized; the Board and terminal panels have independent visibility controls while Board is selected.</p>
+          <p>The terminal is not a fourth primary view. It is a dock inside Board, so moving to Overview or Capabilities hides the dock without closing its sessions.</p>
+
+          <h2 id="board">Use the Board</h2>
+          <p>The Board groups the selected plan's tasks into <strong>Todo</strong>, <strong>Doing</strong>, <strong>Blocked</strong>, and <strong>Done</strong> lanes. Its header shows plan progress, provides an add-task field, and can launch an installed agent for the selected plan.</p>
+          <p>Open a task by clicking its card or focusing the card and pressing Enter. Double-click a card to rename it. Each card also provides a status menu plus <strong>Agent</strong>, <strong>Edit</strong>, and <strong>Memory</strong> actions. Empty lanes collapse to narrow rails and can be expanded again.</p>
+          <p>Move a task by choosing a status from its menu or dragging the card to another lane. p-track checks the current task and linked-resource state before applying the move. If active resources are linked to that task, Desktop asks for one explicit confirmation and revalidates the state before changing only the task status. Canceling leaves the Board unchanged; a stale confirmation is rejected and the Board refreshes.</p>
+          <figure class="screenshot-pair">
+            <img class="screenshot-dark" src="../assets/screenshots/board-dark.png" width="1552" height="1012" loading="lazy" decoding="async" alt="Dark p-track Board with six tasks distributed across four status lanes">
+            <img class="screenshot-light" src="../assets/screenshots/board-light.png" width="1552" height="1012" loading="lazy" decoding="async" alt="Light p-track Board showing the same plan, progress, and task-status lanes">
+            <figcaption>The Board presents the selected plan's current snapshot without changing the CLI active plan.</figcaption>
+          </figure>
+
+          <h2 id="task-drawer">Inspect a task and write memory back</h2>
+          <p>The task drawer identifies the task, its status, and its last update. From the drawer you can change status, rename the task, record a memory note, or launch an installed agent for that task.</p>
+          <p>The drawer's detail sections show:</p>
+          <ul>
+            <li><strong>Linked runtime</strong> — current or historical terminal and agent relationships for the task.</li>
+            <li><strong>Notes</strong> — durable memory attached to the task.</li>
+            <li><strong>Commits</strong> — commits associated with the task.</li>
+            <li><strong>Issues</strong> — linked issues and their severity.</li>
+          </ul>
+          <p><strong>Record memory</strong> adds a note to the task. A terminal tab can also be linked to the selected plan or one of its tasks from the Board dock. Its <strong>Write memory back</strong> flow accepts a decision, blocker, handoff, or project rolling summary, then previews the authoritative destination before writing. Replacing the project rolling summary requires an additional explicit confirmation.</p>
+          <figure class="screenshot-pair">
+            <img class="screenshot-dark" src="../assets/screenshots/task-drawer-dark.png" width="1552" height="1012" loading="lazy" decoding="async" alt="Dark p-track task drawer showing status, actions, linked runtime, notes, commits, and issues">
+            <img class="screenshot-light" src="../assets/screenshots/task-drawer-light.png" width="1552" height="1012" loading="lazy" decoding="async" alt="Light p-track task drawer with the same bounded task context sections">
+            <figcaption>The task drawer keeps durable task context separate from live runtime authority.</figcaption>
+          </figure>
+
+          <h2 id="overview">Read the Overview</h2>
+          <p>Overview brings project memory and bounded repository observations together without changing the Board selection. It includes:</p>
+          <ul>
+            <li>the project goal, rolling agent handoff, project status, and plan progress;</li>
+            <li>a 16-week notes-and-commits activity view, open issues, and recent memory;</li>
+            <li>the project root, storage status, and repository summary;</li>
+            <li>agent activity, handoff and workflow proposals, drift signals, and notifications;</li>
+            <li>expandable remotes and branches, recent commits, blockers, and project notes.</li>
+          </ul>
+          <p>Counts and bounds shown in this view describe the snapshot currently loaded. Agent handoffs and workflow approvals shown here are proposals; the interface labels them separately from task changes and command execution.</p>
+          <figure class="screenshot-pair">
+            <img class="screenshot-dark" src="../assets/screenshots/overview-dark.png" width="1552" height="1012" loading="lazy" decoding="async" alt="Dark p-track Overview with project memory, status counts, activity, issues, repository state, and agent coordination panels">
+            <img class="screenshot-light" src="../assets/screenshots/overview-light.png" width="1552" height="1012" loading="lazy" decoding="async" alt="Light p-track Overview showing the same bounded project and repository snapshot">
+            <figcaption>Overview combines durable memory with bounded repository and coordination observations.</figcaption>
+          </figure>
+
+          <h2 id="capabilities">Open Capabilities</h2>
+          <p>Capabilities is a primary project view, alongside Board and Overview. Use it to list the project's capability records, review recent audit metadata, and create or edit HTTP, Git, or SSH scope drafts for an agent profile.</p>
+          <p>The editor separates <strong>Preview scope</strong>, <strong>Test connection</strong>, and <strong>Save draft</strong>. Saving a draft does not silently enable it; approval and enablement remain explicit actions in the capability list. Scope fields and status messages in the view show what is currently configured.</p>
+          <div class="callout">
+            <p><strong>Capabilities and terminals are separate.</strong> These records apply to p-track broker tools for the selected project and agent profile. Opening this view does not turn ordinary terminal processes into an operating-system network sandbox.</p>
+          </div>
+          <figure class="screenshot-pair">
+            <img class="screenshot-dark" src="../assets/screenshots/capabilities-dark.png" width="1552" height="1012" loading="lazy" decoding="async" alt="Dark p-track Capabilities view with an empty project list and HTTP grant draft form">
+            <img class="screenshot-light" src="../assets/screenshots/capabilities-light.png" width="1552" height="1012" loading="lazy" decoding="async" alt="Light p-track Capabilities view showing the same deny-by-default state and scoped draft fields">
+            <figcaption>A new project has no enabled broker capabilities; drafts, approval, and enablement remain separate.</figcaption>
+          </figure>
+
+          <h2 id="navigation-summary">Workspace at a glance</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Place</th><th>Use it for</th><th>Important boundary</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Project chooser</td><td>Open a recent or different project.</td><td>Leaving active resources requires a fresh confirmation.</td></tr>
+                <tr><td>Plan list</td><td>Choose the Board snapshot to view.</td><td>Selection does not change the CLI active plan.</td></tr>
+                <tr><td>Board</td><td>Add, inspect, rename, move, and link task work.</td><td>The terminal is a Board dock.</td></tr>
+                <tr><td>Task drawer</td><td>Review status, runtime, notes, commits, and issues.</td><td>Memory writeback previews its destination.</td></tr>
+                <tr><td>Overview</td><td>Read project memory, progress, repository, and coordination signals.</td><td>Snapshot bounds remain visible.</td></tr>
+                <tr><td>Capabilities</td><td>Draft and manage scoped broker access.</td><td>Draft save and enablement are separate.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </article>
+
+        <aside class="page-toc" aria-label="On this page">
+          <strong>On this page</strong>
+          <ul>
+            <li><a href="#open-project">Open, switch, or close</a></li>
+            <li><a href="#workspace-navigation">Workspace navigation</a></li>
+            <li><a href="#board">Board</a></li>
+            <li><a href="#task-drawer">Task drawer</a></li>
+            <li><a href="#overview">Overview</a></li>
+            <li><a href="#capabilities">Capabilities</a></li>
+            <li><a href="#navigation-summary">Workspace at a glance</a></li>
+          </ul>
+        </aside>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <div class="site-footer-inner">
+        <p>p-track Help Center · Content for the current stable release</p>
+        <p><a href="https://github.com/ro-ag/ptrack">Source on GitHub</a> · <a href="https://github.com/ro-ag/ptrack/issues">Report a documentation issue</a></p>
+      </div>
+    </footer>
+    <script src="../assets/help.js" defer></script>
+  </body>
+</html>

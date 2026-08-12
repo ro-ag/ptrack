@@ -7,6 +7,7 @@ terminal sessions—without a server or a cloud account.
 
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![Release](https://img.shields.io/badge/release-v0.21.0-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.21.0)
+[![Help Center](https://img.shields.io/badge/help-v0.21.0-3DD6A3)](https://ro-ag.github.io/ptrack/help/)
 [![License](https://img.shields.io/badge/License-Apache--2.0-3DD6A3)](LICENSE)
 [![Storage](https://img.shields.io/badge/Storage-local--first-AFA8FF)](#storage-and-safety)
 
