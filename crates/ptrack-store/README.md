@@ -24,6 +24,8 @@ Safety boundaries:
 - Unix database files are created as `0600` and insecure existing modes fail
   closed.
 
-The one-way bbolt exporter/importer and the native Rust model codecs are
-separate plan items. They must target a distinct `.redb` file and keep the Go
-source open read-only.
+The one-way bbolt exporter and staged redb importer live in the migration
+tools. They target a distinct `.redb` file, keep the Go source read-only, and
+are exercised by a temporary cross-language acceptance fixture. Native Rust
+model codecs and application cutover remain separate plan items; imported Go
+gob payloads are still opaque to the Rust application layer.

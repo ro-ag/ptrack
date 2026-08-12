@@ -14,6 +14,11 @@ and verifies the new database before reporting success. It never discovers
 databases, replaces a path, selects a default, installs an application, or
 performs cutover.
 
+Migration currently fails closed on Windows. The Go exporter does not yet
+create private Windows ACLs, and the Rust validator does not accept a bundle
+without stable file-identity verification. Imported Go gob payloads remain
+opaque until the native Rust model codecs are implemented.
+
 ## PTRKMIG1 version 1
 
 All integers are unsigned and big-endian. The 40-byte header is:
