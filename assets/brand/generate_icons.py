@@ -177,7 +177,7 @@ def draw_banner(width: int, height: int, out: Path, social: bool = False) -> Non
     title_size = round(H * (0.30 if not social else 0.24))
     title_font = menlo(title_size)
     title = "p-track"
-    tagline = "Persistent project memory for humans and AI agents"
+    tagline = "Observe agent work. Keep the plan. Pass the context."
 
     # Shrink the tagline until it fits the canvas width.
     tag_size = round(H * (0.085 if not social else 0.062))

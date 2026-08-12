@@ -16,7 +16,7 @@
     "frontend/src/workspace/model.ts",
     "frontend/src/workspace/presentation.ts"
   ],
-  "uiSourceSha256": "661da493e3857d1e53a82c5b662562d5f1fd3fa29de08eeb7cf80d6c45c94061",
+  "uiSourceSha256": "f34b9fc6ac821590e3e7d2dc3f6d5998b98a873cbb717948a7e7553cbe367b68",
   "requiredWorkflows": [
     "board",
     "capabilities",
@@ -70,7 +70,7 @@
       "route": "desktop/#overview",
       "width": 1552,
       "height": 1012,
-      "sha256": "e93417514e02bbb4ca81b23b2e4aeeb391916190d03868ee291b4c4added09f4"
+      "sha256": "ab96477500071cd80f003f3885600707ddda7f4d13a3e5cdcce8ecec8b946d59"
     },
     {
       "file": "overview-light.png",
@@ -79,7 +79,7 @@
       "route": "desktop/#overview",
       "width": 1552,
       "height": 1012,
-      "sha256": "8b6ba54b3eea6db93bad67ade9d0b7bd15cc83a1029bfe7b62d4430446a1a541"
+      "sha256": "2ad03c6905117a2f2060b074ba6bb1b42e289ae80d0609d0415e5cc2716298d9"
     },
     {
       "file": "project-search-dark.png",

@@ -4,16 +4,16 @@
   "entries": [
     {
       "title": "Start Here",
-      "summary": "Create a first p-track project, plan, and task, then resume work safely.",
-      "headings": ["First project", "First plan", "First task", "Resume work"],
-      "keywords": ["init", "context", "next", "onboarding"],
+      "summary": "Create a durable project record, plan, and task, then leave context another agent can resume.",
+      "headings": ["First project", "First plan", "First task", "Resume and orient"],
+      "keywords": ["init", "context", "next", "onboarding", "agent", "resume"],
       "url": "start-here/"
     },
     {
       "title": "Desktop",
-      "summary": "Use the board, task drawer, Overview, navigation, and project switching.",
+      "summary": "See durable plan status beside registered agent activity, repository evidence, terminals, and capabilities.",
       "headings": ["Board", "Task drawer", "Overview", "Project switching"],
-      "keywords": ["gui", "workspace", "kanban", "sidebar"],
+      "keywords": ["gui", "workspace", "kanban", "sidebar", "agent activity", "plan status", "repository"],
       "url": "desktop/"
     },
     {
@@ -25,9 +25,9 @@
     },
     {
       "title": "Agents & Capabilities",
-      "summary": "Understand agent associations, handoffs, worktrees, drift, and explicit broker grants.",
-      "headings": ["Agents", "Associations", "Handoffs", "Worktrees", "Capabilities"],
-      "keywords": ["ownership", "workflow", "network", "git", "ssh", "security"],
+      "summary": "Pass bounded context across supported agent tools while keeping associations, worktrees, drift, and broker authority explicit.",
+      "headings": ["Agent runs", "Associations", "Plan transfer", "Handoffs", "Worktrees", "Capabilities"],
+      "keywords": ["ownership", "workflow", "network", "git", "ssh", "security", "provider", "multi-agent", "Claude", "Codex", "Gemini", "Agy", "OpenCode"],
       "url": "agents-and-capabilities/"
     },
     {

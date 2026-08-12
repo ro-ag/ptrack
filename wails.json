@@ -16,6 +16,6 @@
     "productVersion": "0.21.0",
     "companyName": "ro-ag",
     "copyright": "© 2026 ro-ag. Licensed under the Apache License, Version 2.0.",
-    "comments": "Persistent project memory for humans and AI agents. https://github.com/ro-ag/ptrack"
+    "comments": "Local control for agent work: observe activity, keep plans, and pass bounded context. https://github.com/ro-ag/ptrack"
   }
 }
