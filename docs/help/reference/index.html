@@ -63,7 +63,7 @@
               <tbody>
                 <tr><td><code>init</code></td><td>Initialize or refresh a project.</td><td><code>--goal</code>, <code>--root</code>, <code>--force</code>, <code>--no-guide</code>.</td></tr>
                 <tr><td><code>goal</code></td><td><code>show</code>, <code>set &lt;text…&gt;</code></td><td>Read or replace the north-star goal.</td></tr>
-                <tr><td><code>summary</code></td><td><code>show</code>, <code>set &lt;text…&gt;</code></td><td>Read or replace the rolling project handoff.</td></tr>
+                <tr><td><code>summary</code></td><td><code>show</code>, <code>set &lt;text…&gt;</code></td><td>Read or replace the rolling project summary.</td></tr>
                 <tr><td><code>milestone</code> / <code>ms</code></td><td><code>add</code>, <code>list</code>, <code>show</code>, <code>done</code>, <code>open</code>, <code>due</code>, <code>rename</code></td><td><code>add --due YYYY-MM-DD</code>; <code>due &lt;id&gt; &lt;YYYY-MM-DD&gt;</code>.</td></tr>
                 <tr><td><code>plan</code></td><td><code>add</code>, <code>list</code>, <code>show</code>, <code>done</code>, <code>use</code>, <code>rename</code></td><td><code>add --milestone &lt;id&gt;</code>. <code>use</code> sets the CLI active plan.</td></tr>
                 <tr><td><code>task</code></td><td><code>add</code>, <code>list</code>, <code>show</code>, <code>start</code>, <code>done</code>, <code>block</code>, <code>rename</code>, <code>move</code>, <code>convert</code> / <code>promote</code></td><td><code>add --plan &lt;id&gt;</code>; <code>list --plan &lt;id&gt; --status todo,doing,done,blocked</code>; <code>move &lt;id&gt; --plan &lt;id&gt;</code>.</td></tr>
@@ -71,7 +71,7 @@
                 <tr><td><code>note</code></td><td><code>add</code>, <code>list</code></td><td><code>add --plan &lt;id&gt;</code> or <code>--task &lt;id&gt;</code>; <code>list --plan --task --limit</code>.</td></tr>
                 <tr><td><code>commit</code></td><td><code>add</code>, <code>record</code>, <code>list</code>, <code>show</code></td><td><code>add --plan --task</code>; <code>record --sha --subject</code>; <code>list --plan --task</code>; <code>show --stat</code>.</td></tr>
                 <tr><td><code>hook</code></td><td><code>install</code>, <code>uninstall</code>, <code>status</code></td><td>Manage the repository hook integration.</td></tr>
-                <tr><td><code>context</code></td><td>Print a bounded project handoff.</td><td>Use at the start of a work session.</td></tr>
+                <tr><td><code>context</code></td><td>Print a bounded resume digest.</td><td>Use at the start of a work session.</td></tr>
                 <tr><td><code>guide</code></td><td>Install or refresh managed agent guidance.</td><td><code>--print</code> writes the guide to standard output instead of files.</td></tr>
                 <tr><td><code>next</code></td><td>Choose the next actionable task in the active plan.</td><td>Read-only orientation.</td></tr>
                 <tr><td><code>search &lt;term&gt;</code></td><td>Search project records.</td><td>Requires one search term.</td></tr>

@@ -1,9 +1,9 @@
 <div align="center">
 
-![p-track — persistent project memory for humans and AI agents](assets/brand/banner.png)
+![p-track — observe agent work, keep the plan, pass the context](assets/brand/banner.png)
 
-Keep goals, plans, tasks, decisions, issues, and commit context alive across
-terminal sessions—without a server or a cloud account.
+Observe agent work, keep project state durable, and pass bounded context to
+the next agent—without a hosted service or cloud account.
 
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![Release](https://img.shields.io/badge/release-v0.21.0-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.21.0)
@@ -15,19 +15,24 @@ terminal sessions—without a server or a cloud account.
 
 ![p-track launch screen](docs/assets/welcome.png)
 
-p-track gives one project two complementary interfaces:
+p-track is a local control layer for work performed by humans and supported
+coding-agent tools:
 
-- **Humans get a full-screen terminal dashboard.** Run `ptrack` to browse and
-  edit the live project state, move work on a board, and perform maintenance.
-- **Humans also get a canonical desktop project workspace.** Run
-  `ptrack gui [PATH]` for project switching, tracking context, read-only Git
-  intelligence, registered agent runs, terminals, and the kanban board.
-- **Agents get small, scriptable commands.** Run `ptrack context` to restore a
-  bounded handoff, then query or update only what the current task needs.
+- **Observe.** Desktop puts registered agent activity, task associations,
+  repository state, advisory drift signals, terminals, and the Board in one
+  project workspace.
+- **Remember.** Goals, plans, tasks, decisions, issues, summaries, and commit
+  context live in the repository's local p-track database instead of one
+  vendor's conversation history.
+- **Pass context.** A new agent can restore a bounded resume digest, inspect the
+  active plan and its open tasks, and continue from durable notes. Desktop can
+  also create reviewable, authority-free handoff proposals between registered
+  live runs.
 
-Both interfaces use the same embedded database. The TUI opens it only for each
-action, so an agent and a human can work side by side without the dashboard
-holding a long-lived lock.
+Use that layer through the Desktop workspace, full-screen terminal dashboard,
+or scriptable CLI. All three surfaces share the same embedded database. The TUI
+opens it only for each action, so agents and humans can work side by side
+without the dashboard holding a long-lived lock.
 
 ## Contents
 
@@ -116,7 +121,7 @@ Now choose the interface that fits the job:
 ```sh
 ptrack          # human: open the interactive dashboard
 ptrack gui       # human: open the desktop project workspace
-ptrack context  # agent: restore a compact project handoff
+ptrack context  # agent: restore a compact resume digest
 ptrack next     # agent: ask for the single most-actionable task
 ```
 
@@ -210,7 +215,7 @@ from the sidebar, drag cards between Todo, Doing, Blocked, and Done, or use the
 status selector on a card. Add tasks from the board header,
 double-click a card to rename it, or record durable task context with **Memory**.
 Cards surface linked notes, commits, and open issues, while the project-memory
-rail keeps the goal, agent handoff, project status, issues, and recent decisions
+rail keeps the goal, rolling project summary, status, issues, and recent decisions
 in view. The board refreshes automatically while it is open; press `R` to reload
 immediately after another process changes the project.
 
@@ -346,7 +351,7 @@ without the board retaining bbolt's write lock.
 |---|---|---|
 | Open project | `⌘O` | File → Open Project |
 | Settings | `⌘,` | Project → Settings |
-| Board / Intelligence / Capabilities | `⌘1` / `⌘2` / `⌘3` | `Ctrl+1` / `Ctrl+2` / `Ctrl+3` |
+| Board / Overview / Capabilities | `⌘1` / `⌘2` / `⌘3` | `Ctrl+1` / `Ctrl+2` / `Ctrl+3` |
 | Command palette | `⌘K` | `Ctrl+K` |
 | Refresh board / add task | `R` / `/` | `R` / `/` |
 | Toggle terminal panel | View → Toggle Terminal Panel | View → Toggle Terminal Panel |
@@ -381,21 +386,61 @@ The same actions are available from `?` and from the task's item view.
 
 ## Agent workflow
 
-A fresh agent starts with `ptrack context`. The digest is intentionally bounded:
-it restores the goal, rolling summary, active plan, blockers, open issues,
-recent notes, and inventory without dumping the whole project.
+A fresh agent—including a replacement using another supported agent tool—starts
+with `ptrack context`. The digest is intentionally bounded: it restores the
+goal, rolling summary, active plan, blockers, open issues, recent notes, and
+inventory without dumping the whole project.
 
 ```sh
-ptrack context                # restore the live edge
+ptrack context                # restore the bounded resume digest
 ptrack next                   # choose the next task
 ptrack task show 12           # drill into one item
 ptrack note add "..." --task 12
 ptrack task done 12
-ptrack summary set "..."      # leave a compact handoff
+ptrack summary set "..."      # update the rolling project summary
 ```
 
 Read commands render Markdown by default because it is compact for an LLM.
 Add `--json` at automation boundaries.
+
+### Transfer work to another agent
+
+The durable transfer path is the project record, not a provider session. Before
+stepping away, leave the task status honest, attach decisions or blockers to the
+relevant task or plan, and update the rolling summary with the current edge:
+
+```sh
+ptrack task show 12
+ptrack note add "Blocked on the upstream schema decision" --task 12
+ptrack summary set "Task #12 is blocked; schema options and evidence are in its notes."
+```
+
+The receiving agent—whether it uses the same tool or another supported
+profile—starts from the repository and rechecks both p-track and Git before
+continuing:
+
+```sh
+ptrack context
+ptrack plan show 4
+ptrack task show 12
+git status --short
+```
+
+Plans have no exclusive agent owner. The CLI active plan is a project-wide
+default, so use explicit plan and task IDs when multiple agents are working and
+run `ptrack plan use <id>` only when you intend to change that shared default.
+Task ownership shown in Desktop is advisory, not a lock.
+
+This workflow transfers durable goals, plans, tasks, notes, summaries, and
+recorded commit context. It does not transfer a provider transcript, hidden
+reasoning, authentication, configuration, terminal state, or authority, and it
+does not prove that an agent-maintained status is correct. The receiving agent
+must reconcile stale status with the repository and current task evidence.
+
+Desktop also supports a separate live handoff proposal between two registered
+runs. That proposal is bounded, short-lived, authority-free, and visible in
+p-track's inbox; it is not injected into either provider and does not update the
+durable project record.
 
 ### Agent onboarding
 
@@ -421,7 +466,7 @@ Put `#<task-id>` in a commit message to link the commit to that task.
 | `ptrack init [--goal S] [--root D] [--force] [--no-guide]` | Create or refresh `.ptrack/` and the agent guide. |
 | `ptrack guide [--print]` | Install, refresh, or print the agent guide. |
 | `ptrack goal show\|set S` | Show or update the north-star goal. |
-| `ptrack summary show\|set S` | Show or update the rolling context summary. |
+| `ptrack summary show\|set S` | Show or update the rolling project summary. |
 | `ptrack milestone add\|list\|show\|done\|open\|due\|rename` | Manage checkpoints that group plans. |
 | `ptrack plan add\|list\|show\|done\|use\|rename` | Manage plans; `show` includes tasks and notes. |
 | `ptrack task add\|list\|show\|start\|done\|block\|rename\|move\|convert` | Manage tasks; move them between plans or convert them into plans. |
@@ -429,7 +474,7 @@ Put `#<task-id>` in a commit message to link the commit to that task.
 | `ptrack note add\|list` | Attach or list project, plan, and task notes. |
 | `ptrack commit add\|list\|show\|record` | Browse the recorded git audit trail; `show` prints the diff. |
 | `ptrack hook install` | Install the post-commit hook that records commits. |
-| `ptrack context [--json]` | Print the bounded restore digest. |
+| `ptrack context [--json]` | Print the bounded resume digest. |
 | `ptrack next [--json]` | Print the most-actionable task in the active plan. |
 | `ptrack gui [PATH]` | Open the canonical desktop project workspace; PATH defaults to the current directory. |
 | `ptrack board [--plan N] [--json] [--gui]` | Print a kanban board or open it as a Wails desktop GUI. |
@@ -443,7 +488,9 @@ Run `ptrack <command> --help` for flags and examples specific to a command.
 
 ## Storage and safety
 
-p-track is local-first and has no server process.
+p-track is local-first and requires no hosted service or long-lived daemon.
+While Desktop is running, it exposes private loopback services for registered
+agent integrations and explicitly approved broker capabilities.
 
 | Store | Location | Contents |
 |---|---|---|

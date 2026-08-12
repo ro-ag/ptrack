@@ -225,6 +225,13 @@ describe("production asset layout", () => {
     expect(index).toMatch(
       /<main[^>]*id="main-content"[^>]*class="canvas-main"[\s\S]*id="overview-page"[^>]*aria-label="Project overview"/,
     );
+    expect(index).toMatch(
+      /class="section-label">Rolling project summary<\/p>[\s\S]*id="summary"[^>]*>No rolling summary yet\.<\/p>/,
+    );
+    expect(appSource).toContain(
+      "No rolling summary yet. Agents can update it with ptrack summary set.",
+    );
+    expect(index).not.toContain("No rolling handoff yet.");
     expect(styles).toMatch(
       /\.canvas-main\s*\{[^}]*min-width:\s*0[^}]*min-height:\s*0[^}]*flex:\s*1 1 auto[^}]*display:\s*flex[^}]*flex-direction:\s*column/s,
     );

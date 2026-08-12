@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="Launch and coordinate p-track agents while preserving authority-free associations and explicit, deny-by-default broker capabilities.">
+    <meta name="description" content="Observe and coordinate supported coding-agent tools, transfer durable plan context, and preserve explicit, deny-by-default capability boundaries.">
     <meta name="ptrack-version" content="0.21.0">
     <title>Agents &amp; Capabilities · p-track Help Center</title>
     <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
@@ -52,9 +52,9 @@
 
       <div class="article-layout">
         <article class="article">
-          <p class="eyebrow">Explicit boundaries</p>
-          <h1>Coordinate agents without implying authority</h1>
-          <p class="lede">p-track connects agent activity to durable project context and offers narrowly typed host operations. Associations, ownership labels, worktree claims, handoffs, and workflow proposals remain coordination metadata; only a separately approved capability can authorize a matching broker call.</p>
+          <p class="eyebrow">Cross-agent coordination</p>
+          <h1>Keep control when agents or tools change</h1>
+          <p class="lede">p-track gives launched and registered agent runs a shared local project record and a bounded coordination view. Durable plans, tasks, notes, and summaries survive agent sessions; live handoffs and broker authority remain separate, explicit, and narrowly scoped.</p>
 
           <div class="callout warning">
             <p><strong>Capabilities are not a shell sandbox.</strong> Ordinary terminal processes keep their normal operating-system access and may invoke tools such as <code>curl</code>, <code>git</code>, or <code>ssh</code> directly. p-track capability policy applies only when an agent calls a typed p-track broker tool.</p>
@@ -71,13 +71,35 @@
             <p><strong>An association grants no authority.</strong> It describes where activity belongs. It does not authorize task changes, filesystem access, network access, commands, Git operations, or capability use.</p>
           </div>
 
+          <h2 id="move-work-between-agents">Move work between agents or supported tools</h2>
+          <p>The durable transfer path is the p-track project record. It works across agent sessions because the goal, active plan, tasks, notes, summary, issues, and recorded commits live with the project instead of inside one provider's conversation history.</p>
+          <ol>
+            <li>The departing agent leaves task status honest, records durable decisions or blockers on the relevant task or plan, and updates the rolling project summary.</li>
+            <li>The receiving agent opens the same project and runs <code>ptrack context</code>, then drills into the named plan and task.</li>
+            <li>Before changing status, the receiving agent compares that record with the current repository, worktree, and any bounded activity or drift signals.</li>
+            <li>The receiving agent continues with explicit task and plan IDs and records the next durable change for whoever follows.</li>
+          </ol>
+          <pre><code># Departing agent
+ptrack note add "Blocked on the upstream schema decision" --task 12
+ptrack summary set "Task #12 is blocked; evidence is attached to the task."
+
+# Receiving agent
+ptrack context
+ptrack plan show 4
+ptrack task show 12
+git status --short</code></pre>
+          <div class="callout">
+            <p><strong>The active plan is a shared project default.</strong> Plans have no exclusive agent owner. When several agents are working, inspect plans with explicit IDs and run <code>ptrack plan use &lt;id&gt;</code> only when you intend to change the CLI default for the project. Desktop task ownership is advisory, not a lock.</p>
+          </div>
+          <p>Installed profiles can include Agy, Claude Code, Codex, Gemini, and OpenCode. Known adapters normalize bounded events into one model; other registered providers may expose lifecycle information only. p-track does not transfer provider transcripts, prompts, hidden reasoning, authentication, configuration, terminal state, or authority, and it cannot make an agent maintain the project record correctly. The receiving agent must reconcile stale claims with observable project and repository evidence.</p>
+
           <h2 id="ownership-and-worktrees">Use ownership and worktrees as advisory signals</h2>
           <p>A live task-associated agent can claim or release task ownership in Overview. Ownership helps expose multiple agents working on the same task, but it is advisory. Claiming or releasing it does not change the agent, association, task status, process, or capabilities. An incomplete bounded snapshot cannot prove exclusive ownership.</p>
           <p>A live run can be associated with an existing worktree observed by the host. p-track verifies the current run and association revision, inspects the worktree, and confirms that the agent working directory is inside it. The claim is ephemeral presentation metadata, separate from both the run association and every capability decision.</p>
           <p>Associating a worktree does not create a worktree, move the agent, change its working directory, run a mutating Git command, or grant filesystem, network, or capability authority.</p>
 
           <h2 id="handoffs-workflows">Review handoffs and workflow proposals</h2>
-          <p>Overview can prepare a bounded handoff from one live agent to another. The inbox stores an immutable proposal and its preview. Sending it grants no authority and changes no task. Acknowledgment revalidates the exact proposal and removes that inbox item; it does not mutate project memory, task state, an agent, or a capability.</p>
+          <p>Overview can prepare a bounded handoff from one live registered agent to another. The inbox stores an immutable proposal and its preview in p-track memory for up to 30 minutes, only while the same workspace and exact live associations remain valid; restart or project replacement clears it. The proposal is not injected into either provider. Sending it grants no authority and changes no task. Acknowledgment revalidates the exact proposal and removes that inbox item; it does not mutate project memory, task state, an agent, or a capability.</p>
           <p>Agents can also prepare validation, commit, pull-request, or merge workflow proposals. Preparing, approving, or dismissing one manages the proposal only. Approval executes no command or Git/hosting action, changes no task, and grants no capability. Perform the proposed work through the repository's normal, separately authorized workflow.</p>
           <figure class="screenshot-pair">
             <img class="screenshot-dark" src="../assets/screenshots/overview-dark.png" width="1552" height="1012" loading="lazy" decoding="async" alt="Dark p-track Overview where agent activity and handoff controls appear alongside bounded project memory">
@@ -146,6 +168,7 @@
           <ul>
             <li><a href="#launch-and-runs">Launch and runs</a></li>
             <li><a href="#associations">Associations</a></li>
+            <li><a href="#move-work-between-agents">Move work between agents</a></li>
             <li><a href="#ownership-and-worktrees">Ownership and worktrees</a></li>
             <li><a href="#handoffs-workflows">Handoffs and workflows</a></li>
             <li><a href="#drift-notifications">Drift and notifications</a></li>

@@ -662,7 +662,7 @@ function fitRecentMemory() {
 function renderMemory() {
   elements.goal.textContent = board.goal || "No north star set for this project.";
   elements.summary.textContent =
-    board.summary || "No rolling handoff yet. Agents can update it with ptrack summary set.";
+    board.summary || "No rolling summary yet. Agents can update it with ptrack summary set.";
   elements.stats.replaceChildren(
     statElement(board.stats.tasksOpen, "Open tasks"),
     statElement(board.stats.tasksBlocked, "Blocked"),
