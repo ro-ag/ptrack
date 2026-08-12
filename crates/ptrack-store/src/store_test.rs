@@ -278,7 +278,7 @@ fn file_identity_detects_path_replacement() {
 #[test]
 fn reserved_bbolt_filenames_are_rejected_even_when_absent() {
     let directory = TestDirectory::new();
-    for name in ["ptrack.db", "global.db"] {
+    for name in ["ptrack.db", "PTrAcK.Db", "global.db", "GlObAl.Db"] {
         let path = directory.path(name);
         assert!(matches!(
             Store::create_new(&path, StoreKind::Project),

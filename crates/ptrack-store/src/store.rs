@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -590,8 +589,10 @@ fn decode_sequence(collection: Collection, encoded: Option<Vec<u8>>) -> StoreRes
 fn reject_legacy_path(path: &Path) -> StoreResult<()> {
     match path.file_name() {
         Some(name)
-            if name == OsStr::new(LEGACY_PROJECT_FILENAME)
-                || name == OsStr::new(LEGACY_GLOBAL_FILENAME) =>
+            if name.to_str().is_some_and(|name| {
+                name.eq_ignore_ascii_case(LEGACY_PROJECT_FILENAME)
+                    || name.eq_ignore_ascii_case(LEGACY_GLOBAL_FILENAME)
+            }) =>
         {
             Err(StoreError::LegacyPathForbidden {
                 path: path.to_path_buf(),
