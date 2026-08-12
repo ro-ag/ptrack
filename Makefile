@@ -1,4 +1,4 @@
-.PHONY: build frontend-build frontend-install frontend-test go-test test \
+.PHONY: build frontend-build frontend-install frontend-test go-test help-check test \
 	package dmg icons sign verify-sign signed-dmg notarize release-dmg
 
 WAILS := go run github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
@@ -132,4 +132,8 @@ frontend-build:
 go-test:
 	go test ./...
 
-test: frontend-install frontend-test frontend-build go-test
+help-check:
+	python3 -B -m unittest tools.help_check_test
+	python3 -B tools/help_check.py all
+
+test: frontend-install frontend-test frontend-build go-test help-check

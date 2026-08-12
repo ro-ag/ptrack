@@ -22,8 +22,10 @@ const (
 	commandPaletteMenuEvent  = "workspace:command-palette-requested"
 	installShellMenuEvent    = "workspace:install-shell-command-requested"
 	updatesMenuEvent         = "update:open-requested"
-	helpCenterURL            = "https://github.com/ro-ag/ptrack#readme"
-	helpKeyboardShortcutsURL = "https://github.com/ro-ag/ptrack#desktop-keyboard-shortcuts"
+	helpCenterURL            = "https://ro-ag.github.io/ptrack/help/"
+	helpKeyboardShortcutsURL = "https://ro-ag.github.io/ptrack/help/reference/shortcuts/"
+	helpTerminalsURL         = "https://ro-ag.github.io/ptrack/help/terminals/"
+	helpCapabilitiesURL      = "https://ro-ag.github.io/ptrack/help/agents-and-capabilities/#capability-model"
 	helpReportIssueURL       = "https://github.com/ro-ag/ptrack/issues/new"
 )
 
@@ -32,6 +34,8 @@ type helpDestination string
 const (
 	helpCenterDestination            helpDestination = "help-center"
 	helpKeyboardShortcutsDestination helpDestination = "keyboard-shortcuts"
+	helpTerminalsDestination         helpDestination = "terminals"
+	helpCapabilitiesDestination      helpDestination = "capabilities"
 	helpReportIssueDestination       helpDestination = "report-issue"
 )
 
@@ -43,11 +47,38 @@ func helpDestinationURL(destination helpDestination) (string, error) {
 		return helpCenterURL, nil
 	case helpKeyboardShortcutsDestination:
 		return helpKeyboardShortcutsURL, nil
+	case helpTerminalsDestination:
+		return helpTerminalsURL, nil
+	case helpCapabilitiesDestination:
+		return helpCapabilitiesURL, nil
 	case helpReportIssueDestination:
 		return helpReportIssueURL, nil
 	default:
 		return "", fmt.Errorf("unknown help destination %q", destination)
 	}
+}
+
+// OpenHelpDestination opens a fixed Help Center route selected by symbolic
+// name. The frontend cannot supply a URL or escape the backend allowlist.
+func (a *App) OpenHelpDestination(destination string) error {
+	return a.openFrontendHelpDestination(
+		helpDestination(destination),
+		func(ctx context.Context, url string) {
+			wailsruntime.BrowserOpenURL(ctx, url)
+		},
+	)
+}
+
+func (a *App) openFrontendHelpDestination(
+	destination helpDestination,
+	opener helpURLOpener,
+) error {
+	ctx, release, ok := a.acquireRuntimeCall()
+	if !ok {
+		return fmt.Errorf("help center is unavailable")
+	}
+	defer release()
+	return openHelpDestination(ctx, destination, opener)
 }
 
 // openHelpDestination resolves a symbolic destination through the fixed

@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Create your first p-track project, activate a plan, start a task, and resume work with durable context.">
+    <meta name="ptrack-version" content="0.21.0">
+    <title>Start Here · p-track Help Center</title>
+    <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="../assets/style.css">
+  </head>
+  <body data-help-root="../">
+    <a class="skip-link" href="#main">Skip to main content</a>
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="brand" href="../" aria-label="p-track Help Center home">
+          <span class="brand-mark" aria-hidden="true">p·</span>
+          <span>p-track Help</span>
+          <span class="version-badge">v0.21.0</span>
+        </a>
+        <nav class="primary-nav" aria-label="Primary">
+          <ul>
+            <li><a href="./" aria-current="page">Start Here</a></li>
+            <li><a href="../desktop/">Desktop</a></li>
+            <li><a href="../terminals/">Terminals</a></li>
+            <li><a href="../agents-and-capabilities/">Agents &amp; Capabilities</a></li>
+            <li><a href="../reference/">Reference</a></li>
+            <li><a href="../install-and-safety/">Install &amp; Safety</a></li>
+            <li><a href="../troubleshooting/">Troubleshooting</a></li>
+          </ul>
+        </nav>
+        <button class="theme-toggle" type="button" data-theme-toggle aria-label="Use light theme" title="Use light theme">☀</button>
+      </div>
+    </header>
+
+    <main class="page-shell" id="main">
+      <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <ol>
+          <li><a href="../">Help Center</a></li>
+          <li aria-current="page">Start Here</li>
+        </ol>
+      </nav>
+
+      <form class="search-panel" role="search" data-help-search>
+        <label class="search-label" for="help-search">Search p-track Help</label>
+        <input class="search-input" id="help-search" type="search" autocomplete="off" placeholder="Try “first task” or “resume work”" disabled>
+        <p class="search-help">Search runs in this browser and never sends your query off-device.</p>
+        <p class="search-status" data-search-status role="status" aria-live="polite">Loading the local search index…</p>
+        <ul class="search-results" data-search-results aria-label="Search results"></ul>
+        <noscript><p class="search-help">JavaScript is off. Use the navigation and page contents below.</p></noscript>
+      </form>
+
+      <div class="article-layout">
+        <article class="article">
+          <p class="eyebrow">Start here</p>
+          <h1>Build your first p-track workflow</h1>
+          <p class="lede">Create durable project memory in a repository, make one plan active, start its first task, and leave enough context to resume in a later terminal or agent session.</p>
+
+          <figure class="screenshot-pair">
+            <img class="screenshot-dark" src="../assets/screenshots/board-dark.png" width="1552" height="1012" loading="lazy" decoding="async" alt="p-track Desktop Board in dark mode with a public beta plan and tasks across Todo, Doing, Blocked, and Done lanes">
+            <img class="screenshot-light" src="../assets/screenshots/board-light.png" width="1552" height="1012" loading="lazy" decoding="async" alt="p-track Desktop Board in light mode with the same public beta plan and four task-status lanes">
+            <figcaption>The Board keeps the selected plan, status lanes, and bounded terminal dock in one project workspace. Switch this Help Center's theme to compare both current product themes.</figcaption>
+          </figure>
+
+          <div class="callout">
+            <p><strong>The safe order is explicit.</strong> Initialize the project, add a plan, activate that plan, add a task, and then start the task. Creating a plan does not activate it.</p>
+          </div>
+
+          <h2 id="first-project">Create your first project</h2>
+          <p>Start in the repository you want p-track to remember. Replace the example path and goal with your own:</p>
+          <pre><code>cd /path/to/your-repository
+ptrack init --goal "Ship the widget service"</code></pre>
+          <p>Without an explicit <code>--root</code>, <code>ptrack init</code> uses the Git repository root when it can find one, or the current directory otherwise. It creates or refreshes the project there.</p>
+          <p>By default, initialization also installs or refreshes p-track's managed agent guide in the repository instruction files while preserving content outside its managed section. Use <code>ptrack init --no-guide</code> only when you intentionally do not want that guide written.</p>
+          <div class="callout warning">
+            <p><strong>Do not bypass a nesting warning casually.</strong> p-track refuses to create a new project inside a different existing p-track project unless <code>--force</code> is supplied. Use that flag only when a nested project is deliberate.</p>
+          </div>
+          <p>After initialization, project discovery walks upward from your current directory but stops at the nearest Git boundary. Run commands inside the intended repository so p-track cannot select project state from outside that boundary.</p>
+
+          <h2 id="first-plan">Create and activate your first plan</h2>
+          <p>A plan groups related tasks. Add one, note the numeric ID printed by the command, and activate that exact plan:</p>
+          <pre><code>ptrack plan add "Build the storage layer"
+ptrack plan use 1</code></pre>
+          <p>Replace <code>1</code> with the plan ID that <code>ptrack plan add</code> prints. Adding a plan does <strong>not</strong> make it active; <code>ptrack plan use &lt;id&gt;</code> is a separate, explicit step.</p>
+          <div class="callout">
+            <p><strong>Desktop and CLI selection are separate.</strong> Choosing a plan in the desktop sidebar changes the board you are viewing, but it does not change the active plan used by CLI commands. Use <code>ptrack plan use &lt;id&gt;</code> when you want to change the CLI active plan.</p>
+          </div>
+
+          <h2 id="first-task">Add and start your first task</h2>
+          <p>With the plan active, add one concrete task. Note its printed ID, then start that task:</p>
+          <pre><code>ptrack task add "Define storage buckets"
+ptrack task start 1
+ptrack task show 1</code></pre>
+          <p>Replace <code>1</code> with the task ID that <code>ptrack task add</code> prints. When <code>task add</code> has no <code>--plan</code> flag, it requires an active plan and adds the task there. To target a different plan without changing the active one, pass it explicitly:</p>
+          <pre><code>ptrack task add "Document the storage format" --plan 2</code></pre>
+          <p>Use <code>ptrack task show &lt;id&gt;</code> to review the task and its attached context. After the work and its relevant checks are complete, mark it done explicitly:</p>
+          <pre><code>ptrack task done 1</code></pre>
+
+          <h2 id="resume-work">Resume and orient</h2>
+          <p>At the start of a later session, return to the repository and restore the current edge without dumping the entire project:</p>
+          <pre><code>cd /path/to/your-repository
+ptrack context
+ptrack next</code></pre>
+          <p><code>ptrack context</code> prints a bounded project handoff: the goal, rolling summary, active plan, blockers, open issues, recent decisions, and inventory. <code>ptrack next</code> identifies the single most-actionable task in the active plan.</p>
+          <p>Drill into only the selected plan or task when you need more detail:</p>
+          <pre><code>ptrack plan show 1
+ptrack task show 1</code></pre>
+          <p>These orientation commands are read-only. When you make a durable product or architectural decision during the work, attach a concise note to the relevant plan or task so the next session can recover it.</p>
+
+          <h2 id="workflow-at-a-glance">Workflow at a glance</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Step</th><th>Command</th><th>Result</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>1</td><td><code>ptrack init --goal "…"</code></td><td>Create or refresh project memory.</td></tr>
+                <tr><td>2</td><td><code>ptrack plan add "…"</code></td><td>Create a plan and print its ID.</td></tr>
+                <tr><td>3</td><td><code>ptrack plan use &lt;id&gt;</code></td><td>Make that plan active for CLI defaults.</td></tr>
+                <tr><td>4</td><td><code>ptrack task add "…"</code></td><td>Add a todo task to the active plan.</td></tr>
+                <tr><td>5</td><td><code>ptrack task start &lt;id&gt;</code></td><td>Move the task to doing.</td></tr>
+                <tr><td>Resume</td><td><code>ptrack context</code>, then <code>ptrack next</code></td><td>Restore bounded context and choose the next task.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </article>
+
+        <aside class="page-toc" aria-label="On this page">
+          <strong>On this page</strong>
+          <ul>
+            <li><a href="#first-project">First project</a></li>
+            <li><a href="#first-plan">First plan</a></li>
+            <li><a href="#first-task">First task</a></li>
+            <li><a href="#resume-work">Resume and orient</a></li>
+            <li><a href="#workflow-at-a-glance">Workflow at a glance</a></li>
+          </ul>
+        </aside>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <div class="site-footer-inner">
+        <p>p-track Help Center · Content for the current stable release</p>
+        <p><a href="https://github.com/ro-ag/ptrack">Source on GitHub</a> · <a href="https://github.com/ro-ag/ptrack/issues">Report a documentation issue</a></p>
+      </div>
+    </footer>
+    <script src="../assets/help.js" defer></script>
+  </body>
+</html>

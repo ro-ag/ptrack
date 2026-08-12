@@ -228,6 +228,7 @@ const elements = {
   agentLaunchMessage: document.querySelector("#agent-launch-message"),
   agentLaunchCancel: document.querySelector("#agent-launch-cancel"),
   agentLaunchSubmit: document.querySelector("#agent-launch-submit"),
+  terminalHelp: document.querySelector("#terminal-help"),
   terminalLinkContext: document.querySelector("#terminal-link-context"),
   terminalWriteback: document.querySelector("#terminal-writeback"),
   terminalAssociationModal: document.querySelector("#terminal-association-modal"),
@@ -265,6 +266,7 @@ const elements = {
   paletteResults: document.querySelector("#palette-results"),
   planRing: document.querySelector("#plan-ring"),
   heatmap: document.querySelector("#activity-heatmap"),
+  capabilityHelp: document.querySelector("#capability-help"),
   capabilityNew: document.querySelector("#capability-new"),
   capabilityStatus: document.querySelector("#capability-status"),
   capabilityClear: document.querySelector("#capability-clear"),
@@ -517,6 +519,12 @@ function api() {
   const backend = window.go?.gui?.App;
   if (!backend) throw new Error("The Wails backend is not ready");
   return backend;
+}
+
+function openHelpDestination(destination) {
+  void api().OpenHelpDestination(destination).catch(() => {
+    showError(new Error("Could not open the Help Center."));
+  });
 }
 
 function messageFrom(error) {
@@ -4462,6 +4470,9 @@ window.addEventListener("focus", () => {
 
 elements.capabilityKind.addEventListener("change", syncCapabilityScopeFields);
 elements.capabilityForm.addEventListener("input", invalidateCapabilityForm);
+elements.capabilityHelp.addEventListener("click", () => {
+  openHelpDestination("capabilities");
+});
 elements.capabilityNew.addEventListener("click", resetCapabilityForm);
 elements.capabilityClear.addEventListener("click", resetCapabilityForm);
 elements.capabilityPreviewButton.addEventListener("click", () =>
@@ -4634,6 +4645,9 @@ document.querySelectorAll("[data-close-agent-launch]").forEach((element) => {
 });
 elements.terminalLinkContext.addEventListener("click", (event) => {
   openTerminalAssociationEditor(event.currentTarget);
+});
+elements.terminalHelp.addEventListener("click", () => {
+  openHelpDestination("terminals");
 });
 elements.terminalAssociationForm.addEventListener("submit", (event) => {
   event.preventDefault();

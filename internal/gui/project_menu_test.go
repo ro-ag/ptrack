@@ -168,7 +168,10 @@ func TestProjectWorkspaceMenuCallbacksEmitExactEvents(t *testing.T) {
 }
 
 func TestHelpDestinationAllowlistAndCallbacks(t *testing.T) {
-	if helpKeyboardShortcutsURL != "https://github.com/ro-ag/ptrack#desktop-keyboard-shortcuts" {
+	if helpCenterURL != "https://ro-ag.github.io/ptrack/help/" {
+		t.Fatalf("Help Center URL = %q", helpCenterURL)
+	}
+	if helpKeyboardShortcutsURL != "https://ro-ag.github.io/ptrack/help/reference/shortcuts/" {
 		t.Fatalf("keyboard shortcuts URL = %q", helpKeyboardShortcutsURL)
 	}
 	tests := []struct {
@@ -177,6 +180,8 @@ func TestHelpDestinationAllowlistAndCallbacks(t *testing.T) {
 	}{
 		{destination: helpCenterDestination, want: helpCenterURL},
 		{destination: helpKeyboardShortcutsDestination, want: helpKeyboardShortcutsURL},
+		{destination: helpTerminalsDestination, want: helpTerminalsURL},
+		{destination: helpCapabilitiesDestination, want: helpCapabilitiesURL},
 		{destination: helpReportIssueDestination, want: helpReportIssueURL},
 	}
 	for _, test := range tests {
@@ -188,8 +193,9 @@ func TestHelpDestinationAllowlistAndCallbacks(t *testing.T) {
 			t.Fatalf("helpDestinationURL(%q) = %q, want %q", test.destination, got, test.want)
 		}
 		parsed, err := url.Parse(got)
-		if err != nil || parsed.Scheme != "https" || parsed.Host != "github.com" {
-			t.Fatalf("allowed help URL %q is not an exact GitHub HTTPS URL", got)
+		if err != nil || parsed.Scheme != "https" ||
+			(parsed.Host != "ro-ag.github.io" && parsed.Host != "github.com") {
+			t.Fatalf("allowed help URL %q is not an exact project HTTPS URL", got)
 		}
 	}
 
@@ -209,6 +215,43 @@ func TestHelpDestinationAllowlistAndCallbacks(t *testing.T) {
 	}
 	if want := []string{helpCenterURL, helpKeyboardShortcutsURL, helpReportIssueURL}; !reflect.DeepEqual(opened, want) {
 		t.Fatalf("opened URLs = %#v, want %#v", opened, want)
+	}
+}
+
+func TestFrontendHelpDestinationsUseAllowlistAndLifecycleBoundary(t *testing.T) {
+	var opened []string
+	app := newMenuTestApp(nil)
+	opener := func(_ context.Context, target string) {
+		app.lifecycleMu.Lock()
+		app.lifecycleMu.Unlock()
+		opened = append(opened, target)
+	}
+
+	for _, destination := range []helpDestination{
+		helpTerminalsDestination,
+		helpCapabilitiesDestination,
+	} {
+		if err := app.openFrontendHelpDestination(destination, opener); err != nil {
+			t.Fatalf("openFrontendHelpDestination(%q): %v", destination, err)
+		}
+	}
+	if want := []string{helpTerminalsURL, helpCapabilitiesURL}; !reflect.DeepEqual(opened, want) {
+		t.Fatalf("opened URLs = %#v, want %#v", opened, want)
+	}
+
+	if err := app.openFrontendHelpDestination(helpDestination("https://attacker.invalid"), opener); err == nil {
+		t.Fatal("frontend URL-shaped destination was accepted")
+	}
+	if len(opened) != 2 {
+		t.Fatalf("unknown destination opened browser: %#v", opened)
+	}
+
+	app.onShutdown(context.Background())
+	if err := app.openFrontendHelpDestination(helpTerminalsDestination, opener); err == nil {
+		t.Fatal("frontend Help destination was accepted after shutdown")
+	}
+	if len(opened) != 2 {
+		t.Fatalf("post-shutdown Help destination opened browser: %#v", opened)
 	}
 }
 

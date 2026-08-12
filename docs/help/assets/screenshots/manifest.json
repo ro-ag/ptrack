@@ -1,0 +1,157 @@
+{
+  "schemaVersion": 1,
+  "productVersion": "0.21.0",
+  "capturedAt": "2026-08-11",
+  "capture": {
+    "app": "packaged macOS Desktop app",
+    "fixture": "isolated Northstar project with sanitized paths, tasks, notes, issues, and terminal text",
+    "width": 1552,
+    "height": 1012
+  },
+  "uiSources": [
+    "frontend/index.html",
+    "frontend/src/app.js",
+    "frontend/src/style.css",
+    "frontend/src/theme.js",
+    "frontend/src/workspace/model.ts",
+    "frontend/src/workspace/presentation.ts"
+  ],
+  "uiSourceSha256": "661da493e3857d1e53a82c5b662562d5f1fd3fa29de08eeb7cf80d6c45c94061",
+  "requiredWorkflows": [
+    "board",
+    "capabilities",
+    "overview",
+    "project-search",
+    "project-switch",
+    "task-drawer",
+    "terminal"
+  ],
+  "screenshots": [
+    {
+      "file": "board-dark.png",
+      "workflow": "board",
+      "theme": "dark",
+      "route": "start-here/",
+      "width": 1552,
+      "height": 1012,
+      "sha256": "6844a3e648d21bfb4c3f738e513beffe4a423d7cc30ff9ed0f4179fdb1fc20a7"
+    },
+    {
+      "file": "board-light.png",
+      "workflow": "board",
+      "theme": "light",
+      "route": "start-here/",
+      "width": 1552,
+      "height": 1012,
+      "sha256": "4fc5b48ea76ef2d278f69fea82ed1826986e13b47a238d7d722a0a282fde7fa1"
+    },
+    {
+      "file": "capabilities-dark.png",
+      "workflow": "capabilities",
+      "theme": "dark",
+      "route": "desktop/#capabilities",
+      "width": 1552,
+      "height": 1012,
+      "sha256": "d29ed04e13ee9586bfc1d8b8694d1f173f273bb031b8fc90bedcc2d01943246b"
+    },
+    {
+      "file": "capabilities-light.png",
+      "workflow": "capabilities",
+      "theme": "light",
+      "route": "desktop/#capabilities",
+      "width": 1552,
+      "height": 1012,
+      "sha256": "2dc167e87c6e056211ae8a1ab19a2ea7bd0f678a4f0cd1a29d619cac54b300a6"
+    },
+    {
+      "file": "overview-dark.png",
+      "workflow": "overview",
+      "theme": "dark",
+      "route": "desktop/#overview",
+      "width": 1552,
+      "height": 1012,
+      "sha256": "e93417514e02bbb4ca81b23b2e4aeeb391916190d03868ee291b4c4added09f4"
+    },
+    {
+      "file": "overview-light.png",
+      "workflow": "overview",
+      "theme": "light",
+      "route": "desktop/#overview",
+      "width": 1552,
+      "height": 1012,
+      "sha256": "8b6ba54b3eea6db93bad67ade9d0b7bd15cc83a1029bfe7b62d4430446a1a541"
+    },
+    {
+      "file": "project-search-dark.png",
+      "workflow": "project-search",
+      "theme": "dark",
+      "route": "reference/#command-palette",
+      "width": 1552,
+      "height": 1012,
+      "sha256": "d1dd1dc11ba3afd99d61c969bd27b81d6949ad5a5609aaf7a296915dbb73773d"
+    },
+    {
+      "file": "project-search-light.png",
+      "workflow": "project-search",
+      "theme": "light",
+      "route": "reference/#command-palette",
+      "width": 1552,
+      "height": 1012,
+      "sha256": "5e1564c9526419409b39b8b3162031715bf0825a791ac00a9076613420030a94"
+    },
+    {
+      "file": "project-switch-dark.png",
+      "workflow": "project-switch",
+      "theme": "dark",
+      "route": "desktop/#open-project",
+      "width": 1552,
+      "height": 1012,
+      "sha256": "d09100fe356e1c3b6d2c09a6565dc90d6ecc81741c13ed4e977ab1058960f8aa"
+    },
+    {
+      "file": "project-switch-light.png",
+      "workflow": "project-switch",
+      "theme": "light",
+      "route": "desktop/#open-project",
+      "width": 1552,
+      "height": 1012,
+      "sha256": "88f7c1098353a5818fbb8548fd6297d7404c5d5e8abbdce7cbed1345f0c530e9"
+    },
+    {
+      "file": "task-drawer-dark.png",
+      "workflow": "task-drawer",
+      "theme": "dark",
+      "route": "desktop/#task-drawer",
+      "width": 1552,
+      "height": 1012,
+      "sha256": "6c0716fd323c8acfaaf1892d8e8bbc5fc2da3ea49f55330499211dace44ec1ae"
+    },
+    {
+      "file": "task-drawer-light.png",
+      "workflow": "task-drawer",
+      "theme": "light",
+      "route": "desktop/#task-drawer",
+      "width": 1552,
+      "height": 1012,
+      "sha256": "823353a7d01a835c7dd6d980d09ca1b3d978d38619bcce9baeb7d166cf09af05"
+    },
+    {
+      "file": "terminal-dark.png",
+      "workflow": "terminal",
+      "theme": "dark",
+      "route": "terminals/",
+      "width": 1552,
+      "height": 1012,
+      "sha256": "2b004b593d26f9e143a839304525d7120182c1e1c51b9c913664a9f5ea761ab0"
+    },
+    {
+      "file": "terminal-light.png",
+      "workflow": "terminal",
+      "theme": "light",
+      "route": "terminals/",
+      "width": 1552,
+      "height": 1012,
+      "sha256": "a8b74fe6759de82eca26856ccc88f4b2f7ea3d8f797e86bfc36e06f295abaa86"
+    }
+  ]
+}

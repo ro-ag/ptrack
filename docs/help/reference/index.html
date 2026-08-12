@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Reference for every p-track CLI command, JSON-capable read command, TUI screen, and Desktop command palette behavior.">
+    <meta name="ptrack-version" content="0.21.0">
+    <title>Reference · p-track Help Center</title>
+    <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="../assets/style.css">
+  </head>
+  <body data-help-root="../">
+    <a class="skip-link" href="#main">Skip to main content</a>
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="brand" href="../" aria-label="p-track Help Center home">
+          <span class="brand-mark" aria-hidden="true">p·</span>
+          <span>p-track Help</span>
+          <span class="version-badge">v0.21.0</span>
+        </a>
+        <nav class="primary-nav" aria-label="Primary">
+          <ul>
+            <li><a href="../start-here/">Start Here</a></li>
+            <li><a href="../desktop/">Desktop</a></li>
+            <li><a href="../terminals/">Terminals</a></li>
+            <li><a href="../agents-and-capabilities/">Agents &amp; Capabilities</a></li>
+            <li><a href="./" aria-current="page">Reference</a></li>
+            <li><a href="../install-and-safety/">Install &amp; Safety</a></li>
+            <li><a href="../troubleshooting/">Troubleshooting</a></li>
+          </ul>
+        </nav>
+        <button class="theme-toggle" type="button" data-theme-toggle aria-label="Use light theme" title="Use light theme">☀</button>
+      </div>
+    </header>
+
+    <main class="page-shell" id="main">
+      <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <ol>
+          <li><a href="../">Help Center</a></li>
+          <li aria-current="page">Reference</li>
+        </ol>
+      </nav>
+
+      <form class="search-panel" role="search" data-help-search>
+        <label class="search-label" for="help-search">Search p-track Help</label>
+        <input class="search-input" id="help-search" type="search" autocomplete="off" placeholder="Try “task move” or “TUI keys”" disabled>
+        <p class="search-help">Search runs in this browser and never sends your query off-device.</p>
+        <p class="search-status" data-search-status role="status" aria-live="polite">Loading the local search index…</p>
+        <ul class="search-results" data-search-results aria-label="Search results"></ul>
+        <noscript><p class="search-help">JavaScript is off. Use the navigation and page contents below.</p></noscript>
+      </form>
+
+      <div class="article-layout">
+        <article class="article">
+          <p class="eyebrow">Command and interface reference</p>
+          <h1>CLI, TUI, and command palette</h1>
+          <p class="lede">Use this page to find a command family or terminal-interface action. Run <code>ptrack &lt;command&gt; --help</code>, and then the relevant subcommand with <code>--help</code>, for authoritative arguments and flags in your installed version.</p>
+
+          <h2 id="cli-commands">CLI commands</h2>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Command</th><th>Subcommands or use</th><th>Important flags and notes</th></tr></thead>
+              <tbody>
+                <tr><td><code>init</code></td><td>Initialize or refresh a project.</td><td><code>--goal</code>, <code>--root</code>, <code>--force</code>, <code>--no-guide</code>.</td></tr>
+                <tr><td><code>goal</code></td><td><code>show</code>, <code>set &lt;text…&gt;</code></td><td>Read or replace the north-star goal.</td></tr>
+                <tr><td><code>summary</code></td><td><code>show</code>, <code>set &lt;text…&gt;</code></td><td>Read or replace the rolling project handoff.</td></tr>
+                <tr><td><code>milestone</code> / <code>ms</code></td><td><code>add</code>, <code>list</code>, <code>show</code>, <code>done</code>, <code>open</code>, <code>due</code>, <code>rename</code></td><td><code>add --due YYYY-MM-DD</code>; <code>due &lt;id&gt; &lt;YYYY-MM-DD&gt;</code>.</td></tr>
+                <tr><td><code>plan</code></td><td><code>add</code>, <code>list</code>, <code>show</code>, <code>done</code>, <code>use</code>, <code>rename</code></td><td><code>add --milestone &lt;id&gt;</code>. <code>use</code> sets the CLI active plan.</td></tr>
+                <tr><td><code>task</code></td><td><code>add</code>, <code>list</code>, <code>show</code>, <code>start</code>, <code>done</code>, <code>block</code>, <code>rename</code>, <code>move</code>, <code>convert</code> / <code>promote</code></td><td><code>add --plan &lt;id&gt;</code>; <code>list --plan &lt;id&gt; --status todo,doing,done,blocked</code>; <code>move &lt;id&gt; --plan &lt;id&gt;</code>.</td></tr>
+                <tr><td><code>issue</code></td><td><code>add</code>, <code>list</code>, <code>show</code>, <code>close</code>, <code>open</code>, <code>severity</code>, <code>rename</code></td><td><code>add --severity --task --body</code>; <code>list --status open|closed</code>.</td></tr>
+                <tr><td><code>note</code></td><td><code>add</code>, <code>list</code></td><td><code>add --plan &lt;id&gt;</code> or <code>--task &lt;id&gt;</code>; <code>list --plan --task --limit</code>.</td></tr>
+                <tr><td><code>commit</code></td><td><code>add</code>, <code>record</code>, <code>list</code>, <code>show</code></td><td><code>add --plan --task</code>; <code>record --sha --subject</code>; <code>list --plan --task</code>; <code>show --stat</code>.</td></tr>
+                <tr><td><code>hook</code></td><td><code>install</code>, <code>uninstall</code>, <code>status</code></td><td>Manage the repository hook integration.</td></tr>
+                <tr><td><code>context</code></td><td>Print a bounded project handoff.</td><td>Use at the start of a work session.</td></tr>
+                <tr><td><code>guide</code></td><td>Install or refresh managed agent guidance.</td><td><code>--print</code> writes the guide to standard output instead of files.</td></tr>
+                <tr><td><code>next</code></td><td>Choose the next actionable task in the active plan.</td><td>Read-only orientation.</td></tr>
+                <tr><td><code>search &lt;term&gt;</code></td><td>Search project records.</td><td>Requires one search term.</td></tr>
+                <tr><td><code>board</code></td><td>Render the board or open its Desktop form.</td><td><code>--plan &lt;id&gt;</code>, <code>--gui</code>.</td></tr>
+                <tr><td><code>gui [PATH]</code></td><td>Open p-track Desktop.</td><td>Optional project path.</td></tr>
+                <tr><td><code>status</code></td><td>Show storage and project status.</td><td>Read-only.</td></tr>
+                <tr><td><code>projects</code></td><td>List known projects.</td><td>Read-only.</td></tr>
+                <tr><td><code>backup</code></td><td>Create a database backup copy.</td><td>No restore subcommand is provided.</td></tr>
+                <tr><td><code>capability</code></td><td><code>call &lt;tool&gt;</code>, <code>mcp</code></td><td><code>call --arguments '{}'</code>; requires a p-track agent-terminal broker session.</td></tr>
+                <tr><td><code>version</code></td><td>Print the installed version.</td><td>No project required.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h2 id="json-output">JSON output</h2>
+          <p><code>--json</code> is command-specific, not a global promise. It is documented for only these read commands:</p>
+          <ul>
+            <li><code>milestone list --json</code>, <code>milestone show &lt;id&gt; --json</code></li>
+            <li><code>plan list --json</code>, <code>plan show &lt;id&gt; --json</code></li>
+            <li><code>task list --json</code>, <code>task show &lt;id&gt; --json</code></li>
+            <li><code>issue list --json</code>, <code>issue show &lt;id&gt; --json</code></li>
+            <li><code>note list --json</code>, <code>commit list --json</code></li>
+            <li><code>context --json</code>, <code>next --json</code>, <code>search &lt;term&gt; --json</code></li>
+            <li><code>board --json</code>, <code>status --json</code>, <code>projects --json</code></li>
+          </ul>
+
+          <h2 id="tui-screens">TUI screens</h2>
+          <p>Running <code>ptrack</code> without a subcommand opens the terminal interface when the desktop-enabled build is used inside a project. Its five screens are <strong>1 Overview</strong>, <strong>2 Board</strong>, <strong>3 Milestones</strong>, <strong>4 Issues</strong>, and <strong>5 Maintenance</strong>.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Context</th><th>Keys</th></tr></thead>
+              <tbody>
+                <tr><td>Welcome</td><td><kbd>Enter</kbd>/<kbd>Space</kbd>/<kbd>1</kbd> Overview; <kbd>2</kbd>–<kbd>5</kbd> other screens; <kbd>?</kbd>/<kbd>F1</kbd> menu; <kbd>q</kbd>/<kbd>Ctrl+C</kbd> quit.</td></tr>
+                <tr><td>Global</td><td><kbd>Tab</kbd>/<kbd>Shift+Tab</kbd> cycle; <kbd>1</kbd>–<kbd>5</kbd> jump; <kbd>?</kbd>/<kbd>F1</kbd> menu; <kbd>g</kbd> goal; <kbd>m</kbd> summary; <kbd>e</kbd> rename; <kbd>Enter</kbd> details; <kbd>r</kbd> reload; <kbd>B</kbd> backup; <kbd>q</kbd>/<kbd>Ctrl+C</kbd> quit.</td></tr>
+                <tr><td>Command menu</td><td><kbd>↑</kbd>/<kbd>k</kbd>, <kbd>↓</kbd>/<kbd>j</kbd>, <kbd>Enter</kbd>; direct keys <kbd>1</kbd>–<kbd>5</kbd>, <kbd>g</kbd>, <kbd>m</kbd>, <kbd>e</kbd>, <kbd>M</kbd>, <kbd>P</kbd>, <kbd>r</kbd>, <kbd>B</kbd>; <kbd>?</kbd>/<kbd>F1</kbd>/<kbd>Esc</kbd> close.</td></tr>
+                <tr><td>Detail</td><td><kbd>↑</kbd>/<kbd>k</kbd>, <kbd>↓</kbd>/<kbd>j</kbd>, <kbd>PgUp</kbd>, <kbd>PgDn</kbd>/<kbd>Space</kbd>; <kbd>Esc</kbd>/<kbd>Enter</kbd>/<kbd>Backspace</kbd> close; <kbd>r</kbd> refresh; <kbd>e</kbd> rename; <kbd>M</kbd> move; <kbd>P</kbd> convert.</td></tr>
+                <tr><td>Text input</td><td><kbd>Enter</kbd> commit; <kbd>Esc</kbd> cancel.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <h3>Screen-specific keys</h3>
+          <ul>
+            <li><strong>Overview:</strong> <kbd>←</kbd>/<kbd>h</kbd> and <kbd>→</kbd>/<kbd>l</kbd> switch plan/task pane; <kbd>↑</kbd>/<kbd>k</kbd> and <kbd>↓</kbd>/<kbd>j</kbd> select; <kbd>a</kbd> add; <kbd>n</kbd> note; <kbd>u</kbd> activate plan; <kbd>x</kbd> finish plan; <kbd>s</kbd>/<kbd>d</kbd>/<kbd>b</kbd> start/finish/block task; <kbd>M</kbd> move; <kbd>P</kbd> convert.</li>
+            <li><strong>Board:</strong> <kbd>←</kbd>/<kbd>h</kbd> and <kbd>→</kbd>/<kbd>l</kbd> change lane; <kbd>↑</kbd>/<kbd>k</kbd> and <kbd>↓</kbd>/<kbd>j</kbd> select card; <kbd>H</kbd>/<kbd>&lt;</kbd> and <kbd>L</kbd>/<kbd>&gt;</kbd> move status; <kbd>a</kbd> task; <kbd>n</kbd> note; <kbd>M</kbd> move plan; <kbd>P</kbd> convert.</li>
+            <li><strong>Milestones:</strong> <kbd>↑</kbd>/<kbd>k</kbd>, <kbd>↓</kbd>/<kbd>j</kbd>, <kbd>a</kbd> add, <kbd>x</kbd> done, <kbd>o</kbd> reopen.</li>
+            <li><strong>Issues:</strong> <kbd>↑</kbd>/<kbd>k</kbd>, <kbd>↓</kbd>/<kbd>j</kbd>, <kbd>a</kbd> add, <kbd>c</kbd> close, <kbd>o</kbd> reopen.</li>
+            <li><strong>Maintenance:</strong> uses the global navigation, reload, backup, menu, and quit keys.</li>
+          </ul>
+
+          <h2 id="command-palette">Desktop command palette</h2>
+          <p>Open the palette with <kbd>Cmd+K</kbd> on macOS or <kbd>Ctrl+K</kbd> elsewhere. It is a project search surface, <strong>not a command launcher</strong>. It performs a case-insensitive substring search over plan titles, task titles, and note bodies in the current workspace, returns at most 50 results, and groups them Plans → Tasks → Notes.</p>
+          <p>Use <kbd>↑</kbd>/<kbd>↓</kbd> to select, <kbd>Enter</kbd> to open, and <kbd>Esc</kbd> to close. A plan result opens that plan's Board snapshot. A task result opens its plan's Board and task drawer. A note result opens Overview, where Recent memory is shown.</p>
+          <figure class="screenshot-pair">
+            <img class="screenshot-dark" src="../assets/screenshots/project-search-dark.png" width="1552" height="1012" loading="lazy" decoding="async" alt="Dark p-track command palette matching a recovery query to one task and one note">
+            <img class="screenshot-light" src="../assets/screenshots/project-search-light.png" width="1552" height="1012" loading="lazy" decoding="async" alt="Light p-track command palette showing the same project task and note results">
+            <figcaption>The Desktop palette searches project context only; Help Center search remains a separate surface.</figcaption>
+          </figure>
+
+          <h2 id="shortcut-reference">Keyboard shortcut reference</h2>
+          <p>Desktop, terminal, tab, pane, and native-menu shortcuts are collected on the <a href="shortcuts/">Keyboard shortcuts page</a>.</p>
+        </article>
+
+        <aside class="page-toc" aria-label="On this page">
+          <strong>On this page</strong>
+          <ul>
+            <li><a href="#cli-commands">CLI commands</a></li>
+            <li><a href="#json-output">JSON output</a></li>
+            <li><a href="#tui-screens">TUI screens</a></li>
+            <li><a href="#command-palette">Command palette</a></li>
+            <li><a href="#shortcut-reference">Keyboard shortcuts</a></li>
+          </ul>
+        </aside>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <div class="site-footer-inner">
+        <p>p-track Help Center · Content for the current stable release</p>
+        <p><a href="https://github.com/ro-ag/ptrack">Source on GitHub</a> · <a href="https://github.com/ro-ag/ptrack/issues">Report a documentation issue</a></p>
+      </div>
+    </footer>
+    <script src="../assets/help.js" defer></script>
+  </body>
+</html>

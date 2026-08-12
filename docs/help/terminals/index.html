@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Use p-track terminal sessions, tabs, splits, search, paste safety, profiles, associations, and bounded recovery controls.">
+    <meta name="ptrack-version" content="0.21.0">
+    <title>Terminals · p-track Help Center</title>
+    <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="../assets/style.css">
+  </head>
+  <body data-help-root="../">
+    <a class="skip-link" href="#main">Skip to main content</a>
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="brand" href="../" aria-label="p-track Help Center home">
+          <span class="brand-mark" aria-hidden="true">p·</span>
+          <span>p-track Help</span>
+          <span class="version-badge">v0.21.0</span>
+        </a>
+        <nav class="primary-nav" aria-label="Primary">
+          <ul>
+            <li><a href="../start-here/">Start Here</a></li>
+            <li><a href="../desktop/">Desktop</a></li>
+            <li><a href="./" aria-current="page">Terminals</a></li>
+            <li><a href="../agents-and-capabilities/">Agents &amp; Capabilities</a></li>
+            <li><a href="../reference/">Reference</a></li>
+            <li><a href="../install-and-safety/">Install &amp; Safety</a></li>
+            <li><a href="../troubleshooting/">Troubleshooting</a></li>
+          </ul>
+        </nav>
+        <button class="theme-toggle" type="button" data-theme-toggle aria-label="Use light theme" title="Use light theme">☀</button>
+      </div>
+    </header>
+
+    <main class="page-shell" id="main">
+      <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <ol>
+          <li><a href="../">Help Center</a></li>
+          <li aria-current="page">Terminals</li>
+        </ol>
+      </nav>
+
+      <form class="search-panel" role="search" data-help-search>
+        <label class="search-label" for="help-search">Search p-track Help</label>
+        <input class="search-input" id="help-search" type="search" autocomplete="off" placeholder="Try “paste safety” or “renderer recovery”" disabled>
+        <p class="search-help">Search runs in this browser and never sends your query off-device.</p>
+        <p class="search-status" data-search-status role="status" aria-live="polite">Loading the local search index…</p>
+        <ul class="search-results" data-search-results aria-label="Search results"></ul>
+        <noscript><p class="search-help">JavaScript is off. Use the navigation and page contents below.</p></noscript>
+      </form>
+
+      <div class="article-layout">
+        <article class="article">
+          <p class="eyebrow">Terminal workspace</p>
+          <h1>Run multiple terminal sessions safely</h1>
+          <p class="lede">Keep independent shells and installed agents available in tabs and splits, while p-track persists only bounded layout descriptors—not terminal contents or runtime authority.</p>
+
+          <figure class="screenshot-pair">
+            <img class="screenshot-dark" src="../assets/screenshots/terminal-dark.png" width="1552" height="1012" loading="lazy" decoding="async" alt="Dark p-track Board with an active terminal session in the bounded terminal dock">
+            <img class="screenshot-light" src="../assets/screenshots/terminal-light.png" width="1552" height="1012" loading="lazy" decoding="async" alt="Light p-track Board with the same active terminal session and terminal controls">
+            <figcaption>The terminal dock belongs to the Board; changing views hides it without closing its sessions.</figcaption>
+          </figure>
+
+          <h2 id="sessions-and-tabs">Sessions and tabs</h2>
+          <p>Open the terminal dock from a project workspace, choose a profile and working directory, then open the stopped pane. Each pane receives its own PTY-backed session. Closing a pane stops its owned process; an exited pane remains visible when its profile uses the <code>keep</code> exit behavior.</p>
+          <p>Create, select, reorder, duplicate, rename, and close tabs from the tab row. Keyboard users can focus a tab and press <kbd>F2</kbd> to begin renaming, <kbd>Enter</kbd> to save a non-empty name, or <kbd>Escape</kbd> to cancel. Arrow keys move focus between tabs; <kbd>Home</kbd> and <kbd>End</kbd> reach the first and last tab.</p>
+          <div class="callout">
+            <p><strong>Persistence is intentionally content-free.</strong> p-track stores tab titles, active panes, split layout, profile IDs, requested working directories, and bounded plan/task pointers. It never persists terminal output, scrollback contents, session IDs, stream URLs, tokens, environment values, or other runtime authority.</p>
+          </div>
+          <p>After an app restart or project reopen, saved descriptors return as stopped panes. Opening one creates a fresh session; it does not restore the prior shell process or terminal contents.</p>
+
+          <h2 id="splits-and-limits">Splits and limits</h2>
+          <p>Split the active pane horizontally or vertically and resize a split with its separator. p-track clamps split ratios from <code>0.1</code> through <code>0.9</code>, so neither side can consume the entire split.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Workspace bound</th><th>Limit</th></tr></thead>
+              <tbody>
+                <tr><td>Tabs per project workspace</td><td>12</td></tr>
+                <tr><td>Terminal panes per tab</td><td>8</td></tr>
+                <tr><td>Nested pane depth</td><td>6</td></tr>
+                <tr><td>Split ratio</td><td><code>0.1</code>–<code>0.9</code></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Controls stop offering additions at these limits. If saved layout data is malformed or outside its bounds, p-track discards it instead of turning it into a live session.</p>
+
+          <h2 id="search-copy-and-zoom">Search, copy, paste, and zoom</h2>
+          <p>Search the active pane's scrollback, move through matches, and close search without stopping the session. Copy uses the native clipboard. A selection-aware <kbd>Ctrl</kbd>+<kbd>C</kbd> copies when text is selected; without a selection it remains terminal interrupt input.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Action</th><th>macOS</th><th>Windows and Linux implementation</th></tr></thead>
+              <tbody>
+                <tr><td>Search output</td><td><kbd>⌘</kbd>+<kbd>F</kbd></td><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd></td></tr>
+                <tr><td>Copy selection</td><td><kbd>⌘</kbd>+<kbd>C</kbd></td><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd></td></tr>
+                <tr><td>Paste</td><td><kbd>⌘</kbd>+<kbd>V</kbd></td><td><kbd>Ctrl</kbd>+<kbd>V</kbd> or <kbd>Shift</kbd>+<kbd>Insert</kbd></td></tr>
+                <tr><td>Select all</td><td><kbd>⌘</kbd>+<kbd>A</kbd></td><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd></td></tr>
+                <tr><td>Zoom in, out, reset</td><td><kbd>⌘</kbd> with <kbd>+</kbd>, <kbd>−</kbd>, <kbd>0</kbd></td><td><kbd>Ctrl</kbd> with <kbd>+</kbd>, <kbd>−</kbd>, <kbd>0</kbd></td></tr>
+                <tr><td>Open context menu</td><td colspan="2"><kbd>Menu</kbd> or <kbd>Shift</kbd>+<kbd>F10</kbd>; right-click also opens it</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>The context menu exposes copy, paste, select all, output search, clear buffer, and terminal-state reset. Toolbar controls offer the same search and zoom behaviors without requiring shortcuts.</p>
+
+          <h2 id="paste-safety">Review multiline paste</h2>
+          <p>In the ordinary terminal screen, pasting text that contains a newline opens a bounded review dialog. Inspect the normalized preview and line count, then confirm or cancel. Cancel sends nothing. Confirm delegates the complete text to xterm's paste behavior, including bracketed paste when the running program enables it.</p>
+          <div class="callout warning">
+            <p><strong>Alternate-screen applications bypass the review dialog.</strong> When a full-screen terminal program such as an editor has activated the alternate screen, p-track sends paste through the terminal's normal paste path so the application can handle it. Review clipboard content before pasting there.</p>
+          </div>
+
+          <h2 id="profiles">Profiles and exit behavior</h2>
+          <p>The default profile uses 25,000 lines of scrollback. A version-1 profile configuration can select a <code>requested</code>, project-root, or fixed working-directory policy; choose a theme and font family; set non-secret environment overrides; and set an exit behavior.</p>
+          <ul>
+            <li>Font size is bounded from 10 through 24 pixels. Toolbar zoom is remembered per profile.</li>
+            <li>Scrollback is bounded from 100 through 100,000 lines.</li>
+            <li><code>keep</code> leaves an exited pane visible; <code>close-on-success</code> closes only after a successful exit; <code>close</code> closes after any exit.</li>
+            <li>Automatic process restart is not an exit policy. Starting again always creates fresh runtime authority.</li>
+          </ul>
+          <p>Profile files must not be used as credential stores. p-track rejects credential-like and reserved environment names; keep credentials in the launched tool's native credential store.</p>
+
+          <h2 id="associations-and-writeback">Associations and write-back</h2>
+          <p><strong>Link terminal context</strong> associates the active tab with a plan or task after host validation. The pointer helps p-track correlate the terminal with project work; it does not grant a capability or capture terminal contents.</p>
+          <p><strong>Write memory back</strong> is available only for an associated live session. You enter the bounded summary, decision, blocker, or handoff yourself, preview its authoritative destination, and then save it. p-track does not extract text from terminal output.</p>
+
+          <h2 id="diagnostics-and-recovery">Diagnostics and recovery</h2>
+          <p>Exited sessions show their status. For an ordinary shell pane, <strong>Restart terminal</strong> closes the failed or exited session before opening a fresh one. A linked-agent pane cannot use ordinary restart: launch that agent again from its associated plan or task so p-track can mint and bind fresh authority.</p>
+          <p>Diagnostics are content-free. They report only process, stream, renderer, layout, update time, and bounded retry or repair counts. They never include terminal output, commands, clipboard text, environment values, credentials, or stream URLs.</p>
+          <ul>
+            <li><strong>Retry terminal renderer</strong> rebuilds the selected visible renderer without restarting its PTY. WebGL recovery is bounded and falls back to the built-in renderer.</li>
+            <li><strong>Force stop terminal</strong> requires confirmation and targets only the selected current session.</li>
+            <li><strong>Reset terminal workspace</strong> replaces the project's saved terminal layout. Confirming it terminates every live session represented by that workspace before creating a fresh stopped layout.</li>
+          </ul>
+          <div class="callout warning">
+            <p><strong>Platform qualification:</strong> clipboard, shortcuts, context menus, restart, and shutdown interactions have been verified end to end on macOS. Windows and Linux include native implementations, but this Help Center does not claim those interactive paths as verified passes.</p>
+          </div>
+        </article>
+
+        <aside class="page-toc" aria-label="On this page">
+          <strong>On this page</strong>
+          <ul>
+            <li><a href="#sessions-and-tabs">Sessions and tabs</a></li>
+            <li><a href="#splits-and-limits">Splits and limits</a></li>
+            <li><a href="#search-copy-and-zoom">Search, copy, paste, and zoom</a></li>
+            <li><a href="#paste-safety">Paste safety</a></li>
+            <li><a href="#profiles">Profiles</a></li>
+            <li><a href="#associations-and-writeback">Associations and write-back</a></li>
+            <li><a href="#diagnostics-and-recovery">Diagnostics and recovery</a></li>
+          </ul>
+        </aside>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <div class="site-footer-inner">
+        <p>p-track Help Center · Content for the current stable release</p>
+        <p><a href="https://github.com/ro-ag/ptrack">Source on GitHub</a> · <a href="https://github.com/ro-ag/ptrack/issues">Report a documentation issue</a></p>
+      </div>
+    </footer>
+    <script src="../assets/help.js" defer></script>
+  </body>
+</html>
