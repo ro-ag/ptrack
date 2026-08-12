@@ -20,6 +20,9 @@
 /frontend/package.json.md5
 /frontend/wailsjs/
 
+# Rust
+/target/
+
 # OS/editor
 .DS_Store
 .idea/
