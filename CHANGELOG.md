@@ -6,6 +6,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-08-12
+
+### Added
+- The branded, versioned Help Center now documents onboarding, Desktop,
+  terminals, agents and capabilities, reference material, installation,
+  safety, and troubleshooting with local search and contextual app links.
+- The Rust rewrite now has a frozen, source-backed parity contract plus its
+  first pure-Rust domain codec and transactional redb destination store.
+- Developer-only migration tooling can freeze the global bbolt database and
+  every registered project read-only, emit a private typed JSON stage, and
+  create verified inactive redb candidates. It never replaces live databases,
+  and malformed legacy capability history remains inert in quarantine.
+
+### Changed
+- Desktop native menus, project switching, keyboard behavior, and application
+  overlays have clearer focus, accessibility, and lifecycle boundaries.
+- Product documentation now presents p-track consistently as a local control
+  layer for observing agent work, keeping durable plans, and passing bounded
+  context between supported tools.
+
+### Fixed
+- The Help Center home page now displays the branded product visuals instead
+  of omitting its workflow previews.
+
 ## [0.21.0] - 2026-08-11
 
 ### Added
@@ -513,7 +537,8 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
-[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.21.0...HEAD
+[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.22.0
 [0.21.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.21.0
 [0.20.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.20.0
 [0.19.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.19.0
