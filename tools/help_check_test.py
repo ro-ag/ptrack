@@ -50,5 +50,19 @@ class DocumentAssetTests(unittest.TestCase):
         self.assertIn(("href", "assets/favicon.svg"), parser.links)
 
 
+class HomeVisualContractTests(unittest.TestCase):
+    def test_homepage_has_theme_aware_product_preview(self) -> None:
+        parser = help_check.HelpHTMLParser(help_check.HELP / "index.html")
+        parser.feed((help_check.HELP / "index.html").read_text(encoding="utf-8"))
+        sources = {image.get("src") for image in parser.images}
+        self.assertIn("assets/screenshots/board-dark.png", sources)
+        self.assertIn("assets/screenshots/board-light.png", sources)
+
+    def test_homepage_cards_are_block_level(self) -> None:
+        css = (help_check.HELP / "assets" / "style.css").read_text(encoding="utf-8")
+        card_rule = css.split(".card {", 1)[1].split("}", 1)[0]
+        self.assertIn("display: block;", card_rule)
+
+
 if __name__ == "__main__":
     unittest.main()
