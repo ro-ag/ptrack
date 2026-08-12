@@ -16,9 +16,8 @@ pub const NATIVE_PAYLOAD_SCHEMA: u32 = 1;
 pub const MAX_PAYLOAD_BYTES: usize = 256 * 1024 * 1024;
 /// Maximum accepted UTF-8 bytes in one string field.
 pub const MAX_STRING_BYTES: usize = MAX_PAYLOAD_BYTES;
-/// Maximum accepted elements in one string list. Every element needs at least
-/// a four-byte length, so a larger list cannot fit the payload bound.
-pub const MAX_LIST_ITEMS: usize = MAX_PAYLOAD_BYTES / 4;
+/// Maximum accepted elements in one string list, matching the Go encoder.
+pub const MAX_LIST_ITEMS: usize = 1_000_000;
 
 /// A structural, canonical, or semantic native record error.
 #[derive(Clone, Debug, Eq, PartialEq)]

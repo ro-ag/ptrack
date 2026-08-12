@@ -1,23 +1,19 @@
 # ptrack-migrate
 
-`ptrack-migrate` validates and explicitly imports the private, one-way
-interchange file produced by the Go bbolt exporter:
+`ptrack-migrate` only validates the retired PTRKMIG1 version-1 interchange
+file produced by the original Go bbolt exporter:
 
 ```text
 ptrack-migrate inspect --bundle ABSOLUTE_PATH
-ptrack-migrate import --bundle ABSOLUTE_PATH --destination ABSOLUTE_ABSENT.redb --accept-one-way
 ```
 
-Import validates the complete bundle before creating a destination, preserves
-the source's opaque bytes and exact sequences in typed `ptrack-store` records,
-and verifies the new database before reporting success. It never discovers
-databases, replaces a path, selects a default, installs an application, or
-performs cutover.
+The legacy bundle stores opaque Go gob payloads, so it cannot create a native
+schema-v3 database. Use the standalone `ptrack-db-export` JSON-stage tool and
+`ptrack-db-import` for writable migration. Inspection never creates or changes
+a database.
 
-Migration currently fails closed on Windows. The Go exporter does not yet
-create private Windows ACLs, and the Rust validator does not accept a bundle
-without stable file-identity verification. Imported Go gob payloads remain
-opaque until the native Rust model codecs are implemented.
+Validation currently fails closed on Windows because it requires stable
+file-identity verification.
 
 ## PTRKMIG1 version 1
 

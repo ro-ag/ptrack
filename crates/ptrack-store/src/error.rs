@@ -67,6 +67,18 @@ pub enum StoreError {
     NotRegularFile { path: PathBuf },
     /// The database pathname changed while it was being opened or cleaned up.
     PathChanged { path: PathBuf },
+    /// The destination's parent is missing, linked, or not a directory.
+    DestinationParentInvalid { path: PathBuf },
+    /// The destination's parent directory changed during create-only work.
+    DestinationParentChanged { path: PathBuf },
+    /// This platform cannot prove destination-parent identity with safe std APIs.
+    DestinationParentIdentityUnavailable { path: PathBuf },
+    /// Import reached `ready`, but its destination namespace changed afterward.
+    ImportCommittedPathChanged { path: PathBuf },
+    /// Import reached `ready`, but a later durability or validation check failed.
+    ImportCommittedVerificationFailed { path: PathBuf, detail: String },
+    /// The engine could not prove whether the final ready transaction committed.
+    ImportCommitOutcomeUnknown { path: PathBuf, detail: String },
     /// A Rust destination was pointed at a reserved legacy bbolt filename.
     LegacyPathForbidden { path: PathBuf },
     /// A database file exposes project data to group or other users.
@@ -149,6 +161,36 @@ impl fmt::Display for StoreError {
             Self::PathChanged { path } => write!(
                 formatter,
                 "database path changed while it was being opened: {}",
+                path.display()
+            ),
+            Self::DestinationParentInvalid { path } => write!(
+                formatter,
+                "database destination parent must be a real directory: {}",
+                path.display()
+            ),
+            Self::DestinationParentChanged { path } => write!(
+                formatter,
+                "database destination parent changed during creation: {}",
+                path.display()
+            ),
+            Self::DestinationParentIdentityUnavailable { path } => write!(
+                formatter,
+                "database destination parent identity cannot be verified on this platform: {}",
+                path.display()
+            ),
+            Self::ImportCommittedPathChanged { path } => write!(
+                formatter,
+                "database import committed, but its destination path changed afterward: {}",
+                path.display()
+            ),
+            Self::ImportCommittedVerificationFailed { path, detail } => write!(
+                formatter,
+                "database import committed, but final verification failed for {}: {detail}",
+                path.display()
+            ),
+            Self::ImportCommitOutcomeUnknown { path, detail } => write!(
+                formatter,
+                "database import commit outcome is unknown for {}: {detail}",
                 path.display()
             ),
             Self::LegacyPathForbidden { path } => write!(

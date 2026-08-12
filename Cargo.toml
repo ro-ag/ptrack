@@ -1,5 +1,10 @@
 [workspace]
-members = ["crates/ptrack-core", "crates/ptrack-migrate", "crates/ptrack-store"]
+members = [
+    "crates/ptrack-core",
+    "crates/ptrack-db-import",
+    "crates/ptrack-migrate",
+    "crates/ptrack-store",
+]
 resolver = "3"
 
 [workspace.package]
@@ -9,3 +14,5 @@ rust-version = "1.89"
 
 [workspace.dependencies]
 redb = "=4.1.0"
+serde = { version = "=1.0.229", default-features = false, features = ["derive", "std"] }
+serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }

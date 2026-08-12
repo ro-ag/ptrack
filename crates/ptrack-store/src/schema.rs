@@ -3,25 +3,42 @@ use std::fmt;
 
 use redb::TableDefinition;
 
-use crate::{LEGACY_CODEC_GO_GOB, LEGACY_CODEC_RAW, StoreError, StoreResult};
+use crate::{
+    LEGACY_CODEC_GO_GOB, LEGACY_CODEC_RAW, NATIVE_CODEC, NATIVE_PAYLOAD_SCHEMA, StoreError,
+    StoreResult,
+};
 
 pub(crate) const STORE_FAMILY: &[u8] = b"ptrack-redb";
 pub(crate) const STORE_OWNER: &[u8] = b"ptrack-storage-tool";
 pub(crate) const STORE_STATE_READY: &[u8] = b"ready";
 pub(crate) const STORE_STATE_IMPORTING: &[u8] = b"importing";
 /// The current application-level ptrack database schema.
-pub const STORE_SCHEMA_VERSION: u32 = 1;
+pub const STORE_SCHEMA_VERSION: u32 = 3;
 
 pub(crate) const MANIFEST_KEY_FAMILY: &[u8] = b"family";
 pub(crate) const MANIFEST_KEY_OWNER: &[u8] = b"owner";
 pub(crate) const MANIFEST_KEY_SCHEMA_VERSION: &[u8] = b"schema_version";
 pub(crate) const MANIFEST_KEY_STATE: &[u8] = b"state";
 pub(crate) const MANIFEST_KEY_STORE_KIND: &[u8] = b"store_kind";
+pub(crate) const MANIFEST_KEY_ORIGIN: &[u8] = b"origin";
+pub(crate) const MANIFEST_KEY_IMPORT_BUNDLE_VERSION: &[u8] = b"import_bundle_version";
+pub(crate) const MANIFEST_KEY_IMPORT_SOURCE_FORMAT: &[u8] = b"import_source_format";
+pub(crate) const MANIFEST_KEY_IMPORT_BUNDLE_SHA256: &[u8] = b"import_bundle_sha256";
+pub(crate) const MANIFEST_KEY_STAGE_VERSION: &[u8] = b"stage_version";
+pub(crate) const MANIFEST_KEY_BATCH_MANIFEST_SHA256: &[u8] = b"batch_manifest_sha256";
+pub(crate) const MANIFEST_KEY_DATABASE_JSON_SHA256: &[u8] = b"database_json_sha256";
+pub(crate) const MANIFEST_KEY_SOURCE_FORMAT: &[u8] = b"source_format";
+pub(crate) const MANIFEST_KEY_QUARANTINE_COUNT: &[u8] = b"quarantine_count";
+pub(crate) const STORE_ORIGIN_CREATED: &[u8] = b"created";
+pub(crate) const STORE_ORIGIN_IMPORTED: &[u8] = b"imported";
+pub(crate) const STORE_ORIGIN_JSON_STAGE: &[u8] = b"json-stage";
 
 pub(crate) const MANIFEST_TABLE: TableDefinition<&[u8], &[u8]> =
     TableDefinition::new("ptrack.schema");
 pub(crate) const SEQUENCES_TABLE: TableDefinition<&[u8], &[u8]> =
     TableDefinition::new("ptrack.sequences");
+pub(crate) const QUARANTINE_TABLE: TableDefinition<&[u8], &[u8]> =
+    TableDefinition::new("ptrack.migration.quarantine");
 
 const PROJECT_META_TABLE: TableDefinition<&[u8], &[u8]> =
     TableDefinition::new("ptrack.project.meta");
@@ -207,6 +224,44 @@ impl Collection {
             | Self::CapabilityAudits
             | Self::MemoryWritebacks
             | Self::GlobalProjects => LEGACY_CODEC_GO_GOB,
+        }
+    }
+
+    /// Returns the only codec accepted for this collection by a current import.
+    #[must_use]
+    pub const fn import_codec(self) -> u16 {
+        match self {
+            Self::GlobalConfig | Self::GlobalBackups => LEGACY_CODEC_RAW,
+            Self::ProjectMeta
+            | Self::Plans
+            | Self::Tasks
+            | Self::Notes
+            | Self::Milestones
+            | Self::Issues
+            | Self::Commits
+            | Self::Capabilities
+            | Self::CapabilityAudits
+            | Self::MemoryWritebacks
+            | Self::GlobalProjects => NATIVE_CODEC,
+        }
+    }
+
+    /// Returns the only payload schema accepted by a current import.
+    #[must_use]
+    pub const fn import_payload_schema(self) -> u32 {
+        match self {
+            Self::GlobalConfig | Self::GlobalBackups => 0,
+            Self::ProjectMeta
+            | Self::Plans
+            | Self::Tasks
+            | Self::Notes
+            | Self::Milestones
+            | Self::Issues
+            | Self::Commits
+            | Self::Capabilities
+            | Self::CapabilityAudits
+            | Self::MemoryWritebacks
+            | Self::GlobalProjects => NATIVE_PAYLOAD_SCHEMA,
         }
     }
 

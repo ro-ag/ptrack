@@ -370,10 +370,34 @@ impl Validate for CapabilityAudit {
         require_nonnegative(self.request_bytes, "capability_audit.request_bytes")?;
         require_nonnegative(self.response_bytes, "capability_audit.response_bytes")?;
         require_nonnegative(self.redirects, "capability_audit.redirects")?;
-        if self.success && self.error_class != "none" {
+        let valid_error_class = if self.success {
+            self.error_class == "none"
+        } else {
+            matches!(
+                self.error_class.as_str(),
+                "denied"
+                    | "dns"
+                    | "routing"
+                    | "vpn"
+                    | "proxy"
+                    | "tls"
+                    | "host-key"
+                    | "authentication"
+                    | "sandbox"
+                    | "remote-policy"
+                    | "timeout"
+                    | "transport"
+                    | "request-limit"
+                    | "response-limit"
+                    | "output-limit"
+                    | "cancelled"
+                    | "internal"
+            )
+        };
+        if !valid_error_class {
             return Err(ValidationError::new(
                 "capability_audit.error_class",
-                "must be none on success",
+                "is not an allowlisted class for its outcome",
             ));
         }
         self.created_at.validate()

@@ -130,7 +130,13 @@ fn legacy_zero_format_meta_is_preserved_but_newer_formats_fail() {
 
 #[test]
 fn successful_audit_uses_go_none_error_class() {
-    let audit = CapabilityAudit {
+    valid_audit()
+        .validate()
+        .expect("Go success class is canonical");
+}
+
+fn valid_audit() -> CapabilityAudit {
+    CapabilityAudit {
         id: 1,
         capability_id: 2,
         agent_profile: "agent".to_owned(),
@@ -144,6 +150,15 @@ fn successful_audit_uses_go_none_error_class() {
         response_bytes: 0,
         redirects: 0,
         created_at: Timestamp::Zero,
-    };
-    audit.validate().expect("Go success class is canonical");
+    }
+}
+
+#[test]
+fn failed_audit_rejects_non_allowlisted_error_text() {
+    let mut audit = valid_audit();
+    audit.success = false;
+    audit.error_class = "secret diagnostic text".to_owned();
+    assert!(audit.validate().is_err());
+    audit.error_class = "timeout".to_owned();
+    assert!(audit.validate().is_ok());
 }

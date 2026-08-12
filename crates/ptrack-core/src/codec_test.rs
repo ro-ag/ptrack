@@ -1,8 +1,8 @@
 use crate::{
     Capability, CapabilityAuditPolicy, CapabilityKind, CapabilityLimits, CodecError, Digest32,
-    GitScope, HttpScope, IssueStatus, MemoryKind, Meta, MilestoneStatus, NativeRecord, Note,
-    NoteTarget, Plan, PlanStatus, RecordKind, Severity, SshScope, TaskStatus, Timestamp,
-    decode_record, encode_record,
+    GitScope, HttpScope, IssueStatus, MAX_LIST_ITEMS, MAX_PAYLOAD_BYTES, MemoryKind, Meta,
+    MilestoneStatus, NativeRecord, Note, NoteTarget, Plan, PlanStatus, RecordKind, Severity,
+    SshScope, TaskStatus, Timestamp, decode_record, encode_record,
 };
 
 fn fixed_time() -> Timestamp {
@@ -294,8 +294,32 @@ fn list_count_is_bounded_before_allocation() {
         .position(|window| window == base_url)
         .expect("HTTP base URL")
         + base_url.len();
-    capability[methods..methods + 4].copy_from_slice(&u32::MAX.to_be_bytes());
-    assert!(decode_record(RecordKind::Capability, &capability).is_err());
+    let declared = MAX_LIST_ITEMS + 1;
+    capability.truncate(methods);
+    capability.extend_from_slice(&u32::try_from(declared).unwrap().to_be_bytes());
+    capability.resize(methods + 4 + declared * 4, 0);
+    assert!(capability.len() < MAX_PAYLOAD_BYTES);
+    assert_eq!(MAX_LIST_ITEMS, 1_000_000);
+    assert_eq!(
+        decode_record(RecordKind::Capability, &capability),
+        Err(CodecError::ListTooLarge {
+            actual: 1_000_001,
+            maximum: 1_000_000,
+        })
+    );
+}
+
+#[test]
+fn list_count_is_bounded_before_writer_iteration() {
+    let mut capability = valid_capability(CapabilityKind::Http);
+    capability.http.as_mut().unwrap().methods = vec![String::new(); MAX_LIST_ITEMS + 1];
+    assert_eq!(
+        encode_record(&NativeRecord::Capability(capability)),
+        Err(CodecError::ListTooLarge {
+            actual: 1_000_001,
+            maximum: 1_000_000,
+        })
+    );
 }
 
 #[test]

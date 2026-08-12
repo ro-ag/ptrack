@@ -64,10 +64,6 @@ impl Record {
     pub fn value(&self) -> &[u8] {
         &self.value
     }
-
-    pub(crate) fn into_parts(self) -> (Vec<u8>, Vec<u8>) {
-        (self.key, self.value)
-    }
 }
 
 /// An integrity-checked canonical legacy bucket and its ordered raw records.
@@ -92,10 +88,6 @@ impl Bucket {
     #[must_use]
     pub fn records(&self) -> &[Record] {
         &self.records
-    }
-
-    pub(crate) fn into_parts(self) -> (String, u64, Vec<Record>) {
-        (self.name, self.sequence, self.records)
     }
 }
 
@@ -139,10 +131,6 @@ impl ValidatedBundle {
     #[must_use]
     pub const fn sha256(&self) -> &[u8; 32] {
         &self.sha256
-    }
-
-    pub(crate) fn into_buckets(self) -> Vec<Bucket> {
-        self.buckets
     }
 }
 
