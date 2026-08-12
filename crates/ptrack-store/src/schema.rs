@@ -1,12 +1,14 @@
+use std::cmp::Ordering;
 use std::fmt;
 
 use redb::TableDefinition;
 
-use crate::{StoreError, StoreResult};
+use crate::{LEGACY_CODEC_GO_GOB, LEGACY_CODEC_RAW, StoreError, StoreResult};
 
 pub(crate) const STORE_FAMILY: &[u8] = b"ptrack-redb";
 pub(crate) const STORE_OWNER: &[u8] = b"ptrack-storage-tool";
 pub(crate) const STORE_STATE_READY: &[u8] = b"ready";
+pub(crate) const STORE_STATE_IMPORTING: &[u8] = b"importing";
 /// The current application-level ptrack database schema.
 pub const STORE_SCHEMA_VERSION: u32 = 1;
 
@@ -96,7 +98,7 @@ impl KeyKind {
 }
 
 /// A closed set of persisted ptrack record collections.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Collection {
     ProjectMeta,
     Plans,
@@ -130,7 +132,28 @@ pub(crate) const ALL_COLLECTIONS: [Collection; 13] = [
 ];
 
 impl Collection {
-    /// Returns the stable logical collection name used by sequence metadata.
+    /// Returns every persisted collection in canonical schema order.
+    #[must_use]
+    pub const fn all() -> &'static [Self] {
+        &ALL_COLLECTIONS
+    }
+
+    /// Iterates the complete collection set for one database family.
+    pub fn for_store(kind: StoreKind) -> impl Iterator<Item = Self> {
+        ALL_COLLECTIONS
+            .into_iter()
+            .filter(move |collection| collection.store_kind() == kind)
+    }
+
+    /// Resolves an exact legacy bbolt bucket name.
+    #[must_use]
+    pub fn from_legacy_name(name: &[u8]) -> Option<Self> {
+        ALL_COLLECTIONS
+            .into_iter()
+            .find(|collection| collection.name().as_bytes() == name)
+    }
+
+    /// Returns the stable legacy bucket name used by migration and sequences.
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
@@ -165,6 +188,25 @@ impl Collection {
             | Self::CapabilityAudits
             | Self::MemoryWritebacks => StoreKind::Project,
             Self::GlobalConfig | Self::GlobalProjects | Self::GlobalBackups => StoreKind::Global,
+        }
+    }
+
+    /// Returns the stable codec used to preserve this legacy bucket's values.
+    #[must_use]
+    pub const fn legacy_codec(self) -> u16 {
+        match self {
+            Self::GlobalConfig | Self::GlobalBackups => LEGACY_CODEC_RAW,
+            Self::ProjectMeta
+            | Self::Plans
+            | Self::Tasks
+            | Self::Notes
+            | Self::Milestones
+            | Self::Issues
+            | Self::Commits
+            | Self::Capabilities
+            | Self::CapabilityAudits
+            | Self::MemoryWritebacks
+            | Self::GlobalProjects => LEGACY_CODEC_GO_GOB,
         }
     }
 
@@ -279,6 +321,64 @@ pub enum OwnedRecordKey {
     Bytes(Vec<u8>),
 }
 
+impl OwnedRecordKey {
+    /// Borrows this owned key without changing its representation.
+    #[must_use]
+    pub fn as_borrowed(&self) -> RecordKey<'_> {
+        match self {
+            Self::Singleton => RecordKey::Singleton,
+            Self::Id(id) => RecordKey::Id(*id),
+            Self::Bytes(bytes) => RecordKey::Bytes(bytes),
+        }
+    }
+
+    pub(crate) fn validated_encoded_len(&self, collection: Collection) -> StoreResult<usize> {
+        let borrowed = self.as_borrowed();
+        let actual = borrowed.kind();
+        let expected = collection.key_kind();
+        if actual != expected {
+            return Err(StoreError::KeyKindMismatch {
+                collection: collection.name(),
+                expected: expected.name(),
+                actual: actual.name(),
+            });
+        }
+        Ok(match self {
+            Self::Singleton => b"meta".len(),
+            Self::Id(_) => size_of::<u64>(),
+            Self::Bytes(bytes) => bytes.len(),
+        })
+    }
+
+    pub(crate) fn compare_encoded(
+        &self,
+        other: &Self,
+        collection: Collection,
+    ) -> StoreResult<Ordering> {
+        self.validated_encoded_len(collection)?;
+        other.validated_encoded_len(collection)?;
+        Ok(match (self, other) {
+            (Self::Singleton, Self::Singleton) => Ordering::Equal,
+            (Self::Id(left), Self::Id(right)) => left.cmp(right),
+            (Self::Bytes(left), Self::Bytes(right)) => left.cmp(right),
+            _ => unreachable!("both keys were validated against one collection"),
+        })
+    }
+
+    pub(crate) fn matches_encoded(
+        &self,
+        collection: Collection,
+        encoded: &[u8],
+    ) -> StoreResult<bool> {
+        self.validated_encoded_len(collection)?;
+        Ok(match self {
+            Self::Singleton => encoded == b"meta",
+            Self::Id(id) => encoded == id.to_be_bytes(),
+            Self::Bytes(bytes) => encoded == bytes,
+        })
+    }
+}
+
 pub(crate) fn decode_key(collection: Collection, encoded: &[u8]) -> StoreResult<OwnedRecordKey> {
     match collection.key_kind() {
         KeyKind::Singleton if encoded == b"meta" => Ok(OwnedRecordKey::Singleton),
@@ -301,7 +401,5 @@ pub(crate) fn decode_key(collection: Collection, encoded: &[u8]) -> StoreResult<
 }
 
 pub(crate) fn collections_for(kind: StoreKind) -> impl Iterator<Item = Collection> {
-    ALL_COLLECTIONS
-        .into_iter()
-        .filter(move |collection| collection.store_kind() == kind)
+    Collection::for_store(kind)
 }

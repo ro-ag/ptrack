@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/ptrack-store"]
+members = ["crates/ptrack-migrate", "crates/ptrack-store"]
 resolver = "3"
 
 [workspace.package]

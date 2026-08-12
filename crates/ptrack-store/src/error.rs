@@ -104,6 +104,14 @@ pub enum StoreError {
     },
     /// A collection has exhausted its 64-bit sequence space.
     SequenceOverflow { collection: &'static str },
+    /// A staged legacy import was incomplete or internally inconsistent.
+    InvalidImport(String),
+    /// A staged legacy import exceeded a fixed resource bound.
+    ImportLimitExceeded {
+        limit: &'static str,
+        maximum: u64,
+        actual: u64,
+    },
     /// A failed mutating operation prevents this transaction from committing.
     TransactionPoisoned,
     /// A stored record envelope was invalid.
@@ -198,6 +206,15 @@ impl fmt::Display for StoreError {
             Self::SequenceOverflow { collection } => {
                 write!(formatter, "collection {collection} sequence has overflowed")
             }
+            Self::InvalidImport(detail) => write!(formatter, "invalid database import: {detail}"),
+            Self::ImportLimitExceeded {
+                limit,
+                maximum,
+                actual,
+            } => write!(
+                formatter,
+                "database import {limit} exceeds its limit: got {actual}, maximum {maximum}"
+            ),
             Self::TransactionPoisoned => write!(
                 formatter,
                 "transaction contains a failed mutation and cannot be committed"

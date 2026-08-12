@@ -12,10 +12,11 @@ use redb::{Database, Durability, ReadableDatabase, ReadableTable, StorageBackend
 use crate::schema::{
     MANIFEST_KEY_FAMILY, MANIFEST_KEY_OWNER, MANIFEST_KEY_SCHEMA_VERSION, MANIFEST_KEY_STATE,
     MANIFEST_KEY_STORE_KIND, MANIFEST_TABLE, SEQUENCES_TABLE, STORE_FAMILY, STORE_OWNER,
-    STORE_SCHEMA_VERSION, STORE_STATE_READY, collections_for, decode_key,
+    STORE_SCHEMA_VERSION, STORE_STATE_IMPORTING, STORE_STATE_READY, collections_for, decode_key,
 };
 use crate::{
-    Collection, OwnedRecordKey, RecordEnvelope, RecordKey, StoreError, StoreKind, StoreResult,
+    Collection, ImportData, ImportReport, OwnedRecordKey, RecordEnvelope, RecordKey, StoreError,
+    StoreKind, StoreResult,
 };
 
 const LOCK_TIMEOUT: Duration = Duration::from_secs(1);
@@ -51,7 +52,7 @@ impl Store {
         sync_parent_directory(path)?;
         let database = Database::builder().create_file(file)?;
 
-        if let Err(error) = initialize_database(&database, kind) {
+        if let Err(error) = initialize_database(&database, kind, STORE_STATE_READY) {
             drop(database);
             return Err(error);
         }
@@ -63,6 +64,61 @@ impl Store {
             kind,
             path: path.to_path_buf(),
         })
+    }
+
+    /// Imports one complete legacy database into a new destination.
+    ///
+    /// All input is bounded and validated before the destination is created.
+    /// Once created, its manifest remains `importing` until records, exact
+    /// sequences, and post-write verification commit atomically with `ready`.
+    /// Failures never unlink the artifact and normal opens reject it.
+    pub fn import_new(
+        path: impl AsRef<Path>,
+        data: ImportData,
+    ) -> StoreResult<(Self, ImportReport)> {
+        Self::import_new_inner(path.as_ref(), data, || Ok(()))
+    }
+
+    fn import_new_inner(
+        path: &Path,
+        data: ImportData,
+        before_ready: impl FnOnce() -> StoreResult<()>,
+    ) -> StoreResult<(Self, ImportReport)> {
+        let import = data.validate()?;
+        reject_legacy_path(path)?;
+        ensure_destination_absent(path)?;
+
+        let file = create_private_file(path)?;
+        let identity = FileIdentity::from_metadata(&file.metadata()?);
+        sync_parent_directory(path)?;
+        let database = Database::builder().create_file(file)?;
+        initialize_database(&database, import.data.kind, STORE_STATE_IMPORTING)?;
+        ensure_path_identity(path, identity)?;
+        sync_parent_directory(path)?;
+
+        if let Err(error) = crate::import::write_import(&database, &import, before_ready) {
+            drop(database);
+            return Err(error);
+        }
+        ensure_path_identity(path, identity)?;
+        sync_parent_directory(path)?;
+        validate_database(&database, import.data.kind)?;
+
+        let store = Self {
+            database,
+            kind: import.data.kind,
+            path: path.to_path_buf(),
+        };
+        Ok((store, import.report))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn import_new_with_before_ready(
+        path: impl AsRef<Path>,
+        data: ImportData,
+        before_ready: impl FnOnce() -> StoreResult<()>,
+    ) -> StoreResult<(Self, ImportReport)> {
+        Self::import_new_inner(path.as_ref(), data, before_ready)
     }
 
     /// Opens an existing database after a read-only schema and ownership probe.
@@ -427,7 +483,7 @@ impl WriteTransaction {
     }
 }
 
-fn initialize_database(database: &Database, kind: StoreKind) -> StoreResult<()> {
+fn initialize_database(database: &Database, kind: StoreKind, state: &[u8]) -> StoreResult<()> {
     let mut transaction = database.begin_write()?;
     transaction.set_durability(Durability::Immediate)?;
     transaction.set_quick_repair(true);
@@ -440,7 +496,7 @@ fn initialize_database(database: &Database, kind: StoreKind) -> StoreResult<()> 
             MANIFEST_KEY_SCHEMA_VERSION,
             STORE_SCHEMA_VERSION.to_be_bytes().as_slice(),
         )?;
-        manifest.insert(MANIFEST_KEY_STATE, STORE_STATE_READY)?;
+        manifest.insert(MANIFEST_KEY_STATE, state)?;
         manifest.insert(MANIFEST_KEY_STORE_KIND, kind.as_bytes())?;
     }
     transaction.open_table(SEQUENCES_TABLE)?;
