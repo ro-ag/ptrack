@@ -9,13 +9,21 @@ use std::time::{Duration, Instant};
 
 use redb::{Database, Durability, ReadableDatabase, ReadableTable, StorageBackend, TableHandle};
 
+use crate::import::MAX_LEGACY_PROJECT_FORMAT;
 use crate::schema::{
-    MANIFEST_KEY_FAMILY, MANIFEST_KEY_OWNER, MANIFEST_KEY_SCHEMA_VERSION, MANIFEST_KEY_STATE,
-    MANIFEST_KEY_STORE_KIND, MANIFEST_TABLE, SEQUENCES_TABLE, STORE_FAMILY, STORE_OWNER,
-    STORE_SCHEMA_VERSION, STORE_STATE_READY, collections_for, decode_key,
+    MANIFEST_KEY_BATCH_MANIFEST_SHA256, MANIFEST_KEY_DATABASE_JSON_SHA256, MANIFEST_KEY_FAMILY,
+    MANIFEST_KEY_IMPORT_BUNDLE_SHA256, MANIFEST_KEY_IMPORT_BUNDLE_VERSION,
+    MANIFEST_KEY_IMPORT_SOURCE_FORMAT, MANIFEST_KEY_ORIGIN, MANIFEST_KEY_OWNER,
+    MANIFEST_KEY_QUARANTINE_COUNT, MANIFEST_KEY_SCHEMA_VERSION, MANIFEST_KEY_SOURCE_FORMAT,
+    MANIFEST_KEY_STAGE_VERSION, MANIFEST_KEY_STATE, MANIFEST_KEY_STORE_KIND, MANIFEST_TABLE,
+    QUARANTINE_TABLE, SEQUENCES_TABLE, STORE_FAMILY, STORE_ORIGIN_CREATED, STORE_ORIGIN_IMPORTED,
+    STORE_ORIGIN_JSON_STAGE, STORE_OWNER, STORE_SCHEMA_VERSION, STORE_STATE_IMPORTING,
+    STORE_STATE_READY, collections_for, decode_key,
 };
 use crate::{
-    Collection, OwnedRecordKey, RecordEnvelope, RecordKey, StoreError, StoreKind, StoreResult,
+    Collection, IMPORT_BUNDLE_VERSION, ImportData, ImportReport, JSON_STAGE_VERSION,
+    JsonStageImportData, JsonStageProvenance, OwnedRecordKey, RecordEnvelope, RecordKey,
+    StoreError, StoreKind, StoreResult,
 };
 
 const LOCK_TIMEOUT: Duration = Duration::from_secs(1);
@@ -39,8 +47,20 @@ impl Store {
     /// Legacy bbolt filenames are always rejected so a Rust destination cannot
     /// accidentally occupy or replace the source database path.
     pub fn create_new(path: impl AsRef<Path>, kind: StoreKind) -> StoreResult<Self> {
-        let path = path.as_ref();
+        Self::create_new_inner(path.as_ref(), kind, || Ok(()), || Ok(()))
+    }
+
+    fn create_new_inner(
+        path: &Path,
+        kind: StoreKind,
+        before_create: impl FnOnce() -> StoreResult<()>,
+        after_create: impl FnOnce() -> StoreResult<()>,
+    ) -> StoreResult<Self> {
         reject_legacy_path(path)?;
+        let parent = DestinationParent::capture(path)?;
+        ensure_destination_absent(path)?;
+        before_create()?;
+        parent.ensure_current()?;
         ensure_destination_absent(path)?;
 
         let file = create_private_file(path)?;
@@ -48,21 +68,225 @@ impl Store {
         // Once create_new succeeds at the filesystem level, leave that exact
         // path in place on every later error. Unlinking by pathname cannot be
         // made race-free with portable std APIs and could delete a replacement.
-        sync_parent_directory(path)?;
+        after_create()?;
+        parent.ensure_destination(path, identity)?;
+        parent.sync()?;
+        parent.ensure_destination(path, identity)?;
         let database = Database::builder().create_file(file)?;
 
-        if let Err(error) = initialize_database(&database, kind) {
+        if let Err(error) =
+            initialize_database(&database, kind, STORE_STATE_READY, STORE_ORIGIN_CREATED)
+        {
             drop(database);
             return Err(error);
         }
-        ensure_path_identity(path, identity)?;
-        sync_parent_directory(path)?;
+        parent.ensure_destination(path, identity)?;
+        parent.sync()?;
+        parent.ensure_destination(path, identity)?;
 
         Ok(Self {
             database,
             kind,
             path: path.to_path_buf(),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn create_new_with_creation_hooks(
+        path: impl AsRef<Path>,
+        kind: StoreKind,
+        before_create: impl FnOnce() -> StoreResult<()>,
+        after_create: impl FnOnce() -> StoreResult<()>,
+    ) -> StoreResult<Self> {
+        Self::create_new_inner(path.as_ref(), kind, before_create, after_create)
+    }
+
+    /// Imports one complete legacy database into a new destination.
+    ///
+    /// All input is bounded and validated before the destination is created.
+    /// Once created, its manifest remains `importing` until records, exact
+    /// sequences, and post-write verification commit atomically with `ready`.
+    /// Failures never unlink the artifact and normal opens reject it.
+    pub fn import_new(
+        path: impl AsRef<Path>,
+        data: ImportData,
+    ) -> StoreResult<(Self, ImportReport)> {
+        Self::import_new_inner(
+            path.as_ref(),
+            data,
+            || Ok(()),
+            || Ok(()),
+            || Ok(()),
+            || Ok(()),
+        )
+    }
+
+    fn import_new_inner(
+        path: &Path,
+        data: ImportData,
+        before_create: impl FnOnce() -> StoreResult<()>,
+        after_create: impl FnOnce() -> StoreResult<()>,
+        before_ready: impl FnOnce() -> StoreResult<()>,
+        after_ready: impl FnOnce() -> StoreResult<()>,
+    ) -> StoreResult<(Self, ImportReport)> {
+        let import = data.validate()?;
+        reject_legacy_path(path)?;
+        let parent = DestinationParent::capture(path)?;
+        ensure_destination_absent(path)?;
+        before_create()?;
+        parent.ensure_current()?;
+        ensure_destination_absent(path)?;
+
+        let file = create_private_file(path)?;
+        let identity = FileIdentity::from_metadata(&file.metadata()?);
+        after_create()?;
+        parent.ensure_destination(path, identity)?;
+        parent.sync()?;
+        parent.ensure_destination(path, identity)?;
+        let database = Database::builder().create_file(file)?;
+        initialize_database(
+            &database,
+            import.data.kind,
+            STORE_STATE_IMPORTING,
+            STORE_ORIGIN_IMPORTED,
+        )?;
+        parent.ensure_destination(path, identity)?;
+        parent.sync()?;
+        parent.ensure_destination(path, identity)?;
+
+        if let Err(error) = crate::import::write_import(&database, &import, path, || {
+            before_ready()?;
+            parent.ensure_destination(path, identity)
+        }) {
+            drop(database);
+            return Err(error);
+        }
+        if let Err(error) = after_ready() {
+            ensure_committed_import_destination(&parent, path, identity)?;
+            return Err(committed_import_verification_error(path, error));
+        }
+        ensure_committed_import_destination(&parent, path, identity)?;
+        parent
+            .sync()
+            .map_err(|error| committed_import_verification_error(path, error))?;
+        ensure_committed_import_destination(&parent, path, identity)?;
+        validate_database(&database, import.data.kind)
+            .map_err(|error| committed_import_verification_error(path, error))?;
+        ensure_committed_import_destination(&parent, path, identity)?;
+
+        let store = Self {
+            database,
+            kind: import.data.kind,
+            path: path.to_path_buf(),
+        };
+        Ok((store, import.report))
+    }
+
+    /// Creates one verified candidate from a standalone canonical JSON stage.
+    ///
+    /// Quarantined legacy capability bytes are committed to a private inert
+    /// table and are never available through ordinary collection APIs.
+    pub fn import_json_stage_new(
+        path: impl AsRef<Path>,
+        data: JsonStageImportData,
+    ) -> StoreResult<(Self, ImportReport)> {
+        Self::import_json_stage_new_inner(path.as_ref(), data, || Ok(()))
+    }
+
+    fn import_json_stage_new_inner(
+        path: &Path,
+        data: JsonStageImportData,
+        before_ready: impl FnOnce() -> StoreResult<()>,
+    ) -> StoreResult<(Self, ImportReport)> {
+        let import = data.validate()?;
+        reject_legacy_path(path)?;
+        let parent = DestinationParent::capture(path)?;
+        ensure_destination_absent(path)?;
+        parent.ensure_current()?;
+        ensure_destination_absent(path)?;
+
+        let file = create_private_file(path)?;
+        let identity = FileIdentity::from_metadata(&file.metadata()?);
+        parent.ensure_destination(path, identity)?;
+        parent.sync()?;
+        parent.ensure_destination(path, identity)?;
+        let database = Database::builder().create_file(file)?;
+        initialize_database(
+            &database,
+            import.data.kind,
+            STORE_STATE_IMPORTING,
+            STORE_ORIGIN_JSON_STAGE,
+        )?;
+        parent.ensure_destination(path, identity)?;
+        parent.sync()?;
+        parent.ensure_destination(path, identity)?;
+
+        if let Err(error) = crate::import::write_json_stage_import(&database, &import, path, || {
+            before_ready()?;
+            parent.ensure_destination(path, identity)
+        }) {
+            drop(database);
+            return Err(error);
+        }
+        ensure_committed_import_destination(&parent, path, identity)?;
+        parent
+            .sync()
+            .map_err(|error| committed_import_verification_error(path, error))?;
+        ensure_committed_import_destination(&parent, path, identity)?;
+        validate_database(&database, import.data.kind)
+            .map_err(|error| committed_import_verification_error(path, error))?;
+        ensure_committed_import_destination(&parent, path, identity)?;
+
+        let store = Self {
+            database,
+            kind: import.data.kind,
+            path: path.to_path_buf(),
+        };
+        Ok((store, import.report))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn import_json_stage_new_with_before_ready(
+        path: impl AsRef<Path>,
+        data: JsonStageImportData,
+        before_ready: impl FnOnce() -> StoreResult<()>,
+    ) -> StoreResult<(Self, ImportReport)> {
+        Self::import_json_stage_new_inner(path.as_ref(), data, before_ready)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn import_new_with_before_ready(
+        path: impl AsRef<Path>,
+        data: ImportData,
+        before_ready: impl FnOnce() -> StoreResult<()>,
+    ) -> StoreResult<(Self, ImportReport)> {
+        Self::import_new_inner(
+            path.as_ref(),
+            data,
+            || Ok(()),
+            || Ok(()),
+            before_ready,
+            || Ok(()),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn import_new_with_parent_hooks(
+        path: impl AsRef<Path>,
+        data: ImportData,
+        before_create: impl FnOnce() -> StoreResult<()>,
+        after_create: impl FnOnce() -> StoreResult<()>,
+        before_ready: impl FnOnce() -> StoreResult<()>,
+        after_ready: impl FnOnce() -> StoreResult<()>,
+    ) -> StoreResult<(Self, ImportReport)> {
+        Self::import_new_inner(
+            path.as_ref(),
+            data,
+            before_create,
+            after_create,
+            before_ready,
+            after_ready,
+        )
     }
 
     /// Opens an existing database after a read-only schema and ownership probe.
@@ -99,6 +323,13 @@ impl Store {
         &self.path
     }
 
+    /// Returns attested standalone-stage provenance without exposing quarantine bytes.
+    pub fn json_stage_provenance(&self) -> StoreResult<Option<JsonStageProvenance>> {
+        let transaction = self.database.begin_read()?;
+        let entries = read_manifest_entries(&transaction)?;
+        json_stage_provenance(&entries)
+    }
+
     /// Runs a read against one consistent snapshot.
     pub fn read<R>(
         &self,
@@ -120,6 +351,12 @@ impl Store {
         &self,
         operation: impl FnOnce(&mut WriteTransaction) -> StoreResult<R>,
     ) -> StoreResult<R> {
+        if self.json_stage_provenance()?.is_some() {
+            return Err(StoreError::InvalidImport(
+                "JSON-stage candidates are immutable until explicit activation replaces their provenance"
+                    .to_owned(),
+            ));
+        }
         let mut inner = self.database.begin_write()?;
         inner.set_durability(Durability::Immediate)?;
         // Persist allocator state with every commit. Besides faster crash
@@ -280,11 +517,18 @@ impl WriteTransaction {
         record: &RecordEnvelope,
     ) -> StoreResult<Option<RecordEnvelope>> {
         collection.validate_store(self.kind)?;
+        let encoded_key = key.encode(collection)?;
+        let owned_key = match key {
+            RecordKey::Singleton => OwnedRecordKey::Singleton,
+            RecordKey::Id(id) => OwnedRecordKey::Id(id),
+            RecordKey::Bytes(bytes) => OwnedRecordKey::Bytes(bytes.to_vec()),
+        };
+        crate::validation::record(collection, &owned_key, record)
+            .map_err(StoreError::InvalidImport)?;
         let numeric_id = match key {
             RecordKey::Id(id) => Some(id),
             _ => None,
         };
-        let encoded_key = key.encode(collection)?;
         let encoded_record = record.encode();
         let old = {
             let mut table = self.raw().open_table(collection.table())?;
@@ -427,7 +671,12 @@ impl WriteTransaction {
     }
 }
 
-fn initialize_database(database: &Database, kind: StoreKind) -> StoreResult<()> {
+fn initialize_database(
+    database: &Database,
+    kind: StoreKind,
+    state: &[u8],
+    origin: &[u8],
+) -> StoreResult<()> {
     let mut transaction = database.begin_write()?;
     transaction.set_durability(Durability::Immediate)?;
     transaction.set_quick_repair(true);
@@ -440,8 +689,9 @@ fn initialize_database(database: &Database, kind: StoreKind) -> StoreResult<()> 
             MANIFEST_KEY_SCHEMA_VERSION,
             STORE_SCHEMA_VERSION.to_be_bytes().as_slice(),
         )?;
-        manifest.insert(MANIFEST_KEY_STATE, STORE_STATE_READY)?;
+        manifest.insert(MANIFEST_KEY_STATE, state)?;
         manifest.insert(MANIFEST_KEY_STORE_KIND, kind.as_bytes())?;
+        manifest.insert(MANIFEST_KEY_ORIGIN, origin)?;
     }
     transaction.open_table(SEQUENCES_TABLE)?;
     for collection in collections_for(kind) {
@@ -456,15 +706,7 @@ fn validate_database(
     expected_kind: StoreKind,
 ) -> StoreResult<()> {
     let transaction = database.begin_read()?;
-    let manifest = transaction.open_table(MANIFEST_TABLE).map_err(|error| {
-        StoreError::InvalidManifest(format!("schema table is unavailable: {error}"))
-    })?;
-
-    let mut entries = BTreeMap::new();
-    for entry in manifest.iter()? {
-        let (key, value) = entry?;
-        entries.insert(key.value().to_vec(), value.value().to_vec());
-    }
+    let entries = read_manifest_entries(&transaction)?;
 
     require_manifest_value(&entries, MANIFEST_KEY_FAMILY, STORE_FAMILY, "family")?;
 
@@ -481,22 +723,82 @@ fn validate_database(
         });
     }
 
-    let expected_manifest_keys = BTreeSet::from([
+    let common_manifest_keys = BTreeSet::from([
         MANIFEST_KEY_FAMILY.to_vec(),
+        MANIFEST_KEY_ORIGIN.to_vec(),
         MANIFEST_KEY_OWNER.to_vec(),
         MANIFEST_KEY_SCHEMA_VERSION.to_vec(),
         MANIFEST_KEY_STATE.to_vec(),
         MANIFEST_KEY_STORE_KIND.to_vec(),
     ]);
+    let origin = entries
+        .get(MANIFEST_KEY_ORIGIN)
+        .ok_or_else(|| StoreError::InvalidManifest("origin is missing".to_owned()))?;
+    let expected_manifest_keys = match origin.as_slice() {
+        STORE_ORIGIN_CREATED => common_manifest_keys,
+        STORE_ORIGIN_IMPORTED => {
+            let mut keys = common_manifest_keys;
+            keys.extend([
+                MANIFEST_KEY_IMPORT_BUNDLE_VERSION.to_vec(),
+                MANIFEST_KEY_IMPORT_SOURCE_FORMAT.to_vec(),
+                MANIFEST_KEY_IMPORT_BUNDLE_SHA256.to_vec(),
+            ]);
+            keys
+        }
+        STORE_ORIGIN_JSON_STAGE => {
+            let mut keys = common_manifest_keys;
+            keys.extend([
+                MANIFEST_KEY_STAGE_VERSION.to_vec(),
+                MANIFEST_KEY_BATCH_MANIFEST_SHA256.to_vec(),
+                MANIFEST_KEY_DATABASE_JSON_SHA256.to_vec(),
+                MANIFEST_KEY_SOURCE_FORMAT.to_vec(),
+                MANIFEST_KEY_QUARANTINE_COUNT.to_vec(),
+            ]);
+            keys
+        }
+        _ => {
+            return Err(StoreError::InvalidManifest(
+                "unexpected origin value".to_owned(),
+            ));
+        }
+    };
     let actual_manifest_keys = entries.keys().cloned().collect::<BTreeSet<_>>();
     if actual_manifest_keys != expected_manifest_keys {
         return Err(StoreError::InvalidManifest(
-            "schema metadata keys do not match the version-1 contract".to_owned(),
+            "schema metadata keys do not match the version-3 origin contract".to_owned(),
         ));
     }
 
     require_manifest_value(&entries, MANIFEST_KEY_OWNER, STORE_OWNER, "owner")?;
     require_manifest_value(&entries, MANIFEST_KEY_STATE, STORE_STATE_READY, "state")?;
+
+    let source_format = if origin == STORE_ORIGIN_IMPORTED {
+        require_manifest_value(
+            &entries,
+            MANIFEST_KEY_IMPORT_BUNDLE_VERSION,
+            IMPORT_BUNDLE_VERSION.to_be_bytes().as_slice(),
+            "import bundle version",
+        )?;
+        let source_format = u64::from_be_bytes(require_manifest_bytes::<8>(
+            &entries,
+            MANIFEST_KEY_IMPORT_SOURCE_FORMAT,
+            "import source format",
+        )?);
+        require_manifest_bytes::<32>(
+            &entries,
+            MANIFEST_KEY_IMPORT_BUNDLE_SHA256,
+            "import bundle SHA-256",
+        )?;
+        Some(source_format)
+    } else if origin == STORE_ORIGIN_JSON_STAGE {
+        Some(
+            json_stage_provenance(&entries)?
+                .expect("the JSON-stage origin was checked")
+                .source_format,
+        )
+    } else {
+        None
+    };
 
     let actual_kind = StoreKind::from_bytes(
         entries
@@ -509,10 +811,24 @@ fn validate_database(
             actual: actual_kind,
         });
     }
+    if let Some(source_format) = source_format {
+        match actual_kind {
+            StoreKind::Project if source_format > MAX_LEGACY_PROJECT_FORMAT => {
+                return Err(StoreError::InvalidManifest(format!(
+                    "import project source format exceeds supported format {MAX_LEGACY_PROJECT_FORMAT}"
+                )));
+            }
+            StoreKind::Global if source_format != 0 => {
+                return Err(StoreError::InvalidManifest(
+                    "import global source format must be zero".to_owned(),
+                ));
+            }
+            StoreKind::Project | StoreKind::Global => {}
+        }
+    }
 
-    drop(manifest);
-
-    let expected_tables = expected_table_names(expected_kind);
+    let is_json_stage = origin == STORE_ORIGIN_JSON_STAGE;
+    let expected_tables = expected_table_names(expected_kind, is_json_stage);
     let actual_tables = transaction
         .list_tables()?
         .map(|handle| handle.name().to_owned())
@@ -532,15 +848,141 @@ fn validate_database(
     for collection in collections_for(expected_kind) {
         transaction.open_table(collection.table())?;
     }
+    validate_stored_records(&transaction, expected_kind, origin != STORE_ORIGIN_CREATED)?;
+    if is_json_stage {
+        let provenance = json_stage_provenance(&entries)?.expect("JSON-stage origin was checked");
+        crate::quarantine::validate_stored(&transaction, provenance.quarantine_count)?;
+    }
     Ok(())
 }
 
-fn expected_table_names(kind: StoreKind) -> BTreeSet<String> {
+fn read_manifest_entries(
+    transaction: &redb::ReadTransaction,
+) -> StoreResult<BTreeMap<Vec<u8>, Vec<u8>>> {
+    let manifest = transaction.open_table(MANIFEST_TABLE).map_err(|error| {
+        StoreError::InvalidManifest(format!("schema table is unavailable: {error}"))
+    })?;
+    let mut entries = BTreeMap::new();
+    for entry in manifest.iter()? {
+        let (key, value) = entry?;
+        entries.insert(key.value().to_vec(), value.value().to_vec());
+    }
+    Ok(entries)
+}
+
+fn json_stage_provenance(
+    entries: &BTreeMap<Vec<u8>, Vec<u8>>,
+) -> StoreResult<Option<JsonStageProvenance>> {
+    if entries.get(MANIFEST_KEY_ORIGIN).map(Vec::as_slice) != Some(STORE_ORIGIN_JSON_STAGE) {
+        return Ok(None);
+    }
+    let stage_version = u16::from_be_bytes(require_manifest_bytes::<2>(
+        entries,
+        MANIFEST_KEY_STAGE_VERSION,
+        "JSON stage version",
+    )?);
+    if stage_version != JSON_STAGE_VERSION {
+        return Err(StoreError::InvalidManifest(format!(
+            "unsupported JSON stage version {stage_version}"
+        )));
+    }
+    Ok(Some(JsonStageProvenance {
+        stage_version,
+        source_format: u64::from_be_bytes(require_manifest_bytes::<8>(
+            entries,
+            MANIFEST_KEY_SOURCE_FORMAT,
+            "JSON stage source format",
+        )?),
+        batch_manifest_sha256: require_manifest_bytes::<32>(
+            entries,
+            MANIFEST_KEY_BATCH_MANIFEST_SHA256,
+            "batch manifest SHA-256",
+        )?,
+        database_json_sha256: require_manifest_bytes::<32>(
+            entries,
+            MANIFEST_KEY_DATABASE_JSON_SHA256,
+            "database JSON SHA-256",
+        )?,
+        quarantine_count: u64::from_be_bytes(require_manifest_bytes::<8>(
+            entries,
+            MANIFEST_KEY_QUARANTINE_COUNT,
+            "quarantine count",
+        )?),
+    }))
+}
+
+fn validate_stored_records(
+    transaction: &redb::ReadTransaction,
+    kind: StoreKind,
+    require_complete_sequences: bool,
+) -> StoreResult<()> {
+    let sequences = transaction.open_table(SEQUENCES_TABLE)?;
+    let mut sequence_values = BTreeMap::new();
+    for entry in sequences.iter()? {
+        let (key, value) = entry?;
+        let collection = Collection::from_legacy_name(key.value())
+            .filter(|collection| collection.store_kind() == kind && collection.is_sequenced());
+        let Some(collection) = collection else {
+            return Err(StoreError::InvalidManifest(
+                "sequence table contains an unknown collection".to_owned(),
+            ));
+        };
+        let encoded: [u8; 8] = value.value().try_into().map_err(|_| {
+            StoreError::InvalidManifest(format!(
+                "collection {} has a malformed sequence",
+                collection.name()
+            ))
+        })?;
+        sequence_values.insert(collection, u64::from_be_bytes(encoded));
+    }
+
+    for collection in collections_for(kind) {
+        let table = transaction.open_table(collection.table())?;
+        let mut maximum_id = 0_u64;
+        for entry in table.iter()? {
+            let (key, value) = entry?;
+            let key = decode_key(collection, key.value())?;
+            if matches!(key, OwnedRecordKey::Id(0)) {
+                return Err(StoreError::InvalidManifest(format!(
+                    "collection {} contains numeric ID zero",
+                    collection.name()
+                )));
+            }
+            if let OwnedRecordKey::Id(id) = &key {
+                maximum_id = maximum_id.max(*id);
+            }
+            let envelope = RecordEnvelope::decode(value.value())?;
+            crate::validation::record(collection, &key, &envelope)
+                .map_err(StoreError::InvalidManifest)?;
+        }
+        if collection.is_sequenced() {
+            let sequence = sequence_values.get(&collection).copied();
+            if require_complete_sequences && sequence.is_none() {
+                return Err(StoreError::InvalidManifest(format!(
+                    "imported collection {} is missing its sequence",
+                    collection.name()
+                )));
+            }
+            if sequence.unwrap_or(0) < maximum_id {
+                return Err(StoreError::InvalidManifest(format!(
+                    "collection {} sequence is below its maximum ID",
+                    collection.name()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn expected_table_names(kind: StoreKind, include_quarantine: bool) -> BTreeSet<String> {
     let mut names = BTreeSet::from([
         MANIFEST_TABLE.name().to_owned(),
         SEQUENCES_TABLE.name().to_owned(),
     ]);
     names.extend(collections_for(kind).map(|collection| collection.table().name().to_owned()));
+    if include_quarantine {
+        names.insert(QUARANTINE_TABLE.name().to_owned());
+    }
     names
 }
 
@@ -560,6 +1002,19 @@ fn require_manifest_value(
             "unexpected {label} value"
         )))
     }
+}
+
+fn require_manifest_bytes<const N: usize>(
+    entries: &BTreeMap<Vec<u8>, Vec<u8>>,
+    key: &[u8],
+    label: &str,
+) -> StoreResult<[u8; N]> {
+    entries
+        .get(key)
+        .ok_or_else(|| StoreError::InvalidManifest(format!("{label} is missing")))?
+        .as_slice()
+        .try_into()
+        .map_err(|_| StoreError::InvalidManifest(format!("{label} must contain exactly {N} bytes")))
 }
 
 fn require_sequence(collection: Collection) -> StoreResult<()> {
@@ -879,6 +1334,130 @@ impl FileIdentity {
     }
 }
 
+struct DestinationParent {
+    path: PathBuf,
+    #[cfg(unix)]
+    identity: FileIdentity,
+    #[cfg(unix)]
+    directory: File,
+}
+
+impl DestinationParent {
+    fn capture(destination: &Path) -> StoreResult<Self> {
+        let path = destination
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+
+        #[cfg(not(unix))]
+        {
+            Err(StoreError::DestinationParentIdentityUnavailable { path })
+        }
+
+        #[cfg(unix)]
+        {
+            let before = fs::symlink_metadata(&path)
+                .map_err(|_| StoreError::DestinationParentInvalid { path: path.clone() })?;
+            if before.file_type().is_symlink() || !before.is_dir() {
+                return Err(StoreError::DestinationParentInvalid { path });
+            }
+            let identity = FileIdentity::from_metadata(&before);
+            let directory = File::open(&path)?;
+            let opened = directory.metadata()?;
+            if !opened.is_dir() || FileIdentity::from_metadata(&opened) != identity {
+                return Err(StoreError::DestinationParentChanged { path });
+            }
+            let after = fs::symlink_metadata(&path)
+                .map_err(|_| StoreError::DestinationParentChanged { path: path.clone() })?;
+            if after.file_type().is_symlink()
+                || !after.is_dir()
+                || FileIdentity::from_metadata(&after) != identity
+            {
+                return Err(StoreError::DestinationParentChanged { path });
+            }
+            Ok(Self {
+                path,
+                identity,
+                directory,
+            })
+        }
+    }
+
+    fn ensure_current(&self) -> StoreResult<()> {
+        #[cfg(not(unix))]
+        {
+            Err(StoreError::DestinationParentIdentityUnavailable {
+                path: self.path.clone(),
+            })
+        }
+
+        #[cfg(unix)]
+        {
+            let metadata = fs::symlink_metadata(&self.path).map_err(|_| {
+                StoreError::DestinationParentChanged {
+                    path: self.path.clone(),
+                }
+            })?;
+            if metadata.file_type().is_symlink()
+                || !metadata.is_dir()
+                || FileIdentity::from_metadata(&metadata) != self.identity
+            {
+                return Err(StoreError::DestinationParentChanged {
+                    path: self.path.clone(),
+                });
+            }
+            let opened = self.directory.metadata()?;
+            if !opened.is_dir() || FileIdentity::from_metadata(&opened) != self.identity {
+                return Err(StoreError::DestinationParentChanged {
+                    path: self.path.clone(),
+                });
+            }
+            Ok(())
+        }
+    }
+
+    fn ensure_destination(&self, destination: &Path, identity: FileIdentity) -> StoreResult<()> {
+        self.ensure_current()?;
+        ensure_path_identity(destination, identity)?;
+        self.ensure_current()
+    }
+
+    fn sync(&self) -> StoreResult<()> {
+        self.ensure_current()?;
+        #[cfg(unix)]
+        self.directory.sync_all()?;
+        self.ensure_current()
+    }
+}
+
+fn ensure_committed_import_destination(
+    parent: &DestinationParent,
+    destination: &Path,
+    identity: FileIdentity,
+) -> StoreResult<()> {
+    parent
+        .ensure_destination(destination, identity)
+        .map_err(|_| StoreError::ImportCommittedPathChanged {
+            path: destination.to_path_buf(),
+        })
+}
+
+fn committed_import_verification_error(path: &Path, error: StoreError) -> StoreError {
+    match error {
+        StoreError::DestinationParentChanged { .. }
+        | StoreError::DestinationParentInvalid { .. }
+        | StoreError::DestinationParentIdentityUnavailable { .. }
+        | StoreError::PathChanged { .. } => StoreError::ImportCommittedPathChanged {
+            path: path.to_path_buf(),
+        },
+        other => StoreError::ImportCommittedVerificationFailed {
+            path: path.to_path_buf(),
+            detail: other.to_string(),
+        },
+    }
+}
+
 fn validate_opened_path(path: &Path, opened: FileIdentity) -> StoreResult<()> {
     let path_identity = validate_existing_path(path)?;
     #[cfg(unix)]
@@ -909,21 +1488,6 @@ pub(crate) fn ensure_path_identity(path: &Path, expected: FileIdentity) -> Store
     } else {
         Ok(())
     }
-}
-
-#[cfg(unix)]
-fn sync_parent_directory(path: &Path) -> StoreResult<()> {
-    let parent = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    File::open(parent)?.sync_all()?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn sync_parent_directory(_path: &Path) -> StoreResult<()> {
-    Ok(())
 }
 
 #[cfg(unix)]

@@ -1,4 +1,7 @@
-use super::{Collection, OwnedRecordKey, RecordKey, StoreError, StoreKind};
+use super::{
+    Collection, LEGACY_CODEC_GO_GOB, LEGACY_CODEC_RAW, NATIVE_CODEC, NATIVE_PAYLOAD_SCHEMA,
+    OwnedRecordKey, RecordKey, StoreError, StoreKind,
+};
 use crate::schema::{ALL_COLLECTIONS, collections_for, decode_key};
 
 #[test]
@@ -13,6 +16,32 @@ fn schema_contains_the_exact_legacy_collection_set() {
             .count(),
         9
     );
+    for collection in Collection::all() {
+        assert_eq!(
+            Collection::from_legacy_name(collection.name().as_bytes()),
+            Some(*collection)
+        );
+    }
+    assert_eq!(Collection::from_legacy_name(b"Tasks"), None);
+    assert_eq!(Collection::GlobalConfig.legacy_codec(), LEGACY_CODEC_RAW);
+    assert_eq!(Collection::GlobalBackups.legacy_codec(), LEGACY_CODEC_RAW);
+    assert_eq!(Collection::Tasks.legacy_codec(), LEGACY_CODEC_GO_GOB);
+    assert_eq!(
+        Collection::GlobalProjects.legacy_codec(),
+        LEGACY_CODEC_GO_GOB
+    );
+    for collection in Collection::all() {
+        match collection {
+            Collection::GlobalConfig | Collection::GlobalBackups => {
+                assert_eq!(collection.import_codec(), LEGACY_CODEC_RAW);
+                assert_eq!(collection.import_payload_schema(), 0);
+            }
+            _ => {
+                assert_eq!(collection.import_codec(), NATIVE_CODEC);
+                assert_eq!(collection.import_payload_schema(), NATIVE_PAYLOAD_SCHEMA);
+            }
+        }
+    }
 }
 
 #[test]
@@ -35,6 +64,8 @@ fn keys_use_stable_binary_representations() {
             .unwrap(),
         [0, 0xff]
     );
+    let owned = OwnedRecordKey::Bytes(vec![0, 0xff]);
+    assert_eq!(owned.as_borrowed(), RecordKey::Bytes(&[0, 0xff]));
 }
 
 #[test]

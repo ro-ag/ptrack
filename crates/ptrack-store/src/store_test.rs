@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -5,10 +6,21 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use redb::{ReadableDatabase, TableDefinition};
+use ptrack_core::{
+    Digest32, Issue, IssueStatus, MemoryKind, MemoryWritebackRecord, NativeRecord, Note,
+    NoteTarget, Plan, PlanStatus, Severity, Task, TaskStatus, Timestamp, encode_record,
+};
+use redb::{ReadableDatabase, ReadableTable, TableDefinition};
 
-use super::{Collection, OwnedRecordKey, RecordEnvelope, RecordKey, Store, StoreError, StoreKind};
-use crate::schema::{MANIFEST_KEY_SCHEMA_VERSION, MANIFEST_TABLE};
+use super::{
+    Collection, NATIVE_CODEC, NATIVE_PAYLOAD_SCHEMA, OwnedRecordKey, RecordEnvelope, RecordKey,
+    Store, StoreError, StoreKind,
+};
+use crate::schema::{
+    MANIFEST_KEY_FAMILY, MANIFEST_KEY_ORIGIN, MANIFEST_KEY_OWNER, MANIFEST_KEY_SCHEMA_VERSION,
+    MANIFEST_KEY_STATE, MANIFEST_KEY_STORE_KIND, MANIFEST_TABLE, STORE_FAMILY,
+    STORE_ORIGIN_CREATED, STORE_OWNER, STORE_STATE_READY,
+};
 use crate::store::{FileIdentity, ensure_path_identity};
 
 static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(1);
@@ -42,11 +54,99 @@ fn project_store() -> (TestDirectory, PathBuf, Store) {
     (directory, path, store)
 }
 
+fn native(record: NativeRecord) -> RecordEnvelope {
+    RecordEnvelope::new(
+        NATIVE_CODEC,
+        NATIVE_PAYLOAD_SCHEMA,
+        encode_record(&record).unwrap(),
+    )
+}
+
+fn plan(id: u64) -> RecordEnvelope {
+    native(NativeRecord::Plan(Plan {
+        id,
+        title: format!("plan {id}"),
+        status: PlanStatus::Active,
+        milestone_id: 0,
+        order: 0,
+        created_at: Timestamp::Zero,
+        updated_at: Timestamp::Zero,
+    }))
+}
+
+fn task(id: u64) -> RecordEnvelope {
+    native(NativeRecord::Task(Task {
+        id,
+        plan_id: 1,
+        title: format!("task {id}"),
+        status: TaskStatus::Todo,
+        order: 0,
+        created_at: Timestamp::Zero,
+        updated_at: Timestamp::Zero,
+    }))
+}
+
+fn note(id: u64) -> RecordEnvelope {
+    native(NativeRecord::Note(Note {
+        id,
+        target: NoteTarget::Project,
+        target_id: 0,
+        kind: MemoryKind::Decision,
+        body: "note".to_owned(),
+        created_at: Timestamp::Zero,
+    }))
+}
+
+fn issue(id: u64) -> RecordEnvelope {
+    native(NativeRecord::Issue(Issue {
+        id,
+        title: format!("issue {id}"),
+        body: String::new(),
+        status: IssueStatus::Open,
+        severity: Severity::Low,
+        task_id: 0,
+        created_at: Timestamp::Zero,
+        updated_at: Timestamp::Zero,
+    }))
+}
+
+fn memory(sequence: u64) -> RecordEnvelope {
+    native(NativeRecord::MemoryWriteback(MemoryWritebackRecord {
+        digest: Digest32([1; 32]),
+        sequence,
+        kind: MemoryKind::Summary,
+        note_id: 0,
+    }))
+}
+
+#[test]
+fn created_store_uses_exact_schema_v3_manifest() {
+    let (directory, path, store) = project_store();
+    drop(store);
+
+    let entries = manifest_entries(&path);
+    assert_eq!(
+        entries,
+        BTreeMap::from([
+            (MANIFEST_KEY_FAMILY.to_vec(), STORE_FAMILY.to_vec()),
+            (MANIFEST_KEY_ORIGIN.to_vec(), STORE_ORIGIN_CREATED.to_vec()),
+            (MANIFEST_KEY_OWNER.to_vec(), STORE_OWNER.to_vec()),
+            (
+                MANIFEST_KEY_SCHEMA_VERSION.to_vec(),
+                3_u32.to_be_bytes().to_vec(),
+            ),
+            (MANIFEST_KEY_STATE.to_vec(), STORE_STATE_READY.to_vec()),
+            (MANIFEST_KEY_STORE_KIND.to_vec(), b"project".to_vec()),
+        ])
+    );
+    drop(directory);
+}
+
 #[test]
 fn committed_records_and_sequences_survive_reopen() {
     let (directory, path, store) = project_store();
-    let plan = RecordEnvelope::new(1, 5, [0x00, 0xff, 0x80]);
-    let replay = RecordEnvelope::new(77, 9, b"opaque gob bytes".as_slice());
+    let plan = plan(7);
+    let replay = memory(1);
 
     store
         .write(|transaction| {
@@ -55,7 +155,7 @@ fn committed_records_and_sequences_survive_reopen() {
             assert_eq!(transaction.next_id(Collection::MemoryWritebacks)?, 1);
             transaction.put(
                 Collection::MemoryWritebacks,
-                RecordKey::Bytes(&[0, 0xff, 0]),
+                RecordKey::Bytes(b"request-1"),
                 &replay,
             )?;
             Ok(())
@@ -79,7 +179,7 @@ fn committed_records_and_sequences_survive_reopen() {
             );
             assert_eq!(
                 transaction.scan(Collection::MemoryWritebacks)?,
-                vec![(OwnedRecordKey::Bytes(vec![0, 0xff, 0]), replay.clone())]
+                vec![(OwnedRecordKey::Bytes(b"request-1".to_vec()), replay.clone())]
             );
             Ok(())
         })
@@ -95,11 +195,7 @@ fn closure_error_rolls_back_records_and_sequence_allocation() {
 
     let error = store.write(|transaction| -> Result<(), StoreError> {
         assert_eq!(transaction.next_id(Collection::Tasks)?, 1);
-        transaction.put(
-            Collection::Tasks,
-            RecordKey::Id(1),
-            &RecordEnvelope::new(1, 1, b"not committed".as_slice()),
-        )?;
+        transaction.put(Collection::Tasks, RecordKey::Id(1), &task(1))?;
         Err(StoreError::InvalidManifest("sentinel".to_owned()))
     });
     assert!(matches!(error, Err(StoreError::InvalidManifest(_))));
@@ -120,11 +216,7 @@ fn closure_panic_rolls_back_records_and_sequence_allocation() {
     let panic = catch_unwind(AssertUnwindSafe(|| {
         let _ = store.write(|transaction| -> Result<(), StoreError> {
             let id = transaction.next_id(Collection::Notes)?;
-            transaction.put(
-                Collection::Notes,
-                RecordKey::Id(id),
-                &RecordEnvelope::new(1, 1, b"not committed".as_slice()),
-            )?;
+            transaction.put(Collection::Notes, RecordKey::Id(id), &note(id))?;
             panic!("test panic");
         });
     }));
@@ -140,7 +232,7 @@ fn closure_panic_rolls_back_records_and_sequence_allocation() {
 }
 
 #[test]
-fn swallowed_mutation_error_poisons_and_aborts_the_transaction() {
+fn corrupt_stored_record_is_rejected_on_open_without_mutation() {
     let directory = TestDirectory::new();
     let path = directory.path("poison.redb");
     drop(Store::create_new(&path, StoreKind::Project).unwrap());
@@ -157,38 +249,18 @@ fn swallowed_mutation_error_poisons_and_aborts_the_transaction() {
     transaction.commit().unwrap();
     drop(database);
 
-    let store = Store::open_existing(&path, StoreKind::Project).unwrap();
-    let result = store.write(|transaction| {
-        let error = transaction
-            .put(
-                Collection::Tasks,
-                RecordKey::Id(1),
-                &RecordEnvelope::new(1, 1, b"replacement".as_slice()),
-            )
-            .unwrap_err();
-        assert!(matches!(error, StoreError::Envelope(_)));
-        Ok(())
-    });
-    assert!(matches!(result, Err(StoreError::TransactionPoisoned)));
-    drop(store);
-
-    let database = redb::Database::open(&path).unwrap();
-    let transaction = database.begin_read().unwrap();
-    let tasks = transaction.open_table(Collection::Tasks.table()).unwrap();
-    assert_eq!(
-        tasks
-            .get(1_u64.to_be_bytes().as_slice())
-            .unwrap()
-            .unwrap()
-            .value(),
-        corrupt_value
-    );
+    let before = fs::read(&path).unwrap();
+    assert!(matches!(
+        Store::open_existing(&path, StoreKind::Project),
+        Err(StoreError::Envelope(_))
+    ));
+    assert_eq!(fs::read(path).unwrap(), before);
 }
 
 #[test]
 fn high_water_marks_preserve_deletions_gaps_and_overflow() {
     let (_directory, _path, store) = project_store();
-    let record = RecordEnvelope::new(1, 1, b"record".as_slice());
+    let record = issue(5);
 
     store
         .write(|transaction| {
@@ -260,6 +332,119 @@ fn create_new_never_clobbers_an_existing_file() {
     assert_eq!(fs::read(path).unwrap(), before);
 }
 
+#[cfg(unix)]
+#[test]
+fn create_new_requires_an_existing_real_parent_directory() {
+    use std::os::unix::fs::symlink;
+
+    let directory = TestDirectory::new();
+    let missing = directory.path("missing").join("project.redb");
+    assert!(matches!(
+        Store::create_new(&missing, StoreKind::Project),
+        Err(StoreError::DestinationParentInvalid { .. })
+    ));
+    assert!(!missing.exists());
+
+    let file_parent = directory.path("file-parent");
+    write_private_file(&file_parent, b"parent");
+    assert!(matches!(
+        Store::create_new(file_parent.join("project.redb"), StoreKind::Project),
+        Err(StoreError::DestinationParentInvalid { .. })
+    ));
+    assert_eq!(fs::read(file_parent).unwrap(), b"parent");
+
+    let real_parent = directory.path("real-parent");
+    let linked_parent = directory.path("linked-parent");
+    fs::create_dir(&real_parent).unwrap();
+    symlink(&real_parent, &linked_parent).unwrap();
+    assert!(matches!(
+        Store::create_new(linked_parent.join("project.redb"), StoreKind::Project),
+        Err(StoreError::DestinationParentInvalid { .. })
+    ));
+    assert!(!real_parent.join("project.redb").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn create_new_rejects_parent_swap_before_creation_without_artifact() {
+    let directory = TestDirectory::new();
+    let parent = directory.path("destination-parent");
+    let held_parent = directory.path("held-parent");
+    fs::create_dir(&parent).unwrap();
+    let path = parent.join("project.redb");
+    let marker = parent.join("marker");
+    write_private_file(&marker, b"original");
+
+    let swap_parent = parent.clone();
+    let move_to = held_parent.clone();
+    let result = Store::create_new_with_creation_hooks(
+        &path,
+        StoreKind::Project,
+        move || {
+            fs::rename(&swap_parent, &move_to)?;
+            fs::create_dir(&swap_parent)?;
+            fs::write(swap_parent.join("replacement-marker"), b"replacement")?;
+            Ok(())
+        },
+        || Ok(()),
+    );
+
+    assert!(matches!(
+        result,
+        Err(StoreError::DestinationParentChanged { .. })
+    ));
+    assert!(!path.exists());
+    assert!(!held_parent.join("project.redb").exists());
+    assert_eq!(fs::read(held_parent.join("marker")).unwrap(), b"original");
+    assert_eq!(
+        fs::read(parent.join("replacement-marker")).unwrap(),
+        b"replacement"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn create_new_rejects_parent_swap_after_creation_before_redb_writes() {
+    use std::os::unix::fs::MetadataExt;
+
+    let directory = TestDirectory::new();
+    let parent = directory.path("destination-parent");
+    let held_parent = directory.path("held-parent");
+    fs::create_dir(&parent).unwrap();
+    let path = parent.join("project.redb");
+    let marker = parent.join("marker");
+    write_private_file(&marker, b"original");
+
+    let swap_parent = parent.clone();
+    let move_to = held_parent.clone();
+    let result = Store::create_new_with_creation_hooks(
+        &path,
+        StoreKind::Project,
+        || Ok(()),
+        move || {
+            fs::rename(&swap_parent, &move_to)?;
+            fs::create_dir(&swap_parent)?;
+            fs::write(swap_parent.join("replacement-marker"), b"replacement")?;
+            Ok(())
+        },
+    );
+
+    assert!(matches!(
+        result,
+        Err(StoreError::DestinationParentChanged { .. })
+    ));
+    assert!(!path.exists());
+    let retained = held_parent.join("project.redb");
+    let metadata = fs::metadata(&retained).unwrap();
+    assert_eq!(metadata.len(), 0);
+    assert_eq!(metadata.mode() & 0o777, 0o600);
+    assert_eq!(fs::read(held_parent.join("marker")).unwrap(), b"original");
+    assert_eq!(
+        fs::read(parent.join("replacement-marker")).unwrap(),
+        b"replacement"
+    );
+}
+
 #[test]
 fn file_identity_detects_path_replacement() {
     let directory = TestDirectory::new();
@@ -321,7 +506,7 @@ fn newer_application_schema_is_rejected_without_mutation() {
     {
         let mut manifest = transaction.open_table(MANIFEST_TABLE).unwrap();
         manifest
-            .insert(MANIFEST_KEY_SCHEMA_VERSION, 2_u32.to_be_bytes().as_slice())
+            .insert(MANIFEST_KEY_SCHEMA_VERSION, 4_u32.to_be_bytes().as_slice())
             .unwrap();
         manifest
             .insert(b"future_key".as_slice(), b"future_value".as_slice())
@@ -334,8 +519,8 @@ fn newer_application_schema_is_rejected_without_mutation() {
     assert!(matches!(
         Store::open_existing(&path, StoreKind::Project),
         Err(StoreError::UnsupportedSchemaVersion {
-            actual: 2,
-            current: 1
+            actual: 4,
+            current: 3
         })
     ));
     assert_eq!(fs::read(path).unwrap(), before);
@@ -346,14 +531,40 @@ fn older_application_schema_is_rejected_without_mutation() {
     let (_directory, path, store) = project_store();
     drop(store);
 
-    set_schema_version(&path, 0);
+    for version in [1, 2] {
+        set_schema_version(&path, version);
+        let before = fs::read(&path).unwrap();
+        assert!(matches!(
+            Store::open_existing(&path, StoreKind::Project),
+            Err(StoreError::UnsupportedSchemaVersion {
+                actual,
+                current: 3
+            }) if actual == version
+        ));
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+}
+
+#[test]
+fn malformed_application_schema_is_rejected_without_mutation() {
+    let (_directory, path, store) = project_store();
+    drop(store);
+
+    let database = redb::Database::open(&path).unwrap();
+    let transaction = database.begin_write().unwrap();
+    {
+        let mut manifest = transaction.open_table(MANIFEST_TABLE).unwrap();
+        manifest
+            .insert(MANIFEST_KEY_SCHEMA_VERSION, [0_u8; 3].as_slice())
+            .unwrap();
+    }
+    transaction.commit().unwrap();
+    drop(database);
+
     let before = fs::read(&path).unwrap();
     assert!(matches!(
         Store::open_existing(&path, StoreKind::Project),
-        Err(StoreError::UnsupportedSchemaVersion {
-            actual: 0,
-            current: 1
-        })
+        Err(StoreError::InvalidManifest(_))
     ));
     assert_eq!(fs::read(path).unwrap(), before);
 }
@@ -398,9 +609,8 @@ fn unexpected_tables_and_corrupt_record_envelopes_are_rejected() {
     }
     transaction.commit().unwrap();
     drop(database);
-    let store = Store::open_existing(record_path, StoreKind::Project).unwrap();
     assert!(matches!(
-        store.read(|transaction| transaction.get(Collection::Tasks, RecordKey::Id(1))),
+        Store::open_existing(record_path, StoreKind::Project),
         Err(StoreError::Envelope(_))
     ));
 }
@@ -469,6 +679,20 @@ fn set_schema_version(path: &Path, version: u32) {
     }
     transaction.commit().unwrap();
     drop(database);
+}
+
+fn manifest_entries(path: &Path) -> BTreeMap<Vec<u8>, Vec<u8>> {
+    let database = redb::Database::open(path).unwrap();
+    let transaction = database.begin_read().unwrap();
+    let manifest = transaction.open_table(MANIFEST_TABLE).unwrap();
+    manifest
+        .iter()
+        .unwrap()
+        .map(|entry| {
+            let (key, value) = entry.unwrap();
+            (key.value().to_vec(), value.value().to_vec())
+        })
+        .collect()
 }
 
 #[cfg(unix)]

@@ -1,10 +1,18 @@
 use crate::EnvelopeError;
 
 const RECORD_MAGIC: [u8; 4] = *b"PTRK";
-const HEADER_LENGTH: usize = 4 + 2 + 2 + 4 + 8;
+pub(crate) const RECORD_ENVELOPE_HEADER_LENGTH: usize = 4 + 2 + 2 + 4 + 8;
 
 /// The current binary layout version of a persisted record envelope.
 pub const RECORD_ENVELOPE_VERSION: u16 = 1;
+/// Stable codec identifier for payloads encoded by Go's `encoding/gob`.
+pub const LEGACY_CODEC_GO_GOB: u16 = 1;
+/// Stable codec identifier for legacy values stored as uninterpreted bytes.
+pub const LEGACY_CODEC_RAW: u16 = 2;
+/// Stable codec identifier for canonical native ptrack positional records.
+pub const NATIVE_CODEC: u16 = 3;
+/// Current payload schema for canonical native ptrack positional records.
+pub const NATIVE_PAYLOAD_SCHEMA: u32 = 1;
 
 /// A versioned wrapper around an opaque persisted model payload.
 ///
@@ -56,7 +64,7 @@ impl RecordEnvelope {
     pub fn encode(&self) -> Vec<u8> {
         let payload_length = u64::try_from(self.payload.len())
             .expect("Rust targets cannot address a payload larger than u64::MAX bytes");
-        let mut encoded = Vec::with_capacity(HEADER_LENGTH + self.payload.len());
+        let mut encoded = Vec::with_capacity(RECORD_ENVELOPE_HEADER_LENGTH + self.payload.len());
         encoded.extend_from_slice(&RECORD_MAGIC);
         encoded.extend_from_slice(&RECORD_ENVELOPE_VERSION.to_be_bytes());
         encoded.extend_from_slice(&self.codec.to_be_bytes());
@@ -71,10 +79,10 @@ impl RecordEnvelope {
     /// The decoder rejects truncated headers and payloads, unsupported envelope
     /// layouts, and trailing bytes. Codec identifiers remain opaque.
     pub fn decode(encoded: &[u8]) -> Result<Self, EnvelopeError> {
-        if encoded.len() < HEADER_LENGTH {
+        if encoded.len() < RECORD_ENVELOPE_HEADER_LENGTH {
             return Err(EnvelopeError::HeaderTooShort {
                 actual: encoded.len(),
-                minimum: HEADER_LENGTH,
+                minimum: RECORD_ENVELOPE_HEADER_LENGTH,
             });
         }
 
@@ -116,16 +124,16 @@ impl RecordEnvelope {
             usize::try_from(declared_length).map_err(|_| EnvelopeError::PayloadLengthOverflow {
                 declared: declared_length,
             })?;
-        let expected_length = HEADER_LENGTH.checked_add(payload_length).ok_or(
-            EnvelopeError::PayloadLengthOverflow {
+        let expected_length = RECORD_ENVELOPE_HEADER_LENGTH
+            .checked_add(payload_length)
+            .ok_or(EnvelopeError::PayloadLengthOverflow {
                 declared: declared_length,
-            },
-        )?;
+            })?;
 
         match encoded.len().cmp(&expected_length) {
             std::cmp::Ordering::Less => Err(EnvelopeError::PayloadTooShort {
                 declared: declared_length,
-                actual: encoded.len() - HEADER_LENGTH,
+                actual: encoded.len() - RECORD_ENVELOPE_HEADER_LENGTH,
             }),
             std::cmp::Ordering::Greater => Err(EnvelopeError::TrailingBytes {
                 declared: declared_length,
@@ -134,7 +142,7 @@ impl RecordEnvelope {
             std::cmp::Ordering::Equal => Ok(Self {
                 codec,
                 payload_schema,
-                payload: encoded[HEADER_LENGTH..].to_vec(),
+                payload: encoded[RECORD_ENVELOPE_HEADER_LENGTH..].to_vec(),
             }),
         }
     }

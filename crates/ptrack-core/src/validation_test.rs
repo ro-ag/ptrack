@@ -1,0 +1,164 @@
+use crate::{
+    CapabilityAudit, CapabilityKind, Digest32, MemoryKind, Meta, NativeRecord, Note, NoteTarget,
+    Timestamp, Validate,
+};
+
+use super::codec_test::valid_capability;
+
+#[test]
+fn note_summary_kind_is_never_persistable() {
+    let note = NativeRecord::Note(Note {
+        id: 1,
+        target: NoteTarget::Project,
+        target_id: 0,
+        kind: MemoryKind::Summary,
+        body: "rolling".to_owned(),
+        created_at: Timestamp::Zero,
+    });
+    assert_eq!(
+        note.validate().expect_err("summary note must fail").field(),
+        "note.kind"
+    );
+}
+
+#[test]
+fn capability_requires_exact_scope_and_nonempty_digest() {
+    let mut capability = valid_capability(CapabilityKind::Http);
+    capability.git = valid_capability(CapabilityKind::Git).git;
+    assert_eq!(
+        capability
+            .validate()
+            .expect_err("mixed scopes must fail")
+            .field(),
+        "capability.scope"
+    );
+
+    capability.git = None;
+    capability.scope_digest = Digest32::EMPTY;
+    assert_eq!(
+        capability
+            .validate()
+            .expect_err("empty digest must fail")
+            .field(),
+        "capability.scope_digest"
+    );
+}
+
+#[test]
+fn capability_approval_state_is_coherent() {
+    let mut capability = valid_capability(CapabilityKind::Http);
+    capability.enabled = true;
+    assert_eq!(
+        capability
+            .validate()
+            .expect_err("enabled requires approval")
+            .field(),
+        "capability.approved_at"
+    );
+
+    capability.approved_at = Timestamp::Fixed {
+        seconds: 100,
+        nanoseconds: 0,
+        offset_seconds: 0,
+    };
+    capability.expires_at = Timestamp::Fixed {
+        seconds: 3_701,
+        nanoseconds: 0,
+        offset_seconds: 0,
+    };
+    assert_eq!(
+        capability
+            .validate()
+            .expect_err("expiry exceeds duration")
+            .field(),
+        "capability.expires_at"
+    );
+
+    capability.expires_at = Timestamp::Fixed {
+        seconds: 3_700,
+        nanoseconds: 0,
+        offset_seconds: 0,
+    };
+    capability.validate().expect("coherent approval");
+
+    capability.enabled = false;
+    assert_eq!(
+        capability
+            .validate()
+            .expect_err("disabled approval must be cleared")
+            .field(),
+        "capability.approval"
+    );
+}
+
+#[test]
+fn timestamp_rejects_noncanonical_components() {
+    let timestamp = Timestamp::Fixed {
+        seconds: 0,
+        nanoseconds: 1_000_000_000,
+        offset_seconds: 0,
+    };
+    assert_eq!(
+        timestamp
+            .validate()
+            .expect_err("nanoseconds must be bounded")
+            .field(),
+        "timestamp.nanoseconds"
+    );
+}
+
+#[test]
+fn legacy_zero_format_meta_is_preserved_but_newer_formats_fail() {
+    let mut meta = Meta {
+        goal: String::new(),
+        summary: String::new(),
+        active_plan: 0,
+        created_at: Timestamp::Zero,
+        updated_at: Timestamp::Zero,
+        format_version: 0,
+        last_write_version: String::new(),
+    };
+    meta.validate().expect("legacy v0 is preserved");
+    meta.format_version = 6;
+    assert_eq!(
+        meta.validate()
+            .expect_err("future Go format must fail")
+            .field(),
+        "meta.format_version"
+    );
+}
+
+#[test]
+fn successful_audit_uses_go_none_error_class() {
+    valid_audit()
+        .validate()
+        .expect("Go success class is canonical");
+}
+
+fn valid_audit() -> CapabilityAudit {
+    CapabilityAudit {
+        id: 1,
+        capability_id: 2,
+        agent_profile: "agent".to_owned(),
+        kind: CapabilityKind::Http,
+        operation: "GET".to_owned(),
+        target: "https://example.test".to_owned(),
+        success: true,
+        error_class: "none".to_owned(),
+        duration_millis: 0,
+        request_bytes: 0,
+        response_bytes: 0,
+        redirects: 0,
+        created_at: Timestamp::Zero,
+    }
+}
+
+#[test]
+fn failed_audit_rejects_non_allowlisted_error_text() {
+    let mut audit = valid_audit();
+    audit.success = false;
+    audit.error_class = "secret diagnostic text".to_owned();
+    assert!(audit.validate().is_err());
+    audit.error_class = "timeout".to_owned();
+    assert!(audit.validate().is_ok());
+}
