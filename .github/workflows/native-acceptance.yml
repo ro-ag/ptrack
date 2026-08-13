@@ -216,6 +216,7 @@ jobs:
           python3 tools/release_contract.py validate-binary \
             "$binary" "$version" linux "${{ matrix.arch }}"
           mkdir -p "$RUNNER_TEMP/ptrack-home"
+          chmod 700 "$RUNNER_TEMP/ptrack-home"
           set +e
           PTRACK_HOME="$RUNNER_TEMP/ptrack-home" \
             timeout 10s xvfb-run --auto-servernum "$binary" gui
@@ -235,6 +236,9 @@ jobs:
             $binary $version windows "${{ matrix.arch }}"
           $env:PTRACK_HOME = Join-Path $env:RUNNER_TEMP "ptrack-home"
           New-Item -ItemType Directory -Force -Path $env:PTRACK_HOME | Out-Null
+          $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          icacls $env:PTRACK_HOME /setowner "*$sid" | Out-Null
+          icacls $env:PTRACK_HOME /inheritance:r /grant:r "*${sid}:(OI)(CI)F" | Out-Null
           $process = $null
           try {
             $process = Start-Process -FilePath $binary -ArgumentList "gui" -PassThru
@@ -330,6 +334,7 @@ jobs:
             "$app/Contents/MacOS/ptrack" "$version" darwin "${{ matrix.arch }}"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")" = "p-track"
           mkdir -p "$RUNNER_TEMP/ptrack-home"
+          chmod 700 "$RUNNER_TEMP/ptrack-home"
           pid=""
           cleanup() {
             if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then

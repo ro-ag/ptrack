@@ -21,7 +21,7 @@ use windows_sys::Win32::Security::{
     SUB_CONTAINERS_AND_OBJECTS_INHERIT, TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_ATTRIBUTE_DIRECTORY,
+    BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_DIRECTORY,
     FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
     FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
     GetFileInformationByHandle, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
@@ -215,7 +215,9 @@ fn verify_owner_dacl(owner: *mut c_void, dacl: *mut ACL, user_sid: *mut c_void) 
         if u32::from(allowed.Header.AceType) != ACCESS_ALLOWED_ACE_TYPE {
             return Err(io::Error::other("private DACL contains a non-allow ACE"));
         }
-        if allowed.Mask != GENERIC_ALL {
+        // SetEntriesInAclW may preserve the generic bit or expand it to the
+        // object-specific full-control mask. Both encode the same authority.
+        if allowed.Mask != GENERIC_ALL && allowed.Mask != FILE_ALL_ACCESS {
             return Err(io::Error::other(
                 "private DACL does not grant exact owner authority",
             ));
