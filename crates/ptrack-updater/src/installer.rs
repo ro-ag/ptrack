@@ -260,7 +260,7 @@ mod platform {
 
     use std::os::windows::ffi::OsStringExt;
 
-    use windows_sys::Win32::Storage::FileSystem::GetWindowsDirectoryW;
+    use windows_sys::Win32::System::SystemInformation::GetWindowsDirectoryW;
 
     use super::{
         ApplyAction, ApplyResult, CancellationToken, Installer, Path, PathBuf, StageKind,

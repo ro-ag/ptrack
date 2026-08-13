@@ -5,7 +5,7 @@ use std::ffi::c_void;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::windows::ffi::OsStrExt;
-use std::os::windows::io::{AsRawHandle, FromRawHandle};
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle as StdOwnedHandle};
 use std::path::{Component, Path};
 use std::ptr;
 
@@ -48,7 +48,7 @@ use windows_sys::Win32::System::Threading::{
 
 use crate::git::GitError;
 
-pub(super) struct ProcessJob(windows_sys::Win32::Foundation::HANDLE);
+pub(super) struct ProcessJob(StdOwnedHandle);
 
 impl ProcessJob {
     pub(super) fn attach(child: &tokio::process::Child) -> Result<Self, ()> {
@@ -57,7 +57,7 @@ impl ProcessJob {
 
     pub(super) fn terminate(&self) {
         // SAFETY: self owns a live job handle; the exit code is diagnostic-only.
-        let _ = unsafe { TerminateJobObject(self.0, 1) };
+        let _ = unsafe { TerminateJobObject(self.0.as_raw_handle().cast(), 1) };
     }
 }
 
@@ -105,13 +105,15 @@ impl SuspendedSpawnApi for WindowsSpawnApi<'_> {
             let _ = unsafe { CloseHandle(job) };
             return Err(());
         }
-        Ok(ProcessJob(job))
+        // SAFETY: the successfully configured handle is uniquely owned here
+        // and is transferred to the standard owning handle exactly once.
+        Ok(ProcessJob(unsafe { StdOwnedHandle::from_raw_handle(job) }))
     }
 
     fn assign_suspended_process(&self, job: &Self::Job) -> Result<(), ()> {
         let process = self.child.raw_handle().ok_or(())?;
         // SAFETY: both handles remain valid for the duration of the call.
-        if unsafe { AssignProcessToJobObject(job.0, process.cast()) } == 0 {
+        if unsafe { AssignProcessToJobObject(job.0.as_raw_handle().cast(), process.cast()) } == 0 {
             return Err(());
         }
         Ok(())
@@ -169,14 +171,6 @@ fn resume_only_process_thread(process_id: u32) -> Result<(), ()> {
     // SAFETY: snapshot is the owned handle returned by the snapshot call.
     let _ = unsafe { CloseHandle(snapshot) };
     result
-}
-
-impl Drop for ProcessJob {
-    fn drop(&mut self) {
-        // SAFETY: self owns the job handle exactly once. KILL_ON_JOB_CLOSE
-        // terminates any descendant which survived normal completion.
-        let _ = unsafe { CloseHandle(self.0) };
-    }
 }
 
 pub(super) fn private_windows_acl(path: &Path) -> Result<(), GitError> {
