@@ -1426,6 +1426,7 @@ fn validated_global_attestation(
     })?;
     let expected_database = clean_home.join("global.redb");
     if global_home != clean_home
+        || std::fs::canonicalize(global_home)? != global_home
         || global_database != expected_database
         || std::fs::canonicalize(global_database)? != global_database
         || global_binding.generation == 0
