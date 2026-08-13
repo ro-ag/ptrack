@@ -1629,29 +1629,16 @@ async fn linked_launch_preflight_requires_an_exact_installed_agent_profile() {
 async fn workspace_confirmation_owns_and_expires_the_resource_admission_fence() {
     let directory = TestDirectory::new("admission-expiry");
     let (bindings, _) = bound_bindings(&directory);
-    let root = bindings.project.as_ref().unwrap().root.clone();
-    let manager = Manager::new(&root, vec![profile(&root)], Arc::new(TestFactory))
-        .await
-        .unwrap();
-    let terminal = TerminalRuntime::new(TerminalRuntimeConfig {
-        generation: 7,
-        project_root: root,
-        manager,
-        identity: Arc::new(TestIdentity::default()),
-        events: Arc::new(TestEvents::default()),
-        attachment_lease: Duration::from_secs(30),
-    })
-    .unwrap();
-    let session = terminal.create(7, "shell-default", None, 24, 80).unwrap();
     let workspace = Arc::new(BoundDesktopWorkspace::new(
         7,
         0,
         bindings.clone(),
         Box::new(LocalApplication::new(bindings)),
-        Some(terminal.clone()),
+        None,
         None,
         None,
     ));
+    let pending_admission = workspace.begin_resource_admission().unwrap();
     let runtime = DesktopRuntime::new(DesktopRuntimeConfig {
         version: "test".to_owned(),
         factory: Arc::new(FakeFactory::default()),
@@ -1667,26 +1654,15 @@ async fn workspace_confirmation_owns_and_expires_the_resource_admission_fence() 
     assert_eq!(challenge["requiresConfirmation"], true);
     assert_eq!(
         workspace
-            .invoke(
-                "CreateTerminalV2",
-                &[json!(7), json!("missing"), json!(""), json!(24), json!(80)],
-            )
-            .unwrap_err()
+            .begin_resource_admission()
+            .err()
+            .expect("confirmation must retain the resource-admission fence")
             .to_string(),
         "workspace resource admission is fenced"
     );
     tokio::time::sleep(Duration::from_millis(80)).await;
-    assert!(
-        workspace
-            .invoke(
-                "CreateTerminalV2",
-                &[json!(7), json!("missing"), json!(""), json!(24), json!(80)],
-            )
-            .unwrap_err()
-            .to_string()
-            .contains("profile \"missing\" is unavailable")
-    );
-    terminal.close(7, &session.session_id, true).unwrap();
-    terminal.shutdown().await.unwrap();
+    let after_expiry = workspace.begin_resource_admission().unwrap();
+    drop(after_expiry);
+    drop(pending_admission);
     drop(runtime);
 }
