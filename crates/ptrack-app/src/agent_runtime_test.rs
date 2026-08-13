@@ -1114,7 +1114,12 @@ fn runtime_requires_exact_project_and_global_attestations() {
 
     let mut wrong_home = runtime_config(&directory, 10, endpoint.clone(), Arc::clone(&factory));
     std::fs::create_dir_all(wrong_home.global_home.join("nested")).expect("nested home");
-    wrong_home.global_home = wrong_home.global_home.join("nested/..");
+    let mut dirty_home = wrong_home.global_home.as_os_str().to_os_string();
+    dirty_home.push(std::path::MAIN_SEPARATOR_STR);
+    dirty_home.push("nested");
+    dirty_home.push(std::path::MAIN_SEPARATOR_STR);
+    dirty_home.push("..");
+    wrong_home.global_home = dirty_home.into();
     assert!(AgentRuntime::start(wrong_home).is_err());
 
     let mut wrong_global = runtime_config(&directory, 10, endpoint, factory);
