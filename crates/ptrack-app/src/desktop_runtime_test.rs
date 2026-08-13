@@ -25,8 +25,9 @@ use super::desktop_runtime::{
     project_storage, watch_workspace_data,
 };
 use crate::{
-    AppError, AppResult, DesktopEvent, DesktopEventSink, LocalApplication, ProjectEndpoint,
-    TerminalRuntime, TerminalRuntimeConfig, WorkspaceBindings,
+    AppError, AppResult, DesktopEvent, DesktopEventSink, DesktopUpdateService, LocalApplication,
+    ProjectEndpoint, TerminalRuntime, TerminalRuntimeConfig, UnavailableUpdateService, UpdatePhase,
+    UpdateState, WorkspaceBindings,
 };
 
 use super::terminal_runtime_test::{TestEvents, TestFactory, TestIdentity, profile};
@@ -215,11 +216,113 @@ impl DesktopEventSink for Events {
     }
 }
 
+struct RecordingUpdates {
+    calls: Mutex<Vec<String>>,
+    state: Mutex<UpdateState>,
+}
+
+impl RecordingUpdates {
+    fn new() -> Arc<Self> {
+        let unavailable = UnavailableUpdateService::new("1.2.3");
+        Arc::new(Self {
+            calls: Mutex::new(Vec::new()),
+            state: Mutex::new(unavailable.state()),
+        })
+    }
+
+    fn record(&self, value: String) -> UpdateState {
+        self.calls.lock().unwrap().push(value);
+        let mut state = self.state.lock().unwrap();
+        state.revision = state.revision.saturating_add(1);
+        state.clone()
+    }
+}
+
+impl DesktopUpdateService for RecordingUpdates {
+    fn start(&self) -> Result<(), String> {
+        self.calls.lock().unwrap().push("start".to_owned());
+        Ok(())
+    }
+
+    fn state(&self) -> UpdateState {
+        self.state.lock().unwrap().clone()
+    }
+
+    fn set_automatic_checks(&self, enabled: bool) -> Result<UpdateState, String> {
+        self.state.lock().unwrap().automatic_checks = enabled;
+        Ok(self.record(format!("automatic:{enabled}")))
+    }
+
+    fn check_for_updates(&self) -> Result<UpdateState, String> {
+        self.state.lock().unwrap().phase = UpdatePhase::Current;
+        Ok(self.record("check".to_owned()))
+    }
+
+    fn download_update(&self, expected_version: &str) -> Result<UpdateState, String> {
+        Ok(self.record(format!("download:{expected_version}")))
+    }
+
+    fn apply_update(&self, expected_version: &str) -> Result<UpdateState, String> {
+        Ok(self.record(format!("apply:{expected_version}")))
+    }
+
+    fn cancel_operation(&self) -> UpdateState {
+        self.record("cancel".to_owned())
+    }
+
+    fn shutdown(&self) -> Result<(), String> {
+        self.calls.lock().unwrap().push("shutdown".to_owned());
+        Ok(())
+    }
+}
+
 fn request(method: &str, arguments: Vec<Value>) -> DesktopCommandRequest {
     DesktopCommandRequest {
         method: method.to_owned(),
         arguments,
     }
+}
+
+#[test]
+fn desktop_update_commands_delegate_exact_arguments_and_return_full_state() {
+    let updates = RecordingUpdates::new();
+    let mut config = DesktopRuntimeConfig::unavailable("1.2.3");
+    config.update_service = updates.clone();
+    let runtime = DesktopRuntime::new(config);
+    let initial = runtime
+        .invoke(request("GetUpdateState", Vec::new()))
+        .unwrap();
+    assert_eq!(initial["currentVersion"], "1.2.3");
+    assert_eq!(initial["downloadedBytes"], 0);
+    assert_eq!(initial["checksumVerified"], false);
+    runtime
+        .invoke(request("SetAutomaticUpdateChecks", vec![json!(true)]))
+        .unwrap();
+    runtime
+        .invoke(request("CheckForUpdates", Vec::new()))
+        .unwrap();
+    runtime
+        .invoke(request("DownloadUpdate", vec![json!("1.2.4")]))
+        .unwrap();
+    runtime
+        .invoke(request("ApplyUpdate", vec![json!("1.2.4")]))
+        .unwrap();
+    runtime
+        .invoke(request("CancelUpdateOperation", Vec::new()))
+        .unwrap();
+    assert_eq!(
+        *updates.calls.lock().unwrap(),
+        [
+            "start",
+            "automatic:true",
+            "check",
+            "download:1.2.4",
+            "apply:1.2.4",
+            "cancel"
+        ]
+    );
+    runtime.begin_shutdown().unwrap();
+    assert_eq!(updates.calls.lock().unwrap().last().unwrap(), "shutdown");
 }
 
 #[test]
@@ -427,6 +530,7 @@ fn workspace_publication_is_monotonic_and_failed_candidate_preserves_active_gene
         event_sink: Some(events.clone()),
         initial_workspace: None,
         recent_projects: Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+        update_service: super::update_runtime::UnavailableUpdateService::new("0.22.0"),
         confirmation_ttl: Duration::from_secs(60),
     });
 
@@ -480,6 +584,7 @@ fn workspace_confirmation_is_random_single_use_and_revision_fenced() {
         event_sink: None,
         initial_workspace: Some(current.clone()),
         recent_projects: Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+        update_service: super::update_runtime::UnavailableUpdateService::new("test"),
         confirmation_ttl: Duration::from_secs(60),
     });
 
@@ -525,6 +630,7 @@ fn shutdown_is_idempotent_and_fences_future_calls() {
         event_sink: None,
         initial_workspace: Some(workspace.clone()),
         recent_projects: Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+        update_service: super::update_runtime::UnavailableUpdateService::new("test"),
         confirmation_ttl: Duration::from_secs(60),
     });
     runtime.begin_shutdown().unwrap();
@@ -565,6 +671,7 @@ fn close_is_idempotent_returns_closed_then_settles_to_welcome() {
         event_sink: None,
         initial_workspace: Some(workspace),
         recent_projects: Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+        update_service: super::update_runtime::UnavailableUpdateService::new("test"),
         confirmation_ttl: Duration::from_secs(60),
     });
     let closed = runtime
@@ -594,6 +701,7 @@ fn failed_shutdown_remains_fenced_and_retries_cleanup() {
         event_sink: None,
         initial_workspace: Some(workspace),
         recent_projects: Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+        update_service: super::update_runtime::UnavailableUpdateService::new("test"),
         confirmation_ttl: Duration::from_secs(60),
     });
     assert_eq!(
@@ -623,6 +731,7 @@ fn project_change_cleanup_warnings_preserve_exact_context() {
             attempts: AtomicUsize::new(0),
         })),
         recent_projects: Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+        update_service: super::update_runtime::UnavailableUpdateService::new("test"),
         confirmation_ttl: Duration::from_secs(60),
     });
     assert_eq!(
@@ -640,6 +749,7 @@ fn project_change_cleanup_warnings_preserve_exact_context() {
             attempts: AtomicUsize::new(0),
         })),
         recent_projects: Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+        update_service: super::update_runtime::UnavailableUpdateService::new("test"),
         confirmation_ttl: Duration::from_secs(60),
     });
     assert_eq!(
@@ -663,6 +773,7 @@ fn recent_projects_are_available_without_an_open_workspace_and_fenced_on_close()
             "lastSeen": "2026-08-13T00:00:00Z",
             "available": true
         })])),
+        update_service: super::update_runtime::UnavailableUpdateService::new("test"),
         confirmation_ttl: Duration::from_secs(60),
     });
     let recent = runtime
@@ -696,6 +807,7 @@ fn close_timeout_restores_admission_and_retry_finishes_after_runtime_call() {
         event_sink: None,
         initial_workspace: Some(workspace),
         recent_projects: Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+        update_service: super::update_runtime::UnavailableUpdateService::new("test"),
         confirmation_ttl: Duration::from_secs(60),
     });
     let caller = {
@@ -730,6 +842,7 @@ fn in_flight_open_is_bounded_by_shutdown_and_cannot_republish_after_success() {
         event_sink: None,
         initial_workspace: None,
         recent_projects: Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+        update_service: super::update_runtime::UnavailableUpdateService::new("test"),
         confirmation_ttl: Duration::from_secs(60),
     });
     let opener = {
@@ -1545,6 +1658,7 @@ async fn workspace_confirmation_owns_and_expires_the_resource_admission_fence() 
         event_sink: None,
         initial_workspace: Some(workspace.clone()),
         recent_projects: Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+        update_service: super::update_runtime::UnavailableUpdateService::new("test"),
         confirmation_ttl: Duration::from_millis(30),
     });
     let challenge = runtime

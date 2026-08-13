@@ -244,6 +244,26 @@ impl crate::TerminalEventSink for DesktopTerminalEventSink {
     }
 }
 
+/// Adapts updater state publication into the one-way desktop event plane.
+pub struct DesktopUpdateEventSink {
+    sink: Arc<dyn DesktopEventSink>,
+}
+
+impl DesktopUpdateEventSink {
+    #[must_use]
+    pub fn new(sink: Arc<dyn DesktopEventSink>) -> Arc<Self> {
+        Arc::new(Self { sink })
+    }
+}
+
+impl crate::UpdateEventSink for DesktopUpdateEventSink {
+    fn state_changed(&self, state: crate::UpdateState) {
+        if let Ok(value) = serde_json::to_value(state) {
+            self.sink.emit(DesktopEvent::UpdateStateChanged(value));
+        }
+    }
+}
+
 /// Generation-owned workspace service. Implementations own all database,
 /// terminal, agent, capability, and watcher authority; native shells receive
 /// only this command surface.
@@ -297,18 +317,21 @@ pub struct DesktopRuntimeConfig {
     pub event_sink: Option<Arc<dyn DesktopEventSink>>,
     pub initial_workspace: Option<Arc<dyn DesktopWorkspace>>,
     pub recent_projects: Arc<dyn RecentProjectsProvider>,
+    pub update_service: Arc<dyn crate::DesktopUpdateService>,
     pub confirmation_ttl: Duration,
 }
 
 impl DesktopRuntimeConfig {
     #[must_use]
     pub fn unavailable(version: impl Into<String>) -> Self {
+        let version = version.into();
         Self {
-            version: version.into(),
+            version: version.clone(),
             factory: Arc::new(NoDesktopWorkspaceFactory),
             event_sink: None,
             initial_workspace: None,
             recent_projects: Arc::new(NoRecentProjectsProvider),
+            update_service: crate::UnavailableUpdateService::new(version),
             confirmation_ttl: DEFAULT_CONFIRMATION_TTL,
         }
     }
@@ -448,6 +471,7 @@ pub struct DesktopRuntime {
     calls_changed: Condvar,
     watcher: Mutex<Option<WorkspaceWatcher>>,
     recent_projects: Arc<dyn RecentProjectsProvider>,
+    update_service: Arc<dyn crate::DesktopUpdateService>,
     confirmation_ttl: Duration,
 }
 
@@ -478,12 +502,14 @@ impl DesktopRuntime {
             calls_changed: Condvar::new(),
             watcher: Mutex::new(None),
             recent_projects: config.recent_projects,
+            update_service: config.update_service,
             confirmation_ttl: if config.confirmation_ttl.is_zero() {
                 DEFAULT_CONFIRMATION_TTL
             } else {
                 config.confirmation_ttl
             },
         });
+        let _ = runtime.update_service.start();
         if let Some(workspace) = initial {
             let project = workspace.project();
             runtime.start_workspace_watcher(1, PathBuf::from(project.db_path), workspace);
@@ -522,13 +548,45 @@ impl DesktopRuntime {
                 Ok(Value::String(help_destination(destination)?.to_owned()))
             }
             "PickProjectDirectory" => Err(unavailable("directory picker")),
-            "GetUpdateState" | "CancelUpdateOperation" => {
+            "GetUpdateState" => {
                 let _lease = self.begin_native_action()?;
-                Ok(default_update_state())
+                value(self.update_service.state())
             }
-            "SetAutomaticUpdateChecks" | "CheckForUpdates" | "DownloadUpdate" | "ApplyUpdate" => {
+            "CancelUpdateOperation" => {
                 let _lease = self.begin_native_action()?;
-                Err(unavailable("update service"))
+                value(self.update_service.cancel_operation())
+            }
+            "SetAutomaticUpdateChecks" => {
+                let _lease = self.begin_native_action()?;
+                value(
+                    self.update_service
+                        .set_automatic_checks(bool_arg(&request.arguments, 0)?)
+                        .map_err(AppError::Message)?,
+                )
+            }
+            "CheckForUpdates" => {
+                let _lease = self.begin_native_action()?;
+                value(
+                    self.update_service
+                        .check_for_updates()
+                        .map_err(AppError::Message)?,
+                )
+            }
+            "DownloadUpdate" => {
+                let _lease = self.begin_native_action()?;
+                value(
+                    self.update_service
+                        .download_update(string_arg(&request.arguments, 0)?)
+                        .map_err(AppError::Message)?,
+                )
+            }
+            "ApplyUpdate" => {
+                let _lease = self.begin_native_action()?;
+                value(
+                    self.update_service
+                        .apply_update(string_arg(&request.arguments, 0)?)
+                        .map_err(AppError::Message)?,
+                )
             }
             "InstallShellCommand" => {
                 let _lease = self.begin_native_action()?;
@@ -564,6 +622,13 @@ impl DesktopRuntime {
             state.shutting_down = true;
             state.shutdown_retry = false;
             state.confirmation = None;
+        }
+        if let Err(error) = self.update_service.shutdown() {
+            lock(&self.state).shutting_down = false;
+            return Err(AppError::Message(error));
+        }
+        {
+            let mut state = lock(&self.state);
             let deadline = Instant::now() + RUNTIME_CALL_TIMEOUT;
             while state.active_calls != 0 {
                 let remaining = deadline.saturating_duration_since(Instant::now());
@@ -3950,17 +4015,6 @@ fn state_view(state: &RuntimeState, version: &str) -> WorkspaceState {
             .map(|workspace| workspace.project()),
         error: state.error.clone(),
     }
-}
-
-fn default_update_state() -> Value {
-    json!({
-        "revision": 0,
-        "phase": "idle",
-        "automaticChecks": false,
-        "restartRequired": false,
-        "manualInstall": false,
-        "cleanupPending": false
-    })
 }
 
 fn help_destination(name: &str) -> AppResult<&'static str> {

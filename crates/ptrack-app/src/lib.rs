@@ -9,6 +9,7 @@ mod agent_runtime;
 mod desktop_runtime;
 mod service;
 mod terminal_runtime;
+mod update_runtime;
 
 pub use agent_runtime::{
     AgentAdmissionFence, AgentIntegration, AgentIntegrationFactory, AgentInvalidationV2,
@@ -20,8 +21,8 @@ pub use agent_runtime::{
 pub use desktop_runtime::{
     ActiveResourceSummary, BoundDesktopWorkspace, DesktopAdmissionFence, DesktopAgentRuntime,
     DesktopCommandRequest, DesktopEvent, DesktopEventSink, DesktopNativeActionLease,
-    DesktopRuntime, DesktopRuntimeConfig, DesktopTerminalEventSink, DesktopWorkspace,
-    DesktopWorkspaceFactory, NoDesktopWorkspaceFactory, NoRecentProjectsProvider,
+    DesktopRuntime, DesktopRuntimeConfig, DesktopTerminalEventSink, DesktopUpdateEventSink,
+    DesktopWorkspace, DesktopWorkspaceFactory, NoDesktopWorkspaceFactory, NoRecentProjectsProvider,
     RecentProjectsProvider, WorkspaceChangeResult, WorkspaceProject, WorkspaceState,
     WorkspaceStatus, allowed_desktop_commands,
 };
@@ -38,6 +39,11 @@ pub use terminal_runtime::{
     TerminalIdentityAuthority, TerminalProfileView, TerminalProfilesV2, TerminalRuntime,
     TerminalRuntimeConfig, TerminalSessionV2, TerminalStatusV2,
 };
+pub use update_runtime::{
+    DesktopUpdateService, GlobalStoreUpdatePreferences, NoUpdatePreferences,
+    UnavailableUpdateService, UpdateEventSink, UpdatePhase, UpdatePreferences, UpdateRelease,
+    UpdateRuntime, UpdateState, update_preference_key,
+};
 
 #[cfg(test)]
 mod agent_runtime_test;
@@ -47,3 +53,5 @@ mod desktop_runtime_test;
 mod service_test;
 #[cfg(test)]
 mod terminal_runtime_test;
+#[cfg(test)]
+mod update_runtime_test;

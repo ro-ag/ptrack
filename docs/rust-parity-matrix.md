@@ -1390,6 +1390,15 @@ updater and release rows additionally use `docs/updater-acceptance.md`.
 
 26 contracts. The table is both the compatibility specification and the parity acceptance matrix for this subsystem.
 
+Rust parity evidence for this inventory is split across sibling-only tests:
+`crates/ptrack-updater/src/discovery_test.rs` (UPD-001–006),
+`staging_test.rs` (UPD-007–015), `installer_test.rs` (UPD-016–022),
+and `crates/ptrack-app/src/update_runtime_test.rs` plus
+`desktop_runtime_test.rs` (UPD-006, UPD-023–024). The Windows private-path
+module is additionally MSVC type-checked; native handoff/security execution and
+the deliberately opt-in live GitHub checks remain acceptance evidence under
+task #74 and are not inferred from cross-builds (UPD-007, UPD-017–026).
+
 ### Discovery and candidate selection
 
 | ID | Subsystem | Checkable contract | Verification method | Go freeze source / evidence |

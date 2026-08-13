@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use ptrack_app::{
     DesktopCommandRequest, DesktopEvent, DesktopEventSink, DesktopRuntime, DesktopRuntimeConfig,
+    DesktopUpdateEventSink, UpdateRuntime,
 };
 use ptrack_desktop::{
     DesktopPlatform, MenuDispatch, MenuEntrySpec, MenuRole, menu_dispatch, menu_spec,
@@ -152,6 +153,11 @@ fn run_desktop(initial_path: Option<PathBuf>, initial_plan: u64) {
                 app: app.handle().clone(),
             });
             let mut config = DesktopRuntimeConfig::unavailable(env!("CARGO_PKG_VERSION"));
+            config.update_service = UpdateRuntime::for_default_home(
+                env!("CARGO_PKG_VERSION"),
+                Some(DesktopUpdateEventSink::new(Arc::clone(&sink))),
+            )
+            .map_err(std::io::Error::other)?;
             config.event_sink = Some(sink);
             app.manage(DesktopRuntime::new(config));
             Ok(())

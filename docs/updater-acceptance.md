@@ -6,6 +6,24 @@ it is not a release procedure and does not publish, tag, or upload anything.
 
 ## Automated checks
 
+The active Rust/Tauri updater gates are:
+
+```sh
+cargo fmt --all -- --check
+cargo test -p ptrack-updater --all-targets
+cargo test -p ptrack-app --lib
+cargo clippy -p ptrack-updater -p ptrack-app --all-targets -- -D warnings
+RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps
+
+cd frontend
+npm ci
+npm test
+npm run build
+```
+
+The Go checks remain required until the task #75 cutover removes the retained
+Wails runtime:
+
 ```sh
 gofmt -w internal/updater/*.go internal/gui/*.go
 go test ./...
@@ -18,9 +36,10 @@ npm test
 npm run build
 ```
 
-Compile the OS-tagged updater tests for every release target, then execute them
-on native macOS, Windows, and Linux hosts. Opt-in live contract tests verify the
-current stable GitHub Release and the macOS DMG trust chain:
+Compile the updater for every release target, then execute the OS-specific Rust
+tests on native macOS, Windows, and Linux hosts. The retained Go opt-in live
+contract tests verify the current stable GitHub Release and macOS DMG trust
+chain until equivalent Rust live fixtures replace them:
 
 ```sh
 PTRACK_LIVE_UPDATE_TEST=1 go test -run 'TestLive(LatestReleaseContract|DarwinDMGTrustContract)' -v ./internal/updater
@@ -31,7 +50,7 @@ unannounced default test side effect.
 
 ## App behavior
 
-Exercise the native Wails app with no project open and with an open project.
+Exercise the native Tauri app with no project open and with an open project.
 
 - Default startup makes no update request. About & Updates opens from both the
   version trigger and native Settings menu on the Welcome screen.

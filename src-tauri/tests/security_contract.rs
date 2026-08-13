@@ -26,6 +26,9 @@ fn shell_has_only_the_bounded_adapter_commands() {
     assert!(source.contains("pick_project_directory"));
     assert!(source.contains("open_external_url"));
     assert!(source.contains("tauri::generate_handler!["));
+    assert!(source.contains("UpdateRuntime::for_default_home("));
+    assert!(source.contains("DesktopUpdateEventSink::new("));
+    assert!(!source.contains("config.update_service = UnavailableUpdateService"));
     assert!(manifest.contains("tauri-plugin-dialog = \"=2.7.2\""));
     assert!(manifest.contains("tauri-plugin-opener = \"=2.5.4\""));
     assert!(!manifest.contains("tauri-plugin-shell"));
