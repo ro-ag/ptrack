@@ -1213,11 +1213,11 @@ fn parse_date(value: &str) -> Result<Timestamp, String> {
     }
     let year_adjusted = year - i64::from(month <= 2);
     let era = year_adjusted.div_euclid(400);
-    let yoe = year_adjusted - era * 400;
+    let year_of_era = year_adjusted - era * 400;
     let shifted_month = i64::from(month) + if month > 2 { -3 } else { 9 };
-    let doy = (153 * shifted_month + 2) / 5 + i64::from(day) - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
+    let day_of_year = (153 * shifted_month + 2) / 5 + i64::from(day) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - 719_468;
     Ok(Timestamp::Fixed {
         seconds: days
             .checked_mul(86_400)
