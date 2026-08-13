@@ -1246,7 +1246,11 @@ fn create_private_file(path: &Path) -> StoreResult<File> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_GENERIC_READ, FILE_GENERIC_WRITE, WRITE_DAC, WRITE_OWNER,
+        };
 
+        options.access_mode(FILE_GENERIC_READ | FILE_GENERIC_WRITE | WRITE_DAC | WRITE_OWNER);
         options.share_mode(0);
     }
 
@@ -1258,7 +1262,7 @@ fn create_private_file(path: &Path) -> StoreResult<File> {
                 file.set_permissions(fs::Permissions::from_mode(0o600))?;
             }
             #[cfg(windows)]
-            crate::private_windows::protect_file(path)?;
+            crate::private_windows::protect_handle(&file)?;
             Ok(file)
         }
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {

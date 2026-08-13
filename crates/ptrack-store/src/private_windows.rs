@@ -12,7 +12,8 @@ use std::ptr;
 use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_ALL, HANDLE, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
     EXPLICIT_ACCESS_W, GetNamedSecurityInfoW, GetSecurityInfo, SE_FILE_OBJECT, SET_ACCESS,
-    SetEntriesInAclW, SetNamedSecurityInfoW, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
+    SetEntriesInAclW, SetNamedSecurityInfoW, SetSecurityInfo, TRUSTEE_IS_SID, TRUSTEE_IS_USER,
+    TRUSTEE_W,
 };
 use windows_sys::Win32::Security::{
     ACCESS_ALLOWED_ACE, ACL, ACL_SIZE_INFORMATION, AclSizeInformation, DACL_SECURITY_INFORMATION,
@@ -99,6 +100,32 @@ pub(crate) fn identity(file: &File) -> io::Result<WindowsFileIdentity> {
 
 pub(crate) fn protect_file(path: &Path) -> io::Result<()> {
     protect_current_user(path, NO_INHERITANCE)
+}
+
+pub(crate) fn protect_handle(file: &File) -> io::Result<()> {
+    let user = current_user()?;
+    let acl = current_user_acl(user.sid, NO_INHERITANCE)?;
+    // SAFETY: file owns a live handle with WRITE_DAC and WRITE_OWNER; the SID
+    // and ACL remain valid for the duration of the synchronous call.
+    let status = unsafe {
+        SetSecurityInfo(
+            file.as_raw_handle().cast(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION
+                | DACL_SECURITY_INFORMATION
+                | PROTECTED_DACL_SECURITY_INFORMATION,
+            user.sid,
+            ptr::null_mut(),
+            acl,
+            ptr::null_mut(),
+        )
+    };
+    // SAFETY: ACL ownership came from SetEntriesInAclW.
+    let _ = unsafe { LocalFree(acl.cast::<c_void>()) };
+    if status != 0 {
+        return Err(io::Error::from_raw_os_error(status as i32));
+    }
+    Ok(())
 }
 
 pub(crate) fn protect_directory(path: &Path) -> io::Result<()> {
@@ -303,25 +330,7 @@ fn current_user() -> io::Result<CurrentUser> {
 
 fn protect_current_user(path: &Path, inheritance: u32) -> io::Result<()> {
     let user = current_user()?;
-    let trustee = TRUSTEE_W {
-        pMultipleTrustee: ptr::null_mut(),
-        MultipleTrusteeOperation: 0,
-        TrusteeForm: TRUSTEE_IS_SID,
-        TrusteeType: TRUSTEE_IS_USER,
-        ptstrName: user.sid.cast(),
-    };
-    let access = EXPLICIT_ACCESS_W {
-        grfAccessPermissions: GENERIC_ALL,
-        grfAccessMode: SET_ACCESS,
-        grfInheritance: inheritance,
-        Trustee: trustee,
-    };
-    let mut acl = ptr::null_mut();
-    // SAFETY: access and ACL output are valid for the call.
-    let status = unsafe { SetEntriesInAclW(1, &access, ptr::null(), &mut acl) };
-    if status != 0 || acl.is_null() {
-        return Err(io::Error::from_raw_os_error(status as i32));
-    }
+    let acl = current_user_acl(user.sid, inheritance)?;
     let wide = wide_path(path);
     // SAFETY: path is NUL-terminated; ACL remains allocated for the call.
     let status = unsafe {
@@ -343,6 +352,29 @@ fn protect_current_user(path: &Path, inheritance: u32) -> io::Result<()> {
         return Err(io::Error::from_raw_os_error(status as i32));
     }
     Ok(())
+}
+
+fn current_user_acl(user_sid: *mut c_void, inheritance: u32) -> io::Result<*mut ACL> {
+    let trustee = TRUSTEE_W {
+        pMultipleTrustee: ptr::null_mut(),
+        MultipleTrusteeOperation: 0,
+        TrusteeForm: TRUSTEE_IS_SID,
+        TrusteeType: TRUSTEE_IS_USER,
+        ptstrName: user_sid.cast(),
+    };
+    let access = EXPLICIT_ACCESS_W {
+        grfAccessPermissions: GENERIC_ALL,
+        grfAccessMode: SET_ACCESS,
+        grfInheritance: inheritance,
+        Trustee: trustee,
+    };
+    let mut acl = ptr::null_mut();
+    // SAFETY: access and ACL output are valid for the call.
+    let status = unsafe { SetEntriesInAclW(1, &access, ptr::null(), &mut acl) };
+    if status != 0 || acl.is_null() {
+        return Err(io::Error::from_raw_os_error(status as i32));
+    }
+    Ok(acl)
 }
 
 fn wide_path(path: &Path) -> Vec<u16> {
