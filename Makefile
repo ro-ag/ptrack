@@ -1,122 +1,97 @@
 .PHONY: build frontend-build frontend-install frontend-test go-test help-check test \
-	package dmg icons sign verify-sign signed-dmg notarize release-dmg
+	package archive dmg icons sign verify-sign signed-dmg notarize release-dmg
 
-WAILS := go run github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
-
-# Version stamped into the app bundle: latest tag, or "dev" outside a checkout.
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v//' || echo dev)
-ARCH := $(shell uname -m)
-APP := build/bin/p-track.app
-DMG := build/bin/p-track-$(VERSION)-macOS-$(ARCH).dmg
+# Version and target are explicit so local packages exercise the same identity
+# as the tag-only release workflow. Override VERSION for an unsigned candidate.
+VERSION ?= $(shell python3 -c 'import tomllib; print(tomllib.load(open("src-tauri/Cargo.toml", "rb"))["package"]["version"])')
+RUST_TARGET ?= $(shell rustc -vV | sed -n 's/^host: //p')
+CARGO_TARGET_DIR ?= target
+UNAME_OS := $(shell uname -s)
+UNAME_ARCH := $(shell uname -m)
+ARCHIVE_OS := $(if $(filter Darwin,$(UNAME_OS)),darwin,$(if $(filter Linux,$(UNAME_OS)),linux,windows))
+ARCHIVE_ARCH := $(if $(filter arm64 aarch64,$(UNAME_ARCH)),arm64,amd64)
+APP := $(CARGO_TARGET_DIR)/$(RUST_TARGET)/release/bundle/macos/p-track.app
+DMG := dist/p-track_$(VERSION)_darwin_$(ARCHIVE_ARCH).dmg
+CLI_ARCHIVE := dist/ptrack_$(VERSION)_darwin_$(ARCHIVE_ARCH).tar.gz
 ENTITLEMENTS := build/darwin/entitlements.plist
+TAURI := npm --prefix frontend run tauri --
 
-# Signing identity: the SHA-1 fingerprint of the Developer ID Application
-# certificate. Using the fingerprint instead of the certificate name avoids
-# "ambiguous identity" errors when more than one Developer ID certificate
-# with the same name exists on the machine. Find it with:
-#   security find-identity -v -p codesigning
+# Use the SHA-1 fingerprint to avoid ambiguous same-name identities.
 SIGN_IDENTITY ?= D0F5928D9173891DA0EC4C7A52DCB190E483034C
-
-# notarytool keychain profile holding the App Store Connect API credentials.
-# Create it once with:
-#   xcrun notarytool store-credentials "$(NOTARY_PROFILE)" \
-#     --key AuthKey_XXXX.p8 --key-id <KEY-ID> --issuer <ISSUER-ID>
 NOTARY_PROFILE ?= ptrack-notarize
 
-# Application builds must go through Wails. A plain `go build` cannot supply
-# Wails' platform-specific tags, CGO setup, or native linker flags.
 build: frontend-install frontend-build
-	$(WAILS) build \
-		-clean \
-		-nopackage \
-		-trimpath \
-		-ldflags "-X github.com/ro-ag/ptrack/internal/cli.Version=$(VERSION)" \
-		-windowsconsole
+	PTRACK_BUILD_VERSION="$(VERSION)" CARGO_TARGET_DIR="$(CARGO_TARGET_DIR)" \
+		cargo build --locked --release --package ptrack-desktop --bin ptrack \
+		--target "$(RUST_TARGET)"
 
-# macOS app bundle: build/bin/p-track.app with the branded icon and the
-# Info.plist from build/darwin/. The bundle version is stamped from git so
-# local builds never silently inherit the version pinned in wails.json. The
-# bundle's entry point is the launcher script (build/darwin/launcher), which
-# always runs `ptrack gui`; the Wails binary stays available as the plain CLI.
-package: frontend-install frontend-build
-	$(WAILS) build -clean -trimpath \
-		-ldflags "-X github.com/ro-ag/ptrack/internal/cli.Version=$(VERSION)"
+# Build the unsigned native macOS app, retain the internal CLI, and install the
+# frozen launcher that always selects `ptrack gui` when Finder opens the app.
+package: frontend-install
+	PTRACK_BUILD_VERSION="$(VERSION)" CARGO_TARGET_DIR="$(CARGO_TARGET_DIR)" \
+		$(TAURI) build --target "$(RUST_TARGET)" --bundles app --no-sign --ci \
+		--config '{"version":"$(VERSION)"}'
 	cp build/darwin/launcher "$(APP)/Contents/MacOS/p-track"
 	chmod +x "$(APP)/Contents/MacOS/p-track"
+	/usr/libexec/PlistBuddy -c "Set :CFBundleExecutable p-track" "$(APP)/Contents/Info.plist"
 	/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $(VERSION)" "$(APP)/Contents/Info.plist"
 	/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(VERSION)" "$(APP)/Contents/Info.plist"
-	@echo "Built $(APP) (version $(VERSION))"
+	python3 tools/release_contract.py validate-binary \
+		"$(APP)/Contents/MacOS/ptrack" "$(VERSION)" darwin "$(ARCHIVE_ARCH)"
 
-# Distributable disk image with an /Applications drop link.
+archive: package
+	rm -rf build/archive
+	mkdir -p build/archive
+	cp "$(APP)/Contents/MacOS/ptrack" README.md LICENSE build/archive/
+	mkdir -p dist
+	tar -C build/archive -czf "$(CLI_ARCHIVE)" .
+	rm -rf build/archive
+
 dmg: package
 	rm -rf build/dmg
-	mkdir -p build/dmg
+	mkdir -p build/dmg dist
 	cp -R "$(APP)" build/dmg/
 	ln -s /Applications build/dmg/Applications
 	hdiutil create -volname "p-track" -srcfolder build/dmg \
 		-ov -format UDZO "$(DMG)"
 	rm -rf build/dmg
-	@echo "Built $(DMG)"
 
-# Sign the app bundle with the Developer ID identity (hardened runtime,
-# entitlements, secure timestamp). The ptrack binary gets its own signature
-# first: the bundle's main executable is the launcher script, and the notary
-# validates each binary individually. Works locally with the identity in your
-# login keychain; the first run may ask for key access — choose Always Allow.
 sign: package
-	codesign --force --options runtime \
-		--entitlements "$(ENTITLEMENTS)" \
-		--sign "$(SIGN_IDENTITY)" \
-		--timestamp \
-		"$(APP)/Contents/MacOS/ptrack"
-	codesign --force --options runtime \
-		--entitlements "$(ENTITLEMENTS)" \
-		--sign "$(SIGN_IDENTITY)" \
-		--timestamp \
-		"$(APP)"
+	codesign --force --options runtime --entitlements "$(ENTITLEMENTS)" \
+		--sign "$(SIGN_IDENTITY)" --timestamp "$(APP)/Contents/MacOS/ptrack"
+	codesign --force --options runtime --entitlements "$(ENTITLEMENTS)" \
+		--sign "$(SIGN_IDENTITY)" --timestamp "$(APP)"
 	@$(MAKE) --no-print-directory verify-sign
 
 verify-sign:
 	codesign --verify --strict --verbose=2 "$(APP)"
 	@codesign -dv --verbose=2 "$(APP)" 2>&1 | grep -E "^(Identifier|Authority|TeamIdentifier|Timestamp)" || true
-	@echo "Signature OK: $(APP)"
 
-# Signed (but not notarized) disk image: Gatekeeper still warns on first
-# launch, but the Developer ID signature is fully valid.
 signed-dmg: sign
 	rm -rf build/dmg
-	mkdir -p build/dmg
+	mkdir -p build/dmg dist
 	cp -R "$(APP)" build/dmg/
 	ln -s /Applications build/dmg/Applications
-	hdiutil create -volname "p-track" -srcfolder build/dmg \
-		-ov -format UDZO "$(DMG)"
+	hdiutil create -volname "p-track" -srcfolder build/dmg -ov -format UDZO "$(DMG)"
 	rm -rf build/dmg
 	codesign --force --sign "$(SIGN_IDENTITY)" --timestamp "$(DMG)"
-	@echo "Built signed $(DMG)"
 
-# Notarize the signed DMG and staple the ticket. Requires the notarytool
-# keychain profile (see NOTARY_PROFILE above); without it this prints the
-# one-time setup command and stops.
 notarize: signed-dmg
 	@if ! xcrun notarytool history --keychain-profile "$(NOTARY_PROFILE)" >/dev/null 2>&1; then \
 		echo "notarytool profile '$(NOTARY_PROFILE)' not found."; \
-		echo "Create it once with:"; \
-		echo "  xcrun notarytool store-credentials $(NOTARY_PROFILE) \\"; \
-		echo "    --key AuthKey_XXXX.p8 --key-id <KEY-ID> --issuer <ISSUER-ID>"; \
+		echo "Create it with xcrun notarytool store-credentials $(NOTARY_PROFILE) ..."; \
 		exit 1; \
 	fi
-	xcrun notarytool submit "$(DMG)" \
-		--keychain-profile "$(NOTARY_PROFILE)" --wait
+	xcrun notarytool submit "$(DMG)" --keychain-profile "$(NOTARY_PROFILE)" --wait
 	xcrun stapler staple "$(DMG)"
 	xcrun stapler validate "$(DMG)"
-	@echo "Notarized and stapled: $(DMG)"
 
-# Full release pipeline: build, sign, DMG, sign, notarize, staple.
 release-dmg: notarize
+	hdiutil verify "$(DMG)"
+	codesign --verify --strict --verbose=2 \
+		-R='anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "3CAJR4ZDMQ"' "$(DMG)"
 	spctl --assess --type open --context context:primary-signature -vv "$(DMG)"
-	@echo "Release-ready: $(DMG)"
 
-# Regenerate build/appicon.png and assets/brand/* from source.
 icons:
 	python3 assets/brand/generate_icons.py
 
@@ -131,9 +106,18 @@ frontend-build:
 
 go-test:
 	go test ./...
+	go vet ./...
 
 help-check:
-	python3 -B -m unittest tools.help_check_test
+	python3 -B -m unittest tools.help_check_test tools.release_contract_test
 	python3 -B tools/help_check.py all
 
-test: frontend-install frontend-test frontend-build go-test help-check
+test: frontend-install frontend-test frontend-build
+	cargo fmt --all -- --check
+	cargo test --workspace --all-targets --no-fail-fast
+	cargo clippy --workspace --all-targets -- -D warnings
+	RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps
+	go test ./...
+	go vet ./...
+	python3 -B -m unittest tools.help_check_test tools.release_contract_test
+	python3 -B tools/help_check.py all

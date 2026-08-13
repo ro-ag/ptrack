@@ -1,4 +1,3 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![forbid(unsafe_code)]
 
 use std::path::PathBuf;
@@ -42,11 +41,25 @@ impl DesktopEventSink for TauriEventSink {
 #[tauri::command]
 async fn gui_invoke(
     runtime: tauri::State<'_, Arc<DesktopRuntime>>,
+    app: AppHandle,
     request: DesktopCommandRequest,
 ) -> Result<serde_json::Value, String> {
     let runtime = Arc::clone(runtime.inner());
+    let shell_command = request.method == "InstallShellCommand";
     tauri::async_runtime::spawn_blocking(move || {
-        runtime.invoke(request).map_err(|error| error.to_string())
+        let result = runtime.invoke(request).map_err(|error| error.to_string())?;
+        if shell_command {
+            let message = result.as_str().ok_or_else(|| {
+                "shell command installation returned an invalid result".to_owned()
+            })?;
+            app.dialog()
+                .message(message)
+                .title("Shell Command")
+                .blocking_show();
+            Ok(serde_json::Value::Null)
+        } else {
+            Ok(result)
+        }
     })
     .await
     .map_err(|error| error.to_string())?
@@ -152,9 +165,9 @@ fn run_desktop(initial_path: Option<PathBuf>, initial_plan: u64) {
             let sink: Arc<dyn DesktopEventSink> = Arc::new(TauriEventSink {
                 app: app.handle().clone(),
             });
-            let mut config = DesktopRuntimeConfig::unavailable(env!("CARGO_PKG_VERSION"));
+            let mut config = DesktopRuntimeConfig::unavailable(ptrack_cli::version());
             config.update_service = UpdateRuntime::for_default_home(
-                env!("CARGO_PKG_VERSION"),
+                ptrack_cli::version(),
                 Some(DesktopUpdateEventSink::new(Arc::clone(&sink))),
             )
             .map_err(std::io::Error::other)?;
@@ -207,7 +220,7 @@ fn build_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
                     MenuRole::About => submenu.about(Some(
                         AboutMetadataBuilder::new()
                             .name(Some("p-track"))
-                            .version(Some(env!("CARGO_PKG_VERSION")))
+                            .version(Some(ptrack_cli::version()))
                             .build(),
                     )),
                     MenuRole::Services => submenu.services(),

@@ -16,8 +16,8 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -30,57 +30,91 @@ jobs:
             exit 1
           fi
 
-      - name: Set up Go
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.89.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Linux desktop libraries
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - name: Install and test frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm test
+          npm run build
+
+      - name: Test Rust runtime and release producer
+        shell: bash
+        run: |
+          cargo fmt --all -- --check
+          cargo test --workspace --all-targets --no-fail-fast
+          cargo clippy --workspace --all-targets -- -D warnings
+          RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+          python3 -B -m unittest tools.release_contract_test
+
+      # Retain the frozen Go gates until task #75 removes the Go/Wails runtime.
+      - name: Set up Go compatibility runtime
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
-      - name: Run tests
-        run: go test ./...
-
-      - name: Check module files
+      - name: Test retained Go compatibility runtime
+        shell: bash
         run: |
+          go test ./...
+          go vet ./...
           go mod tidy
           git diff --exit-code -- go.mod go.sum
 
   build:
-    name: build (${{ matrix.target }})
+    name: build (${{ matrix.archive_os }}/${{ matrix.arch }})
     needs: test
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 25
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
         include:
           - runner: ubuntu-24.04
-            target: linux/amd64
+            rust_target: x86_64-unknown-linux-gnu
             archive_os: linux
-            goarch: amd64
+            arch: amd64
           - runner: ubuntu-24.04-arm
-            target: linux/arm64
+            rust_target: aarch64-unknown-linux-gnu
             archive_os: linux
-            goarch: arm64
+            arch: arm64
           - runner: macos-15-intel
-            target: darwin/amd64
+            rust_target: x86_64-apple-darwin
             archive_os: darwin
-            goarch: amd64
+            arch: amd64
           - runner: macos-15
-            target: darwin/arm64
+            rust_target: aarch64-apple-darwin
             archive_os: darwin
-            goarch: arm64
+            arch: arm64
           - runner: windows-2025
-            target: windows/amd64
+            rust_target: x86_64-pc-windows-msvc
             archive_os: windows
-            goarch: amd64
+            arch: amd64
           - runner: windows-11-arm
-            target: windows/arm64
+            rust_target: aarch64-pc-windows-msvc
             archive_os: windows
-            goarch: arm64
+            arch: arm64
 
-    # Secrets cannot be referenced in step-level `if` conditions, so complete
-    # credential sets are resolved into job-level flags once. macOS release
-    # assets must satisfy both flags because the updater rejects anything that
-    # does not pass Developer ID and Gatekeeper verification.
+    # Secrets cannot be referenced in step-level `if` conditions. Every macOS
+    # package must have the complete signing and notarization trust chain.
     env:
       SIGNING_ENABLED: ${{ secrets.APPLE_CERTIFICATE_BASE64 != '' && secrets.APPLE_CERTIFICATE_PASSWORD != '' && secrets.KEYCHAIN_PASSWORD != '' && secrets.APPLE_SIGNING_IDENTITY != '' }}
       NOTARY_ENABLED: ${{ secrets.APPLE_API_KEY != '' && secrets.APPLE_API_KEY_ID != '' && secrets.APPLE_API_ISSUER != '' }}
@@ -98,10 +132,10 @@ jobs:
             exit 1
           fi
 
-      - name: Set up Go
-        uses: actions/setup-go@v7
+      - name: Set up Rust target
+        uses: dtolnay/rust-toolchain@1.89.0
         with:
-          go-version-file: go.mod
+          targets: ${{ matrix.rust_target }}
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -110,7 +144,7 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Prebuild frontend assets
+      - name: Build frontend assets
         working-directory: frontend
         run: |
           npm ci
@@ -121,119 +155,107 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install --yes libgtk-3-dev libwebkit2gtk-4.1-dev
+          sudo apt-get install --yes libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf
 
       - name: Build Linux binary
         if: runner.os == 'Linux'
         shell: bash
         run: |
           version="${GITHUB_REF_NAME#v}"
-          go run github.com/wailsapp/wails/v2/cmd/wails@v2.13.0 build \
-            -clean \
-            -nopackage \
-            -trimpath \
-            -platform "${{ matrix.target }}" \
-            -tags webkit2_41 \
-            -ldflags "-s -w -X github.com/ro-ag/ptrack/internal/cli.Version=${version}"
-
-      - name: Build macOS app bundle
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          go run github.com/wailsapp/wails/v2/cmd/wails@v2.13.0 build \
-            -clean \
-            -trimpath \
-            -platform "${{ matrix.target }}" \
-            -ldflags "-s -w -X github.com/ro-ag/ptrack/internal/cli.Version=${version}"
-          # Install the launcher entry point (runs `ptrack gui`); the bundle's
-          # CFBundleExecutable points at it, so the app cannot start without it.
-          cp build/darwin/launcher "build/bin/p-track.app/Contents/MacOS/p-track"
-          chmod +x "build/bin/p-track.app/Contents/MacOS/p-track"
-          # Stamp the release version into the bundle metadata.
-          app="build/bin/p-track.app"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${version}" "$app/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${version}" "$app/Contents/Info.plist"
-
-      - name: Import signing certificate
-        if: runner.os == 'macOS' && env.SIGNING_ENABLED == 'true'
-        shell: bash
-        env:
-          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-        run: |
-          # Import the Developer ID identity into a throwaway keychain so the
-          # runner's login keychain is never touched.
-          keychain="$RUNNER_TEMP/codesign.keychain-db"
-          echo "$APPLE_CERTIFICATE_BASE64" | base64 -d > "$RUNNER_TEMP/codesign.p12"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
-          security set-keychain-settings -lut 21600 "$keychain"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
-          security import "$RUNNER_TEMP/codesign.p12" \
-            -k "$keychain" \
-            -P "$APPLE_CERTIFICATE_PASSWORD" \
-            -T /usr/bin/codesign
-          # Let codesign use the key without interactive prompts.
-          security set-key-partition-list -S apple-tool:,apple: \
-            -s -k "$KEYCHAIN_PASSWORD" "$keychain"
-          security list-keychains -d user -s "$keychain" login.keychain-db
-          rm "$RUNNER_TEMP/codesign.p12"
-          security find-identity -v -p codesigning "$keychain"
-
-      - name: Sign app bundle
-        if: runner.os == 'macOS' && env.SIGNING_ENABLED == 'true'
-        shell: bash
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        run: |
-          app="build/bin/p-track.app"
-          # The bundle's main executable is the launcher script, so the
-          # notary checks the ptrack binary's own signature: sign the binary
-          # first, then the bundle as a whole.
-          codesign --force --options runtime \
-            --entitlements build/darwin/entitlements.plist \
-            --sign "$APPLE_SIGNING_IDENTITY" \
-            --timestamp \
-            "$app/Contents/MacOS/ptrack"
-          codesign --force --options runtime \
-            --entitlements build/darwin/entitlements.plist \
-            --sign "$APPLE_SIGNING_IDENTITY" \
-            --timestamp \
-            "$app"
-          codesign --verify --strict --verbose=2 "$app"
-          codesign -dv --verbose=2 "$app/Contents/MacOS/ptrack" 2>&1 \
-            | grep -E "^(Identifier|Authority|TeamIdentifier)"
+          PTRACK_BUILD_VERSION="${version}" cargo build --locked --release \
+            --package ptrack-desktop --bin ptrack --target "${{ matrix.rust_target }}"
+          python3 tools/release_contract.py validate-binary \
+            "target/${{ matrix.rust_target }}/release/ptrack" \
+            "${version}" linux "${{ matrix.arch }}"
 
       - name: Build Windows binary
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $version = $env:GITHUB_REF_NAME.TrimStart("v")
-          go run github.com/wailsapp/wails/v2/cmd/wails@v2.13.0 build `
-            -clean `
-            -nopackage `
-            -trimpath `
-            -windowsconsole `
-            -platform "${{ matrix.target }}" `
-            -ldflags "-s -w -X github.com/ro-ag/ptrack/internal/cli.Version=$version"
+          $env:PTRACK_BUILD_VERSION = $version
+          cargo build --locked --release `
+            --package ptrack-desktop --bin ptrack --target "${{ matrix.rust_target }}"
+          python tools/release_contract.py validate-binary `
+            "target/${{ matrix.rust_target }}/release/ptrack.exe" `
+            $version windows "${{ matrix.arch }}"
 
-      - name: Package Unix archive
+      - name: Build macOS app bundle
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          export PTRACK_BUILD_VERSION="${version}"
+          npm --prefix frontend run tauri -- build \
+            --target "${{ matrix.rust_target }}" --bundles app --no-sign --ci \
+            --config "{\"version\":\"${version}\"}"
+          app="target/${{ matrix.rust_target }}/release/bundle/macos/p-track.app"
+          test -f "$app/Contents/MacOS/ptrack"
+          python3 tools/release_contract.py validate-binary \
+            "$app/Contents/MacOS/ptrack" "${version}" darwin "${{ matrix.arch }}"
+          cp build/darwin/launcher "$app/Contents/MacOS/p-track"
+          chmod +x "$app/Contents/MacOS/p-track"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable p-track" "$app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${version}" "$app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${version}" "$app/Contents/Info.plist"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")" = "p-track"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "${version}"
+
+      - name: Import signing certificate
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/codesign.keychain-db"
+          echo "$APPLE_CERTIFICATE_BASE64" | base64 -d > "$RUNNER_TEMP/codesign.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security import "$RUNNER_TEMP/codesign.p12" \
+            -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: \
+            -s -k "$KEYCHAIN_PASSWORD" "$keychain"
+          security list-keychains -d user -s "$keychain" login.keychain-db
+          rm "$RUNNER_TEMP/codesign.p12"
+          security find-identity -v -p codesigning "$keychain"
+
+      - name: Sign macOS app bundle
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          app="target/${{ matrix.rust_target }}/release/bundle/macos/p-track.app"
+          codesign --force --options runtime \
+            --entitlements build/darwin/entitlements.plist \
+            --sign "$APPLE_SIGNING_IDENTITY" --timestamp \
+            "$app/Contents/MacOS/ptrack"
+          codesign --force --options runtime \
+            --entitlements build/darwin/entitlements.plist \
+            --sign "$APPLE_SIGNING_IDENTITY" --timestamp "$app"
+          codesign --verify --strict --verbose=2 "$app"
+          codesign -dv --verbose=2 "$app/Contents/MacOS/ptrack" 2>&1 \
+            | grep -E "^(Identifier|Authority|TeamIdentifier)"
+
+      - name: Package Unix CLI archive
         if: runner.os != 'Windows'
         shell: bash
         run: |
           version="${GITHUB_REF_NAME#v}"
-          archive="ptrack_${version}_${{ matrix.archive_os }}_${{ matrix.goarch }}"
+          archive="ptrack_${version}_${{ matrix.archive_os }}_${{ matrix.arch }}"
           mkdir -p "dist/${archive}"
           if [ "${{ runner.os }}" = "macOS" ]; then
-            # The CLI binary ships inside the app bundle on macOS.
-            cp "build/bin/p-track.app/Contents/MacOS/ptrack" "dist/${archive}/ptrack"
+            cp "target/${{ matrix.rust_target }}/release/bundle/macos/p-track.app/Contents/MacOS/ptrack" \
+              "dist/${archive}/ptrack"
           else
-            cp build/bin/ptrack "dist/${archive}/"
+            cp "target/${{ matrix.rust_target }}/release/ptrack" "dist/${archive}/ptrack"
           fi
           cp README.md LICENSE "dist/${archive}/"
-          archive_path="${PWD}/dist/${archive}.tar.gz"
-          tar -C "dist/${archive}" -czf "${archive_path}" .
+          tar -C "dist/${archive}" -czf "dist/${archive}.tar.gz" .
           rm -rf "dist/${archive}"
 
       - name: Package macOS disk image
@@ -243,19 +265,17 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           version="${GITHUB_REF_NAME#v}"
+          app="target/${{ matrix.rust_target }}/release/bundle/macos/p-track.app"
           mkdir -p build/dmg
-          cp -R "build/bin/p-track.app" build/dmg/
+          cp -R "$app" build/dmg/
           ln -s /Applications build/dmg/Applications
-          hdiutil create -volname "p-track" -srcfolder build/dmg \
-            -ov -format UDZO "dist/p-track_${version}_darwin_${{ matrix.goarch }}.dmg"
+          dmg="dist/p-track_${version}_darwin_${{ matrix.arch }}.dmg"
+          hdiutil create -volname "p-track" -srcfolder build/dmg -ov -format UDZO "$dmg"
           rm -rf build/dmg
-          if [ "${SIGNING_ENABLED}" = "true" ]; then
-            codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp \
-              "dist/p-track_${version}_darwin_${{ matrix.goarch }}.dmg"
-          fi
+          codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp "$dmg"
 
       - name: Notarize disk image
-        if: runner.os == 'macOS' && env.SIGNING_ENABLED == 'true' && env.NOTARY_ENABLED == 'true'
+        if: runner.os == 'macOS'
         shell: bash
         env:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
@@ -263,13 +283,11 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
           version="${GITHUB_REF_NAME#v}"
-          dmg="dist/p-track_${version}_darwin_${{ matrix.goarch }}.dmg"
+          dmg="dist/p-track_${version}_darwin_${{ matrix.arch }}.dmg"
           echo "$APPLE_API_KEY" > "$RUNNER_TEMP/AuthKey.p8"
           xcrun notarytool submit "$dmg" \
             --key "$RUNNER_TEMP/AuthKey.p8" \
-            --key-id "$APPLE_API_KEY_ID" \
-            --issuer "$APPLE_API_ISSUER" \
-            --wait
+            --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" --wait
           xcrun stapler staple "$dmg"
           xcrun stapler validate "$dmg"
           rm "$RUNNER_TEMP/AuthKey.p8"
@@ -279,27 +297,28 @@ jobs:
         shell: bash
         run: |
           version="${GITHUB_REF_NAME#v}"
-          dmg="dist/p-track_${version}_darwin_${{ matrix.goarch }}.dmg"
+          dmg="dist/p-track_${version}_darwin_${{ matrix.arch }}.dmg"
           requirement='anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "3CAJR4ZDMQ"'
           hdiutil verify "$dmg"
           codesign --verify --strict --verbose=2 -R="$requirement" "$dmg"
           spctl --assess --type open --context context:primary-signature "$dmg"
 
-      - name: Package Windows archive
+      - name: Package Windows CLI archive
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $version = $env:GITHUB_REF_NAME.TrimStart("v")
-          $archive = "ptrack_${version}_${{ matrix.archive_os }}_${{ matrix.goarch }}"
+          $archive = "ptrack_${version}_${{ matrix.archive_os }}_${{ matrix.arch }}"
           New-Item -ItemType Directory -Force -Path "dist/$archive"
-          Copy-Item build/bin/ptrack.exe, README.md, LICENSE -Destination "dist/$archive"
+          Copy-Item "target/${{ matrix.rust_target }}/release/ptrack.exe", README.md, LICENSE `
+            -Destination "dist/$archive"
           Compress-Archive -Path "dist/$archive/*" -DestinationPath "dist/$archive.zip"
           Remove-Item -Recurse -Force "dist/$archive"
 
-      - name: Upload archive
+      - name: Upload exact packaged assets
         uses: actions/upload-artifact@v7
         with:
-          name: release-${{ matrix.archive_os }}-${{ matrix.goarch }}
+          name: release-${{ matrix.archive_os }}-${{ matrix.arch }}
           path: |
             dist/ptrack_*
             dist/p-track_*
@@ -308,36 +327,32 @@ jobs:
 
   release:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Download archives
+      - name: Download packaged assets
         uses: actions/download-artifact@v8
         with:
           pattern: release-*
           path: dist
           merge-multiple: true
 
-      - name: Create checksums
-        shell: bash
-        run: |
-          cd dist
-          sha256sum ptrack_* p-track_* > checksums.txt
-
-      - name: Extract release notes
+      - name: Validate packages and create checksums
         shell: bash
         run: |
           version="${GITHUB_REF_NAME#v}"
-          awk -v version="${version}" '
-            $0 ~ "^## \\[" version "\\]" { found = 1; next }
-            found && /^## \[/ { exit }
-            found { print }
-          ' CHANGELOG.md > release-notes.md
-          test -s release-notes.md
-          test "$(wc -c < release-notes.md)" -le 32768
+          python3 tools/release_contract.py validate-dist dist "$version"
+          python3 tools/release_contract.py checksums dist "$version"
+
+      - name: Extract bounded release notes
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          python3 tools/release_contract.py release-notes \
+            CHANGELOG.md "$version" release-notes.md
 
       - name: Publish GitHub release
         shell: bash

@@ -97,6 +97,7 @@ function installTauriBridge(target = globalThis, dependencies = {}) {
         const result = await invokeCommand("gui_invoke", {
           request: { method, arguments: arguments_ },
         });
+        if (method === "InstallShellCommand") return undefined;
         if (method === "OpenHelpDestination" && typeof result === "string") {
           await invokeCommand("open_external_url", { url: result });
           return undefined;

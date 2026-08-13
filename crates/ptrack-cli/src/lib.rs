@@ -51,7 +51,10 @@ where
 
 #[must_use]
 pub const fn version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
+    match option_env!("PTRACK_BUILD_VERSION") {
+        Some(version) => version,
+        None => env!("CARGO_PKG_VERSION"),
+    }
 }
 
 #[must_use]

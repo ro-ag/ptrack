@@ -45,10 +45,12 @@ describe("Tauri compatibility bridge", () => {
 
     await target.go.gui.App.MoveTaskV3(7, 9, "done", "token");
     await target.go.gui.App.PickProjectDirectory();
+    expect(await target.go.gui.App.InstallShellCommand()).toBeUndefined();
     expect(await target.go.gui.App.OpenHelpDestination("terminals")).toBeUndefined();
     expect(calls).toEqual([
       ["gui_invoke", { request: { method: "MoveTaskV3", arguments: [7, 9, "done", "token"] } }],
       ["pick_project_directory", undefined],
+      ["gui_invoke", { request: { method: "InstallShellCommand", arguments: [] } }],
       ["gui_invoke", { request: { method: "OpenHelpDestination", arguments: ["terminals"] } }],
       ["open_external_url", { url: "https://docs.example/help" }],
     ]);

@@ -513,23 +513,22 @@ go test ./...
 go vet ./...
 ```
 
-Application builds always go through Wails so the resulting executable includes
-the CLI, terminal dashboard, and desktop GUI. Install the
-[Wails v2 prerequisites](https://wails.io/docs/gettingstarted/installation/)
-for your platform, then run:
+The Rust/Tauri candidate builds one `ptrack` executable containing the CLI,
+terminal dashboard, and desktop GUI. Install the
+[Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your
+platform, then run:
 
 ```sh
 make build
-./build/bin/ptrack version
+./target/$(rustc -vV | sed -n 's/^host: //p')/release/ptrack version
 ```
 
 On macOS, two more targets produce the branded desktop artifacts:
 
 ```sh
-make package   # build/bin/p-track.app — bundle id com.ro-ag.ptrack, version
-               # stamped from git, icon from build/appicon.png
-make dmg       # build/bin/p-track-<version>-macOS-<arch>.dmg with an
-               # /Applications drop link
+make package   # target/<triple>/release/bundle/macos/p-track.app
+make archive   # exact updater-compatible macOS CLI tar.gz
+make dmg       # exact p-track_<version>_darwin_<arch>.dmg
 ```
 
 With a Developer ID identity in the login keychain (`SIGN_IDENTITY` is the
@@ -545,25 +544,21 @@ make release-dmg # full pipeline: sign, DMG, sign, notarize, staple — needs a
                  # one-time `xcrun notarytool store-credentials ptrack-notarize`
 ```
 
-The release workflow runs the same steps on tag pushes: macOS builds are
-signed when the `APPLE_CERTIFICATE_*` secrets exist, and notarized as well
-once the `APPLE_API_*` secrets are added.
+The tag-only release workflow runs the same steps for six native targets.
+macOS release jobs fail closed unless the complete Developer ID and Apple
+notary credential sets are present; unsigned macOS assets are never published.
 
-Bundle metadata lives in `build/darwin/` (`Info.plist`, `Info.dev.plist`,
-hardened-runtime `entitlements.plist` for future signed releases). Brand
-assets — the icon generator, PNG exports, `AppIcon.icns`, the README banner,
-and a social card — live in [`assets/brand/`](assets/brand/); regenerate them
-with `make icons`.
+Bundle configuration lives in `src-tauri/tauri.conf.json`; the frozen launcher
+and hardened-runtime entitlements live in `build/darwin/`. Brand assets — the
+icon generator, PNG exports, `AppIcon.icns`, README banner, and social card —
+live in [`assets/brand/`](assets/brand/); regenerate them with `make icons`.
 
 The equivalent command, for environments without `make`, is:
 
 ```sh
-cd frontend
-npm ci
-npm run build
-cd ..
-go run github.com/wailsapp/wails/v2/cmd/wails@v2.13.0 build \
-  -clean -nopackage -trimpath -windowsconsole
+npm --prefix frontend ci
+npm --prefix frontend run build
+cargo build --locked --release --package ptrack-desktop --bin ptrack
 ```
 
 Architecture and product design notes live in

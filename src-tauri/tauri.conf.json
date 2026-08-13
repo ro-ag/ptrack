@@ -31,6 +31,15 @@
   "bundle": {
     "active": true,
     "category": "DeveloperTool",
-    "icon": ["../build/appicon.png"]
+    "icon": [
+      "../assets/brand/icon-32.png",
+      "../assets/brand/icon-128.png",
+      "../assets/brand/icon-256.png",
+      "../assets/brand/AppIcon.icns"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "12.0",
+      "entitlements": "../build/darwin/entitlements.plist"
+    }
   }
 }

@@ -8,6 +8,7 @@
 mod agent_runtime;
 mod desktop_runtime;
 mod service;
+mod shell_command;
 mod terminal_runtime;
 mod update_runtime;
 
@@ -33,6 +34,7 @@ pub use service::{
     LocalApplication, Mutation, MutationResult, ProcessOutput, ProjectEndpoint,
     UnavailableApplication, WorkspaceBindings,
 };
+pub use shell_command::{ShellCommandInstallResult, install_shell_command};
 pub use terminal_runtime::{
     PreparedTerminalIdentity, ProductionTerminalIdentityAuthority, TerminalAgentAuthority,
     TerminalCwdValidation, TerminalCwdValidationsV2, TerminalEventSink, TerminalExitV2,
@@ -51,6 +53,8 @@ mod agent_runtime_test;
 mod desktop_runtime_test;
 #[cfg(test)]
 mod service_test;
+#[cfg(test)]
+mod shell_command_test;
 #[cfg(test)]
 mod terminal_runtime_test;
 #[cfg(test)]

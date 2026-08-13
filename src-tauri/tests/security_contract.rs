@@ -29,6 +29,11 @@ fn shell_has_only_the_bounded_adapter_commands() {
     assert!(source.contains("UpdateRuntime::for_default_home("));
     assert!(source.contains("DesktopUpdateEventSink::new("));
     assert!(!source.contains("config.update_service = UnavailableUpdateService"));
+    assert!(source.contains("request.method == \"InstallShellCommand\""));
+    assert!(source.contains(".title(\"Shell Command\")"));
+    assert!(source.contains("ptrack_cli::version()"));
+    assert!(!source.contains("windows_subsystem"));
+    assert!(manifest.contains("name = \"ptrack\"\npath = \"src/main.rs\""));
     assert!(manifest.contains("tauri-plugin-dialog = \"=2.7.2\""));
     assert!(manifest.contains("tauri-plugin-opener = \"=2.5.4\""));
     assert!(!manifest.contains("tauri-plugin-shell"));
@@ -88,6 +93,11 @@ fn tauri_uses_the_existing_frontend_and_exact_window_contract() {
         "p-track Project Workspace"
     );
     assert_eq!(config["app"]["windows"][0]["backgroundColor"], "#080d12");
+    assert_eq!(config["bundle"]["macOS"]["minimumSystemVersion"], "12.0");
+    assert_eq!(
+        config["bundle"]["macOS"]["entitlements"],
+        "../build/darwin/entitlements.plist"
+    );
     assert!(
         config["app"]["security"]["csp"]
             .as_str()

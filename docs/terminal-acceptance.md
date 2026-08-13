@@ -135,7 +135,7 @@ go vet ./...
 cd frontend && npm ci && npm test && npm run build
 ```
 
-The release workflow compiles native Wails applications on macOS, Windows, and
+The release workflow compiles native Rust/Tauri applications on macOS, Windows, and
 Linux only when an explicit version tag is pushed. A successful compile is
 useful evidence for build compatibility but never substitutes for this
 interactive matrix.

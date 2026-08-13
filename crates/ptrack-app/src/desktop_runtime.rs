@@ -590,7 +590,7 @@ impl DesktopRuntime {
             }
             "InstallShellCommand" => {
                 let _lease = self.begin_native_action()?;
-                Err(unavailable("shell command installation"))
+                value(crate::install_shell_command().message)
             }
             "GetRecentProjects" => {
                 let _lease = self.begin_native_action()?;
