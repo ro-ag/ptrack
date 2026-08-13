@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Instant;
 
 use ptrack_capability_policy::{ApprovalProof, SanitizedAudit, normalize};
 use ptrack_core::{
@@ -918,7 +919,44 @@ impl ProjectStore {
     }
 
     pub fn counts(&self) -> StoreResult<Counts> {
-        Ok(self.snapshot()?.counts())
+        self.counts_inner(None)
+    }
+
+    pub fn counts_until(&self, deadline: Instant) -> StoreResult<Counts> {
+        self.counts_inner(Some(deadline))
+    }
+
+    fn counts_inner(&self, deadline: Option<Instant>) -> StoreResult<Counts> {
+        self.active.store.read(|transaction| {
+            let mut counts = Counts {
+                milestones: transaction.collection_len(Collection::Milestones)?,
+                plans: transaction.collection_len(Collection::Plans)?,
+                tasks: transaction.collection_len(Collection::Tasks)?,
+                issues: transaction.collection_len(Collection::Issues)?,
+                commits: transaction.collection_len(Collection::Commits)?,
+                notes: transaction.collection_len(Collection::Notes)?,
+                ..Counts::default()
+            };
+            visit_with_deadline::<Milestone>(transaction, deadline, |value| {
+                counts.milestones_done += usize::from(value.status == MilestoneStatus::Done);
+                Ok(())
+            })?;
+            visit_with_deadline::<Plan>(transaction, deadline, |value| {
+                counts.plans_done += usize::from(value.status == PlanStatus::Done);
+                Ok(())
+            })?;
+            visit_with_deadline::<Task>(transaction, deadline, |value| {
+                counts.tasks_done += usize::from(value.status == TaskStatus::Done);
+                counts.tasks_blocked += usize::from(value.status == TaskStatus::Blocked);
+                counts.tasks_open += usize::from(value.status.is_open());
+                Ok(())
+            })?;
+            visit_with_deadline::<Issue>(transaction, deadline, |value| {
+                counts.issues_open += usize::from(value.status == IssueStatus::Open);
+                Ok(())
+            })?;
+            Ok(counts)
+        })
     }
 
     fn get_id<R: StoredRecord>(&self, id: u64) -> StoreResult<R> {
@@ -1184,6 +1222,18 @@ fn prune_memory_receipts(transaction: &mut WriteTransaction) -> StoreResult<()> 
         receipts.remove(&sequence);
     }
     Ok(())
+}
+
+fn visit_with_deadline<R: StoredRecord>(
+    transaction: &ReadTransaction,
+    deadline: Option<Instant>,
+    visitor: impl FnMut(R) -> StoreResult<()>,
+) -> StoreResult<()> {
+    if let Some(deadline) = deadline {
+        typed::visit_until(transaction, false, deadline, visitor)
+    } else {
+        typed::visit(transaction, false, visitor)
+    }
 }
 
 fn memory_digest_json(request: &MemoryWriteRequest) -> String {

@@ -609,6 +609,9 @@ pub fn allowed_stream_origin_str(raw_origin: &str) -> bool {
     if scheme == "wails" {
         return authority == "wails";
     }
+    if scheme == "tauri" {
+        return authority == "localhost";
+    }
     if scheme != "http" && scheme != "https" {
         return false;
     }
@@ -626,7 +629,10 @@ pub fn allowed_stream_origin_str(raw_origin: &str) -> bool {
             .split_once(':')
             .map_or(authority, |(host, _)| host)
     };
-    if host.eq_ignore_ascii_case("wails.localhost") || host.eq_ignore_ascii_case("localhost") {
+    if host.eq_ignore_ascii_case("wails.localhost")
+        || host.eq_ignore_ascii_case("tauri.localhost")
+        || host.eq_ignore_ascii_case("localhost")
+    {
         return true;
     }
     host.parse::<IpAddr>()

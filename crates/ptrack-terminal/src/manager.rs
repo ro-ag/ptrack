@@ -484,6 +484,41 @@ impl Manager {
         Ok(values)
     }
 
+    /// Execute a callback while holding the exact session lifecycle epoch.
+    ///
+    /// # Errors
+    ///
+    /// Returns the frozen snapshot-limit error when every session cannot be
+    /// represented within `maximum`.
+    pub fn with_exact_session_snapshot<T>(
+        &self,
+        maximum: usize,
+        use_snapshot: impl FnOnce(&[SessionInfo]) -> T,
+    ) -> Result<T, ManagerError> {
+        if maximum == 0 {
+            return Err(ManagerError::new(
+                ManagerErrorKind::SnapshotLimit,
+                "exact terminal session snapshot requires a limit",
+            ));
+        }
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut sessions = BTreeMap::new();
+        for (id, session) in inner.sessions.iter().chain(&inner.closing) {
+            sessions.entry(id.clone()).or_insert_with(|| session.info());
+        }
+        if sessions.len() > maximum {
+            return Err(ManagerError::new(
+                ManagerErrorKind::SnapshotLimit,
+                "terminal session snapshot exceeds exact limit",
+            ));
+        }
+        let values = sessions.into_values().collect::<Vec<_>>();
+        Ok(use_snapshot(&values))
+    }
+
     /// Synchronously stop admission and request listener/stream cancellation.
     ///
     /// This is the bounded first phase used by emergency drop paths. Call

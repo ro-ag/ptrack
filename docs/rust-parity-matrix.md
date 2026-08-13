@@ -9,11 +9,9 @@ commits landed after that tag on the branch used for inventory extraction.
 A tag-to-branch diff audit removed or rewrote every affected contract. The
 later Help Center, expanded native menus, close/runtime-call fencing,
 overlay-aware renderer recovery, and accessibility/layout work are not
-`v0.21.0` behavior and are outside this release-parity matrix. This matrix
-closes the tagged-release portion of Plan 8 only. Because Plan 8 promises
-full current-feature parity, its final cutover also requires those post-tag
-additions to be cataloged and accepted in a deliberate extension; their
-absence here is not evidence that the features may be dropped.
+`v0.21.0` behavior. The tagged baseline remains identified as such, and
+GUI-128–138 plus TERM-107–108 deliberately catalog those current-feature
+extensions required for final cutover.
 
 ## Scope and method
 
@@ -50,7 +48,7 @@ code in that audit checkout. A `v0.21.0:` prefix locates tag-specific source
 where later commits changed the behavior. Contract values always describe
 the tag, regardless of reference form.
 
-There are **749 contract rows**: 709 from the nine subsystem
+There are **762 contract rows**: 722 from the nine subsystem
 inventories, 26 updater rows, and 14 packaging/release rows.
 A row can overlap another subsystem's boundary; every row still requires its
 own evidence because the producer and consumer may fail independently.
@@ -589,7 +587,7 @@ updater and release rows additionally use `docs/updater-acceptance.md`.
 
 ## GUI bridge and desktop lifecycle
 
-125 contracts. The table is both the compatibility specification and the parity acceptance matrix for this subsystem.
+136 contracts. The table is both the compatibility specification and the parity acceptance matrix for this subsystem.
 
 ### A. Bound methods — transport & shared fencing
 
@@ -746,9 +744,25 @@ updater and release rows additionally use `docs/updater-acceptance.md`.
 | `GUI-126` | GUI bridge | Wails runtime APIs used beyond the bound methods: `window.runtime.EventsOnMultiple` (only subscription form), `BrowserOpenURL` (with `window.open` fallback), `ClipboardGetText`/`ClipboardSetText` (SetText must resolve truthy else client throws `Native clipboard copy failed`). | Existing automated test — frontend/src/terminal/pane.test.ts | frontend/src/app.js:2253-2257,4331-4335, frontend/src/terminal/pane.ts:325-361 |
 | `GUI-127` | GUI bridge | Backend access is centralized through `api()` and `api().<Method>` calls in `app.js`; its generation-bound terminal adapter maps V2 methods and rejects mismatched response generations before passing them to `terminal/pane.ts`. Native-menu listeners also live directly in `app.js`; `workspace/native-menu.ts` does not exist. Other adapters are `workspace/controller.ts`, `presentation.ts`, `task-transition.ts`, `persistence.ts`, `layout.ts`; `terminal/pane.ts`, `client.ts`, `linked-launch.ts`, `association-editor.ts`, `writeback.ts`, `resize-dispatch.ts`; `updates/presentation.js`; and `capabilities/presentation.js`. Preserve linked pointer `{version:1, planId, taskId?}`, association detach as `association === undefined` with fallback `{version:1}`, returned revision `expected+1`, stable writeback request IDs, and the default 100 ms resize interval. | Existing automated test (partial) — corresponding workspace, terminal, updates, and capabilities module tests (app-level wiring only partially covered by build.test.js)<br>New automated test needed | v0.21.0:frontend/src/app.js:494-498,783-4545 (especially 3924-4008,4121-4146), plus the named adapter files at v0.21.0 |
 
+### F. Current-feature extensions after the v0.21 freeze
+
+| ID | Subsystem | Checkable contract | Verification method | Current source / evidence |
+|---|---|---|---|---|
+| `GUI-128` | GUI bridge | Native menus use the current platform shape: macOS App/File/Project/Edit/View/Window/Help with native App, Edit, and Window roles; other platforms expose File/Project/View/Help. File, Project, View, and Help item ordering, separators, labels, and macOS accelerators match the production menu. No synthetic non-macOS Edit menu is added. | New automated test — src-tauri/tests/security_contract.rs<br>Manual acceptance `MANUAL-GUI-128` | internal/gui/project_menu.go, internal/gui/run.go, src-tauri/src/main.rs |
+| `GUI-129` | GUI bridge | The native menu event allowlist is exactly the current 11 names: workspace open/switch/close/settings/capabilities/board/intelligence/terminal-panel/command-palette/install-shell-command and update open. Menu IDs outside this set are never forwarded as frontend actions. | Existing automated test — frontend/src/workspace/native-menu.test.ts<br>New automated test — src-tauri/tests/security_contract.rs | internal/gui/project_menu.go, frontend/src/workspace/native-menu.ts, src-tauri/src/main.rs |
+| `GUI-130` | GUI bridge | `OpenHelpDestination` is the 64th current bridge method and accepts only five symbolic names (`help-center`, `keyboard-shortcuts`, `terminals`, `capabilities`, `report-issue`) mapped to fixed HTTPS destinations. The native external-URL adapter rejects non-HTTP(S), credentialed, invalid, and over-2048-byte URLs. | New automated test — crates/ptrack-app/src/desktop_runtime_test.rs, frontend/src/tauri-bridge.test.js, src-tauri/tests/security_contract.rs | internal/gui/project_menu.go, crates/ptrack-app/src/desktop_runtime.rs, src-tauri/src/main.rs |
+| `GUI-131` | GUI bridge | Native close starts a runtime-call fence: new application calls reject with `terminal lifecycle is shutting down`; in-flight calls receive 250 ms to release their leases. Timeout restores admission and prevents the window close so a later retry can complete; successful shutdown is idempotent and tears down generation authority before window destruction. | New automated test — crates/ptrack-app/src/desktop_runtime_test.rs | internal/gui/terminal.go, crates/ptrack-app/src/desktop_runtime.rs, src-tauri/src/main.rs |
+| `GUI-132` | GUI bridge | macOS has a native p-track About item populated with product name and version, followed by native Services/Hide/Hide Others/Show All/Quit roles. It is absent as a synthetic item on Windows and Linux. | New automated test — src-tauri/tests/security_contract.rs<br>Manual acceptance `MANUAL-GUI-132` | internal/gui/run.go, src-tauri/src/main.rs |
+| `GUI-133` | GUI bridge | Opening an application-owned modal or terminal-owned overlay makes the rest of the workspace inert, pauses terminal rendering, and hands focus to the active overlay; closing restores the prior focus target without allowing the background workspace to consume shortcuts. | Existing automated test — frontend/src/workspace/application-overlay.test.ts, frontend/src/terminal/lifecycle.test.ts, frontend/src/terminal/accessibility.test.ts | frontend/src/workspace/application-overlay.ts, frontend/src/app.js, frontend/src/terminal/pane.ts |
+| `GUI-134` | GUI bridge | Keyboard routing is focus- and ownership-aware: composing/input/terminal/overlay contexts suppress global workspace shortcuts; Tab is trapped within the active modal, Escape closes only the owning top overlay, and native-menu actions use the same gate before mutating visible state. | Existing automated test — frontend/src/workspace/application-overlay.test.ts, frontend/src/workspace/native-menu.test.ts, frontend/src/terminal/accessibility.test.ts | frontend/src/app.js, frontend/src/workspace/application-overlay.ts, frontend/src/workspace/native-menu.ts |
+| `GUI-135` | GUI bridge | Workspace welcome/loading/error/open transitions announce status without stealing focus, transition epochs fence stale responses, project switching exposes active-resource confirmation, and board/overview/settings navigation carries correct disabled, `aria-current`, inert, and busy state. | Existing automated test — frontend/src/workspace/controller.test.ts, frontend/src/workspace/presentation.test.ts, frontend/src/responsive-layout.test.ts | frontend/index.html, frontend/src/app.js, frontend/src/workspace/controller.ts |
+| `GUI-136` | GUI bridge | Capability and updater dialogs expose labeled headings, bounded progress/status announcements, keyboard-safe focus restoration, confirmation controls, and no secret-bearing diagnostic data. Unknown update phases fail closed and older revisions never replace newer presentation state. | Existing automated test — frontend/src/capabilities/presentation.test.js, frontend/src/updates/presentation.test.js, frontend/src/build.test.js | frontend/index.html, frontend/src/capabilities/presentation.js, frontend/src/updates/presentation.js |
+| `GUI-137` | GUI bridge | The desktop is usable at the native minimum 880×560 and at 200% text zoom: sidebar/board/terminal split controls remain reachable, overlays scroll within the viewport, and no fixed width creates horizontal page overflow. The native window contract is 1440×900 with minimum 880×560 and background `#080d12`. | Existing automated test — frontend/src/responsive-layout.test.ts<br>New automated test — src-tauri/tests/security_contract.rs<br>Manual acceptance `MANUAL-GUI-137` | internal/gui/run.go, frontend/src/style.css, src-tauri/tauri.conf.json |
+| `GUI-138` | GUI bridge | Help Center entry points exist in the native Help menu, terminal toolbar, and capability settings; frontend callers pass symbolic destinations only and contain no documentation URL. Opening Help is non-mutating, uses the fixed allowlist, and never grants ambient shell or filesystem authority. | Existing automated test — frontend/src/build.test.js<br>New automated test — crates/ptrack-app/src/desktop_runtime_test.rs, src-tauri/tests/security_contract.rs | internal/gui/project_menu.go, frontend/src/app.js, src-tauri/src/main.rs |
+
 ## Embedded terminal
 
-106 contracts. The table is both the compatibility specification and the parity acceptance matrix for this subsystem.
+108 contracts. The table is both the compatibility specification and the parity acceptance matrix for this subsystem.
 
 ### Stream server & wire protocol (WebSocket)
 
@@ -935,6 +949,8 @@ updater and release rows additionally use `docs/updater-acceptance.md`.
 | ID | Subsystem | Checkable contract | Verification method | Go freeze source / evidence |
 |---|---|---|---|---|
 | `TERM-106` | Terminal | `docs/terminal-acceptance.md` defines a 16-row manual acceptance matrix (SH-1/2, AG-1, TU-1, IN-1/2, RD-1/2, CB-1/2, AX-1, RS-1, RC-1, ST-1, LC-1, DG-1) with per-OS/arch result records; `tools/terminal-acceptance` provides the fixtures (`inventory`, `render`, `output --mib N` 1–1024 MiB in 64 KiB blocks, `interactive` alt-screen app). Recorded pass: macOS arm64, Windows arm64, Linux arm64 at commit e3f2432. The automated gate is `go test ./tools/terminal-acceptance ./internal/terminal ./internal/gui` (with `-race`), vet, and frontend tests/build. | Manual acceptance `MANUAL-TERM-106` | docs/terminal-acceptance.md, tools/terminal-acceptance/ |
+| `TERM-107` | Terminal | Application-owned overlays pause terminal rendering without closing the session or WebSocket, coalesce pending renderer work, and resume with a fit/refresh after the overlay closes. Background terminal output remains bounded by the existing flow-control window. | Existing automated test — frontend/src/workspace/application-overlay.test.ts, frontend/src/terminal/lifecycle.test.ts | frontend/src/workspace/application-overlay.ts, frontend/src/terminal/pane.ts |
+| `TERM-108` | Terminal | Terminal-owned modals own their keyboard lifecycle: focus stays inside the top terminal overlay; Escape affects only that overlay; paste, termination, association, write-back, and renderer-recovery dialogs restore the prior terminal control and prevent workspace shortcuts while open. | Existing automated test — frontend/src/terminal/accessibility.test.ts, frontend/src/terminal/paste.test.ts, frontend/src/terminal/recovery-actions.test.ts | frontend/src/terminal/accessibility.ts, frontend/src/terminal/pane.ts, frontend/src/app.js |
 
 ## Capabilities
 

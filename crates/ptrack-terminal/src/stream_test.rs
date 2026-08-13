@@ -220,8 +220,10 @@ async fn raw_status(server: &StreamServer, request: &str) -> u16 {
 fn stream_origin_policy_matches_the_frozen_allowlist() {
     for accepted in [
         "wails://wails",
+        "tauri://localhost",
         "http://wails.localhost",
         "https://wails.localhost",
+        "https://tauri.localhost",
         "http://localhost:5173",
         "https://LOCALHOST:34115",
         "http://127.0.0.1:5173",

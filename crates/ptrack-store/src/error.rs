@@ -145,6 +145,8 @@ pub enum StoreError {
         collection: &'static str,
         maximum: usize,
     },
+    /// A caller-owned presentation deadline expired during a bounded scan.
+    DeadlineExceeded,
     /// A memory write-back request is malformed or its target is stale.
     InvalidMemoryWriteback(String),
     /// A memory request identifier was reused for different content.
@@ -313,6 +315,7 @@ impl fmt::Display for StoreError {
                 formatter,
                 "bounded {collection} scan exceeds its limit of {maximum} records"
             ),
+            Self::DeadlineExceeded => formatter.write_str("context deadline exceeded"),
             Self::InvalidMemoryWriteback(detail) => {
                 write!(formatter, "invalid memory write-back: {detail}")
             }

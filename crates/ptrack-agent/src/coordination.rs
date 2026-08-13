@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -80,6 +81,19 @@ pub trait CoordinationStore: Send + Sync {
 
     fn linked_commit_shas(&self) -> Vec<String> {
         Vec::new()
+    }
+
+    /// Returns linked commit identities while honoring a caller-owned deadline.
+    ///
+    /// # Errors
+    /// Returns a deadline or durable-store error.
+    fn linked_commit_shas_until(
+        &self,
+        deadline: Instant,
+    ) -> Result<Vec<String>, CoordinationError> {
+        let values = self.linked_commit_shas();
+        ensure_projection_deadline(Some(deadline))?;
+        Ok(values)
     }
 
     fn tracking_started_at(&self) -> Timestamp {
@@ -301,6 +315,7 @@ pub enum CoordinationError {
     WorkflowStale,
     WorkflowApproved,
     WorkflowFull,
+    DeadlineExceeded,
     Message(String),
 }
 
@@ -349,6 +364,7 @@ impl fmt::Display for CoordinationError {
             Self::WorkflowStale => formatter.write_str("agent workflow is stale or invalid"),
             Self::WorkflowApproved => formatter.write_str("agent workflow was already approved"),
             Self::WorkflowFull => formatter.write_str("agent workflow inbox is full"),
+            Self::DeadlineExceeded => formatter.write_str("context deadline exceeded"),
             Self::Message(message) => formatter.write_str(message),
         }
     }
@@ -469,6 +485,25 @@ pub struct AgentRunsV2 {
     pub generation: u64,
     pub runs: Vec<AgentRuntimeSummary>,
     pub bounds: BoundedSnapshot,
+}
+
+/// Complete bounded candidate projection used by app-owned aggregate views.
+/// Unlike [`AgentRunsV2`], `runs` retains every candidate up to the hard
+/// lifecycle limit so task-scoped projections cannot miss an associated run.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentRuntimeCandidatesV2 {
+    pub generation: u64,
+    pub runs: Vec<AgentRuntimeSummary>,
+    pub bounds: BoundedSnapshot,
+    pub sources_truncated: bool,
+    pub analysis_incomplete: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentWorkspaceSnapshotV2 {
+    pub runtime: AgentRuntimeCandidatesV2,
+    pub activity: AgentActivitySnapshot,
+    pub drift: DriftSnapshot,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -894,6 +929,63 @@ impl Coordinator {
         })
     }
 
+    /// Returns the complete, sanitized runtime candidate projection.
+    ///
+    /// # Errors
+    /// Returns generation, shutdown, registry, session, or evidence errors.
+    pub fn agent_runtime_candidates(
+        &self,
+        generation: u64,
+    ) -> Result<AgentRuntimeCandidatesV2, CoordinationError> {
+        self.check_generation(generation)?;
+        let projection = self.projection()?;
+        Ok(AgentRuntimeCandidatesV2 {
+            generation: self.generation,
+            runs: projection.agent_candidates,
+            bounds: projection.agent_bounds,
+            sources_truncated: projection.sources_truncated,
+            analysis_incomplete: projection.incomplete,
+        })
+    }
+
+    /// Builds all aggregate workspace sections from one runtime and Git epoch.
+    ///
+    /// # Errors
+    /// Returns generation, shutdown, registry, or durable-store errors.
+    pub fn workspace_snapshot(
+        &self,
+        generation: u64,
+        git: &CoordinationGitSnapshot,
+        deadline: Instant,
+    ) -> Result<AgentWorkspaceSnapshotV2, CoordinationError> {
+        self.check_generation(generation)?;
+        ensure_projection_deadline(Some(deadline))?;
+        let projection = self.projection_until(Some(deadline))?;
+        let activity = self.activity_from_projection_git_until(&projection, git, Some(deadline))?;
+        ensure_projection_deadline(Some(deadline))?;
+        let linked_commits = self.store.linked_commit_shas_until(deadline)?;
+        ensure_projection_deadline(Some(deadline))?;
+        let drift = build_drift(
+            &projection,
+            &activity,
+            git,
+            &linked_commits,
+            self.store.tracking_started_at(),
+        );
+        ensure_projection_deadline(Some(deadline))?;
+        Ok(AgentWorkspaceSnapshotV2 {
+            runtime: AgentRuntimeCandidatesV2 {
+                generation: self.generation,
+                runs: projection.agent_candidates.clone(),
+                bounds: projection.agent_bounds,
+                sources_truncated: projection.sources_truncated,
+                analysis_incomplete: projection.incomplete,
+            },
+            activity,
+            drift,
+        })
+    }
+
     /// Builds a standalone authority-free handoff preview from at most 128 events.
     ///
     /// # Errors
@@ -993,8 +1085,8 @@ impl Coordinator {
     pub fn drift(&self, generation: u64) -> Result<DriftSnapshot, CoordinationError> {
         self.check_generation(generation)?;
         let projection = self.projection()?;
-        let activity = self.activity_from_projection(&projection)?;
         let git = self.git.snapshot(&self.project_root)?;
+        let activity = self.activity_from_projection_git(&projection, &git)?;
         Ok(build_drift(
             &projection,
             &activity,
@@ -1699,28 +1791,35 @@ impl Coordinator {
     }
 
     #[allow(clippy::too_many_lines)] // One bounded snapshot transaction is easier to audit whole.
+    #[allow(clippy::unnecessary_wraps)] // Stable coordinator seam remains fallible for adapters.
     fn projection(&self) -> Result<Projection, CoordinationError> {
+        self.projection_until(None)
+    }
+
+    #[allow(clippy::too_many_lines)] // One bounded snapshot transaction is easier to audit whole.
+    #[allow(clippy::unnecessary_wraps)] // Stable coordinator seam remains fallible for adapters.
+    fn projection_until(&self, deadline: Option<Instant>) -> Result<Projection, CoordinationError> {
+        ensure_projection_deadline(deadline)?;
         let (sessions, terminal_total) = self.sessions.snapshot(CANDIDATE_LIMIT);
-        let mut runs = Vec::new();
-        self.registry
-            .with_exact_runtime_snapshot(CANDIDATE_LIMIT, |snapshot| {
-                runs.extend_from_slice(snapshot);
-                Ok(())
-            })
-            .map_err(registry_coordination_error)?;
-        let agent_total = runs.len();
+        ensure_projection_deadline(deadline)?;
+        let (runs, agent_total) = self.registry.runtime_snapshot_bounded(CANDIDATE_LIMIT);
+        ensure_projection_deadline(deadline)?;
+        let sources_truncated = terminal_total > sessions.len() || agent_total > runs.len();
         let mut terminals = sessions
             .into_iter()
-            .map(|session| TerminalRuntimeSummary {
-                session_id: session.id.clone(),
-                profile_kind: session.profile_kind,
-                live: session_state_live(&session.state),
-                state: session.state,
-                association: session.association.as_ref().and_then(|association| {
-                    self.store.current_association(&session.id, association)
-                }),
+            .map(|session| {
+                ensure_projection_deadline(deadline)?;
+                Ok(TerminalRuntimeSummary {
+                    session_id: session.id.clone(),
+                    profile_kind: session.profile_kind,
+                    live: session_state_live(&session.state),
+                    state: session.state,
+                    association: session.association.as_ref().and_then(|association| {
+                        self.store.current_association(&session.id, association)
+                    }),
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, CoordinationError>>()?;
         terminals.sort_by(|left, right| {
             association_sort_key(left.association, &left.session_id)
                 .cmp(&association_sort_key(right.association, &right.session_id))
@@ -1733,9 +1832,10 @@ impl Coordinator {
         let mut exact_runs = BTreeMap::new();
         let mut events_by_run = BTreeMap::new();
         let mut event_totals_by_run = BTreeMap::new();
-        let mut incomplete = agent_total > PROJECTION_LIMIT || terminal_total > terminals.len();
+        let mut incomplete = sources_truncated || agent_total > PROJECTION_LIMIT;
         let mut agents = Vec::new();
         for run in runs {
+            ensure_projection_deadline(deadline)?;
             let association = current_association(self.store.as_ref(), &run);
             let terminal_backed =
                 run.registration_kind == RegistrationKind::Launched && !run.terminal_id.is_empty();
@@ -1748,15 +1848,18 @@ impl Coordinator {
                 .intelligence_snapshot(&run.id, INTELLIGENCE_EVENTS_PER_RUN);
             let (intelligence, events, event_total) = match intelligence_snapshot {
                 Ok((observed, events, total, _)) if same_run_epoch(&run, &observed) => {
+                    ensure_projection_deadline(deadline)?;
                     if total > events.len() {
                         incomplete = true;
                     }
-                    let events = events
-                        .into_iter()
-                        .filter(|event| {
-                            notification_current(self.generation, &run, association, event)
-                        })
-                        .collect::<Vec<_>>();
+                    let mut current_events = Vec::with_capacity(events.len());
+                    for event in events {
+                        ensure_projection_deadline(deadline)?;
+                        if notification_current(self.generation, &run, association, &event) {
+                            current_events.push(event);
+                        }
+                    }
+                    let events = current_events;
                     let intelligence = crate::derive_run_intelligence(&run, &events);
                     let summary = AgentIntelligenceSummary {
                         state: intelligence.state,
@@ -1831,6 +1934,7 @@ impl Coordinator {
         let agent_candidates = agents.clone();
         agents.truncate(PROJECTION_LIMIT);
         terminals.truncate(PROJECTION_LIMIT);
+        ensure_projection_deadline(deadline)?;
         Ok(Projection {
             generation: self.generation,
             terminals,
@@ -1841,6 +1945,7 @@ impl Coordinator {
             exact_runs,
             events_by_run,
             event_totals_by_run,
+            sources_truncated,
             incomplete,
         })
     }
@@ -1849,38 +1954,62 @@ impl Coordinator {
         &self,
         projection: &Projection,
     ) -> Result<AgentActivitySnapshot, CoordinationError> {
+        let git = self.git.snapshot(&self.project_root)?;
+        self.activity_from_projection_git(projection, &git)
+    }
+
+    #[allow(clippy::unnecessary_wraps)] // Stable aggregate seam preserves coordination errors.
+    fn activity_from_projection_git(
+        &self,
+        projection: &Projection,
+        git: &CoordinationGitSnapshot,
+    ) -> Result<AgentActivitySnapshot, CoordinationError> {
+        self.activity_from_projection_git_until(projection, git, None)
+    }
+
+    fn activity_from_projection_git_until(
+        &self,
+        projection: &Projection,
+        git: &CoordinationGitSnapshot,
+        deadline: Option<Instant>,
+    ) -> Result<AgentActivitySnapshot, CoordinationError> {
+        ensure_projection_deadline(deadline)?;
         let mut items = projection
             .agents
             .iter()
-            .map(|run| AgentActivity {
-                run_id: run.run_id.clone(),
-                state: run.activity_state,
-                registration_kind: run.registration_kind,
-                terminal_backed: run.terminal_backed,
-                terminal_present: run.terminal_present,
-                corresponding_terminal: run.corresponding_terminal,
-                live: run.live,
-                association: run.association,
-                confidence: run.intelligence.as_ref().map(|value| value.confidence),
-                evidence_count: run
-                    .intelligence
-                    .as_ref()
-                    .map_or(0, |value| value.evidence_count),
-                event_count: run
-                    .intelligence
-                    .as_ref()
-                    .map_or(0, |value| value.event_count),
-                last_event_at: run
-                    .intelligence
-                    .as_ref()
-                    .and_then(|value| value.last_event_at),
-                ownership: None,
-                worktree: None,
+            .map(|run| {
+                ensure_projection_deadline(deadline)?;
+                Ok(AgentActivity {
+                    run_id: run.run_id.clone(),
+                    state: run.activity_state,
+                    registration_kind: run.registration_kind,
+                    terminal_backed: run.terminal_backed,
+                    terminal_present: run.terminal_present,
+                    corresponding_terminal: run.corresponding_terminal,
+                    live: run.live,
+                    association: run.association,
+                    confidence: run.intelligence.as_ref().map(|value| value.confidence),
+                    evidence_count: run
+                        .intelligence
+                        .as_ref()
+                        .map_or(0, |value| value.evidence_count),
+                    event_count: run
+                        .intelligence
+                        .as_ref()
+                        .map_or(0, |value| value.event_count),
+                    last_event_at: run
+                        .intelligence
+                        .as_ref()
+                        .and_then(|value| value.last_event_at),
+                    ownership: None,
+                    worktree: None,
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, CoordinationError>>()?;
         let mut state = lock(&self.state);
         let mut valid_ownership = BTreeMap::new();
         for item in &mut items {
+            ensure_projection_deadline(deadline)?;
             let Some(run) = projection.exact_runs.get(&item.run_id) else {
                 continue;
             };
@@ -1910,7 +2039,7 @@ impl Coordinator {
             activity_conflicts(&projection.agent_candidates, &valid_ownership);
         let (notifications, notification_bounds, notifications_incomplete) =
             notifications(self.generation, projection);
-        let git = self.git.snapshot(&self.project_root)?;
+        ensure_projection_deadline(deadline)?;
         let mut workflow_targets = git
             .branches
             .iter()
@@ -1921,6 +2050,7 @@ impl Coordinator {
             .collect::<Vec<_>>();
         let workflow_targets_incomplete = git.branches.len() >= 100;
         workflow_targets.sort();
+        ensure_projection_deadline(deadline)?;
         Ok(AgentActivitySnapshot {
             state: "ready".to_owned(),
             items,
@@ -1933,7 +2063,7 @@ impl Coordinator {
             notification_bounds,
             notifications_incomplete,
             handoffs,
-            worktrees: git.worktrees,
+            worktrees: git.worktrees.clone(),
             worktree_bounds: git.worktree_bounds,
             worktrees_incomplete: git.worktrees_incomplete,
             workflows,
@@ -1977,6 +2107,7 @@ struct Projection {
     exact_runs: BTreeMap<String, Run>,
     events_by_run: BTreeMap<String, Vec<Event>>,
     event_totals_by_run: BTreeMap<String, usize>,
+    sources_truncated: bool,
     incomplete: bool,
 }
 
@@ -2873,6 +3004,14 @@ fn registry_coordination_error(error: RegistryError) -> CoordinationError {
     match error {
         RegistryError::RunNotFound => CoordinationError::RunNotFound,
         other => CoordinationError::Message(other.to_string()),
+    }
+}
+
+fn ensure_projection_deadline(deadline: Option<Instant>) -> Result<(), CoordinationError> {
+    if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        Err(CoordinationError::DeadlineExceeded)
+    } else {
+        Ok(())
     }
 }
 

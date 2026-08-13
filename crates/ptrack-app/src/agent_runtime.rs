@@ -1,9 +1,10 @@
+use std::cell::Cell;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ptrack_agent::{
     AdmissionFence, AgentActivitySnapshot, AgentHandoffAcknowledgementV2, AgentHandoffEnvelopeV2,
@@ -192,6 +193,33 @@ impl AgentAdmissionFence {
     }
 }
 
+thread_local! {
+    static HOST_INVALIDATION_SUPPRESSIONS: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Thread-affine guard for a combined mutation whose single frontend event is
+/// owned by the terminal runtime. Resource revisions still advance.
+pub struct AgentRuntimeEventSuppression {
+    active: bool,
+}
+
+impl AgentRuntimeEventSuppression {
+    fn new() -> Self {
+        HOST_INVALIDATION_SUPPRESSIONS.with(|count| count.set(count.get().saturating_add(1)));
+        Self { active: true }
+    }
+}
+
+impl Drop for AgentRuntimeEventSuppression {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        HOST_INVALIDATION_SUPPRESSIONS.with(|count| count.set(count.get().saturating_sub(1)));
+        self.active = false;
+    }
+}
+
 /// Opaque exact-pair association transaction prepared for a linked terminal.
 pub struct LinkedAgentAssociationChange(LinkedAssociationChange);
 
@@ -212,8 +240,19 @@ impl LinkedAgentAssociationChange {
 #[allow(clippy::missing_errors_doc)]
 pub trait AgentRuntimeService {
     fn resource_state(&self, generation: u64) -> AppResult<AgentResourceStateV2>;
+    fn resource_revision(&self, generation: u64) -> AppResult<u64>;
     fn drain_invalidations(&self, generation: u64) -> AppResult<AgentInvalidationV2>;
     fn agent_runs(&self, generation: u64) -> AppResult<AgentRunsV2>;
+    fn agent_runtime_candidates(
+        &self,
+        generation: u64,
+    ) -> AppResult<ptrack_agent::AgentRuntimeCandidatesV2>;
+    fn workspace_snapshot(
+        &self,
+        generation: u64,
+        git: &CoordinationGitSnapshot,
+        deadline: Instant,
+    ) -> AppResult<ptrack_agent::AgentWorkspaceSnapshotV2>;
     fn agent_intelligence(&self, generation: u64, run_id: &str) -> AppResult<AgentIntelligenceV2>;
     fn activity(&self, generation: u64) -> AppResult<AgentActivitySnapshot>;
     fn notifications(&self, generation: u64) -> AppResult<AgentNotificationsV2>;
@@ -259,6 +298,12 @@ pub trait AgentRuntimeService {
     fn approve_workflow(&self, generation: u64, id: &str) -> AppResult<AgentWorkflowProposalV2>;
     fn dismiss_workflow(&self, generation: u64, id: &str) -> AppResult<AgentWorkflowDismissalV2>;
     fn workflow_targets(&self, generation: u64) -> AppResult<AgentWorkflowTargetsV2>;
+    fn with_exact_runtime_snapshot(
+        &self,
+        generation: u64,
+        maximum: usize,
+        use_snapshot: &mut dyn FnMut(&[Run]),
+    ) -> AppResult<()>;
     fn shutdown(&self) -> AppResult<()>;
 }
 
@@ -300,6 +345,7 @@ pub trait LaunchedEventAuthority {
 /// records, never the underlying registry or its authority-bearing tokens.
 #[allow(clippy::missing_errors_doc)]
 pub trait LinkedAgentRuntimeHooks {
+    fn suppress_runtime_event(&self, generation: u64) -> AppResult<AgentRuntimeEventSuppression>;
     fn fence_admission(&self, generation: u64) -> AppResult<AgentAdmissionFence>;
     fn rollback_linked_launched(
         &self,
@@ -531,7 +577,10 @@ impl AgentRuntime {
 
     fn material_changed(&self) {
         increment_saturating(self.resource_revision.as_ref());
-        self.notify_host();
+        let suppressed = HOST_INVALIDATION_SUPPRESSIONS.with(|count| count.get() != 0);
+        if !suppressed {
+            self.notify_host();
+        }
     }
 
     fn association_host(&self) -> ProjectCoordinationStore {
@@ -547,6 +596,11 @@ impl AgentRuntimeService for AgentRuntime {
             resource_revision: self.resource_revision.load(Ordering::Acquire),
             active_runs: self.registry.active_count(),
         })
+    }
+
+    fn resource_revision(&self, generation: u64) -> AppResult<u64> {
+        let _operation = self.begin(generation)?;
+        Ok(self.resource_revision.load(Ordering::Acquire))
     }
 
     fn drain_invalidations(&self, generation: u64) -> AppResult<AgentInvalidationV2> {
@@ -566,6 +620,27 @@ impl AgentRuntimeService for AgentRuntime {
     fn agent_runs(&self, generation: u64) -> AppResult<AgentRunsV2> {
         let _operation = self.begin(generation)?;
         map_coordination(self.coordinator.agent_runs(generation))
+    }
+
+    fn agent_runtime_candidates(
+        &self,
+        generation: u64,
+    ) -> AppResult<ptrack_agent::AgentRuntimeCandidatesV2> {
+        let _operation = self.begin(generation)?;
+        map_coordination(self.coordinator.agent_runtime_candidates(generation))
+    }
+
+    fn workspace_snapshot(
+        &self,
+        generation: u64,
+        git: &CoordinationGitSnapshot,
+        deadline: Instant,
+    ) -> AppResult<ptrack_agent::AgentWorkspaceSnapshotV2> {
+        let _operation = self.begin(generation)?;
+        map_coordination(
+            self.coordinator
+                .workspace_snapshot(generation, git, deadline),
+        )
     }
 
     fn agent_intelligence(&self, generation: u64, run_id: &str) -> AppResult<AgentIntelligenceV2> {
@@ -698,6 +773,21 @@ impl AgentRuntimeService for AgentRuntime {
             items: activity.workflow_targets,
             incomplete: activity.workflow_targets_incomplete,
         })
+    }
+
+    fn with_exact_runtime_snapshot(
+        &self,
+        generation: u64,
+        maximum: usize,
+        use_snapshot: &mut dyn FnMut(&[Run]),
+    ) -> AppResult<()> {
+        let _operation = self.begin(generation)?;
+        self.registry
+            .with_exact_runtime_snapshot(maximum, |runs| {
+                use_snapshot(runs);
+                Ok(())
+            })
+            .map_err(agent_error)
     }
 
     fn shutdown(&self) -> AppResult<()> {
@@ -850,6 +940,11 @@ impl LaunchedEventAuthority for AgentRuntime {
 }
 
 impl LinkedAgentRuntimeHooks for AgentRuntime {
+    fn suppress_runtime_event(&self, generation: u64) -> AppResult<AgentRuntimeEventSuppression> {
+        let _operation = self.begin(generation)?;
+        Ok(AgentRuntimeEventSuppression::new())
+    }
+
     fn fence_admission(&self, generation: u64) -> AppResult<AgentAdmissionFence> {
         let _operation = self.begin(generation)?;
         Ok(AgentAdmissionFence(Some(self.registry.fence_admission())))
@@ -1070,6 +1165,14 @@ impl CoordinationStore for ProjectCoordinationStore {
     fn linked_commit_shas(&self) -> Vec<String> {
         self.with_store(|store| Ok(store.commits()?.into_iter().map(|item| item.sha).collect()))
             .unwrap_or_default()
+    }
+
+    fn linked_commit_shas_until(
+        &self,
+        deadline: Instant,
+    ) -> Result<Vec<String>, CoordinationError> {
+        self.with_store(|store| Ok(store.commit_shas_until(deadline)?))
+            .map_err(|error| CoordinationError::Message(error.to_string()))
     }
 
     fn tracking_started_at(&self) -> Timestamp {

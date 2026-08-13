@@ -1,3 +1,4 @@
+import "./tauri-bridge";
 import { mountTerminalDock } from "./terminal/pane";
 import {
   linkedAssociationPointer,

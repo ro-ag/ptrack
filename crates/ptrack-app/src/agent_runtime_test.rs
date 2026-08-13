@@ -8,22 +8,89 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ptrack_agent::{
     ASSOCIATION_VERSION_V1, AssociationPointer, CoordinationError, CoordinationGit,
     CoordinationGitSnapshot, CoordinationSession, CoordinationSessions, CoordinationStore,
-    IntegrationConfig, Registration, Registry, WorktreeIdentity,
+    IntegrationConfig, PROVIDER_EVENT_MODEL_VERSION, ProviderEvent, Registration, Registry,
+    WorktreeIdentity,
 };
+use ptrack_capability::{Broker, BrokerConfig};
 use ptrack_git::{
     Branch, Commit, Divergence, ExistingWorktree, PathBounds, RepositoryState, Snapshot, Status,
     WorktreeBounds,
 };
 use ptrack_store::{ActiveBinding, GlobalStore, ProjectStore, StoreKind};
+use ptrack_terminal::{ExitResult, Manager, ProfileKind, SessionInfo};
 
+use super::terminal_runtime_test::{TestEvents, TestFactory, profile};
 use crate::agent_runtime::map_git_snapshot;
 use crate::{
     AgentIntegration, AgentIntegrationFactory, AgentRuntime, AgentRuntimeConfig,
-    AgentRuntimeService, LaunchedEventAuthority, LinkedAgentRuntimeHooks, ProjectCoordinationStore,
-    ProjectEndpoint,
+    AgentRuntimeService, BoundDesktopWorkspace, DesktopWorkspace, LaunchedEventAuthority,
+    LinkedAgentRuntimeHooks, LocalApplication, PreparedTerminalIdentity,
+    ProductionTerminalIdentityAuthority, ProjectCoordinationStore, ProjectEndpoint,
+    TerminalIdentityAuthority, TerminalRuntime, TerminalRuntimeConfig, WorkspaceBindings,
 };
 
 struct TestDirectory(PathBuf);
+
+struct CapturingProductionIdentity {
+    inner: ProductionTerminalIdentityAuthority,
+    tokens: Mutex<(String, String)>,
+}
+
+impl TerminalIdentityAuthority for CapturingProductionIdentity {
+    fn prepare(
+        &self,
+        generation: u64,
+        project_root: &Path,
+        profile: &ptrack_terminal::Profile,
+    ) -> crate::AppResult<PreparedTerminalIdentity> {
+        let identity = self.inner.prepare(generation, project_root, profile)?;
+        *self.tokens.lock().unwrap() = (
+            identity.event_token().to_owned(),
+            identity.capability_token().to_owned(),
+        );
+        Ok(identity)
+    }
+
+    fn bind(
+        &self,
+        generation: u64,
+        identity: &PreparedTerminalIdentity,
+        session: &SessionInfo,
+    ) -> crate::AppResult<()> {
+        self.inner.bind(generation, identity, session)
+    }
+
+    fn bind_linked(
+        &self,
+        generation: u64,
+        identity: &PreparedTerminalIdentity,
+        session: &SessionInfo,
+        pointer: AssociationPointer,
+    ) -> crate::AppResult<ptrack_agent::Association> {
+        self.inner
+            .bind_linked(generation, identity, session, pointer)
+    }
+
+    fn revoke_pending(&self, generation: u64, identity: &PreparedTerminalIdentity) {
+        self.inner.revoke_pending(generation, identity);
+    }
+
+    fn revoke_session(&self, generation: u64, session_id: &str) {
+        self.inner.revoke_session(generation, session_id);
+    }
+
+    fn revoke_failed_session(&self, generation: u64, session_id: &str) {
+        self.inner.revoke_failed_session(generation, session_id);
+    }
+
+    fn remove_linked_session(&self, generation: u64, session_id: &str) {
+        self.inner.remove_linked_session(generation, session_id);
+    }
+
+    fn record_exit(&self, generation: u64, session_id: &str, result: &ExitResult) {
+        self.inner.record_exit(generation, session_id, result);
+    }
+}
 
 impl TestDirectory {
     fn new(name: &str) -> Self {
@@ -397,6 +464,131 @@ fn generation_store_reopen_invalidation_and_privacy_contracts() {
 }
 
 #[test]
+fn workspace_and_task_rows_share_structured_waiting_intelligence() {
+    let directory = TestDirectory::new("workspace-intelligence");
+    let (endpoint, plan_id, task_id) = endpoint(&directory);
+    let factory = Arc::new(FakeIntegrationFactory::default());
+    let runtime = Arc::new(start_runtime(
+        &directory,
+        7,
+        endpoint.clone(),
+        Arc::clone(&factory),
+    ));
+    let token = runtime.issue_launched_event_token(7).unwrap();
+    let run = runtime
+        .register_launched(
+            7,
+            Registration {
+                profile: "codex".to_owned(),
+                provider: "codex".to_owned(),
+                pid: i32::try_from(std::process::id()).unwrap(),
+                terminal_id: "terminal-waiting".to_owned(),
+                cwd: endpoint.root.to_string_lossy().into_owned(),
+            },
+        )
+        .unwrap();
+    runtime
+        .bind_launched_event_token(7, &token, &run.id)
+        .unwrap();
+    runtime
+        .associate_run(
+            7,
+            &run.id,
+            AssociationPointer {
+                version: ASSOCIATION_VERSION_V1,
+                plan_id,
+                task_id,
+            },
+        )
+        .unwrap();
+    factory
+        .registry()
+        .record_launched_provider_event(
+            &token,
+            ProviderEvent {
+                model_version: PROVIDER_EVENT_MODEL_VERSION,
+                id: "permission-1".to_owned(),
+                sequence: 1,
+                event_type: "permissionrequest".to_owned(),
+                ..ProviderEvent::default()
+            },
+        )
+        .unwrap();
+    let (global_home, global_database, global_binding) = global_attestation(&directory);
+    let bindings = WorkspaceBindings {
+        current_dir: endpoint.root.clone(),
+        project: Some(endpoint),
+        global_database,
+        global_binding,
+        global_home,
+        writer_version: "test".to_owned(),
+    };
+    let workspace = BoundDesktopWorkspace::new(
+        7,
+        plan_id,
+        bindings.clone(),
+        Box::new(LocalApplication::new(bindings)),
+        None,
+        Some(runtime.clone()),
+        None,
+    );
+    let snapshot = workspace
+        .invoke(
+            "GetWorkspaceSnapshot",
+            &[serde_json::json!(7), serde_json::json!(plan_id)],
+        )
+        .unwrap();
+    assert_eq!(snapshot["agentRuns"]["runs"][0]["activityState"], "waiting");
+    assert_eq!(
+        snapshot["agentRuns"]["runs"][0]["intelligence"]["state"],
+        "waiting"
+    );
+    let detail = workspace
+        .invoke(
+            "GetTaskDetailV2",
+            &[serde_json::json!(7), serde_json::json!(task_id)],
+        )
+        .unwrap();
+    assert_eq!(
+        detail["linkedRuntime"]["agents"][0]["activityState"],
+        "waiting"
+    );
+    assert_eq!(
+        detail["agentIntelligence"][0]["intelligence"]["state"],
+        "waiting"
+    );
+    drop(workspace);
+    AgentRuntimeService::shutdown(runtime.as_ref()).unwrap();
+}
+
+#[test]
+fn terminal_owned_agent_mutation_advances_revision_without_duplicate_invalidation() {
+    let directory = TestDirectory::new("event-owner");
+    let (endpoint, _, _) = endpoint(&directory);
+    let factory = Arc::new(FakeIntegrationFactory::default());
+    let runtime = start_runtime(&directory, 7, endpoint.clone(), factory);
+    {
+        let _suppression = runtime
+            .suppress_runtime_event(7)
+            .expect("terminal event suppression");
+        runtime
+            .register_launched(7, registration(&endpoint.root, "terminal-owned"))
+            .expect("terminal-owned registration");
+    }
+    let drained = runtime.drain_invalidations(7).expect("drain suppression");
+    assert_eq!(drained.resource_revision, 1);
+    assert_eq!(drained.event_count, 0);
+
+    runtime
+        .register_launched(7, registration(&endpoint.root, "agent-owned"))
+        .expect("agent-owned registration");
+    let drained = runtime.drain_invalidations(7).expect("drain direct event");
+    assert_eq!(drained.resource_revision, 2);
+    assert_eq!(drained.event_count, 1);
+    AgentRuntimeService::shutdown(&runtime).expect("shutdown runtime");
+}
+
+#[test]
 fn old_generation_callbacks_are_isolated_and_shutdown_is_ordered() {
     let directory = TestDirectory::new("switch");
     let (endpoint, _, _) = endpoint(&directory);
@@ -740,6 +932,86 @@ fn linked_terminal_hooks_are_opaque_exact_and_revisioned() {
     );
     AgentRuntimeService::shutdown(&runtime).expect("shutdown runtime");
     assert!(runtime.has_linked_terminal(7, "terminal-linked").is_err());
+}
+
+#[tokio::test]
+async fn linked_bind_failure_revokes_production_pending_identities() {
+    let directory = TestDirectory::new("linked-pending-cleanup");
+    let (endpoint, plan_id, task_id) = endpoint(&directory);
+    let generation = endpoint.binding.generation;
+    let agent = Arc::new(start_runtime(
+        &directory,
+        generation,
+        endpoint.clone(),
+        Arc::new(FakeIntegrationFactory::default()),
+    ));
+    let broker = Arc::new(
+        Broker::new(BrokerConfig {
+            project_root: endpoint.root.clone(),
+            database: endpoint.database.clone(),
+            binding: endpoint.binding.clone(),
+            writer_version: "test".to_owned(),
+            generation,
+        })
+        .unwrap(),
+    );
+    let mut agent_profile = profile(&endpoint.root);
+    agent_profile.id = "agent-test".to_owned();
+    agent_profile.kind = ProfileKind::Agent;
+    agent_profile.provider = "test".to_owned();
+    let manager = Manager::new(&endpoint.root, vec![agent_profile], Arc::new(TestFactory))
+        .await
+        .unwrap();
+    let identity = Arc::new(CapturingProductionIdentity {
+        inner: ProductionTerminalIdentityAuthority::new(
+            Some(Arc::clone(&broker)),
+            Some(Arc::clone(&agent) as Arc<dyn crate::TerminalAgentAuthority>),
+        ),
+        tokens: Mutex::new((String::new(), String::new())),
+    });
+    let terminal = TerminalRuntime::new(TerminalRuntimeConfig {
+        generation,
+        project_root: endpoint.root.clone(),
+        manager,
+        identity: identity.clone(),
+        events: Arc::new(TestEvents::default()),
+        attachment_lease: Duration::from_secs(30),
+    })
+    .unwrap();
+
+    let error = terminal
+        .create_linked(
+            generation,
+            "agent-test",
+            None,
+            24,
+            80,
+            ptrack_terminal::TerminalAssociationPointer {
+                version: 0,
+                plan_id,
+                task_id,
+            },
+            "bounded launch context",
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("association"));
+    let (event_token, capability_token) = identity.tokens.lock().unwrap().clone();
+    assert!(!event_token.is_empty());
+    assert!(!capability_token.is_empty());
+    assert!(
+        broker
+            .bind_session(&capability_token, "leak-check")
+            .is_err()
+    );
+    assert!(
+        !agent
+            .revoke_launched_event_token(generation, &event_token)
+            .unwrap(),
+        "prepared event token must already be revoked"
+    );
+
+    terminal.shutdown().await.unwrap();
+    AgentRuntimeService::shutdown(agent.as_ref()).unwrap();
 }
 
 #[test]

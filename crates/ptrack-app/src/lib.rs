@@ -6,15 +6,24 @@
 //! redb handle or accidentally hold the writer lock while idle.
 
 mod agent_runtime;
+mod desktop_runtime;
 mod service;
 mod terminal_runtime;
 
 pub use agent_runtime::{
     AgentAdmissionFence, AgentIntegration, AgentIntegrationFactory, AgentInvalidationV2,
     AgentMutationOutcome, AgentNotificationsV2, AgentResourceStateV2, AgentRuntime,
-    AgentRuntimeConfig, AgentRuntimeService, AgentWorkflowTargetsV2, LaunchedEventAuthority,
-    LinkedAgentAssociationChange, LinkedAgentRuntimeHooks, ProductionAgentIntegrationFactory,
-    ProjectCoordinationStore, PtrackCoordinationGit,
+    AgentRuntimeConfig, AgentRuntimeEventSuppression, AgentRuntimeService, AgentWorkflowTargetsV2,
+    LaunchedEventAuthority, LinkedAgentAssociationChange, LinkedAgentRuntimeHooks,
+    ProductionAgentIntegrationFactory, ProjectCoordinationStore, PtrackCoordinationGit,
+};
+pub use desktop_runtime::{
+    ActiveResourceSummary, BoundDesktopWorkspace, DesktopAdmissionFence, DesktopAgentRuntime,
+    DesktopCommandRequest, DesktopEvent, DesktopEventSink, DesktopNativeActionLease,
+    DesktopRuntime, DesktopRuntimeConfig, DesktopTerminalEventSink, DesktopWorkspace,
+    DesktopWorkspaceFactory, NoDesktopWorkspaceFactory, NoRecentProjectsProvider,
+    RecentProjectsProvider, WorkspaceChangeResult, WorkspaceProject, WorkspaceState,
+    WorkspaceStatus, allowed_desktop_commands,
 };
 
 pub use service::{
@@ -32,6 +41,8 @@ pub use terminal_runtime::{
 
 #[cfg(test)]
 mod agent_runtime_test;
+#[cfg(test)]
+mod desktop_runtime_test;
 #[cfg(test)]
 mod service_test;
 #[cfg(test)]

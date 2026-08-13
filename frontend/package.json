@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@tauri-apps/api": "2.11.1",
     "@xterm/addon-fit": "0.11.0",
     "@xterm/addon-search": "0.16.0",
     "@xterm/addon-unicode-graphemes": "0.4.0",

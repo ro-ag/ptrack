@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use super::*;
 use crate::coordination::{
@@ -33,6 +34,7 @@ impl AssociationCatalog for Catalog {
 struct FakeStore {
     root: String,
     current: AtomicBool,
+    association_delay_millis: AtomicU64,
     linked: Mutex<Vec<String>>,
     tracking: AtomicI64,
     plans: Mutex<BTreeMap<u64, String>>,
@@ -47,6 +49,10 @@ impl CoordinationStore for FakeStore {
         live_id: &str,
         association: &Association,
     ) -> Option<RuntimeAssociation> {
+        let delay = self.association_delay_millis.load(Ordering::SeqCst);
+        if delay != 0 {
+            thread::sleep(Duration::from_millis(delay));
+        }
         (self.current.load(Ordering::SeqCst)
             && association.version == ASSOCIATION_VERSION_V1
             && association.project_root == self.root
@@ -228,6 +234,7 @@ impl Harness {
         let store = Arc::new(FakeStore {
             root: root_string,
             current: AtomicBool::new(true),
+            association_delay_millis: AtomicU64::new(0),
             linked: Mutex::new(Vec::new()),
             tracking: AtomicI64::new(0),
             plans: Mutex::new(BTreeMap::from([(7, "Plan title".to_owned())])),
@@ -495,6 +502,47 @@ fn projections_ownership_worktree_conflict_and_notifications_are_bounded() {
         assert!(!json.contains(secret));
     }
     assert_eq!(second.association.unwrap().target.task_id, 9);
+}
+
+#[test]
+fn workspace_projection_rejects_an_expired_whole_snapshot_deadline() {
+    let harness = Harness::new();
+    harness.external();
+    let error = harness
+        .coordinator
+        .workspace_snapshot(
+            GENERATION,
+            &CoordinationGitSnapshot::default(),
+            Instant::now(),
+        )
+        .unwrap_err();
+    assert_eq!(error, CoordinationError::DeadlineExceeded);
+}
+
+#[test]
+fn workspace_projection_stops_slow_non_git_work_at_the_whole_deadline() {
+    let harness = Harness::new();
+    for index in 0..50 {
+        harness.launched(&format!("terminal-{index}"), 7, 9);
+    }
+    harness
+        .store
+        .association_delay_millis
+        .store(5, Ordering::SeqCst);
+    let started = Instant::now();
+    let error = harness
+        .coordinator
+        .workspace_snapshot(
+            GENERATION,
+            &CoordinationGitSnapshot::default(),
+            Instant::now() + Duration::from_millis(25),
+        )
+        .unwrap_err();
+    assert_eq!(error, CoordinationError::DeadlineExceeded);
+    assert!(
+        started.elapsed() < Duration::from_millis(150),
+        "deadline checks must stop before all 50 delayed candidates are projected"
+    );
 }
 
 #[test]

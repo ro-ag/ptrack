@@ -1,6 +1,8 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::time::Instant;
 
 use ptrack_capability_policy::{AuditEvent, confirm_approval, normalize, sanitize_audit};
 use ptrack_core::{
@@ -217,6 +219,19 @@ fn memory_writeback_is_idempotent_validated_and_bounded_reads_are_exact() {
     assert!(matches!(
         store.plans_bounded(0),
         Err(StoreError::InvalidBoundedLimit)
+    ));
+    let expired = Instant::now();
+    assert!(matches!(
+        store.tasks_by_plan_bounded_until(1, 1, expired),
+        Err(StoreError::DeadlineExceeded)
+    ));
+    assert!(matches!(
+        store.task_associations_until(&BTreeSet::from([1]), expired),
+        Err(StoreError::DeadlineExceeded)
+    ));
+    assert!(matches!(
+        store.counts_until(expired),
+        Err(StoreError::DeadlineExceeded)
     ));
 }
 

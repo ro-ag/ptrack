@@ -1,4 +1,4 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use ptrack_core::{
     Capability, CapabilityAudit, Commit, Issue, MemoryWritebackRecord, Meta, Milestone,
@@ -251,6 +251,24 @@ pub(crate) fn visit<R: StoredRecord>(
     transaction.visit(R::COLLECTION, newest_first, |_, envelope| {
         visitor(decode::<R>(envelope)?)
     })
+}
+
+pub(crate) fn visit_until<R: StoredRecord>(
+    transaction: &ReadTransaction,
+    newest_first: bool,
+    deadline: Instant,
+    mut visitor: impl FnMut(R) -> StoreResult<()>,
+) -> StoreResult<()> {
+    transaction.visit(R::COLLECTION, newest_first, |_, envelope| {
+        if Instant::now() >= deadline {
+            return Err(StoreError::DeadlineExceeded);
+        }
+        visitor(decode::<R>(envelope)?)
+    })?;
+    if Instant::now() >= deadline {
+        return Err(StoreError::DeadlineExceeded);
+    }
+    Ok(())
 }
 
 pub(crate) fn scan_write<R: StoredRecord>(transaction: &WriteTransaction) -> StoreResult<Vec<R>> {

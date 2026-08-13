@@ -1,13 +1,17 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 
-use ptrack_agent::Registration;
+use ptrack_agent::{Association, AssociationPointer, Registration};
 use ptrack_capability::Broker;
 use ptrack_terminal::{
-    CwdPolicy, ExitResult, Manager, ManagerErrorKind, Profile, ProfileKind, Session, SessionInfo,
-    SessionState, ShellIntegrationDescriptor, resolve_cwd, sort_profiles,
+    CwdPolicy, ExitResult, MAX_RUNTIME_SESSION_CANDIDATES, Manager, ManagerErrorKind, Profile,
+    ProfileKind, Session, SessionInfo, SessionState, ShellIntegrationDescriptor,
+    TerminalAssociation, TerminalAssociationChange, TerminalAssociationPointer, resolve_cwd,
+    sort_profiles,
 };
 use serde::Serialize;
 use tokio::task::JoinHandle;
@@ -27,11 +31,16 @@ pub struct TerminalProfileView {
     pub kind: ProfileKind,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub provider: String,
+    pub executable: String,
+    pub args: Vec<String>,
+    pub env: BTreeMap<String, String>,
     pub theme: String,
     pub font_family: String,
     pub font_size: u16,
     pub scrollback: u32,
     pub cwd_policy: CwdPolicy,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fixed_cwd: Option<String>,
     pub exit_behavior: ptrack_terminal::ExitBehavior,
 }
 
@@ -42,11 +51,15 @@ impl From<Profile> for TerminalProfileView {
             name: profile.name,
             kind: profile.kind,
             provider: profile.provider,
+            executable: String::new(),
+            args: Vec::new(),
+            env: BTreeMap::new(),
             theme: profile.theme,
             font_family: profile.font_family,
             font_size: profile.font_size,
             scrollback: profile.scrollback,
             cwd_policy: profile.cwd_policy,
+            fixed_cwd: None,
             exit_behavior: profile.exit_behavior,
         }
     }
@@ -141,6 +154,18 @@ impl PreparedTerminalIdentity {
             agent,
         }
     }
+
+    pub(crate) fn insert_environment(&mut self, key: &str, value: String) {
+        self.environment.insert(key.to_owned(), value);
+    }
+
+    pub(crate) fn capability_token(&self) -> &str {
+        &self.capability_token
+    }
+
+    pub(crate) fn event_token(&self) -> &str {
+        &self.event_token
+    }
 }
 
 #[allow(clippy::missing_errors_doc)]
@@ -157,8 +182,27 @@ pub trait TerminalIdentityAuthority: Send + Sync {
         identity: &PreparedTerminalIdentity,
         session: &SessionInfo,
     ) -> AppResult<()>;
+    fn bind_linked(
+        &self,
+        _generation: u64,
+        _identity: &PreparedTerminalIdentity,
+        _session: &SessionInfo,
+        _pointer: AssociationPointer,
+    ) -> AppResult<Association> {
+        Err(AppError::Message(
+            "linked agent identity authority is unavailable".to_owned(),
+        ))
+    }
     fn revoke_pending(&self, generation: u64, identity: &PreparedTerminalIdentity);
     fn revoke_session(&self, generation: u64, session_id: &str);
+    fn revoke_failed_session(&self, generation: u64, session_id: &str) {
+        self.revoke_session(generation, session_id);
+    }
+    fn rollback_linked_session(&self, generation: u64, session_id: &str) {
+        self.revoke_session(generation, session_id);
+        self.remove_linked_session(generation, session_id);
+    }
+    fn remove_linked_session(&self, _generation: u64, _session_id: &str) {}
     fn record_exit(&self, generation: u64, session_id: &str, result: &ExitResult);
 }
 
@@ -189,6 +233,11 @@ impl TerminalIdentityAuthority for ProductionTerminalIdentityAuthority {
         if !agent {
             return Ok(identity);
         }
+        let _event_suppression = self
+            .agents
+            .as_ref()
+            .map(|agents| agents.suppress_runtime_event(generation))
+            .transpose()?;
         if let Some(agents) = &self.agents {
             let endpoint = agents.event_endpoint(generation)?;
             let token = agents.issue_launched_event_token(generation)?;
@@ -246,6 +295,7 @@ impl TerminalIdentityAuthority for ProductionTerminalIdentityAuthority {
         let Some(agents) = &self.agents else {
             return Ok(());
         };
+        let _event_suppression = agents.suppress_runtime_event(generation)?;
         let pid = i32::try_from(session.pid)
             .map_err(|_| AppError::Message("terminal process identity is invalid".to_owned()))?;
         let run = match agents.register_launched(
@@ -275,20 +325,80 @@ impl TerminalIdentityAuthority for ProductionTerminalIdentityAuthority {
         Ok(())
     }
 
-    fn revoke_pending(&self, generation: u64, identity: &PreparedTerminalIdentity) {
+    fn bind_linked(
+        &self,
+        generation: u64,
+        identity: &PreparedTerminalIdentity,
+        session: &SessionInfo,
+        pointer: AssociationPointer,
+    ) -> AppResult<Association> {
+        if !identity.agent {
+            return Err(AppError::Message(
+                "linked launch requires an agent profile".to_owned(),
+            ));
+        }
+        let agents = self
+            .agents
+            .as_ref()
+            .ok_or_else(|| AppError::Message("AgentRun registry is unavailable".to_owned()))?;
+        let _event_suppression = agents.suppress_runtime_event(generation)?;
+        let pid = i32::try_from(session.pid)
+            .map_err(|_| AppError::Message("terminal process identity is invalid".to_owned()))?;
+        let run = agents.register_linked_launched(
+            generation,
+            Registration {
+                profile: session.profile_id.clone(),
+                provider: session.provider.clone(),
+                pid,
+                terminal_id: session.id.clone(),
+                cwd: session.cwd.clone(),
+            },
+            pointer,
+        )?;
+        let association = run.association.clone().ok_or_else(|| {
+            AppError::Message("linked terminal and AgentRun associations differ".to_owned())
+        })?;
+        if !identity.event_token.is_empty()
+            && let Err(error) =
+                agents.bind_launched_event_token(generation, &identity.event_token, &run.id)
+        {
+            return Err(error);
+        }
         if let Some(broker) = &self.broker
             && !identity.capability_token.is_empty()
+            && let Err(error) = broker.bind_session(&identity.capability_token, &session.id)
         {
-            broker.revoke_token(&identity.capability_token);
+            return Err(AppError::Message(error.to_string()));
         }
-        if let Some(agents) = &self.agents
-            && !identity.event_token.is_empty()
-        {
-            let _ = agents.revoke_launched_event_token(generation, &identity.event_token);
-        }
+        Ok(association)
+    }
+
+    fn revoke_pending(&self, generation: u64, identity: &PreparedTerminalIdentity) {
+        let _event_suppression = self
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.suppress_runtime_event(generation).ok());
+        revoke_prepared_tokens(
+            identity.event_token(),
+            identity.capability_token(),
+            |token| {
+                if let Some(agents) = &self.agents {
+                    let _ = agents.revoke_launched_event_token(generation, token);
+                }
+            },
+            |token| {
+                if let Some(broker) = &self.broker {
+                    broker.revoke_token(token);
+                }
+            },
+        );
     }
 
     fn revoke_session(&self, generation: u64, session_id: &str) {
+        let _event_suppression = self
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.suppress_runtime_event(generation).ok());
         if let Some(broker) = &self.broker {
             broker.revoke_session(session_id);
         }
@@ -297,8 +407,39 @@ impl TerminalIdentityAuthority for ProductionTerminalIdentityAuthority {
         }
     }
 
+    fn revoke_failed_session(&self, generation: u64, session_id: &str) {
+        let _event_suppression = self
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.suppress_runtime_event(generation).ok());
+        if let Some(agents) = &self.agents {
+            let _ = agents.revoke_terminal_event_tokens(generation, session_id);
+        }
+        if let Some(broker) = &self.broker {
+            broker.revoke_session(session_id);
+        }
+    }
+
+    fn rollback_linked_session(&self, generation: u64, session_id: &str) {
+        self.revoke_session(generation, session_id);
+        self.remove_linked_session(generation, session_id);
+    }
+
+    fn remove_linked_session(&self, generation: u64, session_id: &str) {
+        let _event_suppression = self
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.suppress_runtime_event(generation).ok());
+        if let Some(agents) = &self.agents {
+            let _ = agents.rollback_linked_terminal(generation, session_id);
+        }
+    }
+
     fn record_exit(&self, generation: u64, session_id: &str, result: &ExitResult) {
         if let Some(agents) = &self.agents {
+            let Ok(_event_suppression) = agents.suppress_runtime_event(generation) else {
+                return;
+            };
             let class = if result.error.is_some() {
                 "failed"
             } else {
@@ -306,6 +447,20 @@ impl TerminalIdentityAuthority for ProductionTerminalIdentityAuthority {
             };
             let _ = agents.record_terminal_exit(generation, session_id, result.exit_code, class);
         }
+    }
+}
+
+pub(super) fn revoke_prepared_tokens(
+    event_token: &str,
+    capability_token: &str,
+    mut revoke_event: impl FnMut(&str),
+    mut revoke_capability: impl FnMut(&str),
+) {
+    if !event_token.is_empty() {
+        revoke_event(event_token);
+    }
+    if !capability_token.is_empty() {
+        revoke_capability(capability_token);
     }
 }
 
@@ -340,6 +495,16 @@ impl Drop for RuntimeOperation {
     }
 }
 
+fn join_terminal_cleanup(
+    primary: AppError,
+    cleanup: Result<(), ptrack_terminal::ManagerError>,
+) -> AppError {
+    match cleanup {
+        Ok(()) => primary,
+        Err(cleanup) => AppError::Message(format!("{primary}\n{cleanup}")),
+    }
+}
+
 pub struct TerminalRuntime {
     generation: u64,
     project_root: PathBuf,
@@ -350,8 +515,10 @@ pub struct TerminalRuntime {
     gate: Arc<RuntimeGate>,
     cancellation: CancellationToken,
     monitors: Mutex<Vec<JoinHandle<()>>>,
+    resource_revision: Arc<AtomicU64>,
 }
 
+#[allow(clippy::missing_errors_doc)]
 impl TerminalRuntime {
     /// Creates one UI-neutral, generation-scoped terminal host.
     ///
@@ -390,6 +557,7 @@ impl TerminalRuntime {
             }),
             cancellation: CancellationToken::new(),
             monitors: Mutex::new(Vec::new()),
+            resource_revision: Arc::new(AtomicU64::new(0)),
         }))
     }
 
@@ -419,6 +587,81 @@ impl TerminalRuntime {
             generation: self.generation,
             profiles: profiles.into_iter().map(Into::into).collect(),
         })
+    }
+
+    /// Returns the exact number of currently published terminal sessions for
+    /// workspace lifecycle confirmation. The count carries no session tokens.
+    pub fn active_session_count(&self, generation: u64) -> AppResult<usize> {
+        let _operation = self.begin(generation)?;
+        let (sessions, total) = self
+            .manager
+            .runtime_session_snapshot_bounded(MAX_RUNTIME_SESSION_CANDIDATES);
+        if total > sessions.len() {
+            return Err(AppError::Message(
+                "terminal session snapshot exceeds exact limit".to_owned(),
+            ));
+        }
+        Ok(sessions
+            .iter()
+            .filter(|session| {
+                matches!(
+                    session.state,
+                    SessionState::Starting | SessionState::Running
+                )
+            })
+            .count())
+    }
+
+    /// Counts live sessions associated with an exact task, failing closed when
+    /// the bounded runtime inventory cannot be represented.
+    pub fn task_session_count(
+        &self,
+        generation: u64,
+        plan_id: u64,
+        task_id: u64,
+    ) -> AppResult<usize> {
+        let _operation = self.begin(generation)?;
+        let sessions = self
+            .manager
+            .session_snapshot_exact(MAX_RUNTIME_SESSION_CANDIDATES)
+            .map_err(|error| AppError::Message(error.to_string()))?;
+        Ok(sessions
+            .iter()
+            .filter(|session| {
+                session.association.as_ref().is_some_and(|association| {
+                    association.pointer.plan_id == plan_id && association.pointer.task_id == task_id
+                })
+            })
+            .count())
+    }
+
+    /// Executes a callback while holding the exact terminal lifecycle epoch.
+    pub fn with_exact_session_snapshot<T>(
+        &self,
+        generation: u64,
+        use_snapshot: impl FnOnce(&[SessionInfo]) -> AppResult<T>,
+    ) -> AppResult<T> {
+        let _operation = self.begin(generation)?;
+        self.manager
+            .with_exact_session_snapshot(MAX_RUNTIME_SESSION_CANDIDATES, use_snapshot)
+            .map_err(|error| AppError::Message(error.to_string()))?
+    }
+
+    /// Returns the bounded presentation candidate set and exact total.
+    pub fn runtime_session_snapshot(
+        &self,
+        generation: u64,
+    ) -> AppResult<(Vec<SessionInfo>, usize)> {
+        let _operation = self.begin(generation)?;
+        Ok(self
+            .manager
+            .runtime_session_snapshot_bounded(MAX_RUNTIME_SESSION_CANDIDATES))
+    }
+
+    /// Monotonic terminal lifecycle/association epoch used by confirmation flows.
+    pub fn resource_revision(&self, generation: u64) -> AppResult<u64> {
+        let _operation = self.begin(generation)?;
+        Ok(self.resource_revision.load(Ordering::Acquire))
     }
 
     /// Validates a bounded, duplicate-free set of candidate working directories.
@@ -488,6 +731,42 @@ impl TerminalRuntime {
         rows: u16,
         columns: u16,
     ) -> AppResult<TerminalSessionV2> {
+        self.create_inner(generation, profile_id, cwd, rows, columns, None)
+    }
+
+    /// Creates an agent session whose terminal and `AgentRun` associations are
+    /// both published at revision one before the session is exposed.
+    #[allow(clippy::too_many_arguments)] // Exact desktop launch contract fields remain explicit.
+    pub fn create_linked(
+        self: &Arc<Self>,
+        generation: u64,
+        profile_id: &str,
+        cwd: Option<&Path>,
+        rows: u16,
+        columns: u16,
+        pointer: TerminalAssociationPointer,
+        launch_context: &str,
+    ) -> AppResult<TerminalSessionV2> {
+        self.create_inner(
+            generation,
+            profile_id,
+            cwd,
+            rows,
+            columns,
+            Some((pointer, launch_context)),
+        )
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn create_inner(
+        self: &Arc<Self>,
+        generation: u64,
+        profile_id: &str,
+        cwd: Option<&Path>,
+        rows: u16,
+        columns: u16,
+        linked: Option<(TerminalAssociationPointer, &str)>,
+    ) -> AppResult<TerminalSessionV2> {
         let _operation = self.begin(generation)?;
         let profile = self
             .manager
@@ -497,9 +776,17 @@ impl TerminalRuntime {
             .ok_or_else(|| {
                 AppError::Message(format!("terminal profile {profile_id:?} is unavailable"))
             })?;
-        let identity = self
+        if linked.is_some() && profile.kind != ProfileKind::Agent {
+            return Err(AppError::Message(format!(
+                "terminal profile {profile_id:?} is not an agent"
+            )));
+        }
+        let mut identity = self
             .identity
             .prepare(self.generation, &self.project_root, &profile)?;
+        if let Some((_, launch_context)) = linked {
+            identity.insert_environment("PTRACK_LAUNCH_CONTEXT_V1", launch_context.to_owned());
+        }
         let session = match self.manager.create_with_env(
             profile_id,
             cwd,
@@ -514,25 +801,114 @@ impl TerminalRuntime {
             }
         };
         let info = session.info();
-        if identity.agent && info.profile_kind != ProfileKind::Agent {
+        if linked.is_some()
+            && (info.id.is_empty()
+                || info.profile_id != profile.id
+                || info.profile_kind != ProfileKind::Agent
+                || info.provider != profile.provider
+                || info.pid == 0)
+        {
             self.identity.revoke_pending(self.generation, &identity);
-            let _ = self.manager.close_session(session.id(), true);
-            return Err(AppError::Message(
-                "terminal manager returned a shell for an agent profile".to_owned(),
+            return Err(join_terminal_cleanup(
+                AppError::Message(
+                    "launched terminal identity does not match the selected agent profile"
+                        .to_owned(),
+                ),
+                self.manager.close_session(session.id(), true),
             ));
         }
-        if let Err(error) = self.identity.bind(self.generation, &identity, &info) {
+        if linked.is_some() {
+            let expected_cwd = fs::canonicalize(cwd.unwrap_or(&self.project_root)).ok();
+            let actual_cwd = fs::canonicalize(&info.cwd).ok();
+            if expected_cwd.is_none() || actual_cwd != expected_cwd {
+                self.identity.revoke_pending(self.generation, &identity);
+                return Err(join_terminal_cleanup(
+                    AppError::Message(
+                        "launched terminal working directory does not match validated CWD"
+                            .to_owned(),
+                    ),
+                    self.manager.close_session(session.id(), true),
+                ));
+            }
+        }
+        if identity.agent && info.profile_kind != ProfileKind::Agent {
             self.identity.revoke_pending(self.generation, &identity);
-            self.identity.revoke_session(self.generation, session.id());
-            let _ = self.manager.close_session(session.id(), true);
-            return Err(error);
+            return Err(join_terminal_cleanup(
+                AppError::Message(
+                    "terminal manager returned a shell for an agent profile".to_owned(),
+                ),
+                self.manager.close_session(session.id(), true),
+            ));
+        }
+        let mut association_revision = None;
+        let bind_result = if let Some((pointer, _)) = linked {
+            let terminal_association = self
+                .manager
+                .associate_session(session.id(), pointer)
+                .map_err(|error| AppError::Message(error.to_string()));
+            match terminal_association {
+                Ok(terminal_association) => {
+                    let agent_pointer = AssociationPointer {
+                        version: pointer.version,
+                        plan_id: pointer.plan_id,
+                        task_id: pointer.task_id,
+                    };
+                    self.identity
+                        .bind_linked(self.generation, &identity, &info, agent_pointer)
+                        .and_then(|agent_association| {
+                            if agent_association.generation != self.generation
+                                || agent_association.target.plan_id != pointer.plan_id
+                                || agent_association.target.task_id != pointer.task_id
+                                || agent_association.revision != terminal_association.revision
+                            {
+                                return Err(AppError::Message(
+                                    "linked terminal and AgentRun associations differ".to_owned(),
+                                ));
+                            }
+                            association_revision = Some(terminal_association.revision);
+                            Ok(())
+                        })
+                }
+                Err(error) => Err(error),
+            }
+        } else {
+            self.identity.bind(self.generation, &identity, &info)
+        };
+        if let Err(error) = bind_result {
+            if linked.is_some() {
+                // Prepared tokens are the only stable identities until both binds
+                // succeed. Revoke them event-first, then clear any session-bound
+                // remnants before removing the paired runtime record.
+                self.identity.revoke_pending(self.generation, &identity);
+                self.identity
+                    .revoke_failed_session(self.generation, session.id());
+                self.identity
+                    .remove_linked_session(self.generation, session.id());
+            } else {
+                self.identity.revoke_pending(self.generation, &identity);
+                self.identity.revoke_session(self.generation, session.id());
+            }
+            return Err(join_terminal_cleanup(
+                error,
+                self.manager.close_session(session.id(), true),
+            ));
         }
         let stream_url = match self.manager.session_url(session.id()) {
             Ok(url) => url,
             Err(error) => {
-                self.identity.revoke_session(self.generation, session.id());
-                let _ = self.manager.close_session(session.id(), true);
-                return Err(AppError::Message(error.to_string()));
+                if linked.is_some() {
+                    self.identity.revoke_pending(self.generation, &identity);
+                    self.identity
+                        .revoke_failed_session(self.generation, session.id());
+                    self.identity
+                        .remove_linked_session(self.generation, session.id());
+                } else {
+                    self.identity.revoke_session(self.generation, session.id());
+                }
+                return Err(join_terminal_cleanup(
+                    AppError::Message(error.to_string()),
+                    self.manager.close_session(session.id(), true),
+                ));
             }
         };
         let result = TerminalSessionV2 {
@@ -542,8 +918,8 @@ impl TerminalRuntime {
             cwd: info.cwd,
             state: info.state,
             stream_url,
-            association_revision: None,
-            linked_launch: false,
+            association_revision,
+            linked_launch: linked.is_some(),
             shell_integration: session.shell_integration().clone(),
         };
         self.events.status(TerminalStatusV2 {
@@ -553,6 +929,8 @@ impl TerminalRuntime {
         });
         self.monitor_exit(&session);
         self.monitor_attachment(&session);
+        increment_revision(&self.resource_revision);
+        self.events.runtime_changed(self.generation);
         Ok(result)
     }
 
@@ -590,7 +968,152 @@ impl TerminalRuntime {
             session_id: session_id.to_owned(),
             state: SessionState::Closed,
         });
+        increment_revision(&self.resource_revision);
+        self.events.runtime_changed(self.generation);
         Ok(())
+    }
+
+    /// Removes linked launch authority and force-closes its terminal. Callers
+    /// must first prove the session is a linked launch through the `AgentRun` owner.
+    pub fn rollback_linked(&self, generation: u64, session_id: &str) -> AppResult<()> {
+        let _operation = self.begin(generation)?;
+        self.identity.revoke_session(self.generation, session_id);
+        if let Err(error) = self.manager.close_session(session_id, true)
+            && error.kind() != ManagerErrorKind::SessionNotFound
+        {
+            return Err(AppError::Message(error.to_string()));
+        }
+        self.identity
+            .remove_linked_session(self.generation, session_id);
+        self.events.status(TerminalStatusV2 {
+            generation: self.generation,
+            session_id: session_id.to_owned(),
+            state: SessionState::Closed,
+        });
+        increment_revision(&self.resource_revision);
+        self.events.runtime_changed(self.generation);
+        Ok(())
+    }
+
+    /// Cleans a linked launch that failed after publication. Unlike a user
+    /// rollback, failure cleanup revokes event authority before capability
+    /// authority and force-closes before reporting any teardown error.
+    pub fn rollback_failed_linked(&self, generation: u64, session_id: &str) -> AppResult<()> {
+        let _operation = self.begin(generation)?;
+        self.identity
+            .revoke_failed_session(self.generation, session_id);
+        let close = self.manager.close_session(session_id, true);
+        self.identity
+            .remove_linked_session(self.generation, session_id);
+        self.events.status(TerminalStatusV2 {
+            generation: self.generation,
+            session_id: session_id.to_owned(),
+            state: SessionState::Closed,
+        });
+        increment_revision(&self.resource_revision);
+        self.events.runtime_changed(self.generation);
+        match close {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == ManagerErrorKind::SessionNotFound => Ok(()),
+            Err(error) => Err(AppError::Message(error.to_string())),
+        }
+    }
+
+    /// Applies one application-validated association pointer under an exact
+    /// live-session revision fence. A pointer with no plan is the established
+    /// detached representation.
+    pub fn mutate_association(
+        &self,
+        generation: u64,
+        session_id: &str,
+        expected_revision: u64,
+        pointer: TerminalAssociationPointer,
+    ) -> AppResult<TerminalAssociation> {
+        let _operation = self.begin(generation)?;
+        let change = self
+            .manager
+            .prepare_association_change(session_id, pointer, expected_revision)
+            .map_err(|error| AppError::Message(error.to_string()))?;
+        self.manager
+            .commit_association_change(&change)
+            .map_err(|error| AppError::Message(error.to_string()))?;
+        increment_revision(&self.resource_revision);
+        self.events.runtime_changed(self.generation);
+        Ok(change.next)
+    }
+
+    pub fn prepare_association_change(
+        &self,
+        generation: u64,
+        session_id: &str,
+        expected_revision: u64,
+        pointer: TerminalAssociationPointer,
+    ) -> AppResult<TerminalAssociationChange> {
+        let _operation = self.begin(generation)?;
+        self.manager
+            .prepare_association_change(session_id, pointer, expected_revision)
+            .map_err(|error| AppError::Message(error.to_string()))
+    }
+
+    pub fn commit_association_change(
+        &self,
+        generation: u64,
+        change: &TerminalAssociationChange,
+    ) -> AppResult<()> {
+        let _operation = self.begin(generation)?;
+        self.manager
+            .commit_association_change(change)
+            .map_err(|error| AppError::Message(error.to_string()))
+    }
+
+    pub fn rollback_association_change(
+        &self,
+        generation: u64,
+        change: &TerminalAssociationChange,
+    ) -> AppResult<()> {
+        let _operation = self.begin(generation)?;
+        self.manager
+            .rollback_association_change(change)
+            .map_err(|error| AppError::Message(error.to_string()))
+    }
+
+    pub fn association_changed(&self, generation: u64) -> AppResult<()> {
+        let _operation = self.begin(generation)?;
+        increment_revision(&self.resource_revision);
+        self.events.runtime_changed(self.generation);
+        Ok(())
+    }
+
+    /// Associates a previously detached live session for the first time.
+    pub fn associate(
+        &self,
+        generation: u64,
+        session_id: &str,
+        pointer: TerminalAssociationPointer,
+    ) -> AppResult<TerminalAssociation> {
+        let _operation = self.begin(generation)?;
+        let association = self
+            .manager
+            .associate_session(session_id, pointer)
+            .map_err(|error| AppError::Message(error.to_string()))?;
+        increment_revision(&self.resource_revision);
+        self.events.runtime_changed(self.generation);
+        Ok(association)
+    }
+
+    /// Reads a live association only while holding its exact revision fence.
+    pub fn live_association(
+        &self,
+        generation: u64,
+        session_id: &str,
+        expected_revision: u64,
+    ) -> AppResult<TerminalAssociation> {
+        let _operation = self.begin(generation)?;
+        self.manager
+            .get(session_id)
+            .map_err(|error| AppError::Message(error.to_string()))?
+            .with_live_association(expected_revision, Clone::clone)
+            .map_err(|error| AppError::Message(error.to_string()))
     }
 
     fn monitor_exit(self: &Arc<Self>, session: &Arc<Session>) {
@@ -622,6 +1145,7 @@ impl TerminalRuntime {
                     state: result.state,
                     error: result.error,
                 });
+                increment_revision(&runtime.resource_revision);
                 runtime.events.runtime_changed(runtime.generation);
             }
         }));
@@ -650,6 +1174,8 @@ impl TerminalRuntime {
                     session_id: session.id().to_owned(),
                     state: SessionState::Closed,
                 });
+                increment_revision(&runtime.resource_revision);
+                runtime.events.runtime_changed(runtime.generation);
             }
         }));
     }
@@ -713,6 +1239,12 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn increment_revision(revision: &AtomicU64) {
+    let _ = revision.fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+        Some(value.saturating_add(1))
+    });
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]

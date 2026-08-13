@@ -13,18 +13,19 @@
     "windows": [
       {
         "label": "main",
-        "title": "p-track",
-        "width": 1280,
-        "height": 800,
-        "minWidth": 960,
-        "minHeight": 640,
+        "title": "p-track Project Workspace",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 880,
+        "minHeight": 560,
+        "backgroundColor": "#080d12",
         "resizable": true,
         "fullscreen": false
       }
     ],
     "security": {
       "capabilities": ["main-window"],
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; font-src 'self' data:; img-src 'self' data:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:* ws://localhost:*; font-src 'self' data:; img-src 'self' data:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
     }
   },
   "bundle": {

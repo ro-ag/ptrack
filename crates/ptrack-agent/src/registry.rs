@@ -1149,11 +1149,18 @@ impl Registry {
         } else {
             limit
         };
-        let state = lock(&self.inner.state);
+        let mut state = lock(&self.inner.state);
+        if sweep_expired_locked(&self.inner, &mut state, (self.inner.now)()) {
+            persist_locked(&self.inner, &mut state);
+        }
         let mut runs: Vec<Run> = state
             .records
             .values()
-            .map(|entry| entry.run.clone())
+            .map(|entry| {
+                let mut run = entry.run.clone();
+                run.lifecycle_revision = entry.lifecycle_revision;
+                run
+            })
             .collect();
         drop(state);
         runs.sort_by(|left, right| {
