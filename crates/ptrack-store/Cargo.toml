@@ -7,5 +7,6 @@ readme = "README.md"
 rust-version.workspace = true
 
 [dependencies]
+ptrack-capability-policy = { path = "../ptrack-capability-policy" }
 ptrack-core = { path = "../ptrack-core" }
 redb.workspace = true

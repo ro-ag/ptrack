@@ -7,18 +7,23 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use redb::{Database, Durability, ReadableDatabase, ReadableTable, StorageBackend, TableHandle};
+use redb::{
+    Database, Durability, ReadableDatabase, ReadableTable, ReadableTableMetadata, StorageBackend,
+    TableHandle,
+};
 
 use crate::import::MAX_LEGACY_PROJECT_FORMAT;
 use crate::schema::{
-    MANIFEST_KEY_BATCH_MANIFEST_SHA256, MANIFEST_KEY_DATABASE_JSON_SHA256, MANIFEST_KEY_FAMILY,
-    MANIFEST_KEY_IMPORT_BUNDLE_SHA256, MANIFEST_KEY_IMPORT_BUNDLE_VERSION,
-    MANIFEST_KEY_IMPORT_SOURCE_FORMAT, MANIFEST_KEY_ORIGIN, MANIFEST_KEY_OWNER,
-    MANIFEST_KEY_QUARANTINE_COUNT, MANIFEST_KEY_SCHEMA_VERSION, MANIFEST_KEY_SOURCE_FORMAT,
-    MANIFEST_KEY_STAGE_VERSION, MANIFEST_KEY_STATE, MANIFEST_KEY_STORE_KIND, MANIFEST_TABLE,
-    QUARANTINE_TABLE, SEQUENCES_TABLE, STORE_FAMILY, STORE_ORIGIN_CREATED, STORE_ORIGIN_IMPORTED,
-    STORE_ORIGIN_JSON_STAGE, STORE_OWNER, STORE_SCHEMA_VERSION, STORE_STATE_IMPORTING,
-    STORE_STATE_READY, collections_for, decode_key,
+    MANIFEST_KEY_ACTIVATION_GENERATION, MANIFEST_KEY_APPLICATION_WRITES,
+    MANIFEST_KEY_BATCH_MANIFEST_SHA256, MANIFEST_KEY_CANONICAL_PATH, MANIFEST_KEY_DATABASE_ID,
+    MANIFEST_KEY_DATABASE_JSON_SHA256, MANIFEST_KEY_FAMILY, MANIFEST_KEY_IMPORT_BUNDLE_SHA256,
+    MANIFEST_KEY_IMPORT_BUNDLE_VERSION, MANIFEST_KEY_IMPORT_SOURCE_FORMAT, MANIFEST_KEY_ORIGIN,
+    MANIFEST_KEY_OWNER, MANIFEST_KEY_QUARANTINE_COUNT, MANIFEST_KEY_SCHEMA_VERSION,
+    MANIFEST_KEY_SOURCE_FORMAT, MANIFEST_KEY_STAGE_VERSION, MANIFEST_KEY_STATE,
+    MANIFEST_KEY_STORE_KIND, MANIFEST_TABLE, QUARANTINE_TABLE, SEQUENCES_TABLE, STORE_FAMILY,
+    STORE_ORIGIN_CREATED, STORE_ORIGIN_IMPORTED, STORE_ORIGIN_JSON_STAGE, STORE_OWNER,
+    STORE_SCHEMA_VERSION, STORE_STATE_ACTIVE, STORE_STATE_IMPORTING, STORE_STATE_READY,
+    collections_for, decode_key,
 };
 use crate::{
     Collection, IMPORT_BUNDLE_VERSION, ImportData, ImportReport, JSON_STAGE_VERSION,
@@ -39,6 +44,7 @@ pub struct Store {
     database: Database,
     kind: StoreKind,
     path: PathBuf,
+    identity: FileIdentity,
 }
 
 impl Store {
@@ -50,7 +56,7 @@ impl Store {
         Self::create_new_inner(path.as_ref(), kind, || Ok(()), || Ok(()))
     }
 
-    fn create_new_inner(
+    pub(crate) fn create_new_inner(
         path: &Path,
         kind: StoreKind,
         before_create: impl FnOnce() -> StoreResult<()>,
@@ -88,17 +94,8 @@ impl Store {
             database,
             kind,
             path: path.to_path_buf(),
+            identity,
         })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn create_new_with_creation_hooks(
-        path: impl AsRef<Path>,
-        kind: StoreKind,
-        before_create: impl FnOnce() -> StoreResult<()>,
-        after_create: impl FnOnce() -> StoreResult<()>,
-    ) -> StoreResult<Self> {
-        Self::create_new_inner(path.as_ref(), kind, before_create, after_create)
     }
 
     /// Imports one complete legacy database into a new destination.
@@ -121,7 +118,7 @@ impl Store {
         )
     }
 
-    fn import_new_inner(
+    pub(crate) fn import_new_inner(
         path: &Path,
         data: ImportData,
         before_create: impl FnOnce() -> StoreResult<()>,
@@ -178,6 +175,7 @@ impl Store {
             database,
             kind: import.data.kind,
             path: path.to_path_buf(),
+            identity,
         };
         Ok((store, import.report))
     }
@@ -193,7 +191,7 @@ impl Store {
         Self::import_json_stage_new_inner(path.as_ref(), data, || Ok(()))
     }
 
-    fn import_json_stage_new_inner(
+    pub(crate) fn import_json_stage_new_inner(
         path: &Path,
         data: JsonStageImportData,
         before_ready: impl FnOnce() -> StoreResult<()>,
@@ -241,52 +239,9 @@ impl Store {
             database,
             kind: import.data.kind,
             path: path.to_path_buf(),
+            identity,
         };
         Ok((store, import.report))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn import_json_stage_new_with_before_ready(
-        path: impl AsRef<Path>,
-        data: JsonStageImportData,
-        before_ready: impl FnOnce() -> StoreResult<()>,
-    ) -> StoreResult<(Self, ImportReport)> {
-        Self::import_json_stage_new_inner(path.as_ref(), data, before_ready)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn import_new_with_before_ready(
-        path: impl AsRef<Path>,
-        data: ImportData,
-        before_ready: impl FnOnce() -> StoreResult<()>,
-    ) -> StoreResult<(Self, ImportReport)> {
-        Self::import_new_inner(
-            path.as_ref(),
-            data,
-            || Ok(()),
-            || Ok(()),
-            before_ready,
-            || Ok(()),
-        )
-    }
-
-    #[cfg(test)]
-    pub(crate) fn import_new_with_parent_hooks(
-        path: impl AsRef<Path>,
-        data: ImportData,
-        before_create: impl FnOnce() -> StoreResult<()>,
-        after_create: impl FnOnce() -> StoreResult<()>,
-        before_ready: impl FnOnce() -> StoreResult<()>,
-        after_ready: impl FnOnce() -> StoreResult<()>,
-    ) -> StoreResult<(Self, ImportReport)> {
-        Self::import_new_inner(
-            path.as_ref(),
-            data,
-            before_create,
-            after_create,
-            before_ready,
-            after_ready,
-        )
     }
 
     /// Opens an existing database after a read-only schema and ownership probe.
@@ -308,6 +263,7 @@ impl Store {
             database,
             kind: expected,
             path: path.to_path_buf(),
+            identity,
         })
     }
 
@@ -353,10 +309,35 @@ impl Store {
     ) -> StoreResult<R> {
         if self.json_stage_provenance()?.is_some() {
             return Err(StoreError::InvalidImport(
-                "JSON-stage candidates are immutable until explicit activation replaces their provenance"
+                "JSON-stage databases are immutable through the raw store API; activated application writes require a typed store"
                     .to_owned(),
             ));
         }
+        self.write_inner(false, operation)
+    }
+
+    pub(crate) fn write_application<R>(
+        &self,
+        expected: &crate::ActiveBinding,
+        operation: impl FnOnce(&mut WriteTransaction) -> StoreResult<R>,
+    ) -> StoreResult<R> {
+        ensure_path_identity(&self.path, self.identity)?;
+        crate::activation::validate_binding_for_path(expected, self.kind, &self.path)?;
+        if self.active_binding()?.as_ref() != Some(expected) {
+            return Err(StoreError::ActivationBinding(
+                "stored binding does not match the active runtime".to_owned(),
+            ));
+        }
+        let result = self.write_inner(true, operation)?;
+        ensure_path_identity(&self.path, self.identity)?;
+        Ok(result)
+    }
+
+    fn write_inner<R>(
+        &self,
+        application_write: bool,
+        operation: impl FnOnce(&mut WriteTransaction) -> StoreResult<R>,
+    ) -> StoreResult<R> {
         let mut inner = self.database.begin_write()?;
         inner.set_durability(Durability::Immediate)?;
         // Persist allocator state with every commit. Besides faster crash
@@ -368,6 +349,11 @@ impl Store {
             kind: self.kind,
             poisoned: false,
         };
+
+        if application_write {
+            let mut manifest = transaction.raw().open_table(MANIFEST_TABLE)?;
+            manifest.insert(MANIFEST_KEY_APPLICATION_WRITES, b"true".as_slice())?;
+        }
 
         match catch_unwind(AssertUnwindSafe(|| operation(&mut transaction))) {
             Ok(Ok(value)) => {
@@ -387,6 +373,70 @@ impl Store {
                 resume_unwind(payload)
             }
         }
+    }
+
+    pub(crate) fn active_binding(&self) -> StoreResult<Option<crate::ActiveBinding>> {
+        let transaction = self.database.begin_read()?;
+        let entries = read_manifest_entries(&transaction)?;
+        crate::activation::binding_from_manifest(&entries)
+    }
+
+    pub(crate) fn application_writes(&self) -> StoreResult<bool> {
+        let transaction = self.database.begin_read()?;
+        let entries = read_manifest_entries(&transaction)?;
+        match entries
+            .get(MANIFEST_KEY_APPLICATION_WRITES)
+            .map(Vec::as_slice)
+        {
+            None | Some(b"false") => Ok(false),
+            Some(b"true") => Ok(true),
+            Some(_) => Err(StoreError::InvalidManifest(
+                "application_writes must be true or false".to_owned(),
+            )),
+        }
+    }
+
+    pub(crate) fn activate(&self, binding: &crate::ActiveBinding) -> StoreResult<()> {
+        crate::activation::validate_binding_for_path(binding, self.kind, &self.path)?;
+        let current = self.active_binding()?;
+        if let Some(current) = current {
+            return if current == *binding {
+                Ok(())
+            } else {
+                Err(StoreError::ActivationBinding(
+                    "store is already bound to another generation".to_owned(),
+                ))
+            };
+        }
+        let mut transaction = self.database.begin_write()?;
+        transaction.set_durability(Durability::Immediate)?;
+        transaction.set_quick_repair(true);
+        {
+            let mut manifest = transaction.open_table(MANIFEST_TABLE)?;
+            manifest.insert(MANIFEST_KEY_STATE, STORE_STATE_ACTIVE)?;
+            manifest.insert(
+                MANIFEST_KEY_ACTIVATION_GENERATION,
+                binding.generation.to_be_bytes().as_slice(),
+            )?;
+            manifest.insert(MANIFEST_KEY_DATABASE_ID, binding.database_id.as_bytes())?;
+            manifest.insert(
+                MANIFEST_KEY_CANONICAL_PATH,
+                binding.canonical_path.as_os_str().as_encoded_bytes(),
+            )?;
+            manifest.insert(MANIFEST_KEY_APPLICATION_WRITES, b"false".as_slice())?;
+        }
+        transaction.commit()?;
+        validate_database(&self.database, self.kind)
+    }
+
+    pub(crate) fn with_writer_barrier<R>(
+        &self,
+        operation: impl FnOnce(&Path) -> StoreResult<R>,
+    ) -> StoreResult<R> {
+        let transaction = self.database.begin_write()?;
+        let result = operation(&self.path);
+        transaction.abort()?;
+        result
     }
 }
 
@@ -430,6 +480,68 @@ impl ReadTransaction {
             ));
         }
         Ok(records)
+    }
+
+    /// Returns a collection's exact row count without decoding its values.
+    pub fn collection_len(&self, collection: Collection) -> StoreResult<usize> {
+        collection.validate_store(self.kind)?;
+        let table = self.inner.open_table(collection.table())?;
+        usize::try_from(table.len()?).map_err(|_| {
+            StoreError::InvalidManifest("collection length does not fit usize".to_owned())
+        })
+    }
+
+    /// Decodes at most `limit` rows from one end of a collection.
+    pub fn scan_limited(
+        &self,
+        collection: Collection,
+        limit: usize,
+        newest_first: bool,
+    ) -> StoreResult<Vec<(OwnedRecordKey, RecordEnvelope)>> {
+        collection.validate_store(self.kind)?;
+        let table = self.inner.open_table(collection.table())?;
+        let mut iterator = table.iter()?;
+        let mut records = Vec::with_capacity(limit);
+        while records.len() < limit {
+            let entry = if newest_first {
+                iterator.next_back()
+            } else {
+                iterator.next()
+            };
+            let Some(entry) = entry else { break };
+            let (key, value) = entry?;
+            records.push((
+                decode_key(collection, key.value())?,
+                RecordEnvelope::decode(value.value())?,
+            ));
+        }
+        Ok(records)
+    }
+
+    /// Visits rows without collecting them, optionally newest first.
+    pub fn visit(
+        &self,
+        collection: Collection,
+        newest_first: bool,
+        mut visitor: impl FnMut(OwnedRecordKey, RecordEnvelope) -> StoreResult<()>,
+    ) -> StoreResult<()> {
+        collection.validate_store(self.kind)?;
+        let table = self.inner.open_table(collection.table())?;
+        let mut iterator = table.iter()?;
+        loop {
+            let entry = if newest_first {
+                iterator.next_back()
+            } else {
+                iterator.next()
+            };
+            let Some(entry) = entry else { break };
+            let (key, value) = entry?;
+            visitor(
+                decode_key(collection, key.value())?,
+                RecordEnvelope::decode(value.value())?,
+            )?;
+        }
+        Ok(())
     }
 
     /// Reads the collection's independent persisted high-water mark.
@@ -762,15 +874,35 @@ fn validate_database(
             ));
         }
     };
+    let state = entries
+        .get(MANIFEST_KEY_STATE)
+        .ok_or_else(|| StoreError::InvalidManifest("state is missing".to_owned()))?;
+    let mut expected_manifest_keys = expected_manifest_keys;
+    if state.as_slice() == STORE_STATE_ACTIVE {
+        expected_manifest_keys.extend([
+            MANIFEST_KEY_ACTIVATION_GENERATION.to_vec(),
+            MANIFEST_KEY_DATABASE_ID.to_vec(),
+            MANIFEST_KEY_CANONICAL_PATH.to_vec(),
+            MANIFEST_KEY_APPLICATION_WRITES.to_vec(),
+        ]);
+    } else if state.as_slice() != STORE_STATE_READY {
+        return Err(StoreError::InvalidManifest(
+            "unexpected state value".to_owned(),
+        ));
+    }
     let actual_manifest_keys = entries.keys().cloned().collect::<BTreeSet<_>>();
     if actual_manifest_keys != expected_manifest_keys {
         return Err(StoreError::InvalidManifest(
-            "schema metadata keys do not match the version-3 origin contract".to_owned(),
+            "schema metadata keys do not match the version-4 origin contract".to_owned(),
         ));
     }
 
     require_manifest_value(&entries, MANIFEST_KEY_OWNER, STORE_OWNER, "owner")?;
-    require_manifest_value(&entries, MANIFEST_KEY_STATE, STORE_STATE_READY, "state")?;
+    if state.as_slice() == STORE_STATE_ACTIVE {
+        crate::activation::binding_from_manifest(&entries)?.ok_or_else(|| {
+            StoreError::InvalidManifest("active store has no activation binding".to_owned())
+        })?;
+    }
 
     let source_format = if origin == STORE_ORIGIN_IMPORTED {
         require_manifest_value(

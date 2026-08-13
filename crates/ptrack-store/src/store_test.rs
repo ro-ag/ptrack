@@ -120,7 +120,7 @@ fn memory(sequence: u64) -> RecordEnvelope {
 }
 
 #[test]
-fn created_store_uses_exact_schema_v3_manifest() {
+fn created_store_uses_exact_schema_v4_manifest() {
     let (directory, path, store) = project_store();
     drop(store);
 
@@ -133,7 +133,7 @@ fn created_store_uses_exact_schema_v3_manifest() {
             (MANIFEST_KEY_OWNER.to_vec(), STORE_OWNER.to_vec()),
             (
                 MANIFEST_KEY_SCHEMA_VERSION.to_vec(),
-                3_u32.to_be_bytes().to_vec(),
+                4_u32.to_be_bytes().to_vec(),
             ),
             (MANIFEST_KEY_STATE.to_vec(), STORE_STATE_READY.to_vec()),
             (MANIFEST_KEY_STORE_KIND.to_vec(), b"project".to_vec()),
@@ -506,7 +506,7 @@ fn newer_application_schema_is_rejected_without_mutation() {
     {
         let mut manifest = transaction.open_table(MANIFEST_TABLE).unwrap();
         manifest
-            .insert(MANIFEST_KEY_SCHEMA_VERSION, 4_u32.to_be_bytes().as_slice())
+            .insert(MANIFEST_KEY_SCHEMA_VERSION, 5_u32.to_be_bytes().as_slice())
             .unwrap();
         manifest
             .insert(b"future_key".as_slice(), b"future_value".as_slice())
@@ -519,8 +519,8 @@ fn newer_application_schema_is_rejected_without_mutation() {
     assert!(matches!(
         Store::open_existing(&path, StoreKind::Project),
         Err(StoreError::UnsupportedSchemaVersion {
-            actual: 4,
-            current: 3
+            actual: 5,
+            current: 4
         })
     ));
     assert_eq!(fs::read(path).unwrap(), before);
@@ -531,14 +531,14 @@ fn older_application_schema_is_rejected_without_mutation() {
     let (_directory, path, store) = project_store();
     drop(store);
 
-    for version in [1, 2] {
+    for version in [1, 2, 3] {
         set_schema_version(&path, version);
         let before = fs::read(&path).unwrap();
         assert!(matches!(
             Store::open_existing(&path, StoreKind::Project),
             Err(StoreError::UnsupportedSchemaVersion {
                 actual,
-                current: 3
+                current: 4
             }) if actual == version
         ));
         assert_eq!(fs::read(&path).unwrap(), before);

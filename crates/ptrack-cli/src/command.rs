@@ -1,0 +1,75 @@
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ArgCount {
+    None,
+    Exact(usize),
+    Minimum(usize),
+    Maximum(usize),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct LeafSpec {
+    pub path: &'static [&'static str],
+    pub count: ArgCount,
+}
+
+pub const LEAVES: &[LeafSpec] = &[
+    leaf(&["init"], ArgCount::None),
+    leaf(&["goal", "show"], ArgCount::None),
+    leaf(&["goal", "set"], ArgCount::Minimum(1)),
+    leaf(&["summary", "show"], ArgCount::None),
+    leaf(&["summary", "set"], ArgCount::Minimum(1)),
+    leaf(&["milestone", "add"], ArgCount::Minimum(1)),
+    leaf(&["milestone", "list"], ArgCount::None),
+    leaf(&["milestone", "show"], ArgCount::Exact(1)),
+    leaf(&["milestone", "done"], ArgCount::Exact(1)),
+    leaf(&["milestone", "open"], ArgCount::Exact(1)),
+    leaf(&["milestone", "due"], ArgCount::Exact(2)),
+    leaf(&["milestone", "rename"], ArgCount::Minimum(2)),
+    leaf(&["plan", "add"], ArgCount::Minimum(1)),
+    leaf(&["plan", "list"], ArgCount::None),
+    leaf(&["plan", "show"], ArgCount::Exact(1)),
+    leaf(&["plan", "done"], ArgCount::Exact(1)),
+    leaf(&["plan", "use"], ArgCount::Exact(1)),
+    leaf(&["plan", "rename"], ArgCount::Minimum(2)),
+    leaf(&["task", "add"], ArgCount::Minimum(1)),
+    leaf(&["task", "list"], ArgCount::None),
+    leaf(&["task", "show"], ArgCount::Exact(1)),
+    leaf(&["task", "start"], ArgCount::Exact(1)),
+    leaf(&["task", "done"], ArgCount::Exact(1)),
+    leaf(&["task", "block"], ArgCount::Exact(1)),
+    leaf(&["task", "rename"], ArgCount::Minimum(2)),
+    leaf(&["task", "move"], ArgCount::Exact(1)),
+    leaf(&["task", "convert"], ArgCount::Exact(1)),
+    leaf(&["issue", "add"], ArgCount::Minimum(1)),
+    leaf(&["issue", "list"], ArgCount::None),
+    leaf(&["issue", "show"], ArgCount::Exact(1)),
+    leaf(&["issue", "close"], ArgCount::Exact(1)),
+    leaf(&["issue", "open"], ArgCount::Exact(1)),
+    leaf(&["issue", "severity"], ArgCount::Exact(2)),
+    leaf(&["issue", "rename"], ArgCount::Minimum(2)),
+    leaf(&["note", "add"], ArgCount::Minimum(1)),
+    leaf(&["note", "list"], ArgCount::None),
+    leaf(&["commit", "add"], ArgCount::Minimum(2)),
+    leaf(&["commit", "record"], ArgCount::None),
+    leaf(&["commit", "list"], ArgCount::None),
+    leaf(&["commit", "show"], ArgCount::Exact(1)),
+    leaf(&["hook", "install"], ArgCount::None),
+    leaf(&["hook", "uninstall"], ArgCount::None),
+    leaf(&["hook", "status"], ArgCount::None),
+    leaf(&["context"], ArgCount::None),
+    leaf(&["guide"], ArgCount::None),
+    leaf(&["next"], ArgCount::None),
+    leaf(&["search"], ArgCount::Minimum(1)),
+    leaf(&["board"], ArgCount::None),
+    leaf(&["gui"], ArgCount::Maximum(1)),
+    leaf(&["status"], ArgCount::None),
+    leaf(&["projects"], ArgCount::None),
+    leaf(&["backup"], ArgCount::None),
+    leaf(&["capability", "call"], ArgCount::Exact(1)),
+    leaf(&["capability", "mcp"], ArgCount::None),
+    leaf(&["version"], ArgCount::None),
+];
+
+const fn leaf(path: &'static [&'static str], count: ArgCount) -> LeafSpec {
+    LeafSpec { path, count }
+}

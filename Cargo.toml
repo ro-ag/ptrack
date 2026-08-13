@@ -1,9 +1,17 @@
 [workspace]
 members = [
+    "crates/ptrack-agent",
+    "crates/ptrack-app",
+    "crates/ptrack-capability",
+    "crates/ptrack-capability-policy",
+    "crates/ptrack-cli",
     "crates/ptrack-core",
     "crates/ptrack-db-import",
+    "crates/ptrack-git",
     "crates/ptrack-migrate",
     "crates/ptrack-store",
+    "crates/ptrack-tui",
+    "src-tauri",
 ]
 resolver = "3"
 
@@ -13,6 +21,25 @@ license = "Apache-2.0"
 rust-version = "1.89"
 
 [workspace.dependencies]
+base64 = "=0.22.1"
+clap = { version = "=4.6.6", default-features = false, features = ["std", "help", "usage", "error-context", "suggestions"] }
+clap_complete = "=4.6.9"
+getrandom = "=0.3.4"
+http-body-util = { version = "=0.1.5", default-features = false }
+hyper = { version = "=1.11.0", default-features = false, features = ["http1", "server"] }
+hyper-util = { version = "=0.1.20", default-features = false, features = ["tokio"] }
+percent-encoding = "=2.3.2"
 redb = "=4.1.0"
+ratatui = { version = "=0.30.2", default-features = false, features = ["crossterm_0_29"] }
+regex = { version = "=1.13.1", default-features = false, features = ["std", "unicode-case", "unicode-gencat", "unicode-perl"] }
+reqwest = { version = "=0.13.4", default-features = false, features = ["rustls", "system-proxy"] }
+rustix = { version = "=1.1.4", default-features = false, features = ["fs", "std"] }
 serde = { version = "=1.0.229", default-features = false, features = ["derive", "std"] }
 serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
+sha2 = { version = "=0.10.9", default-features = false }
+subtle = { version = "=2.6.1", default-features = false }
+time = { version = "=0.3.55", default-features = false, features = ["formatting", "parsing"] }
+tokio = { version = "=1.53.1", default-features = false, features = ["io-util", "macros", "net", "process", "rt", "sync", "time"] }
+tokio-util = { version = "=0.7.19", default-features = false, features = ["rt"] }
+unicode-width = "=0.2.2"
+windows-sys = { version = "=0.61.2", default-features = false }

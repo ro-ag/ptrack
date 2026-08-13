@@ -6,9 +6,10 @@ use ptrack_core::{Meta, NativeRecord, Timestamp, encode_record};
 use redb::{ReadableDatabase, ReadableTable, ReadableTableMetadata};
 
 use super::{
-    Collection, ImportCollection, ImportRecord, JSON_STAGE_VERSION, JsonStageImportData,
-    NATIVE_CODEC, NATIVE_PAYLOAD_SCHEMA, OwnedRecordKey, QuarantineReason, QuarantinedLegacyRecord,
-    RecordEnvelope, Store, StoreError, StoreKind,
+    ActiveBinding, Collection, ImportCollection, ImportRecord, JSON_STAGE_VERSION,
+    JsonStageImportData, NATIVE_CODEC, NATIVE_PAYLOAD_SCHEMA, OwnedRecordKey, ProjectStore,
+    QuarantineReason, QuarantinedLegacyRecord, RecordEnvelope, StagedStore, Store, StoreError,
+    StoreKind,
 };
 use crate::schema::{
     MANIFEST_KEY_BATCH_MANIFEST_SHA256, MANIFEST_KEY_DATABASE_JSON_SHA256,
@@ -40,6 +41,13 @@ impl Drop for TestDirectory {
 }
 
 fn json_stage(quarantine: Vec<QuarantinedLegacyRecord>) -> JsonStageImportData {
+    json_stage_with_format(quarantine, 5)
+}
+
+fn json_stage_with_format(
+    quarantine: Vec<QuarantinedLegacyRecord>,
+    format_version: u64,
+) -> JsonStageImportData {
     let mut collections = Collection::for_store(StoreKind::Project)
         .map(|collection| ImportCollection {
             collection,
@@ -53,7 +61,7 @@ fn json_stage(quarantine: Vec<QuarantinedLegacyRecord>) -> JsonStageImportData {
         active_plan: 0,
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
-        format_version: 5,
+        format_version,
         last_write_version: "v0.21.0".to_owned(),
     });
     collections[0].records.push(ImportRecord {
@@ -328,4 +336,51 @@ fn json_stage_candidates_are_immutable_through_the_public_store_api() {
         store.write(|_| Ok(())),
         Err(StoreError::InvalidImport(detail)) if detail.contains("immutable")
     ));
+}
+
+#[test]
+fn explicit_activation_retains_stage_provenance_and_quarantine_permanently() {
+    let directory = TestDirectory::new();
+    let path = directory.0.join("activated.redb");
+    drop(
+        Store::import_json_stage_new(
+            &path,
+            json_stage_with_format(vec![quarantined_capability()], 4),
+        )
+        .unwrap()
+        .0,
+    );
+    let staged = StagedStore::open(&path, StoreKind::Project).unwrap();
+    let expected_provenance = staged.provenance().unwrap();
+    let binding = ActiveBinding {
+        generation: 9,
+        database_id: "project-activated".to_owned(),
+        kind: StoreKind::Project,
+        canonical_path: path.canonicalize().unwrap(),
+    };
+    let project = ProjectStore::activate(staged, binding.clone(), "test").unwrap();
+    let meta = project.meta().unwrap();
+    assert_eq!(meta.format_version, 5);
+    assert_eq!(meta.goal, "migration");
+    assert_eq!(meta.last_write_version, "test");
+    assert!(project.application_writes().unwrap());
+    drop(project);
+
+    let reopened = Store::open_existing(&path, StoreKind::Project).unwrap();
+    assert_eq!(
+        reopened.json_stage_provenance().unwrap(),
+        Some(expected_provenance)
+    );
+    assert_eq!(reopened.active_binding().unwrap(), Some(binding));
+    drop(reopened);
+    let database = redb::Database::open(path).unwrap();
+    let transaction = database.begin_read().unwrap();
+    assert_eq!(
+        transaction
+            .open_table(QUARANTINE_TABLE)
+            .unwrap()
+            .len()
+            .unwrap(),
+        1
+    );
 }

@@ -567,9 +567,9 @@ go run github.com/wailsapp/wails/v2/cmd/wails@v2.13.0 build \
 ```
 
 Architecture and product design notes live in
-[`docs/superpowers/`](docs/superpowers/). The deferred cgo-free Tauri host,
-`native-ipc` runner, and libghostty-vt migration is captured separately in
-[`docs/tauri-rust-recode.md`](docs/tauri-rust-recode.md).
+[`docs/superpowers/`](docs/superpowers/). The approved all-Rust runtime, Tauri
+boundary, storage activation contract, and fail-closed cutover design are
+captured in [`docs/tauri-rust-recode.md`](docs/tauri-rust-recode.md).
 
 ## License
 

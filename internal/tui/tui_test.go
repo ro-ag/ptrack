@@ -81,6 +81,26 @@ func TestTabSwitching(t *testing.T) {
 	}
 }
 
+func TestInputOwnsQuitKeys(t *testing.T) {
+	d, _ := newTestModel(t)
+	d = send(t, d, runes("g"))
+	d = send(t, d, runes("q"))
+	if d.purpose != inputEditGoal || d.input.Value() != "q" {
+		t.Fatalf("q in input = purpose %v value %q; want active goal input containing q", d.purpose, d.input.Value())
+	}
+
+	updated, cmd := d.Update(key(tea.KeyCtrlC))
+	d = updated.(dashboard)
+	if d.purpose != inputEditGoal {
+		t.Fatalf("ctrl+c closed active input: purpose %v", d.purpose)
+	}
+	if cmd != nil {
+		if _, quits := cmd().(tea.QuitMsg); quits {
+			t.Fatal("ctrl+c in active input returned tea.Quit")
+		}
+	}
+}
+
 func TestWelcomeUsesLineArtBranding(t *testing.T) {
 	d, _ := newTestModel(t)
 	d.showWelcome = true
