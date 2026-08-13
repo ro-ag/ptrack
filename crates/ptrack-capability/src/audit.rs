@@ -7,13 +7,42 @@ use ptrack_store::ProjectStore;
 /// Capability-owned durable audit sink. Only sanitized opaque records cross
 /// the store boundary.
 pub struct AuditRecorder<'a> {
-    store: Option<&'a ProjectStore>,
+    backend: AuditBackend<'a>,
+}
+
+enum AuditBackend<'a> {
+    None,
+    Store(&'a ProjectStore),
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "private executor test injection seam")
+    )]
+    Sink(&'a dyn AuditSink),
+}
+
+pub(crate) trait AuditSink: Send + Sync {
+    fn record(&self, capability: &Capability, event: &AuditEvent) -> Result<(), AuditError>;
 }
 
 impl<'a> AuditRecorder<'a> {
     #[must_use]
     pub const fn new(store: Option<&'a ProjectStore>) -> Self {
-        Self { store }
+        Self {
+            backend: match store {
+                Some(store) => AuditBackend::Store(store),
+                None => AuditBackend::None,
+            },
+        }
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "private executor test injection seam")
+    )]
+    pub(crate) const fn from_sink(sink: &'a dyn AuditSink) -> Self {
+        Self {
+            backend: AuditBackend::Sink(sink),
+        }
     }
 
     /// Records one bounded audit event when enabled.
@@ -21,16 +50,22 @@ impl<'a> AuditRecorder<'a> {
     /// # Errors
     /// Returns a sanitized storage error without event data.
     pub fn record(&self, capability: &Capability, event: &AuditEvent) -> Result<(), AuditError> {
-        let Some(store) = self.store else {
+        if !capability.audit.enabled {
             return Ok(());
-        };
-        let Some(audit) = sanitize_audit(capability, event) else {
-            return Ok(());
-        };
-        store
-            .record_capability_audit(audit)
-            .map(|_| ())
-            .map_err(|_| AuditError)
+        }
+        match self.backend {
+            AuditBackend::None => Ok(()),
+            AuditBackend::Sink(sink) => sink.record(capability, event),
+            AuditBackend::Store(store) => {
+                let Some(audit) = sanitize_audit(capability, event) else {
+                    return Ok(());
+                };
+                store
+                    .record_capability_audit(audit)
+                    .map(|_| ())
+                    .map_err(|_| AuditError)
+            }
+        }
     }
 }
 

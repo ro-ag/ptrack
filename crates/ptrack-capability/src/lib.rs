@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 //! Capability facade.
 //!
@@ -9,6 +9,8 @@
 mod audit;
 mod git;
 mod http;
+#[cfg(windows)]
+mod private_windows;
 mod process;
 
 pub use audit::{AuditError, AuditRecorder};
@@ -16,4 +18,19 @@ pub use git::{GitError, GitExecutor, GitRequest, GitResult, classify_git_exit};
 pub use http::{
     ConnectionClass, HttpDiagnostics, HttpError, HttpExecutor, HttpRequest, HttpResponse,
 };
+
+#[cfg(test)]
+mod audit_test;
+#[cfg(test)]
+mod contract_coverage_test;
+#[cfg(test)]
+mod git_test;
+#[cfg(test)]
+mod http_test;
+#[cfg(all(test, windows))]
+mod private_windows_test;
+#[cfg(test)]
+mod process_test;
+#[cfg(test)]
+mod test_support;
 pub use ptrack_capability_policy::*;

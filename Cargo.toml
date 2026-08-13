@@ -32,7 +32,8 @@ percent-encoding = "=2.3.2"
 redb = "=4.1.0"
 ratatui = { version = "=0.30.2", default-features = false, features = ["crossterm_0_29"] }
 regex = { version = "=1.13.1", default-features = false, features = ["std", "unicode-case", "unicode-gencat", "unicode-perl"] }
-reqwest = { version = "=0.13.4", default-features = false, features = ["rustls", "system-proxy"] }
+reqwest = { version = "=0.13.4", default-features = false, features = ["rustls-no-provider", "system-proxy"] }
+rustls = { version = "=0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
 rustix = { version = "=1.1.4", default-features = false, features = ["fs", "std"] }
 serde = { version = "=1.0.229", default-features = false, features = ["derive", "std"] }
 serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }

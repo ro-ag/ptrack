@@ -108,7 +108,7 @@ impl From<Denied> for HttpError {
 }
 
 pub struct HttpExecutor<'a> {
-    recorder: AuditRecorder<'a>,
+    pub(crate) recorder: AuditRecorder<'a>,
 }
 
 impl<'a> HttpExecutor<'a> {
@@ -181,13 +181,13 @@ impl<'a> HttpExecutor<'a> {
             response_bytes,
             redirects,
         };
-        if let Err(error) = self.recorder.record(&normalized, &event) {
-            if outcome.is_ok() {
-                return Err(HttpError::new(
-                    error.to_string(),
-                    ConnectionClass::Transport,
-                ));
-            }
+        if let Err(error) = self.recorder.record(&normalized, &event)
+            && outcome.is_ok()
+        {
+            return Err(HttpError::new(
+                error.to_string(),
+                ConnectionClass::Transport,
+            ));
         }
         outcome
     }
@@ -201,6 +201,7 @@ impl<'a> HttpExecutor<'a> {
         headers: HeaderMap,
         authorized_url: String,
     ) -> Result<HttpResponse, HttpError> {
+        ensure_tls_provider()?;
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .build()
@@ -226,7 +227,7 @@ impl<'a> HttpExecutor<'a> {
             let response = tokio::select! {
                 biased;
                 () = cancellation.cancelled() => return Err(HttpError::new("HTTP request cancelled", ConnectionClass::Cancelled)),
-                result = send => result.map_err(classify_reqwest)?,
+                result = send => result.map_err(|error| classify_reqwest(&error))?,
             };
             if response.status() == StatusCode::PROXY_AUTHENTICATION_REQUIRED {
                 return Err(HttpError::new(
@@ -286,6 +287,23 @@ impl<'a> HttpExecutor<'a> {
     }
 }
 
+fn ensure_tls_provider() -> Result<(), HttpError> {
+    static INSTALLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *INSTALLED.get_or_init(|| {
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .is_ok()
+            || rustls::crypto::CryptoProvider::get_default().is_some()
+    }) {
+        Ok(())
+    } else {
+        Err(HttpError::new(
+            "HTTP transport is unavailable",
+            ConnectionClass::Transport,
+        ))
+    }
+}
+
 async fn finish_response(
     response: reqwest::Response,
     redirects: i64,
@@ -300,18 +318,26 @@ async fn finish_response(
     let headers = response_headers(response.headers());
     let effective_url = response.url().to_string();
     let limit = usize::try_from(capability.limits.max_response_bytes).unwrap_or(usize::MAX);
-    let body = response.bytes().await.map_err(classify_reqwest)?;
-    if body.len() > limit {
-        return Err(HttpError::new(
-            "HTTP response exceeds its byte limit",
-            ConnectionClass::ResponseLimit,
-        ));
+    let mut response = response;
+    let mut body = Vec::with_capacity(limit.min(8_192));
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| classify_reqwest(&error))?
+    {
+        if body.len().saturating_add(chunk.len()) > limit {
+            return Err(HttpError::new(
+                "HTTP response exceeds its byte limit",
+                ConnectionClass::ResponseLimit,
+            ));
+        }
+        body.extend_from_slice(&chunk);
     }
     Ok(HttpResponse {
         status_code,
         status,
         headers,
-        body: body.to_vec(),
+        body,
         effective_url,
         redirects,
         diagnostics,
@@ -323,7 +349,9 @@ fn parse_method(raw: &str) -> Result<Method, HttpError> {
         .map_err(|_| HttpError::new("HTTP method is invalid", ConnectionClass::Denied))
 }
 
-fn validate_headers(headers: &BTreeMap<String, Vec<String>>) -> Result<HeaderMap, HttpError> {
+pub(crate) fn validate_headers(
+    headers: &BTreeMap<String, Vec<String>>,
+) -> Result<HeaderMap, HttpError> {
     let mut output = HeaderMap::new();
     let mut total = 0_usize;
     for (name, values) in headers {
@@ -413,12 +441,27 @@ fn response_headers(headers: &HeaderMap) -> BTreeMap<String, Vec<String>> {
 }
 
 fn sanitized_proxy_diagnostic(target: &Url) -> String {
-    let key = if target.scheme() == "https" {
-        ["HTTPS_PROXY", "https_proxy"]
+    proxy_diagnostic_from(target, |name| std::env::var(name).ok())
+}
+
+pub(crate) fn proxy_diagnostic_from(
+    target: &Url,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> String {
+    let no_proxy = lookup("NO_PROXY").or_else(|| lookup("no_proxy"));
+    if no_proxy
+        .as_deref()
+        .is_some_and(|rules| proxy_bypassed(target, rules))
+    {
+        return "direct".to_owned();
+    }
+    let raw = if target.scheme() == "https" {
+        lookup("HTTPS_PROXY").or_else(|| lookup("https_proxy"))
+    } else if lookup("REQUEST_METHOD").is_some() {
+        lookup("http_proxy")
     } else {
-        ["HTTP_PROXY", "http_proxy"]
+        lookup("HTTP_PROXY").or_else(|| lookup("http_proxy"))
     };
-    let raw = key.iter().find_map(|name| std::env::var(name).ok());
     let Some(raw) = raw else {
         return "direct".to_owned();
     };
@@ -432,7 +475,50 @@ fn sanitized_proxy_diagnostic(target: &Url) -> String {
     proxy.to_string().trim_end_matches('/').to_owned()
 }
 
-fn classify_reqwest(error: reqwest::Error) -> HttpError {
+fn proxy_bypassed(target: &Url, rules: &str) -> bool {
+    let Some(host) = target.host_str() else {
+        return false;
+    };
+    let port = target.port_or_known_default();
+    rules.split(',').map(str::trim).any(|rule| {
+        if rule == "*" {
+            return true;
+        }
+        if rule.is_empty() {
+            return false;
+        }
+        let rule = rule.split('/').next().unwrap_or(rule);
+        let (rule_host, rule_port) = split_proxy_rule(rule);
+        if rule_port.is_some() && rule_port != port {
+            return false;
+        }
+        let rule_host = rule_host.trim_start_matches('.');
+        host.eq_ignore_ascii_case(rule_host)
+            || host
+                .to_ascii_lowercase()
+                .ends_with(&format!(".{}", rule_host.to_ascii_lowercase()))
+    })
+}
+
+fn split_proxy_rule(rule: &str) -> (&str, Option<u16>) {
+    if let Some(bracketed) = rule.strip_prefix('[')
+        && let Some((host, suffix)) = bracketed.split_once(']')
+    {
+        return (
+            host,
+            suffix.strip_prefix(':').and_then(|port| port.parse().ok()),
+        );
+    }
+    if rule.matches(':').count() == 1
+        && let Some((host, port)) = rule.rsplit_once(':')
+        && let Ok(port) = port.parse()
+    {
+        return (host, Some(port));
+    }
+    (rule, None)
+}
+
+fn classify_reqwest(error: &reqwest::Error) -> HttpError {
     if error.is_timeout() {
         return HttpError::new("HTTP request timed out", ConnectionClass::Timeout);
     }

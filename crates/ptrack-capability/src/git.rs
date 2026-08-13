@@ -1,7 +1,9 @@
 use std::ffi::OsString;
 use std::fmt;
 use std::fs;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::time::{Duration, Instant};
 
 use ptrack_capability_policy::{
@@ -48,19 +50,49 @@ pub struct GitResult {
 pub struct GitError {
     message: String,
     class: String,
+    result: Box<GitResult>,
 }
 
 impl GitError {
     fn new(message: impl Into<String>, class: impl Into<String>) -> Self {
+        let class = class.into();
+        Self {
+            message: message.into(),
+            result: Box::new(GitResult {
+                exit_code: -1,
+                stdout: String::new(),
+                stderr: String::new(),
+                diagnostic: class.clone(),
+            }),
+            class,
+        }
+    }
+
+    fn with_result(
+        message: impl Into<String>,
+        class: impl Into<String>,
+        result: GitResult,
+    ) -> Self {
         Self {
             message: message.into(),
             class: class.into(),
+            result: Box::new(result),
         }
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn internal(message: impl Into<String>) -> Self {
+        Self::new(message, "internal")
     }
 
     #[must_use]
     pub fn class(&self) -> &str {
         &self.class
+    }
+
+    #[must_use]
+    pub const fn result(&self) -> &GitResult {
+        &self.result
     }
 }
 
@@ -79,15 +111,52 @@ impl From<Denied> for GitError {
 }
 
 pub struct GitExecutor<'a> {
-    recorder: AuditRecorder<'a>,
+    pub(crate) recorder: AuditRecorder<'a>,
+    runner: &'a dyn ProcessRunner,
 }
+
+type RunFuture<'a> = Pin<Box<dyn Future<Output = Result<ProcessResult, ProcessError>> + Send + 'a>>;
+
+pub(crate) trait ProcessRunner: Send + Sync {
+    fn run<'a>(
+        &'a self,
+        spec: &'a ProcessSpec,
+        cancellation: &'a CancellationToken,
+    ) -> RunFuture<'a>;
+}
+
+struct SystemRunner;
+
+impl ProcessRunner for SystemRunner {
+    fn run<'a>(
+        &'a self,
+        spec: &'a ProcessSpec,
+        cancellation: &'a CancellationToken,
+    ) -> RunFuture<'a> {
+        Box::pin(run_process(spec, cancellation))
+    }
+}
+
+static SYSTEM_RUNNER: SystemRunner = SystemRunner;
 
 impl<'a> GitExecutor<'a> {
     #[must_use]
     pub const fn new(store: Option<&'a ProjectStore>) -> Self {
         Self {
             recorder: AuditRecorder::new(store),
+            runner: &SYSTEM_RUNNER,
         }
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "private executor test injection seam")
+    )]
+    pub(crate) const fn from_parts(
+        recorder: AuditRecorder<'a>,
+        runner: &'a dyn ProcessRunner,
+    ) -> Self {
+        Self { recorder, runner }
     }
 
     /// Executes a fixed Git operation against freshly verified repository and
@@ -127,7 +196,8 @@ impl<'a> GitExecutor<'a> {
         let timeout =
             Duration::from_secs(u64::try_from(limits.timeout_seconds).unwrap_or_default());
         let maximum = u64::try_from(limits.max_output_bytes).unwrap_or_default();
-        verify_repository(
+        let actual_remote_url = verify_repository(
+            self.runner,
             cancellation,
             &canonical_root,
             &preview.capability,
@@ -148,7 +218,7 @@ impl<'a> GitExecutor<'a> {
             &GitAuthorization {
                 operation: request.operation.clone(),
                 remote_name: scope.remote_name.clone(),
-                remote_url: scope.remote_url.clone(),
+                remote_url: actual_remote_url,
                 branch: request.branch.clone(),
                 refspec: request.refspec.clone(),
                 force: request.force,
@@ -165,10 +235,22 @@ impl<'a> GitExecutor<'a> {
                 request,
             )
             .await;
-        let response_bytes = outcome.as_ref().map_or(0, |result| {
-            i64::try_from(result.stdout.len().saturating_add(result.stderr.len()))
+        let response_bytes = outcome.as_ref().map_or_else(
+            |error| {
+                i64::try_from(
+                    error
+                        .result
+                        .stdout
+                        .len()
+                        .saturating_add(error.result.stderr.len()),
+                )
                 .unwrap_or(i64::MAX)
-        });
+            },
+            |result| {
+                i64::try_from(result.stdout.len().saturating_add(result.stderr.len()))
+                    .unwrap_or(i64::MAX)
+            },
+        );
         let event = AuditEvent {
             operation: request.operation.clone(),
             target: scope.remote_name.clone(),
@@ -182,10 +264,10 @@ impl<'a> GitExecutor<'a> {
             response_bytes,
             redirects: 0,
         };
-        if let Err(error) = self.recorder.record(&normalized, &event) {
-            if outcome.is_ok() {
-                return Err(GitError::new(error.to_string(), "internal"));
-            }
+        if let Err(error) = self.recorder.record(&normalized, &event)
+            && outcome.is_ok()
+        {
+            return Err(GitError::new(error.to_string(), "internal"));
         }
         outcome
     }
@@ -246,22 +328,26 @@ impl<'a> GitExecutor<'a> {
             None
         };
         let spec = build_operation(capability, root, &hooks.path, &alias, request, env)?;
-        let process = run_process(&spec, cancellation)
+        let process = self
+            .runner
+            .run(&spec, cancellation)
             .await
             .map_err(process_git_error)?;
-        process_result(process)
+        process_result(&process)
     }
 }
 
 async fn verify_repository(
+    runner: &dyn ProcessRunner,
     cancellation: &CancellationToken,
     root: &Path,
     capability: &Capability,
     timeout: Duration,
     maximum: u64,
-) -> Result<(), GitError> {
+) -> Result<String, GitError> {
     let scope = capability.git.as_ref().expect("normalized Git capability");
     let actual = run_metadata(
+        runner,
         cancellation,
         root,
         timeout,
@@ -295,6 +381,7 @@ async fn verify_repository(
     }
     let remote_key = format!("remote.{}.url", scope.remote_name);
     let remote = run_metadata(
+        runner,
         cancellation,
         root,
         timeout,
@@ -309,14 +396,14 @@ async fn verify_repository(
         )
     })?;
     let remote = one_line(&remote)
-        .filter(|value| *value == scope.remote_url)
-        .ok_or_else(|| GitError::new("capability denied: Git remote is invalid", "denied"))?;
-    let _ = remote;
+        .ok_or_else(|| GitError::new("capability denied: Git remote is invalid", "denied"))?
+        .to_owned();
     let remote_pattern = format!(
         "^remote\\.{}\\.(pushurl|uploadpack|receivepack)$",
         escape_basic_regex(&scope.remote_name)
     );
     verify_no_config(
+        runner,
         cancellation,
         root,
         timeout,
@@ -327,6 +414,7 @@ async fn verify_repository(
     )
     .await?;
     verify_no_config(
+        runner,
         cancellation,
         root,
         timeout,
@@ -335,10 +423,13 @@ async fn verify_repository(
         "Git URL rewrite policy could not be verified",
         "Git URL rewrite rules make the approved remote ambiguous",
     )
-    .await
+    .await?;
+    Ok(remote)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn verify_no_config(
+    runner: &dyn ProcessRunner,
     cancellation: &CancellationToken,
     root: &Path,
     timeout: Duration,
@@ -348,7 +439,8 @@ async fn verify_no_config(
     ambiguous_error: &str,
 ) -> Result<(), GitError> {
     let spec = git_process(root, timeout, maximum, &["config", "--get-regexp", pattern]);
-    let result = run_process(&spec, cancellation)
+    let result = runner
+        .run(&spec, cancellation)
         .await
         .map_err(|_| GitError::new(format!("capability denied: {verify_error}"), "denied"))?;
     if result.truncated || (result.exit_code != 0 && result.exit_code != 1) {
@@ -367,13 +459,15 @@ async fn verify_no_config(
 }
 
 async fn run_metadata(
+    runner: &dyn ProcessRunner,
     cancellation: &CancellationToken,
     root: &Path,
     timeout: Duration,
     maximum: u64,
     args: &[&str],
 ) -> Result<ProcessResult, ProcessError> {
-    let result = run_process(&git_process(root, timeout, maximum, args), cancellation).await?;
+    let spec = git_process(root, timeout, maximum, args);
+    let result = runner.run(&spec, cancellation).await?;
     if result.exit_code != 0 || result.truncated {
         return Err(ProcessError::Wait);
     }
@@ -394,7 +488,7 @@ fn git_process(root: &Path, timeout: Duration, maximum: u64, args: &[&str]) -> P
     }
 }
 
-fn build_operation(
+pub(crate) fn build_operation(
     capability: &Capability,
     root: &Path,
     hooks: &Path,
@@ -499,20 +593,32 @@ fn build_operation(
     })
 }
 
-fn process_result(result: ProcessResult) -> Result<GitResult, GitError> {
+fn process_result(result: &ProcessResult) -> Result<GitResult, GitError> {
     let stdout = String::from_utf8_lossy(&result.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&result.stderr).into_owned();
     if result.truncated {
-        return Err(GitError::new(
+        return Err(GitError::with_result(
             "process output exceeds its byte limit",
             "output-limit",
+            GitResult {
+                exit_code: result.exit_code,
+                stdout,
+                stderr,
+                diagnostic: "output-limit".to_owned(),
+            },
         ));
     }
     let class = classify_git_exit(result.exit_code, &stderr);
     if result.exit_code != 0 {
-        return Err(GitError::new(
+        return Err(GitError::with_result(
             format!("Git operation failed: {class}"),
             class,
+            GitResult {
+                exit_code: result.exit_code,
+                stdout,
+                stderr,
+                diagnostic: class.to_owned(),
+            },
         ));
     }
     Ok(GitResult {
@@ -749,7 +855,12 @@ fn set_private_dir(path: &Path) -> Result<(), GitError> {
         .map_err(|_| GitError::new("temporary directory could not be protected", "internal"))
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn set_private_dir(path: &Path) -> Result<(), GitError> {
+    crate::private_windows::private_windows_acl(path)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn set_private_dir(_path: &Path) -> Result<(), GitError> {
     Ok(())
 }
@@ -761,7 +872,12 @@ fn set_private_file(path: &Path) -> Result<(), GitError> {
         .map_err(|_| GitError::new("temporary file could not be protected", "internal"))
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn set_private_file(path: &Path) -> Result<(), GitError> {
+    crate::private_windows::private_windows_acl(path)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn set_private_file(_path: &Path) -> Result<(), GitError> {
     Ok(())
 }
