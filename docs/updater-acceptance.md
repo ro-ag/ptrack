@@ -21,31 +21,16 @@ npm test
 npm run build
 ```
 
-The Go checks remain required until the task #75 cutover removes the retained
-Wails runtime:
+The only retained Go code is the read-only legacy exporter and is validated in
+its nested module:
 
 ```sh
-gofmt -w internal/updater/*.go internal/gui/*.go
-go test ./...
-go test -race ./...
-go vet ./...
-
-cd frontend
-npm ci
-npm test
-npm run build
+(cd tools/ptrack-db-export && go test ./... && go vet ./...)
 ```
 
 Compile the updater for every release target, then execute the OS-specific Rust
-tests on native macOS, Windows, and Linux hosts. The retained Go opt-in live
-contract tests verify the current stable GitHub Release and macOS DMG trust
-chain until equivalent Rust live fixtures replace them:
-
-```sh
-PTRACK_LIVE_UPDATE_TEST=1 go test -run 'TestLive(LatestReleaseContract|DarwinDMGTrustContract)' -v ./internal/updater
-```
-
-The live tests contact GitHub and should be run deliberately, not as an
+tests on native macOS, Windows, and Linux hosts. Live GitHub release and macOS
+trust-chain checks are deliberate native acceptance steps, never an
 unannounced default test side effect.
 
 ## App behavior

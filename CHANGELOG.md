@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- The application runtime is now entirely Rust/Tauri. Legacy bbolt data moves
+  through an explicit offline export, verified redb import, and generation
+  activation; the only retained Go module is the read-only exporter.
+
+### Security
+- Runtime store routing is pinned by a private, attested active-generation
+  marker and retained cutover lock. Automatic migration rollback is refused
+  after any application write to the new global or project stores; preserve
+  the migration journal, handoff, receipt, marker, and legacy files for manual
+  recovery instead of forcing a downgrade.
+
 ## [0.22.0] - 2026-08-12
 
 ### Added

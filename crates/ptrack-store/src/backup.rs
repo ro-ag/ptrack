@@ -29,7 +29,7 @@ impl ProjectStore {
         let expected_binding = self.binding().clone();
         let expected_provenance = self.json_stage_provenance()?;
         self.backup_with_writer_barrier(|source| {
-            let source_identity = FileIdentity::from_metadata(&fs::symlink_metadata(source)?);
+            let source_identity = FileIdentity::from_path(source, false)?;
             ensure_path_identity(source, source_identity)?;
             let parent = BackupParent::prepare(destination)?;
             let temporary = parent.temporary_path(destination)?;
@@ -76,7 +76,7 @@ fn copy_private(source: &Path, destination: &Path) -> StoreResult<FileIdentity> 
         options.mode(0o600);
     }
     let mut output = options.open(destination)?;
-    let identity = FileIdentity::from_metadata(&output.metadata()?);
+    let identity = FileIdentity::from_file(&output)?;
     let mut input = fs::File::open(source)?;
     io::copy(&mut input, &mut output)?;
     output.sync_all()?;

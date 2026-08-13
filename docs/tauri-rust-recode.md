@@ -1,7 +1,7 @@
 # Rust and Tauri runtime architecture
 
-Status: approved target architecture for Plan 8. The Go/Wails application is
-the production implementation only until the parity and cutover gates pass.
+Status: implemented target architecture for Plan 8. Native six-host acceptance
+and the final landing gate remain authoritative evidence for the cutover.
 
 ## Runtime invariant
 
@@ -213,6 +213,7 @@ output limits, process-tree cleanup, and no credential values in diagnostics.
 7. Remove the Wails and Go runtime after every gate passes, retaining only the
    isolated read-only exporter.
 
-The Go/Wails build remains the production fallback until the exact Rust
-candidate passes the complete gate. Compilation or cross-compilation alone is
-not parity, and an unavailable native result is not a pass.
+The Go/Wails runtime has been retired from the candidate. The isolated
+read-only exporter remains solely for explicit offline legacy migration.
+Compilation or cross-compilation alone is not parity, and an unavailable
+native result is not a pass.

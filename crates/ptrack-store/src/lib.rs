@@ -1,16 +1,20 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 mod activation;
 mod backup;
 mod bounded;
+mod cutover;
 mod discovery;
 mod envelope;
 mod error;
 mod global;
 mod import;
 mod paths;
+#[cfg(windows)]
+mod private_windows;
 mod project;
 mod quarantine;
+mod runtime_binding;
 mod schema;
 mod sha256;
 mod store;
@@ -20,6 +24,12 @@ mod validation;
 pub use activation::{ActivatedStore, ActiveBinding, StagedStore};
 pub use bounded::{
     Bounded, MAX_ASSOCIATION_SCAN, MAX_BOUNDED_READ, ScanBounded, TaskAssociations, TaskProgress,
+};
+pub use cutover::{
+    CutoverLease, CutoverLockMode, LegacyReadLease, PrivatePathIdentity, acquire_cutover_lock,
+    acquire_legacy_read_lease, open_private_path, protect_private_directory, protect_private_file,
+    replace_private_file, sync_private_directory, verify_legacy_source_identity,
+    verify_private_open_handle, verify_private_path,
 };
 pub use discovery::{
     GLOBAL_DATABASE_FILENAME, PROJECT_DATABASE_FILENAME, PROJECT_DIRECTORY, find_project_database,
@@ -42,12 +52,19 @@ pub use project::{
     MemoryWriteRequest, MemoryWriteResult, ProjectStore,
 };
 pub use quarantine::{QuarantineReason, QuarantinedLegacyRecord};
+pub use runtime_binding::{
+    ACTIVE_GENERATION_MARKER, ActiveGeneration, ActiveGenerationDatabase, ActiveGenerationProject,
+    RetainedActiveStore, install_active_generation, install_active_generation_retained,
+    load_active_generation, restore_active_generation, validate_active_generation,
+};
 pub use schema::{Collection, OwnedRecordKey, RecordKey, STORE_SCHEMA_VERSION, StoreKind};
 pub use store::{ReadTransaction, Store, WriteTransaction};
 pub use typed::{Clock, SystemClock};
 
 #[cfg(test)]
 mod backup_test_support;
+#[cfg(test)]
+mod cutover_test;
 #[cfg(test)]
 mod discovery_test;
 #[cfg(test)]
@@ -60,6 +77,8 @@ mod project_test;
 mod project_test_support;
 #[cfg(test)]
 mod quarantine_test;
+#[cfg(test)]
+mod runtime_binding_test;
 #[cfg(test)]
 mod schema_test;
 #[cfg(test)]

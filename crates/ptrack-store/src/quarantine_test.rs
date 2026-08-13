@@ -30,6 +30,7 @@ impl TestDirectory {
             std::process::id()
         ));
         fs::create_dir(&path).unwrap();
+        crate::protect_private_directory(&path).unwrap();
         Self(path)
     }
 }
@@ -363,6 +364,13 @@ fn explicit_activation_retains_stage_provenance_and_quarantine_permanently() {
     assert_eq!(meta.format_version, 5);
     assert_eq!(meta.goal, "migration");
     assert_eq!(meta.last_write_version, "test");
+    assert!(!project.application_writes().unwrap());
+    drop(project);
+
+    let project = ProjectStore::open_existing(&path, &binding, "runtime").unwrap();
+    assert_eq!(project.meta().unwrap().format_version, 5);
+    assert!(!project.application_writes().unwrap());
+    project.set_goal("first runtime write").unwrap();
     assert!(project.application_writes().unwrap());
     drop(project);
 

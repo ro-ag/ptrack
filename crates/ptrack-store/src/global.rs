@@ -64,6 +64,20 @@ impl GlobalStore {
         })
     }
 
+    #[must_use]
+    pub fn binding(&self) -> &ActiveBinding {
+        self.active.binding()
+    }
+
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        self.active.store.path()
+    }
+
+    pub fn application_writes(&self) -> StoreResult<bool> {
+        self.active.application_writes()
+    }
+
     pub fn set_config(&self, key: &[u8], value: &[u8]) -> StoreResult<()> {
         if key.is_empty() {
             return Err(StoreError::InvalidManifest(

@@ -15,6 +15,7 @@ use super::{
     StoreError, StoreKind,
 };
 use crate::import::validated_record_size;
+use crate::protect_private_directory;
 use crate::schema::{
     MANIFEST_KEY_FAMILY, MANIFEST_KEY_IMPORT_BUNDLE_SHA256, MANIFEST_KEY_IMPORT_BUNDLE_VERSION,
     MANIFEST_KEY_IMPORT_SOURCE_FORMAT, MANIFEST_KEY_ORIGIN, MANIFEST_KEY_OWNER,
@@ -35,6 +36,7 @@ impl TestDirectory {
             std::process::id()
         ));
         fs::create_dir(&path).unwrap();
+        protect_private_directory(&path).unwrap();
         Self(path)
     }
 

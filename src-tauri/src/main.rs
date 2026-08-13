@@ -4,8 +4,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use ptrack_app::{
-    DesktopCommandRequest, DesktopEvent, DesktopEventSink, DesktopRuntime, DesktopRuntimeConfig,
-    DesktopUpdateEventSink, UpdateRuntime,
+    ActiveRuntime, AppError, DesktopCommandRequest, DesktopEvent, DesktopEventSink, DesktopRuntime,
+    DesktopRuntimeConfig, DesktopUpdateEventSink, DesktopWorkspaceFactory,
+    ProductionDesktopWorkspaceFactory, ProductionRecentProjects, RecentProjectsProvider,
+    RoutedApplication, UpdateRuntime, resolve_global_home,
 };
 use ptrack_desktop::{
     DesktopPlatform, MenuDispatch, MenuEntrySpec, MenuRole, menu_dispatch, menu_spec,
@@ -120,7 +122,21 @@ fn open_external_url(
 }
 
 fn main() {
-    let mut application = ptrack_app::UnavailableApplication;
+    let global_home = match resolve_global_home() {
+        Ok(home) => home,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    };
+    let current_dir = match std::env::current_dir() {
+        Ok(directory) => directory,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    };
+    let mut application = RoutedApplication::new(global_home, current_dir, ptrack_cli::version());
     let mut stdout = std::io::stdout();
     let mut stderr = std::io::stderr();
     let outcome = ptrack_cli::run(
@@ -146,8 +162,36 @@ fn main() {
             );
         }
         Ok(ptrack_cli::RunOutcome::LaunchTui) => {
-            eprintln!("terminal UI is not implemented");
-            std::process::exit(1);
+            let bindings = match application.bindings() {
+                Ok(bindings) => bindings,
+                Err(AppError::NoProject) => {
+                    print!("{}", ptrack_cli::no_project_hint());
+                    return;
+                }
+                Err(error) if error.to_string().contains("runtime is not initialized") => {
+                    print!("{}", ptrack_cli::no_project_hint());
+                    return;
+                }
+                Err(error) => {
+                    eprintln!("{error}");
+                    std::process::exit(1);
+                }
+            };
+            let Some(project) = bindings.project else {
+                print!("{}", ptrack_cli::no_project_hint());
+                return;
+            };
+            if let Err(error) = ptrack_tui::run(
+                &mut application,
+                ptrack_tui::RuntimeContext {
+                    project_root: project.root,
+                    database: project.database,
+                    global_home: bindings.global_home,
+                },
+            ) {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
         }
         Err(error) => {
             eprintln!("{error}");
@@ -157,20 +201,61 @@ fn main() {
 }
 
 fn run_desktop(initial_path: Option<PathBuf>, initial_plan: u64) {
-    drop((initial_path, initial_plan));
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .setup(|app| {
+        .setup(move |app| {
             let sink: Arc<dyn DesktopEventSink> = Arc::new(TauriEventSink {
                 app: app.handle().clone(),
             });
             let mut config = DesktopRuntimeConfig::unavailable(ptrack_cli::version());
-            config.update_service = UpdateRuntime::for_default_home(
+            if let Some(runtime) = ActiveRuntime::load(
+                resolve_global_home().map_err(std::io::Error::other)?,
                 ptrack_cli::version(),
-                Some(DesktopUpdateEventSink::new(Arc::clone(&sink))),
             )
-            .map_err(std::io::Error::other)?;
+            .map_err(std::io::Error::other)?
+            {
+                let current = initial_path
+                    .clone()
+                    .map_or_else(std::env::current_dir, Ok)
+                    .map_err(std::io::Error::other)?;
+                let update_bindings = runtime
+                    .global_bindings(&current)
+                    .map_err(std::io::Error::other)?;
+                config.update_service = UpdateRuntime::for_bindings(
+                    &update_bindings,
+                    Some(DesktopUpdateEventSink::new(Arc::clone(&sink))),
+                )
+                .map_err(std::io::Error::other)?;
+                let switch_factory = ProductionDesktopWorkspaceFactory::new(
+                    Arc::clone(&runtime),
+                    Some(Arc::clone(&sink)),
+                    0,
+                )
+                .map_err(std::io::Error::other)?;
+                config.factory = switch_factory as Arc<dyn DesktopWorkspaceFactory>;
+                config.recent_projects = ProductionRecentProjects::new(Arc::clone(&runtime))
+                    as Arc<dyn RecentProjectsProvider>;
+                match runtime.bindings_for(&current) {
+                    Ok(bindings) => {
+                        if let Some(project) = bindings.project {
+                            let initial_factory = ProductionDesktopWorkspaceFactory::new(
+                                Arc::clone(&runtime),
+                                Some(Arc::clone(&sink)),
+                                initial_plan,
+                            )
+                            .map_err(std::io::Error::other)?;
+                            config.initial_workspace = Some(
+                                initial_factory
+                                    .build(&project.root, 1)
+                                    .map_err(std::io::Error::other)?,
+                            );
+                        }
+                    }
+                    Err(AppError::NoProject) => {}
+                    Err(error) => return Err(std::io::Error::other(error).into()),
+                }
+            }
             config.event_sink = Some(sink);
             app.manage(DesktopRuntime::new(config));
             Ok(())

@@ -26,7 +26,10 @@ fn shell_has_only_the_bounded_adapter_commands() {
     assert!(source.contains("pick_project_directory"));
     assert!(source.contains("open_external_url"));
     assert!(source.contains("tauri::generate_handler!["));
-    assert!(source.contains("UpdateRuntime::for_default_home("));
+    assert!(source.contains("UpdateRuntime::for_bindings("));
+    assert!(source.contains("ActiveRuntime::load("));
+    assert!(source.contains("ProductionDesktopWorkspaceFactory::new("));
+    assert!(!source.contains("UnavailableApplication"));
     assert!(source.contains("DesktopUpdateEventSink::new("));
     assert!(!source.contains("config.update_service = UnavailableUpdateService"));
     assert!(source.contains("request.method == \"InstallShellCommand\""));

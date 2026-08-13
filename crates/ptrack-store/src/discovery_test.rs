@@ -17,6 +17,7 @@ impl Temp {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&path).unwrap();
+        crate::protect_private_directory(&path).unwrap();
         Self(path)
     }
 }

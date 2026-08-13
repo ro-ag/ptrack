@@ -103,6 +103,16 @@ impl ActivatedStore {
     ) -> StoreResult<R> {
         self.store.write_application(&self.binding, operation)
     }
+
+    /// Performs activation-tool normalization without tripping the
+    /// application-write rollback fuse. This is deliberately crate-private:
+    /// runtime services must use [`Self::write`].
+    pub(crate) fn activation_write<R>(
+        &self,
+        operation: impl FnOnce(&mut WriteTransaction) -> StoreResult<R>,
+    ) -> StoreResult<R> {
+        self.store.write_activation(&self.binding, operation)
+    }
 }
 
 pub(crate) fn validate_binding_for_path(

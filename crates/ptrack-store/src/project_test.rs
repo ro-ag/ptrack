@@ -27,6 +27,7 @@ impl Temp {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&path).unwrap();
+        crate::protect_private_directory(&path).unwrap();
         Self(path)
     }
     fn path(&self, name: &str) -> PathBuf {
@@ -105,9 +106,10 @@ fn typed_project_mutations_conversion_cas_and_snapshot_are_atomic() {
     let expected = binding(&path, StoreKind::Project, "project-1");
     let store =
         ProjectStore::create_new_with_clock(&path, expected.clone(), "test", clock()).unwrap();
-    assert!(store.application_writes().unwrap());
+    assert!(!store.application_writes().unwrap());
 
     let milestone = store.add_milestone("m").unwrap();
+    assert!(store.application_writes().unwrap());
     let parent = store.add_plan("parent", milestone.id).unwrap();
     store.set_active_plan(parent.id).unwrap();
     let task = store.add_task(parent.id, "promote").unwrap();

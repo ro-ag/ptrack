@@ -65,19 +65,16 @@ jobs:
           RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
           python3 -B -m unittest tools.release_contract_test
 
-      # Retain the frozen Go gates until task #75 removes the Go/Wails runtime.
-      - name: Set up Go compatibility runtime
+      - name: Set up retained legacy-exporter toolchain
         uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version-file: tools/ptrack-db-export/go.mod
 
-      - name: Test retained Go compatibility runtime
+      - name: Test retained read-only legacy exporter
         shell: bash
         run: |
-          go test ./...
-          go vet ./...
-          go mod tidy
-          git diff --exit-code -- go.mod go.sum
+          (cd tools/ptrack-db-export && go test ./... && go vet ./... && go mod tidy)
+          git diff --exit-code -- tools/ptrack-db-export/go.mod tools/ptrack-db-export/go.sum
 
   build:
     name: build (${{ matrix.archive_os }}/${{ matrix.arch }})

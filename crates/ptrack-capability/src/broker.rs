@@ -173,9 +173,9 @@ impl Broker {
             .project_root
             .canonicalize()
             .map_err(|_| BrokerError::internal("capability project root is unavailable"))?;
-        if config.generation == 0 || config.binding.generation != config.generation {
+        if config.generation == 0 {
             return Err(BrokerError::internal(
-                "capability broker generation does not match the active project",
+                "capability broker generation is required",
             ));
         }
         let store =

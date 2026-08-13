@@ -728,7 +728,7 @@ updater and release rows additionally use `docs/updater-acceptance.md`.
 | `GUI-115` | GUI bridge | Workflow proposals carry the constant notice `Proposal and approval only; no command runs and no Git, hosting, task, or capability state changes.` in both `AgentWorkflowProposalV2.notice` and `AgentWorkflowInbox.notice`; approval is bookkeeping only. | Existing automated test — internal/gui/agent_workflow_test.go/TestAgentWorkflowApprovalIsExactOneTimeAndDoesNotExecute | internal/gui/agent_workflow.go:60,387,404 |
 | `GUI-116` | GUI bridge | Per-workspace activation side effects: starting the agent integration server (event ingestion endpoint) and capability broker server, both scoped to `{globalHome, projectRoot, generation}`; shutdown joins their errors. Workspace close error strings surface as `wait for workspace operations: timeout` / `<terminal\|agent\|capability> workspace cleanup: <err>` (joined, newline-separated) inside `WorkspaceChangeResult.warning`. | Existing automated test — internal/gui/workspace_context_test.go/TestWorkspaceContextCloseJoinsResourceErrors | internal/gui/agent_runs.go:87-102,280-309, internal/gui/capabilities.go:29-68, internal/gui/workspace_context.go:287-347 |
 | `GUI-117` | GUI bridge | Terminal attachment lease: an unattached session expires 30 s after creation — capability session and launched-event token are revoked **before** the forced close, the workspace record is removed, and `terminal:status` (state `closed`) is emitted; attaching (stream connect) cancels the lease. | Existing automated test — internal/gui/terminal_test.go/TestTerminalAttachmentLeaseExpiresUnclaimedSessionAfterRevocation, TestTerminalAttachmentCancelsLeaseAndWorkspaceShutdownOwnsUnclaimedCleanup | internal/gui/terminal.go:580-631, internal/gui/workspace_lifecycle.go:87 |
-| `GUI-118` | GUI bridge | `wails.json` packaging metadata: app name `p-track`, output binary `ptrack`, productVersion `0.21.0`, frontend build `npm ci` + `npm run build`, dev watcher `npm run dev` with auto dev-server URL, generated bindings dir `frontend`. | Fixture/golden needed | wails.json:1-21 |
+| `GUI-118` | GUI bridge | Native packaging metadata preserves app name `p-track`, output binary `ptrack`, the stable product version, frontend build, development server, and checked-in bridge contract. The active implementation is Tauri; the deleted `wails.json` remains freeze evidence only. | Existing automated test — `tools/help_check_test.py`, `src-tauri/tests/security_contract.rs` | `src-tauri/tauri.conf.json`; `src-tauri/Cargo.toml`; frozen `wails.json` |
 
 ### E. Frontend adapter layers (frontend/src)
 
@@ -948,7 +948,7 @@ updater and release rows additionally use `docs/updater-acceptance.md`.
 
 | ID | Subsystem | Checkable contract | Verification method | Go freeze source / evidence |
 |---|---|---|---|---|
-| `TERM-106` | Terminal | `docs/terminal-acceptance.md` defines a 16-row manual acceptance matrix (SH-1/2, AG-1, TU-1, IN-1/2, RD-1/2, CB-1/2, AX-1, RS-1, RC-1, ST-1, LC-1, DG-1) with per-OS/arch result records; `tools/terminal-acceptance` provides the fixtures (`inventory`, `render`, `output --mib N` 1–1024 MiB in 64 KiB blocks, `interactive` alt-screen app). Recorded pass: macOS arm64, Windows arm64, Linux arm64 at commit e3f2432. The automated gate is `go test ./tools/terminal-acceptance ./internal/terminal ./internal/gui` (with `-race`), vet, and frontend tests/build. | Manual acceptance `MANUAL-TERM-106` | docs/terminal-acceptance.md, tools/terminal-acceptance/ |
+| `TERM-106` | Terminal | `docs/terminal-acceptance.md` defines the 16-row manual acceptance matrix (SH-1/2, AG-1, TU-1, IN-1/2, RD-1/2, CB-1/2, AX-1, RS-1, RC-1, ST-1, LC-1, DG-1) with per-OS/arch result records and content-free evidence rules. Automated coverage is the Rust terminal/app suite plus frontend tests/build; native execution remains mandatory. | Existing automated tests — `ptrack-terminal`, `ptrack-app`, frontend terminal suites<br>Manual acceptance `MANUAL-TERM-106` | `docs/terminal-acceptance.md`; `.github/workflows/native-acceptance.yml` |
 | `TERM-107` | Terminal | Application-owned overlays pause terminal rendering without closing the session or WebSocket, coalesce pending renderer work, and resume with a fit/refresh after the overlay closes. Background terminal output remains bounded by the existing flow-control window. | Existing automated test — frontend/src/workspace/application-overlay.test.ts, frontend/src/terminal/lifecycle.test.ts | frontend/src/workspace/application-overlay.ts, frontend/src/terminal/pane.ts |
 | `TERM-108` | Terminal | Terminal-owned modals own their keyboard lifecycle: focus stays inside the top terminal overlay; Escape affects only that overlay; paste, termination, association, write-back, and renderer-recovery dialogs restore the prior terminal control and prevent workspace shortcuts while open. | Existing automated test — frontend/src/terminal/accessibility.test.ts, frontend/src/terminal/paste.test.ts, frontend/src/terminal/recovery-actions.test.ts | frontend/src/terminal/accessibility.ts, frontend/src/terminal/pane.ts, frontend/src/app.js |
 
@@ -1463,7 +1463,7 @@ task #74 and are not inferred from cross-builds (UPD-007, UPD-017–026).
 
 | ID | Subsystem | Checkable contract | Verification method | Go freeze source / evidence |
 |---|---|---|---|---|
-| `PKG-001` | Packaging/release | The release workflow runs only for pushed `v*` tags, then rejects anything except canonical stable `vX.Y.Z`. Its Linux gate runs full Rust format/test/clippy/doc, frontend test/build, producer-contract fixtures, and the retained Go test/vet/tidy compatibility gates before any build job. | Existing automated test — `tools/release_contract_test.py`<br>Manual acceptance `MANUAL-PKG-001` | .github/workflows/release.yml test job; frozen `.github/workflows/release.yml:1-44` |
+| `PKG-001` | Packaging/release | The release workflow runs only for pushed `v*` tags, then rejects anything except canonical stable `vX.Y.Z`. Its Linux gate runs full Rust format/test/clippy/doc, frontend test/build, producer-contract fixtures, and test/vet/tidy for the isolated read-only legacy exporter before any build job. | Existing automated test — `tools/release_contract_test.py`<br>Manual acceptance `MANUAL-PKG-001` | `.github/workflows/release.yml` test job; `tools/ptrack-db-export/go.mod`; frozen workflow |
 | `PKG-002` | Packaging/release | Release builds cover exactly six native targets: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64, and windows/arm64, and the release job waits for every build target. | Fixture/golden — .github/workflows/release.yml build matrix<br>Manual acceptance `MANUAL-PKG-002` | .github/workflows/release.yml:45-80,309-315 |
 
 ### Build products
@@ -1502,6 +1502,32 @@ task #74 and are not inferred from cross-builds (UPD-007, UPD-017–026).
 |---|---|---|---|---|
 | `PKG-013` | Packaging/release | Release archive filenames, contents, executable architectures, version strings, checksum entries, macOS publisher identity, and updater selection rules form one atomic compatibility surface; a release is invalid if any producer and consumer value differs. | Existing automated producer/consumer tests — `tools/release_contract_test.py`; `crates/ptrack-updater` tests<br>Manual acceptance `MANUAL-PKG-013` | `.github/workflows/release.yml`; `tools/release_contract.py`; Rust updater; frozen Go evidence |
 | `PKG-014` | Packaging/release | A successful workflow compile is build evidence only. Native packaging, signing, updater handoff, terminal, accessibility, and recovery rows require execution on the stated OS/architecture; unavailable native evidence is not a pass. | Manual acceptance `MANUAL-PKG-014` | docs/updater-acceptance.md; docs/terminal-acceptance.md |
+
+## Rust cutover and migration evidence
+
+The Go references above remain immutable freeze evidence; they are not active
+runtime paths. The shipped CLI, TUI, Tauri desktop, terminal host, capability
+broker, updater, and stores are Rust. The only retained Go module is
+`tools/ptrack-db-export`, a separately invoked, read-only legacy bbolt exporter
+with no application IPC or write authority.
+
+Runtime routing is fail-closed through the private
+`$PTRACK_HOME/runtime/active-generation.json` marker. A retained shared cutover
+lease covers marker parsing and store attestation; the global and every project
+store must agree on generation, binding identity, schema, and exact canonical
+path. CWD selection uses the deepest mapped canonical root and never searches
+for legacy bbolt files.
+
+Offline activation retains an exclusive cutover lease plus shared bbolt source
+locks from final source verification through marker commit. Immutable plan,
+monotonic journal, verified handoff, marker-last activation, and receipt-last
+publication are digest-bound and crash-resumable. Rollback requires the exact
+receipt/journal/handoff/current marker chain and refuses automatically when the
+global store or any project store has recorded an application write. Automated
+evidence lives in `ptrack-store` runtime-binding/cutover tests,
+`ptrack-db-import` activation and cross-language tests, `ptrack-app` production
+binding tests, and native Windows exporter checks in
+`.github/workflows/native-acceptance.yml`.
 
 ## Acceptance gate definition
 

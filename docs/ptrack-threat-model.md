@@ -6,27 +6,27 @@ Plan 4 adds a privileged host broker that can make HTTP requests and invoke Git,
 
 ## Scope and assumptions
 
-- In scope: `internal/capability`, capability records in `internal/model` and `internal/store`, the `ptrack capability` bridge in `internal/cli`, terminal identity injection and workspace fencing in `internal/gui` and `internal/terminal`, and the capability Settings UI in `frontend`.
+- In scope: `ptrack-capability`, capability records in `ptrack-core` and `ptrack-store`, the `ptrack capability` bridge in `ptrack-cli`, terminal identity injection and workspace fencing in `ptrack-app` and `ptrack-terminal`, and the capability Settings UI in `frontend`.
 - Runtime model: a single-user local desktop/CLI application launches agent profiles as child processes and exposes a random-port loopback broker for the active canonical project generation.
 - Data sensitivity: remote repository contents, HTTP request and response data, filesystem transfers, Git credential-helper access, and current ssh-agent identities may be sensitive.
 - Authentication expectation: a host-minted opaque bearer token represents one launched terminal's immutable project, generation, profile ID, and session. Caller-supplied profile names are not identity.
-- Out of scope: ordinary shell/agent processes invoking network tools directly, OS firewall/sandbox enforcement, remote multi-user hosting, feature 7, and any Rust, Tauri, or Ghostty migration.
+- Out of scope: ordinary shell/agent processes invoking network tools directly, OS firewall/sandbox enforcement, remote multi-user hosting, and application features unrelated to broker authority.
 - The active plan and user instructions supply the service context, so no material deployment questions remain open. If p-track becomes a remote or multi-user service, token storage, process isolation, tenant separation, and loopback assumptions require a new threat model.
 
 ## System model
 
 ### Primary components
 
-- The Settings API previews, stores, enables, disables, expires, and removes project-local grants (`internal/gui/capability_settings.go`, `PreviewCapabilityV2` and `EnableCapabilityV2`).
-- The per-project Bolt database stores normalized grants and bounded audit metadata (`internal/store/capabilities.go`; `internal/store/store.go`, `bucketCapabilities`).
-- The workspace owns a generation-scoped loopback broker and shuts it down with other project resources (`internal/gui/capabilities.go`; `internal/gui/workspace_context.go`, `runClose`).
-- The host injects a fresh capability token before an agent profile starts and binds it to the resulting terminal session (`internal/gui/terminal.go`, `CreateTerminalV2`; `internal/terminal/manager.go`, `CreateWithEnv`).
-- CLI and MCP clients discover the active project's private descriptor and forward typed tool calls to one broker dispatcher (`internal/cli/capability.go`; `internal/capability/mcp.go`; `internal/capability/broker.go`, `Call`).
-- HTTP, Git, and SSH executors repeat authorization at use time and invoke host networking or direct subprocesses (`internal/capability/http.go`, `git.go`, and `ssh.go`).
+- The app Settings service previews, stores, enables, disables, expires, and removes project-local grants (`crates/ptrack-app/src/desktop_runtime.rs`).
+- The per-project redb store holds normalized grants and bounded audit metadata (`crates/ptrack-store/src/project.rs`).
+- The workspace owns a generation-scoped loopback broker and shuts it down with other project resources (`crates/ptrack-app/src/production.rs`).
+- The host injects a fresh capability token before an agent profile starts and binds it to the resulting terminal session (`crates/ptrack-app/src/terminal_runtime.rs`; `crates/ptrack-terminal/src/manager.rs`).
+- CLI and MCP clients discover the active project's private descriptor and forward typed tool calls to one broker dispatcher (`crates/ptrack-cli`; `crates/ptrack-capability/src/mcp.rs`; `broker.rs`).
+- HTTP, Git, and SSH executors repeat authorization at use time and invoke host networking or direct subprocesses (`crates/ptrack-capability/src/http.rs`, `git.rs`, and `ssh.rs`).
 
 ### Data flows and trust boundaries
 
-- Operator → Settings API: grant drafts and approval intent cross Wails bindings. Normalization produces the displayed effective scope and digest; enabling requires that exact digest. The API is generation-fenced.
+- Operator → Settings API: grant drafts and approval intent cross the deny-by-default Tauri command bridge. Normalization produces the displayed effective scope and digest; enabling requires that exact digest. The API is generation-fenced.
 - Host → agent child: an opaque token plus canonical project, generation, and immutable profile ID cross the process environment. The terminal manager validates environment keys and values before launch.
 - Agent/MCP client → loopback broker: JSON or JSON-RPC tool name, capability ID, and typed arguments cross authenticated loopback HTTP or stdio. The broker rejects origins, non-POST requests, unknown fields, oversized frames, invalid or unbound tokens, and unknown tools.
 - Broker → project database: capability IDs select project-local grants; the broker reopens the active project's database and does not accept a database path from the caller.
@@ -81,15 +81,15 @@ flowchart LR
 
 | Surface | How reached | Trust boundary | Notes | Evidence (repo path / symbol) |
 | --- | --- | --- | --- | --- |
-| Settings mutations | Wails-bound GUI methods | Operator → host | Preview digest and generation required | `internal/gui/capability_settings.go`, `SaveCapabilityV2` |
-| CLI helper | `ptrack capability call` | Agent → broker | Requires injected token and matching project descriptor | `internal/cli/capability.go`, `activeCapabilityClient` |
-| MCP stdio | `ptrack capability mcp` | Provider → bridge | Bounded newline JSON-RPC and known tools only | `internal/capability/mcp.go`, `ServeMCP` |
-| Loopback HTTP | `/v1/tools/list`, `/v1/tools/call` | Local process → broker | POST, no Origin, bearer auth, bounded strict JSON | `internal/capability/broker_server.go`, `accept` and `handleCall` |
-| HTTP executor | `ptrack_http_request` | Broker → network | Per-hop origin/path reauthorization and response bounds | `internal/capability/http.go`, `Execute` |
-| Git executor | `ptrack_git` | Broker → Git process | Fresh root/remote/rewrite checks and fixed operations | `internal/capability/git.go`, `Execute` |
-| SSH/scp executor | `ptrack_ssh` | Broker → SSH process | Pinned key, agent-only auth, separate grants | `internal/capability/ssh.go`, `buildSSHProcess` |
-| Project path resolution | upload/download fields | Project data → filesystem | Canonical root and nearest-existing-ancestor symlink checks | `internal/capability/policy.go`, `ResolveProjectPath` |
-| Audit persistence | executor outcomes | Broker → database | Allowlisted, truncated, bounded metadata only | `internal/capability/audit.go`, `Recorder.Record` |
+| Settings mutations | Tauri GUI commands | Operator → host | Preview digest and generation required | `crates/ptrack-app/src/desktop_runtime.rs` |
+| CLI helper | `ptrack capability call` | Agent → broker | Requires injected token and matching project descriptor | `crates/ptrack-cli/src/dispatch.rs` |
+| MCP stdio | `ptrack capability mcp` | Provider → bridge | Bounded newline JSON-RPC and known tools only | `crates/ptrack-capability/src/mcp.rs` |
+| Loopback HTTP | `/v1/tools/list`, `/v1/tools/call` | Local process → broker | POST, no Origin, bearer auth, bounded strict JSON | `crates/ptrack-capability/src/server.rs` |
+| HTTP executor | `ptrack_http_request` | Broker → network | Per-hop origin/path reauthorization and response bounds | `crates/ptrack-capability/src/http.rs` |
+| Git executor | `ptrack_git` | Broker → Git process | Fresh root/remote/rewrite checks and fixed operations | `crates/ptrack-capability/src/git.rs` |
+| SSH/scp executor | `ptrack_ssh` | Broker → SSH process | Pinned key, agent-only auth, separate grants | `crates/ptrack-capability/src/ssh.rs` |
+| Project path resolution | upload/download fields | Project data → filesystem | Canonical root and nearest-existing-ancestor symlink checks | `crates/ptrack-capability-policy/src/lib.rs` |
+| Audit persistence | executor outcomes | Broker → database | Allowlisted, truncated, bounded metadata only | `crates/ptrack-capability/src/audit.rs` |
 
 ## Top abuse paths
 

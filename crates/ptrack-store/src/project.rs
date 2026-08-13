@@ -76,7 +76,7 @@ impl ProjectStore {
         };
         let now = project.clock.now_local();
         let writer = project.writer_version.clone();
-        project.write(|transaction| {
+        project.active.activation_write(|transaction| {
             typed::put(
                 transaction,
                 RecordKey::Singleton,
@@ -100,7 +100,9 @@ impl ProjectStore {
         binding: ActiveBinding,
         writer_version: impl Into<String>,
     ) -> StoreResult<Self> {
-        Self::from_activated(staged.activate(binding)?, writer_version, SystemClock)
+        let project = Self::build(staged.activate(binding)?, writer_version, SystemClock)?;
+        project.migrate_legacy_meta_for_activation()?;
+        Ok(project)
     }
 
     pub fn open_existing(
@@ -120,6 +122,16 @@ impl ProjectStore {
         writer_version: impl Into<String>,
         clock: impl Clock + 'static,
     ) -> StoreResult<Self> {
+        let project = Self::build(active, writer_version, clock)?;
+        project.validate_current_meta()?;
+        Ok(project)
+    }
+
+    fn build(
+        active: ActivatedStore,
+        writer_version: impl Into<String>,
+        clock: impl Clock + 'static,
+    ) -> StoreResult<Self> {
         if active.binding.kind != StoreKind::Project {
             return Err(StoreError::ActivationBinding(
                 "project store requires project binding".to_owned(),
@@ -130,7 +142,6 @@ impl ProjectStore {
             clock: Arc::new(clock),
             writer_version: writer_version.into(),
         };
-        project.migrate_legacy_meta()?;
         Ok(project)
     }
 
@@ -989,14 +1000,25 @@ impl ProjectStore {
         })
     }
 
-    fn migrate_legacy_meta(&self) -> StoreResult<()> {
+    fn validate_current_meta(&self) -> StoreResult<()> {
+        let meta = self.meta()?;
+        if meta.format_version != CURRENT_PROJECT_FORMAT {
+            return Err(StoreError::InvalidManifest(format!(
+                "project format {} requires activation normalization to {CURRENT_PROJECT_FORMAT}",
+                meta.format_version
+            )));
+        }
+        Ok(())
+    }
+
+    fn migrate_legacy_meta_for_activation(&self) -> StoreResult<()> {
         let meta = self.meta()?;
         if meta.format_version == CURRENT_PROJECT_FORMAT {
             return Ok(());
         }
         let now = self.clock.now_local();
         let writer = self.writer_version.clone();
-        self.write(|transaction| {
+        self.active.activation_write(|transaction| {
             let mut current = required_write::<Meta>(transaction, RecordKey::Singleton)?;
             if current.format_version >= CURRENT_PROJECT_FORMAT {
                 return Ok(());

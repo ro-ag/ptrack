@@ -70,7 +70,7 @@ impl Store {
         ensure_destination_absent(path)?;
 
         let file = create_private_file(path)?;
-        let identity = FileIdentity::from_metadata(&file.metadata()?);
+        let identity = FileIdentity::from_file(&file)?;
         // Once create_new succeeds at the filesystem level, leave that exact
         // path in place on every later error. Unlinking by pathname cannot be
         // made race-free with portable std APIs and could delete a replacement.
@@ -135,7 +135,7 @@ impl Store {
         ensure_destination_absent(path)?;
 
         let file = create_private_file(path)?;
-        let identity = FileIdentity::from_metadata(&file.metadata()?);
+        let identity = FileIdentity::from_file(&file)?;
         after_create()?;
         parent.ensure_destination(path, identity)?;
         parent.sync()?;
@@ -204,7 +204,7 @@ impl Store {
         ensure_destination_absent(path)?;
 
         let file = create_private_file(path)?;
-        let identity = FileIdentity::from_metadata(&file.metadata()?);
+        let identity = FileIdentity::from_file(&file)?;
         parent.ensure_destination(path, identity)?;
         parent.sync()?;
         parent.ensure_destination(path, identity)?;
@@ -329,6 +329,23 @@ impl Store {
             ));
         }
         let result = self.write_inner(true, operation)?;
+        ensure_path_identity(&self.path, self.identity)?;
+        Ok(result)
+    }
+
+    pub(crate) fn write_activation<R>(
+        &self,
+        expected: &crate::ActiveBinding,
+        operation: impl FnOnce(&mut WriteTransaction) -> StoreResult<R>,
+    ) -> StoreResult<R> {
+        ensure_path_identity(&self.path, self.identity)?;
+        crate::activation::validate_binding_for_path(expected, self.kind, &self.path)?;
+        if self.active_binding()?.as_ref() != Some(expected) {
+            return Err(StoreError::ActivationBinding(
+                "stored binding does not match the active runtime".to_owned(),
+            ));
+        }
+        let result = self.write_inner(false, operation)?;
         ensure_path_identity(&self.path, self.identity)?;
         Ok(result)
     }
@@ -1215,7 +1232,7 @@ fn validate_existing_path(path: &Path) -> StoreResult<FileIdentity> {
         });
     }
     validate_private_permissions(path, &metadata)?;
-    Ok(FileIdentity::from_metadata(&metadata))
+    FileIdentity::from_path(path, false)
 }
 
 fn create_private_file(path: &Path) -> StoreResult<File> {
@@ -1240,6 +1257,8 @@ fn create_private_file(path: &Path) -> StoreResult<File> {
                 use std::os::unix::fs::PermissionsExt;
                 file.set_permissions(fs::Permissions::from_mode(0o600))?;
             }
+            #[cfg(windows)]
+            crate::private_windows::protect_file(path)?;
             Ok(file)
         }
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -1267,7 +1286,7 @@ fn probe_existing_with_retry(path: &Path, kind: StoreKind) -> StoreResult<(File,
         };
         let metadata = file.metadata()?;
         validate_private_permissions(path, &metadata)?;
-        let expected = FileIdentity::from_metadata(&metadata);
+        let expected = FileIdentity::from_file(&file)?;
         validate_opened_path(path, expected)?;
         ensure_path_identity(path, expected)?;
 
@@ -1299,7 +1318,7 @@ fn open_writable_with_retry(
     loop {
         let file_metadata = file.metadata()?;
         validate_private_permissions(path, &file_metadata)?;
-        if FileIdentity::from_metadata(&file_metadata) != expected {
+        if FileIdentity::from_file(file)? != expected {
             return Err(StoreError::PathChanged {
                 path: path.to_path_buf(),
             });
@@ -1445,9 +1464,56 @@ pub(crate) struct FileIdentity {
     device: u64,
     #[cfg(unix)]
     inode: u64,
+    #[cfg(windows)]
+    volume: u32,
+    #[cfg(windows)]
+    index: u64,
 }
 
 impl FileIdentity {
+    pub(crate) fn from_file(file: &File) -> StoreResult<Self> {
+        #[cfg(unix)]
+        {
+            Ok(Self::from_metadata(&file.metadata()?))
+        }
+        #[cfg(windows)]
+        {
+            let identity = crate::private_windows::identity(file)?;
+            Ok(Self {
+                volume: identity.volume,
+                index: identity.index,
+            })
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = file;
+            Err(StoreError::DestinationParentIdentityUnavailable {
+                path: PathBuf::new(),
+            })
+        }
+    }
+
+    pub(crate) fn from_path(path: &Path, directory: bool) -> StoreResult<Self> {
+        #[cfg(unix)]
+        {
+            let _ = directory;
+            Ok(Self::from_metadata(&fs::symlink_metadata(path)?))
+        }
+        #[cfg(windows)]
+        {
+            let file = crate::private_windows::open_no_reparse(path, directory, false, false)?;
+            Self::from_file(&file)
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = directory;
+            Err(StoreError::DestinationParentIdentityUnavailable {
+                path: path.to_path_buf(),
+            })
+        }
+    }
+
+    #[cfg(not(windows))]
     pub(crate) fn from_metadata(metadata: &fs::Metadata) -> Self {
         #[cfg(unix)]
         {
@@ -1458,7 +1524,7 @@ impl FileIdentity {
                 inode: metadata.ino(),
             }
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = metadata;
             Self {}
@@ -1468,9 +1534,9 @@ impl FileIdentity {
 
 struct DestinationParent {
     path: PathBuf,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     identity: FileIdentity,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     directory: File,
 }
 
@@ -1482,9 +1548,26 @@ impl DestinationParent {
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
 
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             Err(StoreError::DestinationParentIdentityUnavailable { path })
+        }
+
+        #[cfg(windows)]
+        {
+            let directory = crate::private_windows::open_no_reparse(&path, true, true, false)
+                .map_err(|_| StoreError::DestinationParentInvalid { path: path.clone() })?;
+            crate::private_windows::verify_private(&path)
+                .map_err(|_| StoreError::DestinationParentInvalid { path: path.clone() })?;
+            let identity = FileIdentity::from_file(&directory)?;
+            if FileIdentity::from_path(&path, true)? != identity {
+                return Err(StoreError::DestinationParentChanged { path });
+            }
+            Ok(Self {
+                path,
+                identity,
+                directory,
+            })
         }
 
         #[cfg(unix)]
@@ -1517,7 +1600,7 @@ impl DestinationParent {
     }
 
     fn ensure_current(&self) -> StoreResult<()> {
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             Err(StoreError::DestinationParentIdentityUnavailable {
                 path: self.path.clone(),
@@ -1547,6 +1630,23 @@ impl DestinationParent {
             }
             Ok(())
         }
+
+        #[cfg(windows)]
+        {
+            crate::private_windows::verify_private(&self.path).map_err(|_| {
+                StoreError::DestinationParentChanged {
+                    path: self.path.clone(),
+                }
+            })?;
+            if FileIdentity::from_path(&self.path, true)? != self.identity
+                || FileIdentity::from_file(&self.directory)? != self.identity
+            {
+                return Err(StoreError::DestinationParentChanged {
+                    path: self.path.clone(),
+                });
+            }
+            Ok(())
+        }
     }
 
     fn ensure_destination(&self, destination: &Path, identity: FileIdentity) -> StoreResult<()> {
@@ -1557,7 +1657,7 @@ impl DestinationParent {
 
     fn sync(&self) -> StoreResult<()> {
         self.ensure_current()?;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         self.directory.sync_all()?;
         self.ensure_current()
     }
@@ -1592,27 +1692,18 @@ fn committed_import_verification_error(path: &Path, error: StoreError) -> StoreE
 
 fn validate_opened_path(path: &Path, opened: FileIdentity) -> StoreResult<()> {
     let path_identity = validate_existing_path(path)?;
-    #[cfg(unix)]
     if path_identity != opened {
         return Err(StoreError::PathChanged {
             path: path.to_path_buf(),
         });
     }
-    #[cfg(not(unix))]
-    let _ = (path_identity, opened);
     Ok(())
 }
 
 pub(crate) fn ensure_path_identity(path: &Path, expected: FileIdentity) -> StoreResult<()> {
     let metadata = fs::symlink_metadata(path)?;
     let invalid_type = metadata.file_type().is_symlink() || !metadata.is_file();
-    #[cfg(unix)]
-    let wrong_identity = FileIdentity::from_metadata(&metadata) != expected;
-    #[cfg(not(unix))]
-    let wrong_identity = {
-        let _ = expected;
-        false
-    };
+    let wrong_identity = FileIdentity::from_path(path, false)? != expected;
     if invalid_type || wrong_identity {
         Err(StoreError::PathChanged {
             path: path.to_path_buf(),
@@ -1637,7 +1728,15 @@ fn validate_private_permissions(path: &Path, metadata: &fs::Metadata) -> StoreRe
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn validate_private_permissions(path: &Path, _metadata: &fs::Metadata) -> StoreResult<()> {
+    crate::private_windows::verify_private(path).map_err(|_| StoreError::InsecurePermissions {
+        path: path.to_path_buf(),
+        mode: 0,
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
 fn validate_private_permissions(_path: &Path, _metadata: &fs::Metadata) -> StoreResult<()> {
     Ok(())
 }

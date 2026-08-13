@@ -3226,8 +3226,10 @@ version = "0.1.0"
 dependencies = [
  "ptrack-core",
  "ptrack-store",
+ "rustix",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -3236,6 +3238,7 @@ version = "0.22.0"
 dependencies = [
  "ptrack-app",
  "ptrack-cli",
+ "ptrack-tui",
  "serde_json",
  "tauri",
  "tauri-build",
@@ -3252,16 +3255,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "ptrack-migrate"
-version = "0.1.0"
-
-[[package]]
 name = "ptrack-store"
 version = "0.1.0"
 dependencies = [
  "ptrack-capability-policy",
  "ptrack-core",
  "redb",
+ "rustix",
+ "serde",
+ "serde_json",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

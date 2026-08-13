@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-
-	"github.com/ro-ag/ptrack/internal/store"
 )
 
 func main() { os.Exit(run(os.Args[1:], os.Stderr)) }
@@ -25,7 +23,7 @@ func run(args []string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "--home and --output are required; positional arguments are not accepted")
 		return 2
 	}
-	if err := store.ExportJSONStage(*home, *output); err != nil {
+	if err := ExportJSONStage(*home, *output); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}

@@ -20,7 +20,7 @@ struct Fixture {
 fn go_produced_http_git_ssh_digest_fixtures_are_byte_exact() {
     let fixtures: FixtureFile = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../internal/capability/testdata/canonical_digest_fixtures.json"
+        "/testdata/canonical_digest_fixtures.json"
     )))
     .unwrap();
     assert_eq!(fixtures.fixtures.len(), 3);

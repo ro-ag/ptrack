@@ -1,9 +1,10 @@
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Component, Path};
 
 use ptrack_store::{JsonStageProvenance, Store};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::error::{ImportError, ImportResult, invalid};
 use crate::manifest::{DatabaseKind, clean_absolute};
@@ -30,7 +31,7 @@ struct Receipt<'a> {
     candidates: &'a [ReceiptCandidate],
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 struct ReceiptCandidate {
     id: String,
     kind: &'static str,
@@ -38,6 +39,7 @@ struct ReceiptCandidate {
     source_format: String,
     database_json_sha256: String,
     quarantine_count: String,
+    file_sha256: String,
 }
 
 /// Validates an immutable JSON stage, then creates verified inert redb candidates.
@@ -102,6 +104,7 @@ fn import_stage_inner(
             return invalid("candidate provenance failed close/reopen verification");
         }
         drop(reopened);
+        let file_sha256 = hash_private_file(&path)?;
         destination_identity.ensure_current(destination_root)?;
         receipt_candidates.push(ReceiptCandidate {
             id: database.id,
@@ -113,6 +116,7 @@ fn import_stage_inner(
             source_format: expected.source_format.to_string(),
             database_json_sha256: hex(expected.database_json_sha256),
             quarantine_count: expected.quarantine_count.to_string(),
+            file_sha256,
         });
     }
     destination_identity.ensure_current(destination_root)?;
@@ -126,6 +130,20 @@ fn import_stage_inner(
         report: loaded.report,
         candidate_count: receipt_candidates.len() as u64,
     })
+}
+
+fn hash_private_file(path: &Path) -> ImportResult<String> {
+    let mut file = ptrack_store::open_private_path(path, false, false)?;
+    let mut digest = Sha256::new();
+    let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
 }
 
 #[cfg(test)]
@@ -189,65 +207,31 @@ fn create_destination_root(
 struct DestinationIdentity {
     parent: ParentIdentity,
     directory: File,
-    #[cfg(unix)]
-    device: u64,
-    #[cfg(unix)]
-    inode: u64,
+    identity: ptrack_store::PrivatePathIdentity,
 }
 
 impl DestinationIdentity {
-    #[cfg(unix)]
     fn capture(path: &Path, parent: ParentIdentity) -> ImportResult<Self> {
-        use std::os::unix::fs::MetadataExt;
-
-        let before = fs::symlink_metadata(path)?;
-        if before.file_type().is_symlink() || !before.is_dir() {
-            return invalid("destination root is not a real directory");
-        }
-        let directory = File::open(path)?;
-        let opened = directory.metadata()?;
-        let after = fs::symlink_metadata(path)?;
-        if before.dev() != opened.dev()
-            || before.ino() != opened.ino()
-            || after.dev() != opened.dev()
-            || after.ino() != opened.ino()
-        {
+        let identity = ptrack_store::verify_private_path(path, true)?;
+        let directory = ptrack_store::open_private_path(path, true, true)?;
+        if ptrack_store::verify_private_path(path, true)? != identity {
             return invalid("destination root changed while it was pinned");
         }
         Ok(Self {
             parent,
             directory,
-            device: opened.dev(),
-            inode: opened.ino(),
+            identity,
         })
     }
 
-    #[cfg(not(unix))]
-    fn capture(_: &Path, _: ParentIdentity) -> ImportResult<Self> {
-        invalid("safe destination identity pinning is not supported on this platform")
-    }
-
-    #[cfg(unix)]
     fn ensure_current(&self, path: &Path) -> ImportResult<()> {
-        use std::os::unix::fs::MetadataExt;
-
         self.parent.ensure_current(path.parent().ok_or_else(|| {
             ImportError::InvalidStage("destination root has no parent directory".to_owned())
         })?)?;
-        let current = fs::symlink_metadata(path)?;
-        if current.file_type().is_symlink()
-            || !current.is_dir()
-            || current.dev() != self.device
-            || current.ino() != self.inode
-        {
+        if ptrack_store::verify_private_path(path, true)? != self.identity {
             return invalid("destination root identity changed during import");
         }
         Ok(())
-    }
-
-    #[cfg(not(unix))]
-    fn ensure_current(&self, _: &Path) -> ImportResult<()> {
-        invalid("safe destination identity verification is not supported on this platform")
     }
 
     fn sync(&self) -> ImportResult<()> {
@@ -258,61 +242,27 @@ impl DestinationIdentity {
 
 struct ParentIdentity {
     directory: File,
-    #[cfg(unix)]
-    device: u64,
-    #[cfg(unix)]
-    inode: u64,
+    identity: ptrack_store::PrivatePathIdentity,
 }
 
 impl ParentIdentity {
-    #[cfg(unix)]
     fn capture(path: &Path) -> ImportResult<Self> {
-        use std::os::unix::fs::MetadataExt;
-
-        let before = fs::symlink_metadata(path)?;
-        if before.file_type().is_symlink() || !before.is_dir() {
-            return invalid("destination parent is not a real directory");
-        }
-        let directory = File::open(path)?;
-        let opened = directory.metadata()?;
-        let after = fs::symlink_metadata(path)?;
-        if before.dev() != opened.dev()
-            || before.ino() != opened.ino()
-            || after.dev() != opened.dev()
-            || after.ino() != opened.ino()
-        {
+        let identity = ptrack_store::verify_private_path(path, true)?;
+        let directory = ptrack_store::open_private_path(path, true, true)?;
+        if ptrack_store::verify_private_path(path, true)? != identity {
             return invalid("destination parent changed while it was pinned");
         }
         Ok(Self {
             directory,
-            device: opened.dev(),
-            inode: opened.ino(),
+            identity,
         })
     }
 
-    #[cfg(not(unix))]
-    fn capture(_: &Path) -> ImportResult<Self> {
-        invalid("safe destination parent pinning is not supported on this platform")
-    }
-
-    #[cfg(unix)]
     fn ensure_current(&self, path: &Path) -> ImportResult<()> {
-        use std::os::unix::fs::MetadataExt;
-
-        let current = fs::symlink_metadata(path)?;
-        if current.file_type().is_symlink()
-            || !current.is_dir()
-            || current.dev() != self.device
-            || current.ino() != self.inode
-        {
+        if ptrack_store::verify_private_path(path, true)? != self.identity {
             return invalid("destination parent identity changed during import");
         }
         Ok(())
-    }
-
-    #[cfg(not(unix))]
-    fn ensure_current(&self, _: &Path) -> ImportResult<()> {
-        invalid("safe destination parent verification is not supported on this platform")
     }
 
     fn sync(&self) -> ImportResult<()> {
@@ -344,7 +294,7 @@ fn write_receipt(
         .write(true)
         .create_new(true)
         .open(&temporary)?;
-    set_private_file(&file)?;
+    set_private_file(&temporary, &file)?;
     file.write_all(&bytes)?;
     file.sync_all()?;
     drop(file);
@@ -371,33 +321,22 @@ fn write_incomplete(root: &Path, manifest_sha256: [u8; 32]) -> ImportResult<()> 
     })?;
     bytes.push(b'\n');
     let path = root.join(INCOMPLETE_NAME);
-    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
-    set_private_file(&file)?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)?;
+    set_private_file(&path, &file)?;
     file.write_all(&bytes)?;
     file.sync_all()?;
     Ok(())
 }
 
-#[cfg(unix)]
 fn set_private_directory(path: &Path) -> ImportResult<()> {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    ptrack_store::protect_private_directory(path)?;
     Ok(())
 }
 
-#[cfg(not(unix))]
-fn set_private_directory(_: &Path) -> ImportResult<()> {
-    Ok(())
-}
-
-#[cfg(unix)]
-fn set_private_file(file: &File) -> ImportResult<()> {
-    use std::os::unix::fs::PermissionsExt;
-    file.set_permissions(fs::Permissions::from_mode(0o600))?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn set_private_file(_: &File) -> ImportResult<()> {
+fn set_private_file(path: &Path, _: &File) -> ImportResult<()> {
+    ptrack_store::protect_private_file(path)?;
     Ok(())
 }

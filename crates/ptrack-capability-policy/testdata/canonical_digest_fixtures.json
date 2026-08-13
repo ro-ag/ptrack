@@ -1,0 +1,103 @@
+{
+  "fixtures": [
+    {
+      "name": "http",
+      "draft": {
+        "id": 0,
+        "model_version": 0,
+        "revision": 0,
+        "name": " API ",
+        "kind": "http",
+        "agent_profile": "agent-codex",
+        "enabled": false,
+        "approval_duration_seconds": 0,
+        "approved_at": "0001-01-01T00:00:00Z",
+        "expires_at": "0001-01-01T00:00:00Z",
+        "scope_digest": "",
+        "limits": {"timeout_seconds": 0, "max_request_bytes": 0, "max_response_bytes": 0, "max_output_bytes": 0, "max_redirects": 0, "max_concurrent": 0},
+        "audit": {"enabled": true, "retain_last": 0},
+        "http": {
+          "base_url": "HTTPS://Example.COM:443/api/./v1/",
+          "methods": ["get", "HEAD", "get"],
+          "path_prefixes": ["/api/v1/users", "/api/v1"]
+        },
+        "created_at": "0001-01-01T00:00:00Z",
+        "updated_at": "0001-01-01T00:00:00Z"
+      },
+      "canonical_json": "{\"ModelVersion\":1,\"Kind\":\"http\",\"AgentProfile\":\"agent-codex\",\"ApprovalDurationSeconds\":3600,\"Limits\":{\"timeout_seconds\":30,\"max_request_bytes\":1048576,\"max_response_bytes\":4194304,\"max_output_bytes\":1048576,\"max_redirects\":0,\"max_concurrent\":1},\"Audit\":{\"enabled\":true,\"retain_last\":100},\"HTTP\":{\"base_url\":\"https://example.com/api/v1\",\"methods\":[\"GET\",\"HEAD\"],\"path_prefixes\":[\"/api/v1\",\"/api/v1/users\"]},\"Git\":null,\"SSH\":null}",
+      "digest": "b6c227d06473cf1ef2452b4814c14d02eb7140af754c91ab0a1b882fa5a725fa"
+    },
+    {
+      "name": "git",
+      "draft": {
+        "id": 0,
+        "model_version": 0,
+        "revision": 0,
+        "name": "repo",
+        "kind": "git",
+        "agent_profile": "agent-codex",
+        "enabled": false,
+        "approval_duration_seconds": 0,
+        "approved_at": "0001-01-01T00:00:00Z",
+        "expires_at": "0001-01-01T00:00:00Z",
+        "scope_digest": "",
+        "limits": {"timeout_seconds": 0, "max_request_bytes": 0, "max_response_bytes": 0, "max_output_bytes": 0, "max_redirects": 0, "max_concurrent": 0},
+        "audit": {"enabled": false, "retain_last": 0},
+        "git": {
+          "remote_name": "origin",
+          "remote_url": "HTTPS://Example.COM:443/org/repo.git",
+          "operations": ["push", "fetch"],
+          "branches": ["main"],
+          "refspecs": ["main:main"],
+          "allow_tags": false,
+          "allow_force_push": true,
+          "allow_delete_refs": false
+        },
+        "created_at": "0001-01-01T00:00:00Z",
+        "updated_at": "0001-01-01T00:00:00Z"
+      },
+      "canonical_json": "{\"ModelVersion\":1,\"Kind\":\"git\",\"AgentProfile\":\"agent-codex\",\"ApprovalDurationSeconds\":3600,\"Limits\":{\"timeout_seconds\":30,\"max_request_bytes\":1048576,\"max_response_bytes\":4194304,\"max_output_bytes\":1048576,\"max_redirects\":0,\"max_concurrent\":1},\"Audit\":{\"enabled\":false,\"retain_last\":100},\"HTTP\":null,\"Git\":{\"remote_name\":\"origin\",\"remote_url\":\"https://example.com/org/repo.git\",\"operations\":[\"fetch\",\"push\"],\"branches\":[\"main\"],\"refspecs\":[\"refs/heads/main:refs/heads/main\"],\"allow_tags\":false,\"allow_force_push\":true,\"allow_delete_refs\":false},\"SSH\":null}",
+      "digest": "32dc8cff5942c6482b8d5ce8bb1b5eed93e264fa4991a1e86a8f943ed6a9cfcb"
+    },
+    {
+      "name": "ssh",
+      "draft": {
+        "id": 0,
+        "model_version": 0,
+        "revision": 0,
+        "name": "deploy",
+        "kind": "ssh",
+        "agent_profile": "agent-codex",
+        "enabled": false,
+        "approval_duration_seconds": 0,
+        "approved_at": "0001-01-01T00:00:00Z",
+        "expires_at": "0001-01-01T00:00:00Z",
+        "scope_digest": "",
+        "limits": {"timeout_seconds": 0, "max_request_bytes": 0, "max_response_bytes": 0, "max_output_bytes": 0, "max_redirects": 0, "max_concurrent": 0},
+        "audit": {"enabled": false, "retain_last": 0},
+        "ssh": {
+          "alias": "prod",
+          "host": "Example.COM.",
+          "port": 0,
+          "user": "deploy",
+          "host_key": "ssh-ed25519 QUJDREVGR0hJSktMTU5PUA==",
+          "allow_git": false,
+          "remote_commands": ["printf '<>&'"],
+          "allow_upload": true,
+          "allow_download": false,
+          "upload_roots": ["dist"],
+          "download_roots": null,
+          "upload_remote_roots": ["/srv/app"],
+          "download_remote_roots": null,
+          "allow_interactive_shell": false,
+          "local_forward_targets": ["db.internal:5432"],
+          "remote_forward_targets": null
+        },
+        "created_at": "0001-01-01T00:00:00Z",
+        "updated_at": "0001-01-01T00:00:00Z"
+      },
+      "canonical_json": "{\"ModelVersion\":1,\"Kind\":\"ssh\",\"AgentProfile\":\"agent-codex\",\"ApprovalDurationSeconds\":3600,\"Limits\":{\"timeout_seconds\":30,\"max_request_bytes\":1048576,\"max_response_bytes\":4194304,\"max_output_bytes\":1048576,\"max_redirects\":0,\"max_concurrent\":1},\"Audit\":{\"enabled\":false,\"retain_last\":100},\"HTTP\":null,\"Git\":null,\"SSH\":{\"alias\":\"prod\",\"host\":\"example.com\",\"port\":22,\"user\":\"deploy\",\"host_key\":\"ssh-ed25519 QUJDREVGR0hJSktMTU5PUA==\",\"allow_git\":false,\"remote_commands\":[\"printf '\\u003c\\u003e\\u0026'\"],\"allow_upload\":true,\"allow_download\":false,\"upload_roots\":[\"dist\"],\"download_roots\":[],\"upload_remote_roots\":[\"/srv/app\"],\"download_remote_roots\":[],\"allow_interactive_shell\":false,\"local_forward_targets\":[\"db.internal:5432\"],\"remote_forward_targets\":[]}}",
+      "digest": "e0c12ae305fb21688e2e29d4a0d4632ae499dc921159331bf6b7e8a0e2ab65d8"
+    }
+  ]
+}

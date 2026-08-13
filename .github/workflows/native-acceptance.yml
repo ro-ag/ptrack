@@ -15,6 +15,7 @@ on:
       - "tools/help_check_test.py"
       - "tools/release_contract.py"
       - "tools/release_contract_test.py"
+      - "tools/ptrack-db-export/**"
       - "build/**"
       - "assets/brand/**"
       - "docs/help/**"
@@ -35,6 +36,7 @@ on:
       - "tools/help_check_test.py"
       - "tools/release_contract.py"
       - "tools/release_contract_test.py"
+      - "tools/ptrack-db-export/**"
       - "build/**"
       - "assets/brand/**"
       - "docs/help/**"
@@ -78,10 +80,10 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Set up Go compatibility runtime
+      - name: Set up retained exporter toolchain
         uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version-file: tools/ptrack-db-export/go.mod
 
       - name: Install Linux desktop libraries
         shell: bash
@@ -106,10 +108,8 @@ jobs:
           RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
           python3 -B -m unittest tools.help_check_test tools.release_contract_test
           python3 -B tools/help_check.py all
-          go test ./...
-          go vet ./...
-          go mod tidy
-          git diff --exit-code -- go.mod go.sum
+          (cd tools/ptrack-db-export && go test ./... && go vet ./... && go mod tidy)
+          git diff --exit-code -- tools/ptrack-db-export/go.mod tools/ptrack-db-export/go.sum
 
   native:
     name: native (${{ matrix.archive_os }}/${{ matrix.arch }})
@@ -159,6 +159,12 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
+      - name: Set up retained exporter toolchain
+        if: runner.os == 'Windows'
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: tools/ptrack-db-export/go.mod
+
       - name: Install Linux desktop libraries
         if: runner.os == 'Linux'
         shell: bash
@@ -188,6 +194,14 @@ jobs:
             -p ptrack-store \
             -p ptrack-terminal \
             -p ptrack-updater
+
+      - name: Execute native Windows legacy-exporter suite
+        if: runner.os == 'Windows'
+        shell: bash
+        working-directory: tools/ptrack-db-export
+        run: |
+          go test ./...
+          go vet ./...
 
       - name: Build and smoke Linux candidate
         if: runner.os == 'Linux'

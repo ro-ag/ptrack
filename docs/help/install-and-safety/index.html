@@ -60,7 +60,7 @@
           <p>Download the native package for your operating system and CPU from the <a href="https://github.com/ro-ag/ptrack/releases">official GitHub Releases page</a>. Release archives contain the CLI, terminal dashboard, and Desktop GUI. Put the executable on your <code>PATH</code>.</p>
           <p>On macOS, you can instead open <code>p-track_&lt;version&gt;_darwin_&lt;arch&gt;.dmg</code> and drag <strong>p-track.app</strong> into <code>/Applications</code>. The executable inside the app bundle also provides the CLI.</p>
           <div class="callout warning">
-            <p><strong>Do not use <code>go install</code>.</strong> Desktop builds require Wails platform build tags, CGO setup, and native linker flags that <code>go install module@version</code> does not apply. Use a release package, or follow the repository's complete source-build prerequisites.</p>
+            <p><strong>Use an official package.</strong> Source builds require Rust, Node, the Tauri prerequisites, and the repository's complete validation workflow. The retained Go exporter is only an offline legacy-migration helper, not an application installer.</p>
           </div>
           <p>On macOS, <strong>Install 'ptrack' Shell Command…</strong> writes one managed block to <code>~/.zprofile</code>. It appends the running app's binary directory to the end of the existing <code>PATH</code>, leaves an existing managed block alone, and takes effect in a new terminal session.</p>
 
@@ -103,8 +103,9 @@
             <table>
               <thead><tr><th>Data</th><th>Default location</th><th>Contents</th></tr></thead>
               <tbody>
-                <tr><td>Project store</td><td><code>&lt;project&gt;/.ptrack/ptrack.db</code></td><td>Goal, summary, plans, tasks, notes, milestones, issues, commits, capabilities, audits, and writeback records.</td></tr>
-                <tr><td>Global store</td><td><code>$PTRACK_HOME/global.db</code> or <code>~/.ptrack/global.db</code></td><td>Global preferences, known projects, and backup records.</td></tr>
+                <tr><td>Project store</td><td><code>&lt;project&gt;/.ptrack/ptrack.redb</code></td><td>Goal, summary, plans, tasks, notes, milestones, issues, commits, capabilities, audits, and writeback records.</td></tr>
+                <tr><td>Global store</td><td><code>$PTRACK_HOME/global.redb</code> or <code>~/.ptrack/global.redb</code></td><td>Global preferences, known projects, and backup records.</td></tr>
+                <tr><td>Runtime routing</td><td><code>&lt;global-home&gt;/runtime/active-generation.json</code></td><td>The attested generation and exact global/project store bindings.</td></tr>
                 <tr><td>Runtime state</td><td><code>&lt;global-home&gt;/runtime/&lt;sha256(project-root)&gt;/</code></td><td>Private local service descriptors and bounded agent-run history.</td></tr>
                 <tr><td>Backups</td><td><code>&lt;global-home&gt;/backups/</code></td><td>Project database copies created by <code>ptrack backup</code>.</td></tr>
                 <tr><td>Update staging</td><td><code>&lt;global-home&gt;/updates/</code></td><td>Verified candidate stages and bounded recovery state.</td></tr>
@@ -112,7 +113,7 @@
               </tbody>
             </table>
           </div>
-          <p>Set <code>PTRACK_HOME</code> to move the global store and its backups, runtime state, and update staging. WebView <code>localStorage</code> remains a separate application-browser store; it is not part of <code>global.db</code>.</p>
+          <p>Set <code>PTRACK_HOME</code> to move the global store and its backups, runtime state, and update staging. WebView <code>localStorage</code> remains a separate application-browser store; it is not part of <code>global.redb</code>.</p>
 
           <h2 id="backup">Back up with the documented limits</h2>
           <pre><code>ptrack backup</code></pre>
@@ -122,8 +123,8 @@
           </div>
 
           <h2 id="migration">Plan for schema migration</h2>
-          <p>The current project database schema is version 5. Opening an older v0–v4 database with this build creates the newer buckets and updates its metadata in place; existing records remain and newly added fields begin with their zero values.</p>
-          <p>Create and verify a backup before opening older project data. There is no downgrade, schema rollback, import, or automated restore command. If the database format is newer than the installed p-track understands, p-track refuses it and leaves it untouched; install a compatible newer p-track instead of forcing the file open.</p>
+          <p>Legacy bbolt data is migrated only by the explicit offline exporter, importer, and activation coordinator. Activation keeps the legacy files untouched, verifies every candidate and source identity, and publishes the active-generation marker last. Runtime commands never discover or fall back to a legacy database.</p>
+          <p>Automatic rollback is permitted only while every activated global and project store still proves that no application write occurred. After any write, preserve the batch journal, handoff, receipt, marker, and legacy files and stop for manual recovery; forcing an old marker could discard new work.</p>
 
           <h2 id="safety-checklist">Safety checklist</h2>
           <ol>

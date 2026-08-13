@@ -7,6 +7,7 @@
 
 mod agent_runtime;
 mod desktop_runtime;
+mod production;
 mod service;
 mod shell_command;
 mod terminal_runtime;
@@ -28,6 +29,10 @@ pub use desktop_runtime::{
     WorkspaceStatus, allowed_desktop_commands,
 };
 
+pub use production::{
+    ActiveRuntime, ProductionDesktopWorkspaceFactory, ProductionRecentProjects, RoutedApplication,
+    RuntimeBindingState, resolve_global_home,
+};
 pub use service::{
     AppError, AppResult, ApplicationPort, CapabilityCancellation, CapabilityMcpOutcome,
     CapabilitySessionEnvironment, GuideAction, HookAction, HookResult, InitRequest, InitResult,
@@ -51,6 +56,8 @@ pub use update_runtime::{
 mod agent_runtime_test;
 #[cfg(test)]
 mod desktop_runtime_test;
+#[cfg(test)]
+mod production_test;
 #[cfg(test)]
 mod service_test;
 #[cfg(test)]

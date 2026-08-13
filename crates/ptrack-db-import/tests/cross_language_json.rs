@@ -1,5 +1,3 @@
-#![cfg(unix)]
-
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -8,6 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ptrack_db_import::{import_stage, validate_stage};
 use ptrack_store::{
     ActiveBinding, Collection, GlobalStore, ProjectStore, RecordKey, StagedStore, Store, StoreKind,
+    protect_private_directory,
 };
 
 #[test]
@@ -15,20 +14,14 @@ fn go_json_batch_imports_and_reopens_every_candidate() {
     let root = temporary_root();
     let stage = root.join("stage");
     let candidates = root.join("candidates");
-    let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
+    let helper = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tools/ptrack-db-export")
         .canonicalize()
-        .expect("repository root");
+        .expect("legacy exporter helper");
     let output = Command::new("go")
-        .args([
-            "test",
-            "./internal/store",
-            "-run",
-            "^TestCrossLanguageJSONFixture$",
-            "-count=1",
-        ])
+        .args(["test", "-run", "^TestCrossLanguageJSONFixture$", "-count=1"])
         .env("PTRACK_JSON_STAGE_OUTPUT", &stage)
-        .current_dir(repository)
+        .current_dir(helper)
         .output()
         .expect("run Go JSON exporter fixture");
     assert!(
@@ -126,11 +119,6 @@ fn temporary_root() -> PathBuf {
         std::process::id()
     ));
     fs::create_dir(&root).expect("create test root");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
-            .expect("make test root private");
-    }
+    protect_private_directory(&root).expect("make test root private");
     root
 }
