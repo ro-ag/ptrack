@@ -10,7 +10,7 @@ use super::workflow::{
 #[test]
 fn imports_to_an_absent_root_and_writes_receipt_last() {
     let (source_root, manifest) = empty_global_stage();
-    let destination = source_root.with_extension("candidates");
+    let destination = source_root.join("candidates");
 
     let refused = import_stage(&manifest, &destination, false).unwrap_err();
     assert!(refused.to_string().contains("--accept-all"));
@@ -32,15 +32,15 @@ fn imports_to_an_absent_root_and_writes_receipt_last() {
     );
 
     drop(store);
-    fs::remove_dir_all(source_root).expect("remove temporary stage");
     fs::remove_dir_all(destination).expect("remove temporary destination");
+    fs::remove_dir_all(source_root).expect("remove temporary stage");
 }
 
 #[test]
 fn refuses_a_replaced_destination_root() {
     let (source_root, manifest) = empty_global_stage();
-    let destination = source_root.with_extension("swap-candidates");
-    let moved = source_root.with_extension("original-candidates");
+    let destination = source_root.join("swap-candidates");
+    let moved = source_root.join("original-candidates");
     let result = import_stage_with_after_incomplete(&manifest, &destination, |root| {
         fs::rename(root, &moved).expect("move pinned root");
         fs::create_dir(root).expect("replacement root");
@@ -55,9 +55,9 @@ fn refuses_a_replaced_destination_root() {
     assert!(!destination.join("receipt.json").exists());
     assert!(moved.join("incomplete.json").exists());
 
-    fs::remove_dir_all(source_root).expect("remove temporary stage");
     fs::remove_dir_all(destination).expect("remove replacement destination");
     fs::remove_dir_all(moved).expect("remove moved destination");
+    fs::remove_dir_all(source_root).expect("remove temporary stage");
 }
 
 #[test]
