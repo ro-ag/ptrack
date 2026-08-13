@@ -84,6 +84,7 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: tools/ptrack-db-export/go.mod
+          cache-dependency-path: tools/ptrack-db-export/go.sum
 
       - name: Install Linux desktop libraries
         shell: bash
@@ -164,6 +165,7 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: tools/ptrack-db-export/go.mod
+          cache-dependency-path: tools/ptrack-db-export/go.sum
 
       - name: Install Linux desktop libraries
         if: runner.os == 'Linux'

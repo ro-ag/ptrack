@@ -69,6 +69,7 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: tools/ptrack-db-export/go.mod
+          cache-dependency-path: tools/ptrack-db-export/go.sum
 
       - name: Test retained read-only legacy exporter
         shell: bash

@@ -307,7 +307,7 @@ mod platform {
 #[cfg(target_os = "linux")]
 mod platform {
     use std::fs::{self, File, OpenOptions};
-    use std::io::{Read, Write};
+    use std::io::{self, Read, Write};
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 
     use rustix::fs::{FlockOperation, Mode, OFlags};
@@ -746,7 +746,7 @@ mod platform {
     fn read_private_json(path: &Path, limit: usize) -> io::Result<Vec<u8>> {
         let mut file = open_private_regular(path)?;
         let mut data = Vec::new();
-        file.by_ref()
+        Read::by_ref(&mut file)
             .take(u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1))
             .read_to_end(&mut data)?;
         if data.len() > limit {
