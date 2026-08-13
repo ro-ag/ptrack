@@ -19,7 +19,10 @@ import (
 // TestCrossLanguageJSONFixture is the stable entry point used by the Rust
 // importer acceptance test. It writes only disposable test databases.
 func TestCrossLanguageJSONFixture(t *testing.T) {
-	root := t.TempDir()
+	root := filepath.Join(t.TempDir(), "private")
+	if err := createPrivateExportDirectory(root); err != nil {
+		t.Fatal(err)
+	}
 	requirePrivateTestPath(t, root, true)
 	home := filepath.Join(root, "home")
 	projectRoot := filepath.Join(root, "project")
