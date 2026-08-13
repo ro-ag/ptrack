@@ -118,6 +118,31 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("cmd/wails", workflow.lower())
         self.assertNotIn("wails build", workflow.lower())
 
+    def test_native_acceptance_is_nonpublishing_and_exactly_six_native_hosts(self) -> None:
+        workflow = (
+            Path(__file__).resolve().parent.parent
+            / ".github/workflows/native-acceptance.yml"
+        ).read_text(encoding="utf-8")
+        for target in (
+            "x86_64-unknown-linux-gnu",
+            "aarch64-unknown-linux-gnu",
+            "x86_64-apple-darwin",
+            "aarch64-apple-darwin",
+            "x86_64-pc-windows-msvc",
+            "aarch64-pc-windows-msvc",
+        ):
+            self.assertEqual(workflow.count(f"rust_target: {target}"), 1)
+        self.assertIn("pull_request:", workflow)
+        self.assertIn("branches:\n      - main", workflow)
+        self.assertIn("needs: portable", workflow)
+        self.assertIn("native-acceptance-approved", workflow)
+        self.assertIn('paths:\n      - ".github/workflows/native-acceptance.yml"', workflow)
+        self.assertIn("cargo test --workspace --all-targets --no-fail-fast", workflow)
+        self.assertIn("permissions:\n  contents: read", workflow)
+        self.assertNotIn("gh release", workflow)
+        self.assertNotIn("actions/upload-artifact", workflow)
+        self.assertNotIn("secrets.", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()
