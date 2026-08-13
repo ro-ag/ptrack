@@ -82,6 +82,8 @@ fn main_window_has_only_one_way_event_subscription_authority() {
 fn tauri_uses_the_existing_frontend_and_exact_window_contract() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let config = read_json(&manifest_dir.join("tauri.conf.json"));
+    let windows_icon = fs::read(manifest_dir.join("icons/icon.ico"))
+        .expect("Windows builds require the Tauri application icon");
 
     assert_eq!(config["build"]["beforeDevCommand"], "npm run dev");
     assert_eq!(config["build"]["beforeBuildCommand"], "npm run build");
@@ -110,6 +112,7 @@ fn tauri_uses_the_existing_frontend_and_exact_window_contract() {
         config["app"]["security"]["capabilities"],
         Value::Array(vec![Value::String("main-window".into())])
     );
+    assert_eq!(windows_icon.get(..4), Some([0, 0, 1, 0].as_slice()));
 }
 
 #[test]

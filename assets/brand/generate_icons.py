@@ -10,6 +10,7 @@ Outputs (relative to the repository root):
   build/appicon.png                 1024x1024 master icon used by Wails
   assets/brand/icon-{16..512}.png   standalone PNG exports
   assets/brand/AppIcon.icns         macOS icon bundle (via iconutil)
+  src-tauri/icons/icon.ico          Windows application resource
   assets/brand/banner.png           1280x400 README banner
   assets/brand/social.png           1280x640 social/Open Graph card
 
@@ -31,6 +32,7 @@ from PIL import Image, ImageDraw, ImageFont
 ROOT = Path(__file__).resolve().parents[2]
 BRAND = ROOT / "assets" / "brand"
 APPICON = ROOT / "build" / "appicon.png"
+WINDOWS_ICON = ROOT / "src-tauri" / "icons" / "icon.ico"
 
 # --- brand palette (matches the README badge colors) -----------------------
 INK_TOP = (14, 18, 34)       # deep navy, top of the squircle gradient
@@ -199,10 +201,18 @@ def draw_banner(width: int, height: int, out: Path, social: bool = False) -> Non
 
 
 def export_iconset(master: Image.Image) -> None:
-    """Emit PNG exports and, on macOS, a compiled AppIcon.icns."""
+    """Emit PNG exports plus native Windows and macOS icon resources."""
     for size in (16, 32, 64, 128, 256, 512):
         master.resize((size, size), Image.LANCZOS).save(BRAND / f"icon-{size}.png")
         print(f"wrote assets/brand/icon-{size}.png")
+
+    WINDOWS_ICON.parent.mkdir(parents=True, exist_ok=True)
+    master.save(
+        WINDOWS_ICON,
+        format="ICO",
+        sizes=[(size, size) for size in (16, 24, 32, 48, 64, 128, 256)],
+    )
+    print(f"wrote {WINDOWS_ICON.relative_to(ROOT)}")
 
     if shutil.which("iconutil") is None:
         print("iconutil not found; skipping .icns", file=sys.stderr)
