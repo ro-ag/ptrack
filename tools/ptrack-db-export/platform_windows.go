@@ -125,19 +125,22 @@ func requirePrivateExportPath(path string, directory bool) error {
 		return errors.New("path owner is not the current user")
 	}
 	dacl, _, err := sd.DACL()
-	if err != nil || dacl == nil || dacl.AceCount != 1 {
-		return errors.New("private DACL is not single-owner")
+	if err != nil || dacl == nil || dacl.AceCount == 0 || dacl.AceCount > 8 {
+		return errors.New("private DACL has an invalid ACE count")
 	}
-	var ace *windows.ACCESS_ALLOWED_ACE
-	if err := windows.GetAce(dacl, 0, &ace); err != nil || ace == nil {
-		return errors.New("private DACL ACE is unavailable")
-	}
-	entrySID := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-	if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || !entrySID.Equals(user.User.Sid) {
-		return errors.New("private DACL grants another identity")
-	}
-	if ace.Mask != windows.GENERIC_ALL {
-		return errors.New("private DACL does not grant exact owner authority")
+	const fileAllAccess windows.ACCESS_MASK = 2032127
+	for index := uint32(0); index < uint32(dacl.AceCount); index++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, index, &ace); err != nil || ace == nil {
+			return errors.New("private DACL ACE is unavailable")
+		}
+		entrySID := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || !entrySID.Equals(user.User.Sid) {
+			return errors.New("private DACL grants another identity")
+		}
+		if ace.Mask != windows.GENERIC_ALL && ace.Mask != fileAllAccess {
+			return errors.New("private DACL does not grant exact owner authority")
+		}
 	}
 	return nil
 }
