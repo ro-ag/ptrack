@@ -574,7 +574,11 @@ impl NtUnicode {
 
 fn windows_nt_path(path: &Path) -> std::ffi::OsString {
     let value = path.as_os_str().to_string_lossy();
-    if let Some(unc) = value.strip_prefix(r"\\") {
+    if let Some(unc) = value.strip_prefix(r"\\?\UNC\") {
+        std::ffi::OsString::from(format!(r"\??\UNC\{unc}"))
+    } else if let Some(local) = value.strip_prefix(r"\\?\") {
+        std::ffi::OsString::from(format!(r"\??\{local}"))
+    } else if let Some(unc) = value.strip_prefix(r"\\") {
         std::ffi::OsString::from(format!(r"\??\UNC\{unc}"))
     } else {
         std::ffi::OsString::from(format!(r"\??\{value}"))

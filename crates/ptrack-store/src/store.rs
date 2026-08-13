@@ -1247,13 +1247,15 @@ fn create_private_file(path: &Path) -> StoreResult<File> {
     {
         use std::os::windows::fs::OpenOptionsExt;
         use windows_sys::Win32::Storage::FileSystem::{
-            FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, WRITE_DAC, WRITE_OWNER,
+            FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE, WRITE_DAC,
+            WRITE_OWNER,
         };
 
         options.access_mode(FILE_GENERIC_READ | FILE_GENERIC_WRITE | WRITE_DAC | WRITE_OWNER);
-        // Identity attestation reopens the path read-only. Keep that possible
-        // while still denying competing writers and rename/delete replacement.
-        options.share_mode(FILE_SHARE_READ);
+        // Runtime services reopen the same redb while it is live. Redb and the
+        // file lock coordinate writers; omitting FILE_SHARE_DELETE prevents
+        // rename/delete replacement while any database handle remains open.
+        options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
     }
 
     match options.open(path) {
@@ -1471,11 +1473,11 @@ fn open_existing_file(path: &Path) -> StoreResult<File> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
-        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+        use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
 
-        // Permit only the read-only handle used for identity attestation;
-        // writes and rename/delete replacement remain denied.
-        options.share_mode(FILE_SHARE_READ);
+        // Allow redb's coordinated reopenings but keep rename/delete
+        // replacement denied for the lifetime of every database handle.
+        options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
     }
     Ok(options.open(path)?)
 }

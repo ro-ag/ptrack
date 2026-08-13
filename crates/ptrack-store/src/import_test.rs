@@ -103,6 +103,14 @@ fn collection_mut(data: &mut ImportData, collection: Collection) -> &mut ImportC
         .unwrap()
 }
 
+fn project_registry_path() -> &'static [u8] {
+    if cfg!(windows) {
+        br"C:\tmp\project"
+    } else {
+        b"/tmp/project"
+    }
+}
+
 fn record(collection: Collection, key: OwnedRecordKey, payload: &[u8]) -> ImportRecord {
     let payload = match collection {
         Collection::ProjectMeta => encode_record(&NativeRecord::Meta(Meta {
@@ -247,7 +255,7 @@ fn successful_global_import_uses_raw_and_native_codecs() {
         .records
         .push(record(
             Collection::GlobalProjects,
-            OwnedRecordKey::Bytes(b"/tmp/project".to_vec()),
+            OwnedRecordKey::Bytes(project_registry_path().to_vec()),
             b"gob project ref",
         ));
     collection_mut(&mut data, Collection::GlobalBackups)
@@ -276,7 +284,7 @@ fn successful_global_import_uses_raw_and_native_codecs() {
             let project = transaction
                 .get(
                     Collection::GlobalProjects,
-                    RecordKey::Bytes(b"/tmp/project"),
+                    RecordKey::Bytes(project_registry_path()),
                 )?
                 .unwrap();
             assert_eq!(project.codec(), Collection::GlobalProjects.import_codec());

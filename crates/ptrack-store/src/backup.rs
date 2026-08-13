@@ -76,6 +76,8 @@ fn copy_private(source: &Path, destination: &Path) -> StoreResult<FileIdentity> 
         options.mode(0o600);
     }
     let mut output = options.open(destination)?;
+    #[cfg(windows)]
+    crate::protect_private_file(destination)?;
     let identity = FileIdentity::from_file(&output)?;
     let mut input = fs::File::open(source)?;
     io::copy(&mut input, &mut output)?;
@@ -91,6 +93,8 @@ struct BackupParent {
     device: u64,
     #[cfg(unix)]
     inode: u64,
+    #[cfg(windows)]
+    identity: FileIdentity,
 }
 
 impl BackupParent {
@@ -101,7 +105,13 @@ impl BackupParent {
                 path: destination.to_path_buf(),
             })?
             .to_path_buf();
+        let existed = path.exists();
         fs::create_dir_all(&path)?;
+        if existed {
+            crate::verify_private_path(&path, true)?;
+        } else {
+            crate::protect_private_directory(&path)?;
+        }
         Self::capture(path)
     }
 
@@ -126,7 +136,22 @@ impl BackupParent {
         })
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    fn capture(path: PathBuf) -> StoreResult<Self> {
+        let directory = crate::private_windows::open_no_reparse(&path, true, true, false)?;
+        crate::private_windows::verify_private_handle(&directory)?;
+        let identity = FileIdentity::from_file(&directory)?;
+        if FileIdentity::from_path(&path, true)? != identity {
+            return Err(StoreError::DestinationParentChanged { path });
+        }
+        Ok(Self {
+            path,
+            directory,
+            identity,
+        })
+    }
+
+    #[cfg(not(any(unix, windows)))]
     fn capture(path: PathBuf) -> StoreResult<Self> {
         Err(StoreError::DestinationParentIdentityUnavailable { path })
     }
@@ -148,7 +173,20 @@ impl BackupParent {
         Ok(())
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    fn ensure_current(&self) -> StoreResult<()> {
+        crate::private_windows::verify_private_handle(&self.directory)?;
+        if FileIdentity::from_file(&self.directory)? != self.identity
+            || FileIdentity::from_path(&self.path, true)? != self.identity
+        {
+            return Err(StoreError::DestinationParentChanged {
+                path: self.path.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    #[cfg(not(any(unix, windows)))]
     fn ensure_current(&self) -> StoreResult<()> {
         Err(StoreError::DestinationParentIdentityUnavailable {
             path: self.path.clone(),
