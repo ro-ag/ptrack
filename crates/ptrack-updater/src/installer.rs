@@ -358,9 +358,8 @@ mod platform {
         let _lock = ApplyLock::acquire(stage, &target.path)?;
         let journal_path = journal_path(stage, &target.path);
         match fs::symlink_metadata(&journal_path) {
-            Ok(_) => return Err(UpdateError::InstallRefused),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(_) => return Err(UpdateError::InstallRefused),
+            Ok(_) | Err(_) => return Err(UpdateError::InstallRefused),
         }
         let (candidate_path, mut candidate) = create_sibling(directory, ".ptrack-update-")?;
         let result = async {
@@ -609,7 +608,7 @@ mod platform {
             open_private_regular(&stage.payload_path).map_err(|_| UpdateError::InstallRefused)?;
         let mut hash = Sha256::new();
         let mut size = 0_u64;
-        let mut buffer = [0_u8; 64 * 1024];
+        let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
         loop {
             if cancellation.is_cancelled() {
                 return Err(UpdateError::Cancelled);
@@ -723,7 +722,7 @@ mod platform {
         let mut file = File::from(descriptor);
         let mut hash = Sha256::new();
         let mut size = 0_u64;
-        let mut buffer = [0_u8; 64 * 1024];
+        let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
         loop {
             if cancellation.is_cancelled() {
                 return Err(UpdateError::Cancelled);
@@ -768,7 +767,13 @@ mod platform {
     }
 
     fn hex_lower(bytes: &[u8]) -> String {
-        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut output = String::with_capacity(bytes.len() * 2);
+        for byte in bytes {
+            output.push(char::from(HEX[usize::from(byte >> 4)]));
+            output.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+        output
     }
 }
 
