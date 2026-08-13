@@ -1247,11 +1247,13 @@ fn create_private_file(path: &Path) -> StoreResult<File> {
     {
         use std::os::windows::fs::OpenOptionsExt;
         use windows_sys::Win32::Storage::FileSystem::{
-            FILE_GENERIC_READ, FILE_GENERIC_WRITE, WRITE_DAC, WRITE_OWNER,
+            FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, WRITE_DAC, WRITE_OWNER,
         };
 
         options.access_mode(FILE_GENERIC_READ | FILE_GENERIC_WRITE | WRITE_DAC | WRITE_OWNER);
-        options.share_mode(0);
+        // Identity attestation reopens the path read-only. Keep that possible
+        // while still denying competing writers and rename/delete replacement.
+        options.share_mode(FILE_SHARE_READ);
     }
 
     match options.open(path) {
@@ -1279,10 +1281,10 @@ fn probe_existing_with_retry(path: &Path, kind: StoreKind) -> StoreResult<(File,
     loop {
         let file = match open_existing_file(path) {
             Ok(file) => file,
-            Err(StoreError::Io(error))
-                if error.kind() == io::ErrorKind::PermissionDenied
-                    && start.elapsed() < LOCK_TIMEOUT =>
-            {
+            Err(StoreError::Io(error)) if open_conflicts_with_writer(&error) => {
+                if start.elapsed() >= LOCK_TIMEOUT {
+                    return Err(StoreError::Busy);
+                }
                 thread::sleep(LOCK_RETRY_INTERVAL);
                 continue;
             }
@@ -1311,6 +1313,20 @@ fn probe_existing_with_retry(path: &Path, kind: StoreKind) -> StoreResult<(File,
         ensure_path_identity(path, expected)?;
         return Ok((file, expected));
     }
+}
+
+fn open_conflicts_with_writer(error: &io::Error) -> bool {
+    if error.kind() == io::ErrorKind::PermissionDenied {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
+
+        return error.raw_os_error() == Some(ERROR_SHARING_VIOLATION as i32);
+    }
+    #[cfg(not(windows))]
+    false
 }
 
 fn open_writable_with_retry(
@@ -1455,9 +1471,11 @@ fn open_existing_file(path: &Path) -> StoreResult<File> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 
-        // Prevent rename/delete replacement while the database handle exists.
-        options.share_mode(0);
+        // Permit only the read-only handle used for identity attestation;
+        // writes and rename/delete replacement remain denied.
+        options.share_mode(FILE_SHARE_READ);
     }
     Ok(options.open(path)?)
 }
