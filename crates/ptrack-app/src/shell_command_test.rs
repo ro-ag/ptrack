@@ -1,10 +1,12 @@
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
 
+#[cfg(unix)]
 use super::shell_command::{
     SHELL_PATH_MARKER_BEGIN, SHELL_PATH_MARKER_END, ensure_shell_path, install_shell_command_from,
 };
 
+#[cfg(unix)]
 #[test]
 fn shell_path_block_is_exact_private_enough_and_idempotent() {
     let directory = tempfile_directory("exact");
@@ -53,6 +55,7 @@ fn shell_path_block_is_exact_private_enough_and_idempotent() {
     std::fs::remove_dir_all(directory).unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 fn missing_profile_is_created_with_the_exact_managed_block() {
     let directory = tempfile_directory("missing");
@@ -120,6 +123,7 @@ fn shell_profile_symlinks_and_shell_active_executable_paths_fail_closed() {
     std::fs::remove_dir_all(directory).unwrap();
 }
 
+#[cfg(unix)]
 fn tempfile_directory(label: &str) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!(
         "ptrack-shell-command-{label}-{}-{}",

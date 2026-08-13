@@ -24,6 +24,7 @@ impl TestDirectory {
         let path =
             std::env::temp_dir().join(format!("ptrack-app-{name}-{}-{nonce}", std::process::id()));
         std::fs::create_dir_all(&path).expect("create test directory");
+        ptrack_store::protect_private_directory(&path).expect("protect test directory");
         Self(std::fs::canonicalize(path).expect("canonical test directory"))
     }
 }

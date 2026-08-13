@@ -1,13 +1,17 @@
 use std::collections::BTreeMap;
+#[cfg(unix)]
 use std::fs;
+#[cfg(unix)]
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::process::Command;
 
 use crate::profile::{CwdPolicy, ExitBehavior, Profile, ProfileKind};
 use crate::shell_integration::{
     ShellIntegrationDescriptor, ShellIntegrationOwner, ShellIntegrationQuality,
-    prepare_shell_integration, supports_shell_integration,
 };
+#[cfg(unix)]
+use crate::shell_integration::{prepare_shell_integration, supports_shell_integration};
 
 fn profile(kind: ProfileKind, executable: &str, args: &[&str]) -> Profile {
     Profile {
@@ -51,14 +55,18 @@ fn descriptor_json_is_exact_and_omits_empty_nonce() {
 }
 
 #[test]
-fn unsupported_windows_agent_and_command_launches_are_never_mutated() {
+fn windows_shell_integration_is_unavailable() {
     let zsh = profile(ProfileKind::Shell, "/bin/zsh", &["-l"]);
     assert!(
         ShellIntegrationOwner::new_for_os([&zsh], "windows")
             .unwrap()
             .is_none()
     );
+}
 
+#[cfg(unix)]
+#[test]
+fn agent_and_command_launches_are_never_mutated() {
     let owner = shell_owner();
     let cases = [
         profile(ProfileKind::Agent, "/bin/zsh", &["-i"]),
@@ -77,6 +85,7 @@ fn unsupported_windows_agent_and_command_launches_are_never_mutated() {
     owner.close().unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 fn owner_creates_private_bounded_hooks_and_removes_them_only_when_closed() {
     let owner = shell_owner();
@@ -112,6 +121,7 @@ fn owner_creates_private_bounded_hooks_and_removes_them_only_when_closed() {
     assert!(!directory.exists());
 }
 
+#[cfg(unix)]
 #[test]
 fn zsh_integration_preserves_args_sources_startup_and_layers_zdotdir() {
     let owner = shell_owner();
@@ -163,6 +173,7 @@ fn zsh_integration_preserves_args_sources_startup_and_layers_zdotdir() {
     owner.close().unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 fn zsh_uses_home_when_zdotdir_is_absent() {
     let owner = shell_owner();
@@ -177,6 +188,7 @@ fn zsh_uses_home_when_zdotdir_is_absent() {
     owner.close().unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 fn bash_integration_uses_private_init_file_and_preserves_user_hooks() {
     let owner = shell_owner();
@@ -216,6 +228,7 @@ fn bash_integration_uses_private_init_file_and_preserves_user_hooks() {
     owner.close().unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 fn bash_login_shell_and_absent_owner_keep_launch_semantics() {
     let owner = shell_owner();
@@ -237,6 +250,7 @@ fn bash_login_shell_and_absent_owner_keep_launch_semantics() {
     owner.close().unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 fn supported_flags_are_purely_interactive_combinations() {
     for flags in [
@@ -263,6 +277,7 @@ fn supported_flags_are_purely_interactive_combinations() {
     assert!(!supports_shell_integration(&bash_login));
 }
 
+#[cfg(unix)]
 fn assert_authenticated_lifecycle(contents: &str) {
     for marker in [
         "133;A",
@@ -284,6 +299,7 @@ fn assert_authenticated_lifecycle(contents: &str) {
     assert!(!contents.contains("633;E"), "hook leaked command text");
 }
 
+#[cfg(unix)]
 fn shell_owner() -> ShellIntegrationOwner {
     let zsh = profile(ProfileKind::Shell, "/bin/zsh", &[]);
     let bash = profile(ProfileKind::Shell, "/bin/bash", &["-i"]);
@@ -292,6 +308,7 @@ fn shell_owner() -> ShellIntegrationOwner {
         .expect("supported shells should create an owner")
 }
 
+#[cfg(unix)]
 fn environment_value(environment: &[String], key: &str) -> String {
     environment
         .iter()

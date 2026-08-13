@@ -337,6 +337,8 @@ fn write_private_replace(path: &Path, bytes: &[u8]) {
 fn secure_file(path: &Path) {
     #[cfg(unix)]
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    #[cfg(not(unix))]
+    let _ = path;
 }
 
 fn cleanup(path: &Path) {

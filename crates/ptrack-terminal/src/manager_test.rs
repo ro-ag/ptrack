@@ -247,7 +247,9 @@ async fn manager_owns_listener_sessions_crypto_values_and_shutdown() {
     );
     let json = serde_json::to_string(&snapshot).unwrap();
     assert!(!json.contains(first.stream_token()));
-    assert!(!json.contains(&first.shell_integration().nonce));
+    if !first.shell_integration().nonce.is_empty() {
+        assert!(!json.contains(&first.shell_integration().nonce));
+    }
 
     manager.close_session(first.id(), true).unwrap();
     assert_eq!(
@@ -274,7 +276,8 @@ async fn manager_defensively_owns_launch_data_and_validates_cwd_and_env() {
     let factory = Arc::new(ManagerFactory {
         starts: Arc::clone(&starts),
     });
-    let mut source = profile("/bin/sh");
+    let executable = if cfg!(windows) { "cmd.exe" } else { "/bin/sh" };
+    let mut source = profile(executable);
     source.args = vec!["-i".to_owned()];
     source
         .env

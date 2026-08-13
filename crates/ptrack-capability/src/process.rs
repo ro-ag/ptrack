@@ -197,6 +197,7 @@ async fn terminate_and_cleanup(
 }
 
 struct ProcessTree {
+    #[cfg(not(windows))]
     process_id: Option<u32>,
     #[cfg(windows)]
     job: crate::private_windows::ProcessJob,
@@ -211,6 +212,7 @@ impl ProcessTree {
         #[cfg(windows)]
         let job = crate::private_windows::ProcessJob::attach(child)?;
         Ok(Self {
+            #[cfg(not(windows))]
             process_id: child.id(),
             #[cfg(windows)]
             job,

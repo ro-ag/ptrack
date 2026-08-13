@@ -199,8 +199,9 @@ fn discovery_uses_authoritative_shell_and_fixed_agent_order() {
     remove_test_directory(&directory);
 }
 
+#[cfg(unix)]
 #[test]
-fn discovery_uses_darwin_agent_fallbacks_and_windows_comspec() {
+fn discovery_uses_darwin_agent_fallbacks() {
     let directory = test_directory("profile-discovery-fallback");
     let shell = directory.join("zsh");
     let gemini = PathBuf::from("/opt/homebrew/bin/gemini");
@@ -223,7 +224,12 @@ fn discovery_uses_darwin_agent_fallbacks_and_windows_comspec() {
     )
     .unwrap();
     assert!(profiles.iter().any(|profile| profile.id == "agent-gemini"));
+    remove_test_directory(&directory);
+}
 
+#[test]
+fn discovery_uses_windows_comspec() {
+    let directory = test_directory("profile-discovery-comspec");
     let comspec = directory.join("cmd.exe");
     let profiles = discover_profiles_with(
         "windows",

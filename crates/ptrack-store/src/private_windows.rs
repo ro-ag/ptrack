@@ -198,30 +198,33 @@ fn verify_owner_dacl(owner: *mut c_void, dacl: *mut ACL, user_sid: *mut c_void) 
             AclSizeInformation,
         )
     } == 0
-        || information.AceCount != 1
+        || information.AceCount == 0
+        || information.AceCount > 8
     {
-        return Err(io::Error::other("private DACL is not single-owner"));
+        return Err(io::Error::other("private DACL has an invalid ACE count"));
     }
-    let mut ace = ptr::null_mut();
-    // SAFETY: the single ACE index is proven above.
-    if unsafe { GetAce(dacl, 0, &mut ace) } == 0 || ace.is_null() {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: GetAce returned a pointer to an ACE; the header type proves
-    // ACCESS_ALLOWED_ACE layout, whose SidStart is the variable SID start.
-    let allowed = unsafe { &*ace.cast::<ACCESS_ALLOWED_ACE>() };
-    if u32::from(allowed.Header.AceType) != ACCESS_ALLOWED_ACE_TYPE {
-        return Err(io::Error::other("private DACL contains a non-allow ACE"));
-    }
-    if allowed.Mask != GENERIC_ALL {
-        return Err(io::Error::other(
-            "private DACL does not grant exact owner authority",
-        ));
-    }
-    let sid = ptr::addr_of!(allowed.SidStart).cast_mut().cast();
-    // SAFETY: both SIDs are valid for the duration of the comparison.
-    if unsafe { EqualSid(sid, user_sid) } == 0 {
-        return Err(io::Error::other("private DACL belongs to another identity"));
+    for index in 0..information.AceCount {
+        let mut ace = ptr::null_mut();
+        // SAFETY: the index is bounded by the queried ACE count.
+        if unsafe { GetAce(dacl, index, &mut ace) } == 0 || ace.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: GetAce returned a pointer to an ACE; the header type proves
+        // ACCESS_ALLOWED_ACE layout, whose SidStart is the variable SID start.
+        let allowed = unsafe { &*ace.cast::<ACCESS_ALLOWED_ACE>() };
+        if u32::from(allowed.Header.AceType) != ACCESS_ALLOWED_ACE_TYPE {
+            return Err(io::Error::other("private DACL contains a non-allow ACE"));
+        }
+        if allowed.Mask != GENERIC_ALL {
+            return Err(io::Error::other(
+                "private DACL does not grant exact owner authority",
+            ));
+        }
+        let sid = ptr::addr_of!(allowed.SidStart).cast_mut().cast();
+        // SAFETY: both SIDs are valid for the duration of the comparison.
+        if unsafe { EqualSid(sid, user_sid) } == 0 {
+            return Err(io::Error::other("private DACL belongs to another identity"));
+        }
     }
     Ok(())
 }
@@ -323,8 +326,10 @@ fn protect_current_user(path: &Path, inheritance: u32) -> io::Result<()> {
         SetNamedSecurityInfoW(
             wide.as_ptr().cast_mut(),
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-            ptr::null_mut(),
+            OWNER_SECURITY_INFORMATION
+                | DACL_SECURITY_INFORMATION
+                | PROTECTED_DACL_SECURITY_INFORMATION,
+            user.sid,
             ptr::null_mut(),
             acl,
             ptr::null(),

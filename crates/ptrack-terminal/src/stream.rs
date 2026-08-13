@@ -352,7 +352,14 @@ async fn run_stream<S>(
     let reader = read_terminal_stream(stream, session, Arc::clone(&ledger), reader_cancel.clone());
     tokio::pin!(writer, reader);
     tokio::select! {
-        _ = &mut writer => {
+        writer_result = &mut writer => {
+            if writer_result.is_ok() {
+                tokio::select! {
+                    _ = &mut reader => {}
+                    () = cancellation.cancelled() => {}
+                    () = tokio::time::sleep(STREAM_WRITE_WAIT) => {}
+                }
+            }
             reader_cancel.cancel();
         }
         _ = &mut reader => {

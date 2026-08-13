@@ -1046,6 +1046,7 @@ fn audit_target(scope: &SshScope) -> String {
     }
 }
 
+#[cfg(unix)]
 fn random_hex(length: usize) -> Result<String, SshError> {
     let mut bytes = vec![0_u8; length];
     getrandom::fill(&mut bytes)

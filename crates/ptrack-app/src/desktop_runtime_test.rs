@@ -45,6 +45,7 @@ impl TestDirectory {
             std::process::id()
         ));
         std::fs::create_dir_all(&path).unwrap();
+        ptrack_store::protect_private_directory(&path).unwrap();
         Self(std::fs::canonicalize(path).unwrap())
     }
 }
@@ -1303,6 +1304,7 @@ fn workspace_shutdown_drains_its_own_calls_and_fences_late_invocations() {
 fn linked_launch_cwd_preserves_a_verified_worktree_subdirectory() {
     let project = TestDirectory::new("linked-project");
     let worktree_parent = TestDirectory::new("linked-worktree");
+    let project_argument = external_command_path(&project.0);
     let run = |arguments: &[&str]| {
         let status = std::process::Command::new("git")
             .args(arguments)
@@ -1310,32 +1312,27 @@ fn linked_launch_cwd_preserves_a_verified_worktree_subdirectory() {
             .unwrap();
         assert!(status.success(), "git {arguments:?}");
     };
-    run(&["-C", project.0.to_str().unwrap(), "init"]);
+    run(&["-C", &project_argument, "init"]);
     run(&[
         "-C",
-        project.0.to_str().unwrap(),
+        &project_argument,
         "config",
         "user.email",
         "test@example.com",
     ]);
-    run(&[
-        "-C",
-        project.0.to_str().unwrap(),
-        "config",
-        "user.name",
-        "Test",
-    ]);
+    run(&["-C", &project_argument, "config", "user.name", "Test"]);
     std::fs::write(project.0.join("tracked"), "tracked").unwrap();
-    run(&["-C", project.0.to_str().unwrap(), "add", "tracked"]);
-    run(&["-C", project.0.to_str().unwrap(), "commit", "-m", "initial"]);
+    run(&["-C", &project_argument, "add", "tracked"]);
+    run(&["-C", &project_argument, "commit", "-m", "initial"]);
     let worktree = worktree_parent.0.join("tree");
+    let worktree_argument = external_command_path(&worktree);
     run(&[
         "-C",
-        project.0.to_str().unwrap(),
+        &project_argument,
         "worktree",
         "add",
         "--detach",
-        worktree.to_str().unwrap(),
+        &worktree_argument,
         "HEAD",
     ]);
     let subdir = worktree.join("nested");
@@ -1358,6 +1355,20 @@ fn linked_launch_cwd_preserves_a_verified_worktree_subdirectory() {
             .unwrap(),
         std::fs::canonicalize(subdir).unwrap()
     );
+}
+
+fn external_command_path(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    #[cfg(windows)]
+    {
+        if let Some(path) = text.strip_prefix("\\\\?\\UNC\\") {
+            return format!("\\\\{path}");
+        }
+        if let Some(path) = text.strip_prefix("\\\\?\\") {
+            return path.to_owned();
+        }
+    }
+    text.into_owned()
 }
 
 #[tokio::test]
@@ -1660,8 +1671,20 @@ async fn workspace_confirmation_owns_and_expires_the_resource_admission_fence() 
             .to_string(),
         "workspace resource admission is fenced"
     );
-    tokio::time::sleep(Duration::from_millis(80)).await;
-    let after_expiry = workspace.begin_resource_admission().unwrap();
+    let expiry_deadline = Instant::now() + Duration::from_secs(2);
+    let after_expiry = loop {
+        match workspace.begin_resource_admission() {
+            Ok(admission) => break admission,
+            Err(error) => {
+                assert_eq!(error.to_string(), "workspace resource admission is fenced");
+                assert!(
+                    Instant::now() < expiry_deadline,
+                    "confirmation fence did not expire"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
+    };
     drop(after_expiry);
     drop(pending_admission);
     drop(runtime);

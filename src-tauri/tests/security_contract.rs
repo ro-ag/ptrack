@@ -19,7 +19,8 @@ fn shell_has_only_the_bounded_adapter_commands() {
     let source = fs::read_to_string(manifest_dir.join("src/main.rs"))
         .expect("desktop shell source should be readable");
     let manifest = fs::read_to_string(manifest_dir.join("Cargo.toml"))
-        .expect("desktop shell manifest should be readable");
+        .expect("desktop shell manifest should be readable")
+        .replace("\r\n", "\n");
 
     assert_eq!(source.matches("#[tauri::command]").count(), 3);
     assert!(source.contains("gui_invoke"));

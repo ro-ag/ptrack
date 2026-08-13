@@ -78,7 +78,8 @@ async fn ssh_exact_argv_and_noncomposable_grants_deny_before_spawn() {
     let calls = runner.calls.lock().unwrap();
     let args = strings(&calls[0].args);
     assert_eq!(calls[0].name, OsString::from("ssh"));
-    assert_eq!(&args[..4], ["-F", "/dev/null", "-o", "BatchMode=yes"]);
+    let null_config = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    assert_eq!(&args[..4], ["-F", null_config, "-o", "BatchMode=yes"]);
     assert!(
         args.windows(2)
             .any(|pair| pair == ["-o", "PasswordAuthentication=no"])
@@ -373,6 +374,7 @@ struct RecordingRunner {
     calls: Mutex<Vec<CapturedSpec>>,
     stdout: Vec<u8>,
     staged: Mutex<Option<Vec<u8>>>,
+    #[cfg(unix)]
     swap: Option<(PathBuf, PathBuf)>,
 }
 
@@ -382,10 +384,12 @@ impl RecordingRunner {
             calls: Mutex::new(Vec::new()),
             stdout,
             staged: Mutex::new(None),
+            #[cfg(unix)]
             swap: None,
         }
     }
 
+    #[cfg(unix)]
     fn with_swap(stdout: Vec<u8>, path: PathBuf, target: PathBuf) -> Self {
         Self {
             calls: Mutex::new(Vec::new()),

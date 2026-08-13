@@ -21,6 +21,7 @@ impl TempDir {
             NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&path).unwrap();
+        ptrack_store::protect_private_directory(&path).unwrap();
         Self(path)
     }
 

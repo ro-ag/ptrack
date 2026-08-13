@@ -362,6 +362,7 @@ async fn stream_carries_binary_io_and_normal_close_is_single_use() {
     let frame = frame.expect("close frame");
     assert_eq!(frame.code, CloseCode::Normal);
     assert!(frame.reason.is_empty());
+    connection.flush().await.unwrap();
     await_closed(&fixture.host).await;
     assert!(dial(&fixture.url, "wails://wails").await.is_err());
     fixture.server.shutdown().await.unwrap();

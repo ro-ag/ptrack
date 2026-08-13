@@ -444,6 +444,7 @@ fn temporary_root() -> PathBuf {
     });
     let root = std::env::temp_dir().join(format!("ptrack-update-runtime-{name}"));
     std::fs::create_dir(&root).unwrap();
+    ptrack_store::protect_private_directory(&root).unwrap();
     root
 }
 
