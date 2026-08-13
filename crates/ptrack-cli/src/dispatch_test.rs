@@ -2,8 +2,9 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use ptrack_app::{
-    AppError, AppResult, ApplicationPort, CapabilityMcpOutcome, GuideAction, HookAction,
-    HookResult, InitRequest, InitResult, Mutation, MutationResult, ProcessOutput,
+    AppError, AppResult, ApplicationPort, CapabilityCancellation, CapabilityMcpOutcome,
+    GuideAction, HookAction, HookResult, InitRequest, InitResult, Mutation, MutationResult,
+    ProcessOutput,
 };
 use ptrack_core::{Meta, ProjectRef, ProjectSnapshot, Timestamp};
 
@@ -12,6 +13,9 @@ use crate::{Io, RunOutcome, run};
 struct FakeApplication {
     snapshot: ProjectSnapshot,
     git_output: Option<ProcessOutput>,
+    capability_result: Option<AppResult<Vec<u8>>>,
+    capability_calls: Vec<(String, String)>,
+    mcp_input: Vec<u8>,
 }
 
 impl Default for FakeApplication {
@@ -35,6 +39,9 @@ impl Default for FakeApplication {
                 Vec::new(),
             ),
             git_output: None,
+            capability_result: None,
+            capability_calls: Vec::new(),
+            mcp_input: Vec::new(),
         }
     }
 }
@@ -79,17 +86,95 @@ impl ApplicationPort for FakeApplication {
             .ok_or(AppError::NotImplemented("test git"))
     }
 
-    fn capability_call(&mut self, _tool: &str, _arguments: &str) -> AppResult<Vec<u8>> {
-        Err(AppError::NotImplemented("test capability"))
+    fn capability_call(&mut self, tool: &str, arguments: &str) -> AppResult<Vec<u8>> {
+        self.capability_calls
+            .push((tool.to_owned(), arguments.to_owned()));
+        self.capability_result
+            .take()
+            .unwrap_or(Err(AppError::NotImplemented("test capability")))
     }
 
     fn capability_mcp(
         &mut self,
-        _input: &mut dyn Read,
+        mut input: Box<dyn Read + Send>,
         _output: &mut dyn Write,
+        _cancellation: &CapabilityCancellation,
     ) -> AppResult<CapabilityMcpOutcome> {
-        Err(AppError::NotImplemented("test mcp"))
+        input.read_to_end(&mut self.mcp_input)?;
+        Ok(CapabilityMcpOutcome::Complete)
     }
+}
+
+#[test]
+fn capability_call_requires_one_object_forwards_exactly_and_adds_one_raw_newline() {
+    let mut application = FakeApplication {
+        capability_result: Some(Ok(br#"{"ok":true}"#.to_vec())),
+        ..FakeApplication::default()
+    };
+    let (result, stdout, stderr) = invoke_with(
+        &mut application,
+        &[
+            "ptrack",
+            "capability",
+            "call",
+            "ptrack_http_request",
+            "--arguments",
+            r#"{"capability_id":1}"#,
+        ],
+    );
+    assert_eq!(result.unwrap(), RunOutcome::ExitSuccess);
+    assert_eq!(stdout, "{\"ok\":true}\n");
+    assert!(stderr.is_empty());
+    assert_eq!(
+        application.capability_calls,
+        [(
+            "ptrack_http_request".to_owned(),
+            r#"{"capability_id":1}"#.to_owned()
+        )]
+    );
+
+    for arguments in ["null", "[]", "1", "true", "{\"x\":1} trailing"] {
+        let (error, stdout, stderr) = invoke(&[
+            "ptrack",
+            "capability",
+            "call",
+            "ptrack_http_request",
+            "--arguments",
+            arguments,
+        ]);
+        assert_eq!(
+            error.unwrap_err().to_string(),
+            "--arguments must be one JSON object"
+        );
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+    }
+}
+
+#[test]
+fn capability_mcp_uses_stdin_as_sole_protocol_input_and_emits_no_cli_text() {
+    let mut application = FakeApplication::default();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let result = run(
+        ["ptrack", "capability", "mcp"].map(str::to_owned),
+        &mut application,
+        Io {
+            stdin: Box::new(std::io::Cursor::new(
+                b"{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":1}\n".to_vec(),
+            )),
+            stdout: &mut stdout,
+            stderr: &mut stderr,
+            cancellation: CapabilityCancellation::new(),
+        },
+    );
+    assert_eq!(result.unwrap(), RunOutcome::ExitSuccess);
+    assert_eq!(
+        application.mcp_input,
+        b"{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":1}\n"
+    );
+    assert!(stdout.is_empty());
+    assert!(stderr.is_empty());
 }
 
 fn invoke(args: &[&str]) -> (Result<RunOutcome, crate::CliError>, String, String) {
@@ -101,16 +186,16 @@ fn invoke_with(
     application: &mut FakeApplication,
     args: &[&str],
 ) -> (Result<RunOutcome, crate::CliError>, String, String) {
-    let mut input = std::io::empty();
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let result = run(
         args.iter().map(|value| (*value).to_owned()),
         application,
         Io {
-            stdin: &mut input,
+            stdin: Box::new(std::io::empty()),
             stdout: &mut stdout,
             stderr: &mut stderr,
+            cancellation: CapabilityCancellation::new(),
         },
     );
     (

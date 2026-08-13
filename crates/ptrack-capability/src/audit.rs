@@ -13,10 +13,6 @@ pub struct AuditRecorder<'a> {
 enum AuditBackend<'a> {
     None,
     Store(&'a ProjectStore),
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "private executor test injection seam")
-    )]
     Sink(&'a dyn AuditSink),
 }
 
@@ -35,10 +31,6 @@ impl<'a> AuditRecorder<'a> {
         }
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "private executor test injection seam")
-    )]
     pub(crate) const fn from_sink(sink: &'a dyn AuditSink) -> Self {
         Self {
             backend: AuditBackend::Sink(sink),

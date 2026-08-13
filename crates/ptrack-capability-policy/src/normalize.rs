@@ -807,7 +807,14 @@ fn normalize_endpoints(values: &[String], label: &str) -> Result<Vec<String>, Ca
         .map(unique_sorted)
 }
 
-pub(crate) fn normalize_remote_path(raw: &str) -> Result<String, CapabilityError> {
+/// Normalizes an absolute, shell-safe POSIX path used by SSH transfers.
+///
+/// # Errors
+///
+/// Returns an error when the path is relative, spans the remote filesystem
+/// root, contains controls or shell-significant characters, or is otherwise
+/// not a canonical approved transfer path.
+pub fn normalize_remote_path(raw: &str) -> Result<String, CapabilityError> {
     if !raw.starts_with('/') || has_control(raw) || raw.contains('\\') {
         return error("remote path must be an absolute POSIX path");
     }

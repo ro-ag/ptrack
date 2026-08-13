@@ -15,6 +15,7 @@ use crate::AuditRecorder;
 const MAX_TRANSIENT_HEADER_BYTES: usize = 64 << 10;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HttpRequest {
     pub method: String,
     pub url: String,
@@ -57,7 +58,7 @@ pub enum ConnectionClass {
 }
 
 impl ConnectionClass {
-    const fn as_str(self) -> &'static str {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Cancelled => "cancelled",
             Self::Denied => "denied",
@@ -77,6 +78,8 @@ impl ConnectionClass {
 pub struct HttpError {
     message: String,
     class: ConnectionClass,
+    status_code: u16,
+    diagnostics: HttpDiagnostics,
 }
 
 impl HttpError {
@@ -84,12 +87,31 @@ impl HttpError {
         Self {
             message: message.into(),
             class,
+            status_code: 0,
+            diagnostics: HttpDiagnostics {
+                proxy: String::new(),
+                ca_store: String::new(),
+            },
         }
+    }
+
+    fn with_response_metadata(mut self, status_code: u16, diagnostics: HttpDiagnostics) -> Self {
+        self.status_code = status_code;
+        self.diagnostics = diagnostics;
+        self
     }
 
     #[must_use]
     pub const fn class(&self) -> ConnectionClass {
         self.class
+    }
+
+    pub(crate) const fn status_code(&self) -> u16 {
+        self.status_code
+    }
+
+    pub(crate) const fn diagnostics(&self) -> &HttpDiagnostics {
+        &self.diagnostics
     }
 }
 
@@ -117,6 +139,10 @@ impl<'a> HttpExecutor<'a> {
         Self {
             recorder: AuditRecorder::new(store),
         }
+    }
+
+    pub(crate) const fn from_recorder(recorder: AuditRecorder<'a>) -> Self {
+        Self { recorder }
     }
 
     /// Executes one manually redirected, fully authorized HTTP exchange.
@@ -233,7 +259,8 @@ impl<'a> HttpExecutor<'a> {
                 return Err(HttpError::new(
                     "HTTP proxy requires authentication",
                     ConnectionClass::Proxy,
-                ));
+                )
+                .with_response_metadata(response.status().as_u16(), diagnostics));
             }
             ensure_response_headers_bounded(response.headers())?;
             if response.status().is_redirection() {
@@ -287,7 +314,7 @@ impl<'a> HttpExecutor<'a> {
     }
 }
 
-fn ensure_tls_provider() -> Result<(), HttpError> {
+pub(crate) fn ensure_tls_provider() -> Result<(), HttpError> {
     static INSTALLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if *INSTALLED.get_or_init(|| {
         rustls::crypto::ring::default_provider()

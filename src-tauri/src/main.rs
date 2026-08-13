@@ -2,16 +2,16 @@
 
 fn main() {
     let mut application = ptrack_app::UnavailableApplication;
-    let mut stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     let mut stderr = std::io::stderr();
     let outcome = ptrack_cli::run(
         std::env::args_os(),
         &mut application,
         ptrack_cli::Io {
-            stdin: &mut stdin,
+            stdin: Box::new(std::io::stdin()),
             stdout: &mut stdout,
             stderr: &mut stderr,
+            cancellation: ptrack_app::CapabilityCancellation::new(),
         },
     );
     match outcome {

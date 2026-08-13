@@ -8,20 +8,25 @@ rust-version.workspace = true
 [dependencies]
 base64.workspace = true
 getrandom.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+ptrack-agent = { path = "../ptrack-agent" }
 ptrack-capability-policy = { path = "../ptrack-capability-policy" }
 ptrack-core = { path = "../ptrack-core" }
 ptrack-store = { path = "../ptrack-store" }
 reqwest.workspace = true
+regex.workspace = true
 rustls.workspace = true
 serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+subtle.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 
-[dev-dependencies]
-serde_json.workspace = true
-
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Memory", "Win32_System_Threading"] }
+windows-sys = { workspace = true, features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_Memory", "Win32_System_Threading"] }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, features = ["process"] }

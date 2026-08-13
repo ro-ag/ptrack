@@ -491,6 +491,11 @@ fn runtime_json_publish_compare_remove_liveness_and_concurrency_are_private() {
         read_integration_descriptor(home.path(), root.path()).unwrap(),
         descriptor
     );
+    assert_eq!(
+        read_runtime_json::<IntegrationDescriptor>(home.path(), root.path(), "agent-registry.json")
+            .unwrap(),
+        descriptor
+    );
     assert!(fs::read_to_string(&path).unwrap().ends_with('\n'));
     let mut stale = descriptor.clone();
     stale.pid = 0;

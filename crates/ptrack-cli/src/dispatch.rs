@@ -131,7 +131,8 @@ fn dispatch(
         }
         ["capability", "call"] => capability_call(leaf, application, io),
         ["capability", "mcp"] => {
-            application.capability_mcp(io.stdin, io.stdout)?;
+            let input = std::mem::replace(&mut io.stdin, Box::new(std::io::empty()));
+            application.capability_mcp(input, io.stdout, &io.cancellation)?;
             Ok(RunOutcome::ExitSuccess)
         }
         ["version"] => {

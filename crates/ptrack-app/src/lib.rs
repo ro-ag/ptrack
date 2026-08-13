@@ -17,9 +17,10 @@ pub use agent_runtime::{
 };
 
 pub use service::{
-    AppError, AppResult, ApplicationPort, CapabilityMcpOutcome, GuideAction, HookAction,
-    HookResult, InitRequest, InitResult, LocalApplication, Mutation, MutationResult, ProcessOutput,
-    ProjectEndpoint, UnavailableApplication, WorkspaceBindings,
+    AppError, AppResult, ApplicationPort, CapabilityCancellation, CapabilityMcpOutcome,
+    CapabilitySessionEnvironment, GuideAction, HookAction, HookResult, InitRequest, InitResult,
+    LocalApplication, Mutation, MutationResult, ProcessOutput, ProjectEndpoint,
+    UnavailableApplication, WorkspaceBindings,
 };
 
 #[cfg(test)]

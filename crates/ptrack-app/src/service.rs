@@ -9,6 +9,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+use ptrack_capability::{
+    McpCancellation, McpServeOutcome, ToolCall, client_for_project, serve_mcp,
+    validate_session_environment,
+};
 use ptrack_core::{
     Commit, Issue, IssueStatus, Milestone, MilestoneStatus, Note, NoteTarget, Plan, PlanStatus,
     ProjectRef, ProjectSnapshot, Severity, Task, TaskStatus, Timestamp, render_guide, upsert_guide,
@@ -61,6 +65,12 @@ impl From<ptrack_store::StoreError> for AppError {
     }
 }
 
+impl From<ptrack_capability::ServerError> for AppError {
+    fn from(error: ptrack_capability::ServerError) -> Self {
+        Self::Message(error.to_string())
+    }
+}
+
 #[cfg(unix)]
 fn from_errno(error: rustix::io::Errno) -> AppError {
     AppError::Io(std::io::Error::from(error))
@@ -83,6 +93,28 @@ pub struct WorkspaceBindings {
     pub global_binding: ActiveBinding,
     pub global_home: PathBuf,
     pub writer_version: String,
+}
+
+/// Explicit capability authority injected by the session host.
+///
+/// The token intentionally has no `Debug` implementation so diagnostics
+/// cannot accidentally disclose it.
+#[derive(Clone, Eq, PartialEq)]
+pub struct CapabilitySessionEnvironment {
+    token: String,
+    project: Option<PathBuf>,
+    generation: Option<String>,
+}
+
+impl CapabilitySessionEnvironment {
+    #[must_use]
+    pub fn new(token: String, project: Option<PathBuf>, generation: Option<String>) -> Self {
+        Self {
+            token,
+            project,
+            generation,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -223,7 +255,10 @@ pub struct ProcessOutput {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CapabilityMcpOutcome {
     Complete,
+    Cancelled,
 }
+
+pub type CapabilityCancellation = McpCancellation;
 
 /// The single use-case seam consumed by CLI, TUI, and Tauri adapters.
 #[allow(clippy::missing_errors_doc)]
@@ -239,8 +274,9 @@ pub trait ApplicationPort {
     fn capability_call(&mut self, tool: &str, arguments: &str) -> AppResult<Vec<u8>>;
     fn capability_mcp(
         &mut self,
-        input: &mut dyn Read,
+        input: Box<dyn Read + Send>,
         output: &mut dyn Write,
+        cancellation: &CapabilityCancellation,
     ) -> AppResult<CapabilityMcpOutcome>;
 }
 
@@ -289,8 +325,9 @@ impl ApplicationPort for UnavailableApplication {
 
     fn capability_mcp(
         &mut self,
-        _input: &mut dyn Read,
+        _input: Box<dyn Read + Send>,
         _output: &mut dyn Write,
+        _cancellation: &CapabilityCancellation,
     ) -> AppResult<CapabilityMcpOutcome> {
         Err(unavailable())
     }
@@ -302,12 +339,42 @@ fn unavailable() -> AppError {
 
 pub struct LocalApplication {
     bindings: WorkspaceBindings,
+    capability_environment: Option<CapabilitySessionEnvironment>,
 }
 
 impl LocalApplication {
     #[must_use]
     pub const fn new(bindings: WorkspaceBindings) -> Self {
-        Self { bindings }
+        Self {
+            bindings,
+            capability_environment: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_capability_environment(
+        mut self,
+        environment: CapabilitySessionEnvironment,
+    ) -> Self {
+        self.capability_environment = Some(environment);
+        self
+    }
+
+    fn capability_environment(&self) -> AppResult<CapabilitySessionEnvironment> {
+        if let Some(environment) = &self.capability_environment {
+            return Ok(environment.clone());
+        }
+        let token = std::env::var("PTRACK_CAPABILITY_TOKEN").map_err(|_| {
+            AppError::Message(
+                "capability broker token is unavailable; launch this command from an agent terminal in p-track"
+                    .to_owned(),
+            )
+        })?;
+        Ok(CapabilitySessionEnvironment {
+            token,
+            project: std::env::var_os("PTRACK_CAPABILITY_PROJECT").map(PathBuf::from),
+            generation: std::env::var("PTRACK_CAPABILITY_GENERATION").ok(),
+        })
     }
 
     fn project(&self) -> AppResult<&ProjectEndpoint> {
@@ -647,16 +714,64 @@ impl ApplicationPort for LocalApplication {
         })
     }
 
-    fn capability_call(&mut self, _tool: &str, _arguments: &str) -> AppResult<Vec<u8>> {
-        Err(AppError::NotImplemented("capability call"))
+    fn capability_call(&mut self, tool: &str, arguments: &str) -> AppResult<Vec<u8>> {
+        let endpoint = self.project()?;
+        let environment = self.capability_environment()?;
+        let client = client_for_project(&self.bindings.global_home, &endpoint.root)?;
+        validate_session_environment(
+            client.descriptor(),
+            environment.project.as_deref(),
+            environment.generation.as_deref(),
+        )?;
+        let arguments = serde_json::from_str(arguments)
+            .map_err(|_| AppError::Message("tool arguments are invalid".to_owned()))?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| {
+                AppError::Message("capability client runtime is unavailable".to_owned())
+            })?;
+        let result = runtime.block_on(client.call(
+            &environment.token,
+            &ToolCall {
+                name: tool.to_owned(),
+                arguments,
+            },
+        ))?;
+        serde_json::to_vec(&result)
+            .map_err(|_| AppError::Message("capability response could not be encoded".to_owned()))
     }
 
     fn capability_mcp(
         &mut self,
-        _input: &mut dyn Read,
-        _output: &mut dyn Write,
+        input: Box<dyn Read + Send>,
+        output: &mut dyn Write,
+        cancellation: &CapabilityCancellation,
     ) -> AppResult<CapabilityMcpOutcome> {
-        Err(AppError::NotImplemented("capability mcp"))
+        let endpoint = self.project()?;
+        let environment = self.capability_environment()?;
+        let client = client_for_project(&self.bindings.global_home, &endpoint.root)?;
+        validate_session_environment(
+            client.descriptor(),
+            environment.project.as_deref(),
+            environment.generation.as_deref(),
+        )?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| {
+                AppError::Message("capability client runtime is unavailable".to_owned())
+            })?;
+        let outcome = serve_mcp(input, output, cancellation, |cancellation, call| {
+            runtime
+                .block_on(client.call_cancellable(cancellation, &environment.token, &call))
+                .map_err(|error| error.to_string())
+        })
+        .map_err(|error| AppError::Message(error.to_string()))?;
+        Ok(match outcome {
+            McpServeOutcome::Complete => CapabilityMcpOutcome::Complete,
+            McpServeOutcome::Cancelled => CapabilityMcpOutcome::Cancelled,
+        })
     }
 }
 

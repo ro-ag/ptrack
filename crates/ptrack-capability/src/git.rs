@@ -26,6 +26,7 @@ const GIT_ENV: [(&str, &str); 5] = [
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GitRequest {
     pub operation: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -115,7 +116,8 @@ pub struct GitExecutor<'a> {
     runner: &'a dyn ProcessRunner,
 }
 
-type RunFuture<'a> = Pin<Box<dyn Future<Output = Result<ProcessResult, ProcessError>> + Send + 'a>>;
+pub(crate) type RunFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<ProcessResult, ProcessError>> + Send + 'a>>;
 
 pub(crate) trait ProcessRunner: Send + Sync {
     fn run<'a>(
@@ -139,6 +141,10 @@ impl ProcessRunner for SystemRunner {
 
 static SYSTEM_RUNNER: SystemRunner = SystemRunner;
 
+pub(crate) const fn system_runner() -> &'static dyn ProcessRunner {
+    &SYSTEM_RUNNER
+}
+
 impl<'a> GitExecutor<'a> {
     #[must_use]
     pub const fn new(store: Option<&'a ProjectStore>) -> Self {
@@ -148,10 +154,6 @@ impl<'a> GitExecutor<'a> {
         }
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "private executor test injection seam")
-    )]
     pub(crate) const fn from_parts(
         recorder: AuditRecorder<'a>,
         runner: &'a dyn ProcessRunner,

@@ -4,8 +4,9 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use ptrack_app::{
-    AppError, AppResult, ApplicationPort, CapabilityMcpOutcome, GuideAction, HookAction,
-    HookResult, InitRequest, InitResult, Mutation, MutationResult, ProcessOutput,
+    AppError, AppResult, ApplicationPort, CapabilityCancellation, CapabilityMcpOutcome,
+    GuideAction, HookAction, HookResult, InitRequest, InitResult, Mutation, MutationResult,
+    ProcessOutput,
 };
 use ptrack_core::{
     Meta, Plan, PlanStatus, ProjectRef, ProjectSnapshot, Task, TaskStatus, Timestamp,
@@ -68,8 +69,9 @@ impl ApplicationPort for FakeApplication {
 
     fn capability_mcp(
         &mut self,
-        _input: &mut dyn Read,
+        _input: Box<dyn Read + Send>,
         _output: &mut dyn Write,
+        _cancellation: &CapabilityCancellation,
     ) -> AppResult<CapabilityMcpOutcome> {
         unreachable!()
     }

@@ -50,6 +50,22 @@ pub(super) fn store(temp: &TempDir) -> ProjectStore {
     .unwrap()
 }
 
+pub(super) fn binding(temp: &TempDir) -> ActiveBinding {
+    ActiveBinding {
+        generation: 1,
+        database_id: "capability-test".to_owned(),
+        kind: StoreKind::Project,
+        canonical_path: temp.path().canonicalize().unwrap().join("project.redb"),
+    }
+}
+
+pub(super) fn store_at(temp: &TempDir) -> (ProjectStore, PathBuf, ActiveBinding) {
+    let path = temp.path().join("project.redb");
+    let binding = binding(temp);
+    let store = ProjectStore::create_new(&path, binding.clone(), "test").unwrap();
+    (store, path, binding)
+}
+
 pub(super) fn approved_http(base_url: &str) -> Capability {
     approved(&Capability {
         http: Some(HttpScope {
@@ -114,7 +130,7 @@ fn approved(capability: &Capability) -> Capability {
     approve(&preview.capability, preview.scope_digest, now()).unwrap()
 }
 
-fn draft(kind: CapabilityKind) -> Capability {
+pub(super) fn draft(kind: CapabilityKind) -> Capability {
     Capability {
         id: 11,
         model_version: 1,

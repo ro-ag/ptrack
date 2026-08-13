@@ -2,6 +2,7 @@ use std::fmt;
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
@@ -147,6 +148,29 @@ pub fn publish_runtime_json<T: Serialize>(
     let directory = runtime_dir(global_home, project_root)?;
     write_json_atomic(&directory.join(name), value, name)?;
     Ok(directory.join(name))
+}
+
+/// Reads and decodes one JSON descriptor through the pinned private runtime
+/// directory, rejecting symlink and directory-replacement races.
+///
+/// # Errors
+/// Returns a name, path-resolution, locking, no-follow read, or JSON error.
+pub fn read_runtime_json<T: DeserializeOwned>(
+    global_home: impl AsRef<Path>,
+    project_root: impl AsRef<Path>,
+    name: &str,
+) -> Result<T, PersistenceError> {
+    validate_descriptor_name(name)?;
+    let directory = runtime_dir(global_home, project_root)?;
+    let pinned = platform::PinnedRuntimeDir::open(&directory)
+        .map_err(|error| PersistenceError::Message(error.to_string()))?;
+    let _guard = pinned
+        .lock_private_descriptor()
+        .map_err(|error| PersistenceError::Message(error.to_string()))?;
+    let contents = pinned
+        .read_private_file(&directory.join(name))
+        .map_err(|error| PersistenceError::Message(error.to_string()))?;
+    serde_json::from_slice(&contents).map_err(|error| PersistenceError::Message(error.to_string()))
 }
 
 /// Removes one named runtime file, treating absence as success.

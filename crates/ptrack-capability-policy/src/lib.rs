@@ -12,7 +12,7 @@ mod normalize;
 mod policy;
 mod wire;
 
-pub use normalize::{CapabilityError, Preview, normalize};
+pub use normalize::{CapabilityError, Preview, normalize, normalize_remote_path};
 pub use policy::{
     Denied, GitAuthorization, SshOperation, approve, authorize, authorize_git, authorize_http,
     authorize_ssh, disable, resolve_project_path,

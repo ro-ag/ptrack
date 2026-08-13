@@ -54,7 +54,8 @@ pub use launch_context::{
 };
 pub use persistence::{
     IntegrationDescriptor, PersistenceError, publish_runtime_json, read_integration_descriptor,
-    remove_runtime_file, remove_runtime_json_if_equal, run_history_path, runtime_dir,
+    read_runtime_json, remove_runtime_file, remove_runtime_json_if_equal, run_history_path,
+    runtime_dir,
 };
 pub use privacy::{
     EventPrivacyError, EventPrivacyPolicy, default_event_privacy_policy,

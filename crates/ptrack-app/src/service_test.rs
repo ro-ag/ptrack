@@ -1,12 +1,14 @@
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use ptrack_capability::{BrokerConfig, BrokerServer, BrokerServerConfig, McpCancellation};
 use ptrack_core::PlanStatus;
 use ptrack_store::{ActiveBinding, GlobalStore, ProjectStore, StoreKind};
 
 use crate::{
-    ApplicationPort, InitRequest, LocalApplication, Mutation, MutationResult, ProjectEndpoint,
-    WorkspaceBindings,
+    ApplicationPort, CapabilityMcpOutcome, CapabilitySessionEnvironment, InitRequest,
+    LocalApplication, Mutation, MutationResult, ProjectEndpoint, WorkspaceBindings,
 };
 #[cfg(unix)]
 use crate::{GuideAction, HookAction, HookResult};
@@ -122,6 +124,104 @@ fn initialize_uses_the_explicit_binding_and_installs_no_ambient_authority() {
     assert!(!result.already_initialized);
     assert!(result.guide_files.is_empty());
     assert_eq!(application.snapshot().expect("snapshot").meta.goal, "ship");
+}
+
+#[test]
+fn capability_calls_and_mcp_reopen_store_fence_environment_and_never_leak_token() {
+    let directory = TestDirectory::new("capability-service");
+    let (application, endpoint) = configured(&directory, true);
+    let home = directory.0.join("home");
+    let server = BrokerServer::start(BrokerServerConfig {
+        global_home: home,
+        broker: BrokerConfig {
+            project_root: endpoint.root.clone(),
+            database: endpoint.database.clone(),
+            binding: endpoint.binding.clone(),
+            writer_version: "test".to_owned(),
+            generation: 9,
+        },
+    })
+    .unwrap();
+    let token = server.broker().issue_session_token("agent-codex").unwrap();
+    server
+        .broker()
+        .bind_session(&token, "service-test")
+        .unwrap();
+
+    let mut application =
+        application.with_capability_environment(CapabilitySessionEnvironment::new(
+            token.clone(),
+            Some(endpoint.root.clone()),
+            Some("8".to_owned()),
+        ));
+    let mismatch = application
+        .capability_call("unknown", "{}")
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        mismatch,
+        "capability broker generation does not match the launched session"
+    );
+    assert!(!mismatch.contains(&token));
+
+    application = application.with_capability_environment(CapabilitySessionEnvironment::new(
+        token.clone(),
+        Some(endpoint.root.clone()),
+        Some("9".to_owned()),
+    ));
+    let denied = application
+        .capability_call("unknown-secret-bearing-tool", "{}")
+        .unwrap_err()
+        .to_string();
+    assert!(denied.contains("unknown capability tool"));
+    assert!(!denied.contains(&token));
+
+    let mut output = Vec::new();
+    assert_eq!(
+        application
+            .capability_mcp(
+                Box::new(std::io::Cursor::new(
+                    b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\"}}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n".to_vec(),
+                )),
+                &mut output,
+                &McpCancellation::new(),
+            )
+            .unwrap(),
+        CapabilityMcpOutcome::Complete
+    );
+    let lines: Vec<_> = String::from_utf8(output)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[1]["result"]["tools"].as_array().unwrap().len(), 3);
+
+    let concurrent =
+        ProjectStore::open_existing(&endpoint.database, &endpoint.binding, "concurrent").unwrap();
+    drop(concurrent);
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let peer = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (input, _) = listener.accept().unwrap();
+    let cancellation = McpCancellation::new();
+    let worker_cancellation = cancellation.clone();
+    let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
+    let worker = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let result = application.capability_mcp(Box::new(input), &mut output, &worker_cancellation);
+        result_tx.send((result, output)).unwrap();
+    });
+    std::thread::sleep(Duration::from_millis(50));
+    cancellation.cancel();
+    let (outcome, output) = result_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("application MCP cancellation stayed blocked on open input");
+    assert_eq!(outcome.unwrap(), CapabilityMcpOutcome::Cancelled);
+    assert!(output.is_empty());
+    drop(peer);
+    worker.join().unwrap();
+    server.shutdown().unwrap();
 }
 
 #[cfg(unix)]
