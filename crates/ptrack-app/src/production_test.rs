@@ -305,7 +305,7 @@ fn production_workspace_factory_composes_and_shuts_down_real_services() {
     let runtime = ActiveRuntime::load(&home, "test").unwrap().unwrap();
     let factory = ProductionDesktopWorkspaceFactory::new(runtime, None, 0).unwrap();
     let workspace = factory.build(&project, 1).unwrap();
-    assert_eq!(workspace.project().root, project);
+    assert_eq!(Path::new(&workspace.project().root), project);
     workspace.shutdown().unwrap();
 }
 
