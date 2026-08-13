@@ -1441,7 +1441,7 @@ fn validated_global_attestation(
 }
 
 fn clean_absolute(path: &Path) -> Option<PathBuf> {
-    if !path.is_absolute() {
+    if !path.is_absolute() || has_windows_dot_segment(path) {
         return None;
     }
     let mut clean = PathBuf::new();
@@ -1455,6 +1455,24 @@ fn clean_absolute(path: &Path) -> Option<PathBuf> {
         }
     }
     (clean == path).then_some(clean)
+}
+
+#[cfg(windows)]
+fn has_windows_dot_segment(path: &Path) -> bool {
+    use std::os::windows::ffi::OsStrExt as _;
+
+    const DOT: u16 = b'.' as u16;
+    const FORWARD_SLASH: u16 = b'/' as u16;
+    const BACKSLASH: u16 = b'\\' as u16;
+    let encoded: Vec<_> = path.as_os_str().encode_wide().collect();
+    encoded
+        .split(|unit| matches!(*unit, FORWARD_SLASH | BACKSLASH))
+        .any(|segment| segment == [DOT] || segment == [DOT, DOT])
+}
+
+#[cfg(not(windows))]
+fn has_windows_dot_segment(_path: &Path) -> bool {
+    false
 }
 
 fn positive_timeout(value: Duration, fallback: Duration) -> Duration {
