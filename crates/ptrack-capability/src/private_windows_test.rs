@@ -1,4 +1,4 @@
-use std::fs;
+use std::fs::{self, File};
 use std::sync::Mutex;
 
 use std::path::Path;
@@ -12,7 +12,7 @@ use super::test_support::TempDir;
 #[test]
 fn windows_private_transfer_and_diagnostic_api_surface_typechecks() {
     let protect: fn(&Path) -> Result<(), ()> = protect_private_path;
-    let install: fn(&Path, &Path, &Path, i64) -> Result<(), &'static str> = install_download;
+    let install: fn(&Path, &Path, &File, i64) -> Result<(), &'static str> = install_download;
     let interfaces: fn() -> Result<Vec<String>, ()> = active_interface_names;
     let _ = (protect, install, interfaces);
 }
@@ -28,6 +28,7 @@ fn one_character_download_destination_uses_complete_rename_header() {
     let staged = temp.path().join("staged");
     let destination = temp.path().join("a");
     fs::write(&staged, b"payload").unwrap();
+    let staged = File::open(staged).unwrap();
 
     install_download(temp.path(), &destination, &staged, 7).unwrap();
 

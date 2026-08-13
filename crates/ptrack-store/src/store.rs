@@ -3,7 +3,7 @@ use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -41,10 +41,118 @@ const LEGACY_GLOBAL_FILENAME: &str = "global.db";
 /// The raw engine handle is deliberately private. Real paths are intended to
 /// be supplied only by the ptrack storage or migration executable.
 pub struct Store {
-    database: Database,
+    shared: ProcessDatabase,
     kind: StoreKind,
     path: PathBuf,
     identity: FileIdentity,
+}
+
+#[derive(Debug)]
+struct ProcessDatabase {
+    database: Database,
+    backend: OwnedFileBackend,
+}
+
+impl ProcessDatabase {
+    fn new(file: File) -> StoreResult<Self> {
+        let backend = OwnedFileBackend::new(file)?;
+        let database = Database::builder().create_with_backend(backend.clone())?;
+        Ok(Self { database, backend })
+    }
+}
+
+#[derive(Clone, Debug)]
+struct OwnedFileBackend(Arc<OwnedFileBackendInner>);
+
+#[derive(Debug)]
+struct OwnedFileBackendInner {
+    file: File,
+}
+
+impl OwnedFileBackend {
+    fn new(file: File) -> StoreResult<Self> {
+        match file.try_lock() {
+            Ok(()) => Ok(Self(Arc::new(OwnedFileBackendInner { file }))),
+            Err(TryLockError::WouldBlock) => Err(StoreError::Busy),
+            Err(TryLockError::Error(error)) => Err(error.into()),
+        }
+    }
+
+    fn file(&self) -> &File {
+        &self.0.file
+    }
+}
+
+impl Drop for OwnedFileBackendInner {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
+
+impl StorageBackend for OwnedFileBackend {
+    fn len(&self) -> io::Result<u64> {
+        Ok(self.file().metadata()?.len())
+    }
+
+    #[cfg(unix)]
+    fn read(&self, offset: u64, out: &mut [u8]) -> io::Result<()> {
+        use std::os::unix::fs::FileExt;
+
+        self.file().read_exact_at(out, offset)
+    }
+
+    #[cfg(windows)]
+    fn read(&self, mut offset: u64, out: &mut [u8]) -> io::Result<()> {
+        use std::os::windows::fs::FileExt;
+
+        let mut position = 0;
+        while position < out.len() {
+            let read = self.file().seek_read(&mut out[position..], offset)?;
+            if read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "database changed while it was read",
+                ));
+            }
+            position += read;
+            offset += read as u64;
+        }
+        Ok(())
+    }
+
+    fn set_len(&self, len: u64) -> io::Result<()> {
+        self.file().set_len(len)
+    }
+
+    fn sync_data(&self) -> io::Result<()> {
+        self.file().sync_data()
+    }
+
+    #[cfg(unix)]
+    fn write(&self, offset: u64, data: &[u8]) -> io::Result<()> {
+        use std::os::unix::fs::FileExt;
+
+        self.file().write_all_at(data, offset)
+    }
+
+    #[cfg(windows)]
+    fn write(&self, mut offset: u64, data: &[u8]) -> io::Result<()> {
+        use std::os::windows::fs::FileExt;
+
+        let mut position = 0;
+        while position < data.len() {
+            let written = self.file().seek_write(&data[position..], offset)?;
+            if written == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "database write made no progress",
+                ));
+            }
+            position += written;
+            offset += written as u64;
+        }
+        Ok(())
+    }
 }
 
 impl Store {
@@ -78,12 +186,15 @@ impl Store {
         parent.ensure_destination(path, identity)?;
         parent.sync()?;
         parent.ensure_destination(path, identity)?;
-        let database = Database::builder().create_file(file)?;
+        let shared = ProcessDatabase::new(file)?;
 
-        if let Err(error) =
-            initialize_database(&database, kind, STORE_STATE_READY, STORE_ORIGIN_CREATED)
-        {
-            drop(database);
+        if let Err(error) = initialize_database(
+            &shared.database,
+            kind,
+            STORE_STATE_READY,
+            STORE_ORIGIN_CREATED,
+        ) {
+            drop(shared);
             return Err(error);
         }
         parent.ensure_destination(path, identity)?;
@@ -91,7 +202,7 @@ impl Store {
         parent.ensure_destination(path, identity)?;
 
         Ok(Self {
-            database,
+            shared,
             kind,
             path: path.to_path_buf(),
             identity,
@@ -140,9 +251,9 @@ impl Store {
         parent.ensure_destination(path, identity)?;
         parent.sync()?;
         parent.ensure_destination(path, identity)?;
-        let database = Database::builder().create_file(file)?;
+        let shared = ProcessDatabase::new(file)?;
         initialize_database(
-            &database,
+            &shared.database,
             import.data.kind,
             STORE_STATE_IMPORTING,
             STORE_ORIGIN_IMPORTED,
@@ -151,11 +262,11 @@ impl Store {
         parent.sync()?;
         parent.ensure_destination(path, identity)?;
 
-        if let Err(error) = crate::import::write_import(&database, &import, path, || {
+        if let Err(error) = crate::import::write_import(&shared.database, &import, path, || {
             before_ready()?;
             parent.ensure_destination(path, identity)
         }) {
-            drop(database);
+            drop(shared);
             return Err(error);
         }
         if let Err(error) = after_ready() {
@@ -167,12 +278,12 @@ impl Store {
             .sync()
             .map_err(|error| committed_import_verification_error(path, error))?;
         ensure_committed_import_destination(&parent, path, identity)?;
-        validate_database(&database, import.data.kind)
+        validate_database(&shared.database, import.data.kind)
             .map_err(|error| committed_import_verification_error(path, error))?;
         ensure_committed_import_destination(&parent, path, identity)?;
 
         let store = Self {
-            database,
+            shared,
             kind: import.data.kind,
             path: path.to_path_buf(),
             identity,
@@ -208,9 +319,9 @@ impl Store {
         parent.ensure_destination(path, identity)?;
         parent.sync()?;
         parent.ensure_destination(path, identity)?;
-        let database = Database::builder().create_file(file)?;
+        let shared = ProcessDatabase::new(file)?;
         initialize_database(
-            &database,
+            &shared.database,
             import.data.kind,
             STORE_STATE_IMPORTING,
             STORE_ORIGIN_JSON_STAGE,
@@ -219,11 +330,13 @@ impl Store {
         parent.sync()?;
         parent.ensure_destination(path, identity)?;
 
-        if let Err(error) = crate::import::write_json_stage_import(&database, &import, path, || {
-            before_ready()?;
-            parent.ensure_destination(path, identity)
-        }) {
-            drop(database);
+        if let Err(error) =
+            crate::import::write_json_stage_import(&shared.database, &import, path, || {
+                before_ready()?;
+                parent.ensure_destination(path, identity)
+            })
+        {
+            drop(shared);
             return Err(error);
         }
         ensure_committed_import_destination(&parent, path, identity)?;
@@ -231,12 +344,12 @@ impl Store {
             .sync()
             .map_err(|error| committed_import_verification_error(path, error))?;
         ensure_committed_import_destination(&parent, path, identity)?;
-        validate_database(&database, import.data.kind)
+        validate_database(&shared.database, import.data.kind)
             .map_err(|error| committed_import_verification_error(path, error))?;
         ensure_committed_import_destination(&parent, path, identity)?;
 
         let store = Self {
-            database,
+            shared,
             kind: import.data.kind,
             path: path.to_path_buf(),
             identity,
@@ -252,15 +365,15 @@ impl Store {
     pub fn open_existing(path: impl AsRef<Path>, expected: StoreKind) -> StoreResult<Self> {
         let path = path.as_ref();
         reject_legacy_path(path)?;
-        // The file resolved by this exclusive open is authoritative. Avoid a
+        // The file resolved by this open is authoritative. Avoid a
         // check-then-open window in which a pathname could be replaced.
         let (file, identity) = probe_existing_with_retry(path, expected)?;
-        let database = open_writable_with_retry(path, identity, &file)?;
+        let shared = open_writable_with_retry(path, identity, file)?;
         ensure_path_identity(path, identity)?;
-        validate_database(&database, expected)?;
+        validate_database(&shared.database, expected)?;
 
         Ok(Self {
-            database,
+            shared,
             kind: expected,
             path: path.to_path_buf(),
             identity,
@@ -279,9 +392,14 @@ impl Store {
         &self.path
     }
 
+    pub(crate) fn ensure_current_path(&self) -> StoreResult<()> {
+        ensure_path_identity(&self.path, self.identity)?;
+        validate_private_permissions(&self.path, &fs::symlink_metadata(&self.path)?)
+    }
+
     /// Returns attested standalone-stage provenance without exposing quarantine bytes.
     pub fn json_stage_provenance(&self) -> StoreResult<Option<JsonStageProvenance>> {
-        let transaction = self.database.begin_read()?;
+        let transaction = self.shared.database.begin_read()?;
         let entries = read_manifest_entries(&transaction)?;
         json_stage_provenance(&entries)
     }
@@ -291,7 +409,7 @@ impl Store {
         &self,
         operation: impl FnOnce(&ReadTransaction) -> StoreResult<R>,
     ) -> StoreResult<R> {
-        let transaction = self.database.begin_read()?;
+        let transaction = self.shared.database.begin_read()?;
         let transaction = ReadTransaction {
             inner: transaction,
             kind: self.kind,
@@ -355,7 +473,7 @@ impl Store {
         application_write: bool,
         operation: impl FnOnce(&mut WriteTransaction) -> StoreResult<R>,
     ) -> StoreResult<R> {
-        let mut inner = self.database.begin_write()?;
+        let mut inner = self.shared.database.begin_write()?;
         inner.set_durability(Durability::Immediate)?;
         // Persist allocator state with every commit. Besides faster crash
         // recovery, this keeps the next open eligible for the side-effect-free
@@ -393,13 +511,13 @@ impl Store {
     }
 
     pub(crate) fn active_binding(&self) -> StoreResult<Option<crate::ActiveBinding>> {
-        let transaction = self.database.begin_read()?;
+        let transaction = self.shared.database.begin_read()?;
         let entries = read_manifest_entries(&transaction)?;
         crate::activation::binding_from_manifest(&entries)
     }
 
     pub(crate) fn application_writes(&self) -> StoreResult<bool> {
-        let transaction = self.database.begin_read()?;
+        let transaction = self.shared.database.begin_read()?;
         let entries = read_manifest_entries(&transaction)?;
         match entries
             .get(MANIFEST_KEY_APPLICATION_WRITES)
@@ -425,7 +543,7 @@ impl Store {
                 ))
             };
         }
-        let mut transaction = self.database.begin_write()?;
+        let mut transaction = self.shared.database.begin_write()?;
         transaction.set_durability(Durability::Immediate)?;
         transaction.set_quick_repair(true);
         {
@@ -443,15 +561,15 @@ impl Store {
             manifest.insert(MANIFEST_KEY_APPLICATION_WRITES, b"false".as_slice())?;
         }
         transaction.commit()?;
-        validate_database(&self.database, self.kind)
+        validate_database(&self.shared.database, self.kind)
     }
 
     pub(crate) fn with_writer_barrier<R>(
         &self,
-        operation: impl FnOnce(&Path) -> StoreResult<R>,
+        operation: impl FnOnce(&Path, &File) -> StoreResult<R>,
     ) -> StoreResult<R> {
-        let transaction = self.database.begin_write()?;
-        let result = operation(&self.path);
+        let transaction = self.shared.database.begin_write()?;
+        let result = operation(&self.path, self.shared.backend.file());
         transaction.abort()?;
         result
     }
@@ -1312,6 +1430,7 @@ fn probe_existing_with_retry(path: &Path, kind: StoreKind) -> StoreResult<(File,
             Database::builder().create_with_backend(MemoryProbeBackend::new(snapshot))?;
         validate_database(&database, kind)?;
         drop(database);
+        file.unlock()?;
         ensure_path_identity(path, expected)?;
         return Ok((file, expected));
     }
@@ -1334,27 +1453,32 @@ fn open_conflicts_with_writer(error: &io::Error) -> bool {
 fn open_writable_with_retry(
     path: &Path,
     expected: FileIdentity,
-    file: &File,
-) -> StoreResult<Database> {
+    file: File,
+) -> StoreResult<ProcessDatabase> {
     let start = Instant::now();
+    let mut file = Some(file);
     loop {
-        let file_metadata = file.metadata()?;
+        let candidate = match file.take() {
+            Some(file) => file,
+            None => open_existing_file(path)?,
+        };
+        let file_metadata = candidate.metadata()?;
         validate_private_permissions(path, &file_metadata)?;
-        if FileIdentity::from_file(file)? != expected {
+        if FileIdentity::from_file(&candidate)? != expected {
             return Err(StoreError::PathChanged {
                 path: path.to_path_buf(),
             });
         }
         ensure_path_identity(path, expected)?;
-        match Database::builder().create_file(file.try_clone()?) {
-            Ok(database) => {
+        match ProcessDatabase::new(candidate) {
+            Ok(shared) => {
                 ensure_path_identity(path, expected)?;
-                return Ok(database);
+                return Ok(shared);
             }
-            Err(redb::DatabaseError::DatabaseAlreadyOpen) if start.elapsed() < LOCK_TIMEOUT => {
+            Err(StoreError::Busy) if start.elapsed() < LOCK_TIMEOUT => {
                 thread::sleep(LOCK_RETRY_INTERVAL);
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(error),
         }
     }
 }

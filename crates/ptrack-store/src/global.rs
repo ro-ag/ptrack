@@ -33,14 +33,14 @@ impl GlobalStore {
         let store = Store::create_new(path, StoreKind::Global)?;
         store.activate(&binding)?;
         Ok(Self {
-            active: ActivatedStore { store, binding },
+            active: ActivatedStore::new(store, binding)?,
             clock: Arc::new(clock),
         })
     }
 
     pub fn activate(staged: StagedStore, binding: ActiveBinding) -> StoreResult<Self> {
         let active = staged.activate(binding)?;
-        if active.binding.kind != StoreKind::Global {
+        if active.binding().kind != StoreKind::Global {
             return Err(StoreError::ActivationBinding(
                 "global store requires global binding".to_owned(),
             ));
@@ -53,7 +53,7 @@ impl GlobalStore {
 
     pub fn open_existing(path: impl AsRef<Path>, binding: &ActiveBinding) -> StoreResult<Self> {
         let active = ActivatedStore::open(path, binding)?;
-        if active.binding.kind != StoreKind::Global {
+        if active.binding().kind != StoreKind::Global {
             return Err(StoreError::ActivationBinding(
                 "global store requires global binding".to_owned(),
             ));
@@ -71,7 +71,7 @@ impl GlobalStore {
 
     #[must_use]
     pub fn path(&self) -> &Path {
-        self.active.store.path()
+        self.active.store().path()
     }
 
     pub fn application_writes(&self) -> StoreResult<bool> {
@@ -95,7 +95,7 @@ impl GlobalStore {
     }
 
     pub fn config(&self, key: &[u8]) -> StoreResult<Vec<u8>> {
-        self.active.store.read(|tx| {
+        self.active.store().read(|tx| {
             Ok(tx
                 .get(Collection::GlobalConfig, RecordKey::Bytes(key))?
                 .map_or_else(Vec::new, |v| v.payload().to_vec()))
@@ -126,7 +126,7 @@ impl GlobalStore {
     }
 
     pub fn projects(&self) -> StoreResult<Vec<ProjectRef>> {
-        self.active.store.read(|tx| {
+        self.active.store().read(|tx| {
             let mut values = typed::scan::<ProjectRef>(tx)?;
             values.sort_by_key(|value| std::cmp::Reverse(timestamp_key(value.last_seen)));
             Ok(values)

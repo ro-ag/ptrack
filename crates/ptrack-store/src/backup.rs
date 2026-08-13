@@ -28,12 +28,12 @@ impl ProjectStore {
     ) -> StoreResult<()> {
         let expected_binding = self.binding().clone();
         let expected_provenance = self.json_stage_provenance()?;
-        self.backup_with_writer_barrier(|source| {
+        self.backup_with_writer_barrier(|source, source_file| {
             let source_identity = FileIdentity::from_path(source, false)?;
             ensure_path_identity(source, source_identity)?;
             let parent = BackupParent::prepare(destination)?;
             let temporary = parent.temporary_path(destination)?;
-            let temporary_identity = copy_private(source, &temporary)?;
+            let temporary_identity = copy_private(source_file, &temporary)?;
             let verified = (|| {
                 ensure_path_identity(source, source_identity)?;
                 ensure_path_identity(&temporary, temporary_identity)?;
@@ -61,13 +61,13 @@ impl ProjectStore {
 
     pub(crate) fn backup_with_writer_barrier<R>(
         &self,
-        operation: impl FnOnce(&Path) -> StoreResult<R>,
+        operation: impl FnOnce(&Path, &fs::File) -> StoreResult<R>,
     ) -> StoreResult<R> {
         self.raw_writer_barrier(operation)
     }
 }
 
-fn copy_private(source: &Path, destination: &Path) -> StoreResult<FileIdentity> {
+fn copy_private(source: &fs::File, destination: &Path) -> StoreResult<FileIdentity> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -79,8 +79,27 @@ fn copy_private(source: &Path, destination: &Path) -> StoreResult<FileIdentity> 
     #[cfg(windows)]
     crate::protect_private_file(destination)?;
     let identity = FileIdentity::from_file(&output)?;
-    let mut input = fs::File::open(source)?;
-    io::copy(&mut input, &mut output)?;
+    #[cfg(not(windows))]
+    {
+        let mut input = source.try_clone()?;
+        io::copy(&mut input, &mut output)?;
+    }
+    #[cfg(windows)]
+    {
+        use std::io::Write as _;
+        use std::os::windows::fs::FileExt as _;
+
+        let mut offset = 0_u64;
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let read = source.seek_read(&mut buffer, offset)?;
+            if read == 0 {
+                break;
+            }
+            output.write_all(&buffer[..read])?;
+            offset = offset.saturating_add(read as u64);
+        }
+    }
     output.sync_all()?;
     ensure_path_identity(destination, identity)?;
     Ok(identity)

@@ -70,7 +70,7 @@ impl ProjectStore {
         let store = Store::create_new(path, StoreKind::Project)?;
         store.activate(&binding)?;
         let project = Self {
-            active: ActivatedStore { store, binding },
+            active: ActivatedStore::new(store, binding)?,
             clock: Arc::new(clock),
             writer_version: writer_version.into(),
         };
@@ -132,7 +132,7 @@ impl ProjectStore {
         writer_version: impl Into<String>,
         clock: impl Clock + 'static,
     ) -> StoreResult<Self> {
-        if active.binding.kind != StoreKind::Project {
+        if active.binding().kind != StoreKind::Project {
             return Err(StoreError::ActivationBinding(
                 "project store requires project binding".to_owned(),
             ));
@@ -152,7 +152,7 @@ impl ProjectStore {
 
     #[must_use]
     pub fn path(&self) -> &Path {
-        self.active.store.path()
+        self.active.store().path()
     }
 
     pub fn application_writes(&self) -> StoreResult<bool> {
@@ -170,22 +170,22 @@ impl ProjectStore {
         &self,
         operation: impl FnOnce(&ReadTransaction) -> StoreResult<R>,
     ) -> StoreResult<R> {
-        self.active.store.read(operation)
+        self.active.store().read(operation)
     }
 
     pub(crate) fn raw_writer_barrier<R>(
         &self,
-        operation: impl FnOnce(&Path) -> StoreResult<R>,
+        operation: impl FnOnce(&Path, &std::fs::File) -> StoreResult<R>,
     ) -> StoreResult<R> {
-        self.active.store.with_writer_barrier(operation)
+        self.active.store().with_writer_barrier(operation)
     }
 
     pub(crate) fn json_stage_provenance(&self) -> StoreResult<Option<crate::JsonStageProvenance>> {
-        self.active.store.json_stage_provenance()
+        self.active.store().json_stage_provenance()
     }
 
     pub fn meta(&self) -> StoreResult<Meta> {
-        self.active.store.read(|transaction| {
+        self.active.store().read(|transaction| {
             typed::get(transaction, RecordKey::Singleton)?.ok_or(StoreError::NotFound)
         })
     }
@@ -830,10 +830,10 @@ impl ProjectStore {
 
     pub fn write_memory(&self, request: MemoryWriteRequest) -> StoreResult<MemoryWriteResult> {
         validate_memory_request(&request)?;
-        if request.workspace_generation != self.active.binding.generation {
+        if request.workspace_generation != self.active.binding().generation {
             return Err(StoreError::StaleWorkspaceGeneration {
                 expected: request.workspace_generation,
-                active: self.active.binding.generation,
+                active: self.active.binding().generation,
             });
         }
         let digest = Digest32(crate::sha256::digest(
@@ -914,7 +914,7 @@ impl ProjectStore {
     }
 
     pub fn snapshot(&self) -> StoreResult<ProjectSnapshot> {
-        self.active.store.read(|transaction| {
+        self.active.store().read(|transaction| {
             let meta =
                 typed::get(transaction, RecordKey::Singleton)?.ok_or(StoreError::NotFound)?;
             Ok(ProjectSnapshot::new(
@@ -938,7 +938,7 @@ impl ProjectStore {
     }
 
     fn counts_inner(&self, deadline: Option<Instant>) -> StoreResult<Counts> {
-        self.active.store.read(|transaction| {
+        self.active.store().read(|transaction| {
             let mut counts = Counts {
                 milestones: transaction.collection_len(Collection::Milestones)?,
                 plans: transaction.collection_len(Collection::Plans)?,
@@ -971,13 +971,13 @@ impl ProjectStore {
     }
 
     fn get_id<R: StoredRecord>(&self, id: u64) -> StoreResult<R> {
-        self.active.store.read(|transaction| {
+        self.active.store().read(|transaction| {
             typed::get(transaction, RecordKey::Id(id))?.ok_or(StoreError::NotFound)
         })
     }
 
     fn list<R: StoredRecord>(&self) -> StoreResult<Vec<R>> {
-        self.active.store.read(typed::scan::<R>)
+        self.active.store().read(typed::scan::<R>)
     }
 
     fn list_ordered<R: StoredRecord + Ordered>(&self) -> StoreResult<Vec<R>> {

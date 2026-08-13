@@ -3,7 +3,7 @@
 
 use std::ffi::c_void;
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle as StdOwnedHandle};
 use std::path::{Component, Path};
@@ -292,7 +292,7 @@ pub(super) fn active_interface_names() -> Result<Vec<String>, ()> {
 pub(super) fn install_download(
     project: &Path,
     destination: &Path,
-    staged: &Path,
+    staged: &File,
     maximum: i64,
 ) -> Result<(), &'static str> {
     let relative = destination
@@ -322,30 +322,7 @@ pub(super) fn install_download(
     let parent = directories.last().ok_or(
         "capability denied: download destination parent is not a stable project directory",
     )?;
-    let source_path: Vec<u16> = staged
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    // SAFETY: source_path is NUL-terminated and arguments request a no-follow
-    // read handle with no inherited security attributes.
-    let source_handle = unsafe {
-        CreateFileW(
-            source_path.as_ptr(),
-            FILE_GENERIC_READ,
-            FILE_SHARE_READ,
-            ptr::null(),
-            OPEN_EXISTING,
-            FILE_FLAG_OPEN_REPARSE_POINT,
-            ptr::null_mut(),
-        )
-    };
-    if source_handle == INVALID_HANDLE_VALUE {
-        return Err("capability denied: download staging file is invalid");
-    }
-    // SAFETY: source_handle is newly owned and transferred exactly once.
-    let mut source = unsafe { File::from_raw_handle(source_handle.cast()) };
-    let source_info = by_handle_information(source.as_raw_handle().cast())?;
+    let source_info = by_handle_information(staged.as_raw_handle().cast())?;
     if source_info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY) != 0
     {
         return Err("capability denied: download staging file is invalid");
@@ -356,11 +333,25 @@ pub(super) fn install_download(
     let mut temporary = unsafe { File::from_raw_handle(temporary_handle.cast()) };
     let allowed = u64::try_from(maximum).unwrap_or_default();
     let install = (|| {
-        let copied = std::io::copy(
-            &mut Read::by_ref(&mut source).take(allowed.saturating_add(1)),
-            &mut temporary,
-        )
-        .map_err(|_| "download install failed")?;
+        use std::os::windows::fs::FileExt as _;
+
+        let limit = allowed.saturating_add(1);
+        let mut copied = 0_u64;
+        let mut buffer = [0_u8; 64 * 1024];
+        while copied < limit {
+            let remaining = usize::try_from(limit - copied).unwrap_or(usize::MAX);
+            let chunk_len = buffer.len().min(remaining);
+            let read = staged
+                .seek_read(&mut buffer[..chunk_len], copied)
+                .map_err(|_| "download install failed")?;
+            if read == 0 {
+                break;
+            }
+            temporary
+                .write_all(&buffer[..read])
+                .map_err(|_| "download install failed")?;
+            copied = copied.saturating_add(read as u64);
+        }
         if copied > allowed {
             return Err("HTTP response exceeds its byte limit");
         }

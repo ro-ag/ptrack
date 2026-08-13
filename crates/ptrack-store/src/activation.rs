@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use crate::schema::{
     MANIFEST_KEY_ACTIVATION_GENERATION, MANIFEST_KEY_APPLICATION_WRITES,
@@ -23,6 +24,10 @@ pub struct StagedStore {
 
 /// A store activated for one exact runtime binding.
 pub struct ActivatedStore {
+    inner: Arc<ActivatedStoreInner>,
+}
+
+struct ActivatedStoreInner {
     pub(crate) store: Store,
     pub(crate) binding: ActiveBinding,
 }
@@ -63,15 +68,40 @@ impl StagedStore {
     /// Permanently consumes the staged state and binds this disposable candidate.
     pub fn activate(self, binding: ActiveBinding) -> StoreResult<ActivatedStore> {
         self.store.activate(&binding)?;
-        Ok(ActivatedStore {
-            store: self.store,
-            binding,
-        })
+        ActivatedStore::new(self.store, binding)
     }
 }
 
 impl ActivatedStore {
+    pub(crate) fn new(store: Store, binding: ActiveBinding) -> StoreResult<Self> {
+        let inner = Arc::new(ActivatedStoreInner { store, binding });
+        let key = inner.binding.canonical_path.clone();
+        let mut registry = activated_registry().lock().map_err(|_| {
+            StoreError::ActivationBinding("store registry is unavailable".to_owned())
+        })?;
+        registry.retain(|_, value| value.strong_count() > 0);
+        registry.insert(key, Arc::downgrade(&inner));
+        Ok(Self { inner })
+    }
+
     pub(crate) fn open(path: impl AsRef<Path>, expected: &ActiveBinding) -> StoreResult<Self> {
+        validate_binding_for_path(expected, expected.kind, path.as_ref())?;
+        let inner = activated_registry()
+            .lock()
+            .map_err(|_| StoreError::ActivationBinding("store registry is unavailable".to_owned()))?
+            .get(&expected.canonical_path)
+            .and_then(Weak::upgrade);
+        if let Some(inner) = inner {
+            inner.store.ensure_current_path()?;
+            if inner.binding != *expected
+                || inner.store.active_binding()?.as_ref() != Some(expected)
+            {
+                return Err(StoreError::ActivationBinding(
+                    "stored binding does not match the active runtime".to_owned(),
+                ));
+            }
+            return Ok(Self { inner });
+        }
         let store = Store::open_existing(path, expected.kind)?;
         let actual = store
             .active_binding()?
@@ -82,26 +112,29 @@ impl ActivatedStore {
                 "stored binding does not match the active runtime".to_owned(),
             ));
         }
-        Ok(Self {
-            store,
-            binding: actual,
-        })
+        Self::new(store, actual)
     }
 
     #[must_use]
     pub fn binding(&self) -> &ActiveBinding {
-        &self.binding
+        &self.inner.binding
+    }
+
+    pub(crate) fn store(&self) -> &Store {
+        &self.inner.store
     }
 
     pub fn application_writes(&self) -> StoreResult<bool> {
-        self.store.application_writes()
+        self.inner.store.application_writes()
     }
 
     pub(crate) fn write<R>(
         &self,
         operation: impl FnOnce(&mut WriteTransaction) -> StoreResult<R>,
     ) -> StoreResult<R> {
-        self.store.write_application(&self.binding, operation)
+        self.inner
+            .store
+            .write_application(&self.inner.binding, operation)
     }
 
     /// Performs activation-tool normalization without tripping the
@@ -111,8 +144,16 @@ impl ActivatedStore {
         &self,
         operation: impl FnOnce(&mut WriteTransaction) -> StoreResult<R>,
     ) -> StoreResult<R> {
-        self.store.write_activation(&self.binding, operation)
+        self.inner
+            .store
+            .write_activation(&self.inner.binding, operation)
     }
+}
+
+fn activated_registry() -> &'static Mutex<BTreeMap<PathBuf, Weak<ActivatedStoreInner>>> {
+    static REGISTRY: OnceLock<Mutex<BTreeMap<PathBuf, Weak<ActivatedStoreInner>>>> =
+        OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
 pub(crate) fn validate_binding_for_path(

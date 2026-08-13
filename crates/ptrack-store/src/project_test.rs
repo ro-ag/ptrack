@@ -13,7 +13,7 @@ use ptrack_core::{
 
 use crate::{
     ActiveBinding, Clock, Collection, GlobalStore, MemoryWriteRequest, ProjectStore, RecordKey,
-    StoreError, StoreKind,
+    Store, StoreError, StoreKind,
 };
 
 static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -49,6 +49,27 @@ impl Clock for FixedClock {
     fn now_utc(&self) -> Timestamp {
         self.0
     }
+}
+
+#[test]
+fn activated_reopens_share_one_process_writer_and_keep_raw_exclusion() {
+    let temp = Temp::new();
+    let path = temp.path("shared.redb");
+    let expected = binding(&path, StoreKind::Project, "project-shared");
+    let first =
+        ProjectStore::create_new_with_clock(&path, expected.clone(), "first", clock()).unwrap();
+    let second = ProjectStore::open_existing(&path, &expected, "second").unwrap();
+
+    first.add_plan("shared", 0).unwrap();
+    assert_eq!(second.snapshot().unwrap().plans[0].title, "shared");
+    assert!(matches!(
+        Store::open_existing(&path, StoreKind::Project),
+        Err(StoreError::Busy)
+    ));
+
+    drop(second);
+    drop(first);
+    assert!(Store::open_existing(&path, StoreKind::Project).is_ok());
 }
 
 struct SteppingClock(AtomicI64);

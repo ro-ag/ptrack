@@ -633,6 +633,7 @@ impl DownloadCompletion {
         let staged = self.directory.path.join("payload");
         let mut file = OpenOptions::new()
             .create_new(true)
+            .read(true)
             .write(true)
             .open(&staged)
             .map_err(|_| SshError::new("download staging failed", "internal"))?;
@@ -652,7 +653,13 @@ impl DownloadCompletion {
                 "denied",
             ));
         }
-        install_download(&self.project_root, &self.destination, &staged, self.maximum)
+        install_download(
+            &self.project_root,
+            &self.destination,
+            &staged,
+            &file,
+            self.maximum,
+        )
     }
 }
 
@@ -729,6 +736,7 @@ fn install_download(
     project: &Path,
     destination: &Path,
     staged: &Path,
+    _staged_file: &File,
     maximum: i64,
 ) -> Result<(), SshError> {
     use rustix::fs::{Mode, OFlags};
@@ -898,10 +906,11 @@ pub(crate) fn unlink_owned_download_temp(
 fn install_download(
     project: &Path,
     destination: &Path,
-    staged: &Path,
+    _staged: &Path,
+    staged_file: &File,
     maximum: i64,
 ) -> Result<(), SshError> {
-    crate::private_windows::install_download(project, destination, staged, maximum)
+    crate::private_windows::install_download(project, destination, staged_file, maximum)
         .map_err(|message| SshError::new(message, "denied"))
 }
 
@@ -910,6 +919,7 @@ fn install_download(
     _project: &Path,
     _destination: &Path,
     _staged: &Path,
+    _staged_file: &File,
     _maximum: i64,
 ) -> Result<(), SshError> {
     Err(SshError::new(
