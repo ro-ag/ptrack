@@ -12,9 +12,11 @@ ptrack-capability = { path = "../ptrack-capability" }
 ptrack-core = { path = "../ptrack-core" }
 ptrack-git = { path = "../ptrack-git" }
 ptrack-store = { path = "../ptrack-store" }
+ptrack-terminal = { path = "../ptrack-terminal" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true

@@ -7,6 +7,7 @@
 
 mod agent_runtime;
 mod service;
+mod terminal_runtime;
 
 pub use agent_runtime::{
     AgentAdmissionFence, AgentIntegration, AgentIntegrationFactory, AgentInvalidationV2,
@@ -22,8 +23,16 @@ pub use service::{
     LocalApplication, Mutation, MutationResult, ProcessOutput, ProjectEndpoint,
     UnavailableApplication, WorkspaceBindings,
 };
+pub use terminal_runtime::{
+    PreparedTerminalIdentity, ProductionTerminalIdentityAuthority, TerminalAgentAuthority,
+    TerminalCwdValidation, TerminalCwdValidationsV2, TerminalEventSink, TerminalExitV2,
+    TerminalIdentityAuthority, TerminalProfileView, TerminalProfilesV2, TerminalRuntime,
+    TerminalRuntimeConfig, TerminalSessionV2, TerminalStatusV2,
+};
 
 #[cfg(test)]
 mod agent_runtime_test;
 #[cfg(test)]
 mod service_test;
+#[cfg(test)]
+mod terminal_runtime_test;
