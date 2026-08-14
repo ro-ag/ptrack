@@ -1412,11 +1412,16 @@ fn desktop_authority_loser_reconciles_the_winning_guide_manifest() {
         ..first_request.clone()
     };
     let barrier = Arc::new(Barrier::new(3));
+    let commit_barrier = Arc::new(Barrier::new(2));
     let first_thread = {
         let authority = Arc::clone(&first);
         let request = first_request.clone();
         let barrier = Arc::clone(&barrier);
+        let commit_barrier = Arc::clone(&commit_barrier);
         std::thread::spawn(move || {
+            crate::production::set_initialization_before_commit_hook(move || {
+                commit_barrier.wait();
+            });
             barrier.wait();
             authority
                 .initialize(&request)
@@ -1428,7 +1433,11 @@ fn desktop_authority_loser_reconciles_the_winning_guide_manifest() {
         let authority = Arc::clone(&second);
         let request = second_request.clone();
         let barrier = Arc::clone(&barrier);
+        let commit_barrier = Arc::clone(&commit_barrier);
         std::thread::spawn(move || {
+            crate::production::set_initialization_before_commit_hook(move || {
+                commit_barrier.wait();
+            });
             barrier.wait();
             authority
                 .initialize(&request)
