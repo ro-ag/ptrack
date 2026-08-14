@@ -6,10 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-08-13
+
 ### Changed
 - The application runtime is now entirely Rust/Tauri. Legacy bbolt data moves
   through an explicit offline export, verified redb import, and generation
   activation; the only retained Go module is the read-only exporter.
+
+### Fixed
+- Linux and Windows release executables are built through Tauri so the
+  embedded Desktop frontend is present when `ptrack gui` starts.
 
 ### Security
 - Runtime store routing is pinned by a private, attested active-generation
@@ -549,7 +555,8 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
-[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.23.0...HEAD
+[0.23.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.23.0
 [0.22.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.22.0
 [0.21.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.21.0
 [0.20.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.20.0
