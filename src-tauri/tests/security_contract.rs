@@ -27,14 +27,26 @@ fn shell_has_only_the_bounded_adapter_commands() {
     assert!(source.contains("pick_project_directory"));
     assert!(source.contains("open_external_url"));
     assert!(source.contains("tauri::generate_handler!["));
-    assert!(source.contains("UpdateRuntime::for_bindings("));
-    assert!(source.contains("ActiveRuntime::load("));
-    assert!(source.contains("ProductionDesktopWorkspaceFactory::new("));
+    assert!(source.contains("production_desktop_runtime("));
+    assert!(source.contains("app.manage(runtime)"));
+    assert!(!source.contains("ProductionDesktopAuthority::load("));
+    assert!(!source.contains("DesktopRuntimeConfig::unavailable("));
+    assert!(!source.contains("UpdateRuntime::for_bindings("));
+    assert!(!source.contains("ActiveRuntime::load("));
     assert!(!source.contains("UnavailableApplication"));
-    assert!(source.contains("DesktopUpdateEventSink::new("));
     assert!(!source.contains("config.update_service = UnavailableUpdateService"));
     assert!(source.contains("request.method == \"InstallShellCommand\""));
     assert!(source.contains(".title(\"Shell Command\")"));
+    let shell_dialog_lease = source
+        .find("let _dialog_lease = if shell_command")
+        .expect("shell command native dialog must acquire a shutdown fence");
+    let shell_invoke = source
+        .find("runtime.invoke(request)")
+        .expect("shell command must run through the desktop bridge");
+    let shell_dialog = source
+        .find(".blocking_show()")
+        .expect("shell command result must use the native dialog");
+    assert!(shell_dialog_lease < shell_invoke && shell_invoke < shell_dialog);
     assert!(source.contains("ptrack_cli::version()"));
     assert!(!source.contains("windows_subsystem"));
     assert!(manifest.contains("name = \"ptrack\"\npath = \"src/main.rs\""));
@@ -90,6 +102,14 @@ fn tauri_uses_the_existing_frontend_and_exact_window_contract() {
     assert_eq!(config["build"]["beforeBuildCommand"], "npm run build");
     assert_eq!(config["build"]["devUrl"], "http://localhost:5173");
     assert_eq!(config["build"]["frontendDist"], "../frontend/dist");
+    assert_eq!(
+        config["app"]["windows"]
+            .as_array()
+            .expect("desktop windows must be an array")
+            .len(),
+        1
+    );
+    assert_eq!(config["app"]["windows"][0]["label"], "main");
     assert_eq!(config["app"]["windows"][0]["width"], 1440);
     assert_eq!(config["app"]["windows"][0]["height"], 900);
     assert_eq!(config["app"]["windows"][0]["minWidth"], 880);

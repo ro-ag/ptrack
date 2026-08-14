@@ -108,6 +108,7 @@ describe("native menu event routing", () => {
     };
     expect(nativeMenuCommandAllowed("openProject", state)).toBe(true);
     expect(nativeMenuCommandAllowed("installShellCommand", state)).toBe(true);
+    expect(nativeMenuCommandAllowed("checkForUpdates", state)).toBe(true);
     expect(nativeMenuCommandAllowed("switchProject", state)).toBe(false);
     expect(nativeMenuCommandAllowed("closeProject", state)).toBe(false);
     expect(nativeMenuCommandAllowed("showBoard", state)).toBe(false);
@@ -123,7 +124,11 @@ describe("native menu event routing", () => {
       expect(nativeMenuCommandAllowed("openProject", state)).toBe(true);
       expect(nativeMenuCommandAllowed("installShellCommand", state)).toBe(true);
     }
-    for (const command of ["openProject", "installShellCommand"] as const) {
+    for (const command of [
+      "openProject",
+      "installShellCommand",
+      "checkForUpdates",
+    ] as const) {
       expect(nativeMenuCommandAllowed(command, {
         workspaceStatus: "loading",
         openOverlayIDs: [],

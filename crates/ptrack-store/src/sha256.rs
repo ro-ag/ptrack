@@ -76,7 +76,7 @@ const K: [u32; 64] = [
     0xc671_78f2,
 ];
 
-pub(crate) fn digest(bytes: &[u8]) -> [u8; 32] {
+pub fn digest(bytes: &[u8]) -> [u8; 32] {
     let mut state = INITIAL;
     let mut chunks = bytes.chunks_exact(64);
     for block in &mut chunks {

@@ -163,21 +163,300 @@
         <section
           id="workspace-state-screen"
           class="workspace-state-screen"
-          aria-live="polite"
         >
-          <div class="state-card">
-            <p id="workspace-state-eyebrow" class="eyebrow">p-track projects</p>
-            <h2 id="workspace-state-heading" tabindex="-1">Choose a project</h2>
-            <p id="workspace-state-detail" class="state-detail">
-              Open a directory containing a p-track project to begin.
-            </p>
-            <button id="state-open-project-button" type="button">Open Project…</button>
-            <div class="recent-projects-section">
-              <div class="section-heading">
-                <p class="section-label">Recent projects</p>
+          <div id="project-state-card" class="state-card">
+            <div id="welcome-panel">
+              <p id="workspace-state-eyebrow" class="eyebrow">p-track projects</p>
+              <h2 id="workspace-state-heading" tabindex="-1">Start with a project</h2>
+              <p id="workspace-state-detail" class="state-detail">
+                Initialize p-track in a folder, or open a project you already use.
+              </p>
+              <div class="welcome-actions">
+                <button id="state-initialize-project-button" type="button">Initialize Project</button>
+                <button
+                  id="state-open-project-button"
+                  class="button-secondary"
+                  type="button"
+                >Open Project…</button>
               </div>
-              <div id="recent-project-list" class="recent-project-list"></div>
+              <div class="recent-projects-section">
+                <div class="section-heading">
+                  <p
+                    id="recent-project-heading"
+                    class="section-label"
+                    tabindex="-1"
+                  >Recent projects</p>
+                </div>
+                <div
+                  id="recent-project-list"
+                  class="recent-project-list"
+                  role="list"
+                  aria-labelledby="recent-project-heading"
+                  aria-busy="false"
+                ></div>
+                <p
+                  id="recent-project-status"
+                  class="recent-project-feedback"
+                  role="status"
+                  aria-live="polite"
+                  aria-atomic="true"
+                ></p>
+                <p
+                  id="recent-project-error"
+                  class="recent-project-feedback setup-error"
+                  role="alert"
+                  aria-atomic="true"
+                ></p>
+              </div>
             </div>
+
+            <section
+              id="setup-panel"
+              class="setup-panel"
+              aria-labelledby="setup-heading"
+              hidden
+            >
+              <p id="setup-progress" class="setup-progress">Step 1 of 4</p>
+              <p id="setup-eyebrow" class="eyebrow">Initialize project</p>
+              <h2 id="setup-heading" tabindex="-1">Choose a project folder</h2>
+              <p id="setup-detail" class="state-detail"></p>
+
+              <div
+                id="setup-operation"
+                role="group"
+                aria-labelledby="setup-heading"
+                aria-busy="false"
+              >
+              <div id="setup-target-summary" class="setup-target-summary" hidden>
+                <p class="section-label">Canonical project folder</p>
+                <p id="setup-target" class="setup-target"></p>
+              </div>
+
+              <form id="setup-goal-form" class="setup-form" novalidate hidden>
+                <label for="setup-goal">North-star goal</label>
+                <textarea
+                  id="setup-goal"
+                  rows="5"
+                  aria-describedby="setup-goal-help setup-goal-error"
+                  required
+                ></textarea>
+                <p id="setup-goal-help" class="setup-help">
+                  Required · 4,096 UTF-8 bytes maximum
+                </p>
+                <p
+                  id="setup-goal-error"
+                  class="setup-field-error"
+                  role="alert"
+                  aria-atomic="true"
+                ></p>
+                <div class="setup-actions">
+                  <button id="setup-goal-back" class="button-secondary" type="button">Back</button>
+                  <button id="setup-goal-continue" type="submit">Choose Guide</button>
+                  <button id="setup-goal-cancel" class="button-secondary" type="button">Cancel Setup</button>
+                </div>
+              </form>
+
+              <section id="setup-guide" class="setup-guide" aria-label="Project guide choice" hidden>
+                <div id="setup-guide-default-choice" class="setup-change-summary">
+                  <p class="section-label">Default choice</p>
+                  <p><strong>Skip Guide</strong> — no guide files will change unless you preview and explicitly install them.</p>
+                </div>
+                <div
+                  id="setup-guide-preview"
+                  class="setup-guide-preview"
+                  aria-label="Exact guide file preview"
+                  hidden
+                >
+                  <div class="section-heading">
+                    <p class="section-label">Exact guide file changes</p>
+                  </div>
+                  <div id="setup-guide-files" class="setup-guide-files"></div>
+                </div>
+                <div id="setup-guide-default-actions" class="setup-actions">
+                  <button id="setup-guide-skip" type="button">Continue with Skip Guide</button>
+                  <button id="setup-guide-preview-button" class="button-secondary" type="button">Preview Guide Changes</button>
+                  <button id="setup-guide-back" class="button-secondary" type="button">Back</button>
+                  <button id="setup-guide-cancel" class="button-secondary" type="button">Cancel Setup</button>
+                </div>
+                <div id="setup-guide-install-actions" class="setup-actions" hidden>
+                  <button id="setup-guide-install" type="button">Install These Guide Changes</button>
+                  <button id="setup-guide-preview-skip" class="button-secondary" type="button">Skip Guide</button>
+                  <button id="setup-guide-preview-back" class="button-secondary" type="button">Back</button>
+                  <button id="setup-guide-preview-cancel" class="button-secondary" type="button">Cancel Setup</button>
+                </div>
+                <div id="setup-guide-stale-actions" class="setup-actions" hidden>
+                  <button id="setup-guide-review-again" type="button">Review Again</button>
+                  <button id="setup-guide-stale-skip" class="button-secondary" type="button">Skip Guide</button>
+                  <button id="setup-guide-stale-back" class="button-secondary" type="button">Back</button>
+                  <button id="setup-guide-stale-cancel" class="button-secondary" type="button">Cancel Setup</button>
+                </div>
+              </section>
+
+              <section id="setup-review" class="setup-review" aria-label="Initialization review" hidden>
+                <div class="setup-change-summary">
+                  <p class="section-label">Private p-track project storage</p>
+                  <p id="setup-storage-summary">
+                    p-track will create the project database shown here.
+                  </p>
+                </div>
+                <div class="setup-change-summary">
+                  <p class="section-label">North-star goal</p>
+                  <p id="setup-review-goal" class="setup-review-goal"></p>
+                </div>
+                <div class="setup-change-summary">
+                  <p class="section-label">Project guide choice</p>
+                  <p id="setup-review-guide-choice"></p>
+                  <p id="setup-review-guide-detail"></p>
+                  <ul id="setup-review-guide-changes" class="setup-change-list"></ul>
+                </div>
+                <div class="setup-change-summary">
+                  <p class="section-label">Complete file changes</p>
+                  <ul id="setup-complete-changes" class="setup-change-list"></ul>
+                </div>
+                <p id="setup-untouched-root" class="setup-untouched"></p>
+                <div class="setup-actions">
+                  <button id="setup-review-back" class="button-secondary" type="button">Back</button>
+                  <button id="setup-commit" type="button">Initialize Project</button>
+                  <button id="setup-review-cancel" class="button-secondary" type="button">Cancel Setup</button>
+                </div>
+              </section>
+
+              <div id="setup-existing-actions" class="setup-actions" hidden>
+                <button id="setup-open-existing" type="button">Open Existing Project</button>
+                <button id="setup-existing-choose" class="button-secondary" type="button">Choose Another Folder</button>
+                <button id="setup-existing-cancel" class="button-secondary" type="button">Cancel Setup</button>
+              </div>
+
+              <div id="setup-new-target-actions" class="setup-actions" hidden>
+                <button id="setup-new-target-continue" type="button">Continue to Goal</button>
+                <button id="setup-new-target-choose" class="button-secondary" type="button">Choose Another Folder</button>
+                <button id="setup-new-target-cancel" class="button-secondary" type="button">Cancel Setup</button>
+              </div>
+
+              <div id="setup-recovery-actions" class="setup-actions" hidden>
+                <button id="setup-retry" type="button" hidden>Try Again</button>
+                <button id="setup-resume" type="button" hidden>Resume Setup</button>
+                <button id="setup-open-recovery" class="button-secondary" type="button" hidden>Open Project</button>
+                <button id="setup-recovery-help" class="button-secondary" type="button" hidden>Open Recovery Help</button>
+                <button id="setup-recovery-choose" class="button-secondary" type="button">Choose Another Folder</button>
+                <button id="setup-return-welcome" class="button-secondary" type="button">Return to Welcome</button>
+              </div>
+
+              <div id="setup-uncertain-actions" class="setup-actions" hidden>
+                <button id="setup-check-status" type="button">Check Status Again</button>
+              </div>
+              </div>
+
+              <p
+                id="setup-status"
+                class="setup-status"
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+              ></p>
+              <p
+                id="setup-error"
+                class="setup-error"
+                role="alert"
+                aria-atomic="true"
+              ></p>
+            </section>
+
+            <section
+              id="post-project-onboarding"
+              class="post-project-onboarding"
+              aria-labelledby="onboarding-heading"
+              hidden
+            >
+              <p id="onboarding-progress" class="setup-progress">Next step · Plan</p>
+              <p class="eyebrow">Project initialized</p>
+              <h2 id="onboarding-heading" tabindex="-1">Create the first plan</h2>
+              <p id="onboarding-detail" class="state-detail"></p>
+
+              <div
+                id="onboarding-operation"
+                role="group"
+                aria-labelledby="onboarding-heading"
+                aria-busy="false"
+              >
+              <form id="onboarding-plan-form" class="setup-form" novalidate>
+                <label for="onboarding-plan-title">Plan title</label>
+                <input
+                  id="onboarding-plan-title"
+                  type="text"
+                  maxlength="240"
+                  autocomplete="off"
+                  aria-describedby="onboarding-plan-help onboarding-plan-error"
+                  required
+                />
+                <p id="onboarding-plan-help" class="setup-help">
+                  Required · 240 UTF-8 bytes maximum
+                </p>
+                <p
+                  id="onboarding-plan-error"
+                  class="setup-field-error"
+                  role="alert"
+                  aria-atomic="true"
+                ></p>
+                <div class="setup-actions">
+                  <button id="onboarding-create-plan" type="submit">Create Plan</button>
+                  <button id="onboarding-skip-plan" class="button-secondary" type="button">Skip for Now</button>
+                </div>
+              </form>
+
+              <form id="onboarding-task-form" class="setup-form" novalidate hidden>
+                <div class="setup-change-summary">
+                  <p class="section-label">Active plan</p>
+                  <p id="onboarding-active-plan"></p>
+                </div>
+                <label for="onboarding-task-title">First task title</label>
+                <input
+                  id="onboarding-task-title"
+                  type="text"
+                  maxlength="240"
+                  autocomplete="off"
+                  aria-describedby="onboarding-task-help onboarding-task-error"
+                  required
+                />
+                <p id="onboarding-task-help" class="setup-help">
+                  Required · 240 UTF-8 bytes maximum
+                </p>
+                <p
+                  id="onboarding-task-error"
+                  class="setup-field-error"
+                  role="alert"
+                  aria-atomic="true"
+                ></p>
+                <label class="onboarding-start-option" for="onboarding-start-now">
+                  <input id="onboarding-start-now" type="checkbox" />
+                  <span>Start this task now</span>
+                </label>
+                <div class="setup-actions">
+                  <button id="onboarding-create-task" type="submit">Create Task</button>
+                  <button id="onboarding-finish-with-plan" class="button-secondary" type="button">Finish with Plan</button>
+                </div>
+              </form>
+
+              <div id="onboarding-start-failed-actions" class="setup-actions" hidden>
+                <button id="onboarding-retry-start" type="button">Try Starting Again</button>
+                <button id="onboarding-finish-setup" class="button-secondary" type="button">Finish Setup</button>
+              </div>
+              </div>
+
+              <p
+                id="onboarding-status"
+                class="setup-status"
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+              ></p>
+              <p
+                id="onboarding-error"
+                class="setup-error"
+                role="alert"
+                aria-atomic="true"
+              ></p>
+            </section>
           </div>
         </section>
 
@@ -1277,7 +1556,7 @@
         aria-labelledby="workspace-confirm-heading"
         aria-describedby="workspace-confirm-detail"
       >
-        <p class="eyebrow">Active project resources</p>
+        <p id="workspace-confirm-eyebrow" class="eyebrow">Active project resources</p>
         <h2 id="workspace-confirm-heading">Leave this project?</h2>
         <p id="workspace-confirm-detail" class="dialog-help"></p>
         <div class="dialog-actions">

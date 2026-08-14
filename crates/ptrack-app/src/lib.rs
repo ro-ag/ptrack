@@ -21,17 +21,27 @@ pub use agent_runtime::{
     ProductionAgentIntegrationFactory, ProjectCoordinationStore, PtrackCoordinationGit,
 };
 pub use desktop_runtime::{
-    ActiveResourceSummary, BoundDesktopWorkspace, DesktopAdmissionFence, DesktopAgentRuntime,
-    DesktopCommandRequest, DesktopEvent, DesktopEventSink, DesktopNativeActionLease,
-    DesktopRuntime, DesktopRuntimeConfig, DesktopTerminalEventSink, DesktopUpdateEventSink,
-    DesktopWorkspace, DesktopWorkspaceFactory, NoDesktopWorkspaceFactory, NoRecentProjectsProvider,
-    RecentProjectsProvider, WorkspaceChangeResult, WorkspaceProject, WorkspaceState,
-    WorkspaceStatus, allowed_desktop_commands,
+    ActiveResourceSummary, BoundDesktopWorkspace, CreateFirstPlanResultV1, CreateFirstTaskResultV1,
+    DesktopAdmissionFence, DesktopAgentRuntime, DesktopCommandRequest, DesktopEvent,
+    DesktopEventSink, DesktopInitializationService, DesktopNativeActionLease, DesktopRuntime,
+    DesktopRuntimeConfig, DesktopTerminalEventSink, DesktopUpdateEventSink, DesktopWorkspace,
+    DesktopWorkspaceFactory, FirstPlanV1, FirstRunWorkspaceStateV1, FirstTaskV1,
+    ForgetRecentProjectResultV1, InitializationCheckpointV1, InitializationOutcomeV1,
+    InitializationStatusV1, InitializeProjectRequestV1, InitializeProjectResultV1,
+    NoDesktopInitializationService, NoDesktopWorkspaceFactory, NoRecentProjectsProvider,
+    OpenRecentProjectResultV1, PendingInitializationV1, ProjectGuideChoiceV1,
+    ProjectGuideFileActionV1, ProjectGuideFilePreviewV1, ProjectGuidePreviewRequestV1,
+    ProjectGuidePreviewV1, ProjectTargetKindV1, ProjectTargetValidationV1,
+    RecentProjectAvailabilityV1, RecentProjectOpenAuthorizationV1, RecentProjectRegistryCommitV1,
+    RecentProjectRegistryStatusV1, RecentProjectResolutionV1, RecentProjectV1,
+    RecentProjectsProvider, RecentProjectsV1, ResolvedRecentProjectV1, WorkspaceChangeResult,
+    WorkspaceProject, WorkspaceState, WorkspaceStatus, allowed_desktop_commands,
 };
 
 pub use production::{
-    ActiveRuntime, ProductionDesktopWorkspaceFactory, ProductionRecentProjects, RoutedApplication,
-    RuntimeBindingState, resolve_global_home,
+    ActiveRuntime, ProductionDesktopAuthority, ProductionDesktopWorkspaceFactory,
+    ProductionRecentProjects, RoutedApplication, RuntimeBindingState, production_desktop_runtime,
+    resolve_global_home,
 };
 pub use service::{
     AppError, AppResult, ApplicationPort, CapabilityCancellation, CapabilityMcpOutcome,

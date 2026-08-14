@@ -4,12 +4,34 @@ use ptrack_core::{CapabilityAudit, CapabilityKind, NativeRecord, Timestamp, enco
 use redb::Database;
 
 use crate::typed;
+#[cfg(unix)]
+use crate::{ActiveBinding, PinnedProjectDirectory};
 use crate::{
     Collection, NATIVE_CODEC, NATIVE_PAYLOAD_SCHEMA, ProjectStore, RecordEnvelope, RecordKey,
     StoreResult,
 };
 
 impl ProjectStore {
+    #[cfg(unix)]
+    pub(crate) fn create_new_pinned_with_before_open(
+        pinned: &PinnedProjectDirectory,
+        binding: ActiveBinding,
+        writer_version: impl Into<String>,
+        before_open: impl FnOnce() -> StoreResult<()>,
+    ) -> StoreResult<Self> {
+        Self::create_new_pinned_inner(pinned, binding, writer_version, before_open)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn open_existing_pinned_with_before_open(
+        pinned: &PinnedProjectDirectory,
+        binding: &ActiveBinding,
+        writer_version: impl Into<String>,
+        before_open: impl FnOnce() -> StoreResult<()>,
+    ) -> StoreResult<Self> {
+        Self::open_existing_pinned_inner(pinned, binding, writer_version, before_open)
+    }
+
     pub(crate) fn seed_capability_audits(&self, count: u64) -> StoreResult<()> {
         self.write(|transaction| {
             for id in 1..=count {

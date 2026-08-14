@@ -17,6 +17,9 @@ import {
   mutationFocusFallback,
   paletteTarget,
   preserveSectionOnError,
+  postProjectOnboardingActions,
+  projectGuideRecoveryCopy,
+  projectGuideReviewCopy,
   runtimeAssociationLabel,
   runtimeCountLabel,
   runtimeEventIsCurrent,
@@ -25,6 +28,8 @@ import {
   worktreeSelectionForRerender,
   workspaceStateCopy,
   driftPresentation,
+  durableProjectGuideReviewCopy,
+  firstRunRecoveryActions,
 } from "./presentation";
 
 describe("workspace presentation policy", () => {
@@ -41,7 +46,89 @@ describe("workspace presentation policy", () => {
       expect(copy.heading.length).toBeGreaterThan(0);
       expect(copy.detail.length).toBeGreaterThan(0);
     }
+    expect(workspaceStateCopy("welcome")).toEqual({
+      eyebrow: "p-track projects",
+      heading: "Start with a project",
+      detail: "Initialize p-track in a folder, or open a project you already use.",
+    });
     expect(workspaceStateCopy("error", "broken").detail).toBe("broken");
+  });
+
+  it("summarizes only the explicit guide choice and complete preview", () => {
+    expect(projectGuideReviewCopy("skip")).toEqual({
+      label: "Skip Guide",
+      detail: "No guide files will change.",
+      changes: [],
+    });
+    expect(projectGuideReviewCopy("install", [
+      { path: "AGENTS.md", action: "create", additions: 4, deletions: 0 },
+      { path: "CLAUDE.md", action: "no-change", additions: 0, deletions: 0 },
+    ])).toEqual({
+      label: "Install Guide",
+      detail: "Only the previewed guide changes will be applied.",
+      changes: ["AGENTS.md · create · +4 −0", "CLAUDE.md · no change"],
+    });
+  });
+
+  it("makes partial guide recovery noncancellable without suggesting skip", () => {
+    const copy = projectGuideRecoveryCopy("partially-applied");
+
+    expect(copy.heading).toBe("Review the applied guide changes");
+    expect(copy.detail).toContain("already durable");
+    expect(copy.error).toContain("partially applied");
+    expect(`${copy.heading} ${copy.detail} ${copy.error}`).not.toContain("skip");
+  });
+
+  it("offers only checkpoint-safe recovery exits", () => {
+    expect(firstRunRecoveryActions("durable", "runtime-committed")).toEqual({
+      resume: true,
+      open: false,
+      help: true,
+      chooseAnother: false,
+      returnToWelcome: false,
+    });
+    expect(firstRunRecoveryActions("durable", "project-committed")).toMatchObject({
+      resume: true,
+      open: true,
+      help: true,
+    });
+    expect(firstRunRecoveryActions("blocked", "prepared")).toEqual({
+      resume: false,
+      open: false,
+      help: true,
+      chooseAnother: true,
+      returnToWelcome: true,
+    });
+  });
+
+  it("describes durable restart choices without replaying guide changes", () => {
+    expect(durableProjectGuideReviewCopy("skip")).toEqual({
+      label: "Skip Guide",
+      detail: "Skip Guide is already durable for this initialization operation.",
+      changes: [],
+    });
+    expect(durableProjectGuideReviewCopy("install")).toEqual({
+      label: "Install Guide",
+      detail: "The durable guide step is complete and will not be replayed.",
+      changes: ["AGENTS.md and CLAUDE.md · guide step already applied"],
+    });
+  });
+
+  it("keeps post-project recovery actions explicit and non-rollback", () => {
+    expect(postProjectOnboardingActions("plan-failed")).toEqual({
+      primary: "Try Again",
+      secondary: "Skip for Now",
+    });
+    expect(postProjectOnboardingActions("task-create-failed")).toEqual({
+      primary: "Try Again",
+      secondary: "Finish with Plan",
+    });
+    expect(postProjectOnboardingActions("task-start-failed")).toEqual({
+      primary: "Try Starting Again",
+      secondary: "Finish Setup",
+    });
+    expect(JSON.stringify(postProjectOnboardingActions("task-start-failed")))
+      .not.toMatch(/cancel|rollback/i);
   });
 
   it("describes only explicitly counted active resources", () => {

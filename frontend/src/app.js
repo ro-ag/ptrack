@@ -56,6 +56,53 @@ import {
   WorkspaceController,
 } from "./workspace/controller";
 import {
+  canOpenPreservedFirstRunProject,
+  completedInitializationWorkspaceMatches,
+  firstRunFocusTarget,
+  initializationFailureMessage,
+  initializationStatusMatchesOperation,
+  initialFirstRunState,
+  isProjectGuidePartiallyApplied,
+  isProjectGuidePreviewStale,
+  pendingInitializationEvent,
+  parseProjectGuidePreview,
+  PROJECT_GUIDANCE_UNAVAILABLE,
+  projectGuideCommitFields,
+  reduceFirstRun,
+  resolveFirstRunStartupState,
+  validateNorthStarGoal,
+} from "./workspace/first-run";
+import {
+  commitInitialization,
+  initializeProjectRequest,
+  openExactProject as runExactProjectOpen,
+  readInitializationStatus,
+  resumeInitialization,
+  validateInitializationTarget,
+} from "./workspace/first-run-journey";
+import {
+  createFirstPlan,
+  createFirstTask,
+  firstPlanExitFocusTarget,
+  firstPlanFocusTarget,
+  initialFirstPlanState,
+  reduceFirstPlan,
+  startFirstTask as runStartFirstTask,
+  validateOnboardingTitle,
+} from "./workspace/first-plan";
+import {
+  focusAfterForgottenProject,
+  initialRecentProjectsState,
+  parseForgetRecentProjectResult,
+  parseRecentProjectOpenResult,
+  parseRecentProjectResolution,
+  parseRecentProjects,
+  RECENT_RELOCATION_UNCONFIRMED,
+  recentProjectFocusKey,
+  recentProjectPrimaryAction,
+  reduceRecentProjects,
+} from "./workspace/recent-projects";
+import {
   taskTransitionCanStart,
   taskTransitionConfirmationCopy,
   taskTransitionFocusIntent,
@@ -70,6 +117,8 @@ import {
   collapsedLaneStatuses,
   commandShortcut,
   confirmationCopy,
+  durableProjectGuideReviewCopy,
+  firstRunRecoveryActions,
   focusCycleIndex,
   groupSearchResults,
   handoffPreviewResponseIsCurrent,
@@ -78,6 +127,9 @@ import {
   mutationFocusFallback,
   paletteTarget,
   preserveSectionOnError,
+  postProjectOnboardingActions,
+  projectGuideRecoveryCopy,
+  projectGuideReviewCopy,
   runtimeAssociationLabel,
   runtimeEventIsCurrent,
   shortcutIntent,
@@ -105,6 +157,8 @@ const elements = {
   sidebar: document.querySelector("#sidebar"),
   sidebarResize: document.querySelector("#sidebar-resize"),
   sidebarToggle: document.querySelector("#sidebar-toggle"),
+  boardPanelToggle: document.querySelector("#board-panel-toggle"),
+  terminalPanelToggle: document.querySelector("#terminal-panel-toggle"),
   workspace: document.querySelector("#workspace"),
   overviewPage: document.querySelector("#overview-page"),
   settingsPage: document.querySelector("#settings-page"),
@@ -114,11 +168,101 @@ const elements = {
   navOverview: document.querySelector("#nav-overview"),
   navSettings: document.querySelector("#nav-settings"),
   stateScreen: document.querySelector("#workspace-state-screen"),
+  stateCard: document.querySelector("#project-state-card"),
+  welcomePanel: document.querySelector("#welcome-panel"),
   stateEyebrow: document.querySelector("#workspace-state-eyebrow"),
   stateHeading: document.querySelector("#workspace-state-heading"),
   stateDetail: document.querySelector("#workspace-state-detail"),
+  stateInitialize: document.querySelector("#state-initialize-project-button"),
   stateOpen: document.querySelector("#state-open-project-button"),
   recents: document.querySelector("#recent-project-list"),
+  recentHeading: document.querySelector("#recent-project-heading"),
+  recentStatus: document.querySelector("#recent-project-status"),
+  recentError: document.querySelector("#recent-project-error"),
+  setupPanel: document.querySelector("#setup-panel"),
+  setupProgress: document.querySelector("#setup-progress"),
+  setupEyebrow: document.querySelector("#setup-eyebrow"),
+  setupHeading: document.querySelector("#setup-heading"),
+  setupDetail: document.querySelector("#setup-detail"),
+  setupOperation: document.querySelector("#setup-operation"),
+  setupTargetSummary: document.querySelector("#setup-target-summary"),
+  setupTarget: document.querySelector("#setup-target"),
+  setupGoalForm: document.querySelector("#setup-goal-form"),
+  setupGoal: document.querySelector("#setup-goal"),
+  setupGoalError: document.querySelector("#setup-goal-error"),
+  setupGoalBack: document.querySelector("#setup-goal-back"),
+  setupGoalCancel: document.querySelector("#setup-goal-cancel"),
+  setupGuide: document.querySelector("#setup-guide"),
+  setupGuideDefaultChoice: document.querySelector("#setup-guide-default-choice"),
+  setupGuidePreview: document.querySelector("#setup-guide-preview"),
+  setupGuideFiles: document.querySelector("#setup-guide-files"),
+  setupGuideDefaultActions: document.querySelector("#setup-guide-default-actions"),
+  setupGuideSkip: document.querySelector("#setup-guide-skip"),
+  setupGuidePreviewButton: document.querySelector("#setup-guide-preview-button"),
+  setupGuideBack: document.querySelector("#setup-guide-back"),
+  setupGuideCancel: document.querySelector("#setup-guide-cancel"),
+  setupGuideInstallActions: document.querySelector("#setup-guide-install-actions"),
+  setupGuideInstall: document.querySelector("#setup-guide-install"),
+  setupGuidePreviewSkip: document.querySelector("#setup-guide-preview-skip"),
+  setupGuidePreviewBack: document.querySelector("#setup-guide-preview-back"),
+  setupGuidePreviewCancel: document.querySelector("#setup-guide-preview-cancel"),
+  setupGuideStaleActions: document.querySelector("#setup-guide-stale-actions"),
+  setupGuideReviewAgain: document.querySelector("#setup-guide-review-again"),
+  setupGuideStaleSkip: document.querySelector("#setup-guide-stale-skip"),
+  setupGuideStaleBack: document.querySelector("#setup-guide-stale-back"),
+  setupGuideStaleCancel: document.querySelector("#setup-guide-stale-cancel"),
+  setupReview: document.querySelector("#setup-review"),
+  setupStorageSummary: document.querySelector("#setup-storage-summary"),
+  setupUntouchedRoot: document.querySelector("#setup-untouched-root"),
+  setupReviewGoal: document.querySelector("#setup-review-goal"),
+  setupReviewGuideChoice: document.querySelector("#setup-review-guide-choice"),
+  setupReviewGuideDetail: document.querySelector("#setup-review-guide-detail"),
+  setupReviewGuideChanges: document.querySelector("#setup-review-guide-changes"),
+  setupCompleteChanges: document.querySelector("#setup-complete-changes"),
+  setupReviewBack: document.querySelector("#setup-review-back"),
+  setupReviewCancel: document.querySelector("#setup-review-cancel"),
+  setupCommit: document.querySelector("#setup-commit"),
+  setupExistingActions: document.querySelector("#setup-existing-actions"),
+  setupOpenExisting: document.querySelector("#setup-open-existing"),
+  setupExistingChoose: document.querySelector("#setup-existing-choose"),
+  setupExistingCancel: document.querySelector("#setup-existing-cancel"),
+  setupNewTargetActions: document.querySelector("#setup-new-target-actions"),
+  setupNewTargetContinue: document.querySelector("#setup-new-target-continue"),
+  setupNewTargetChoose: document.querySelector("#setup-new-target-choose"),
+  setupNewTargetCancel: document.querySelector("#setup-new-target-cancel"),
+  setupRecoveryActions: document.querySelector("#setup-recovery-actions"),
+  setupRetry: document.querySelector("#setup-retry"),
+  setupResume: document.querySelector("#setup-resume"),
+  setupOpenRecovery: document.querySelector("#setup-open-recovery"),
+  setupRecoveryHelp: document.querySelector("#setup-recovery-help"),
+  setupRecoveryChoose: document.querySelector("#setup-recovery-choose"),
+  setupReturnWelcome: document.querySelector("#setup-return-welcome"),
+  setupUncertainActions: document.querySelector("#setup-uncertain-actions"),
+  setupCheckStatus: document.querySelector("#setup-check-status"),
+  setupStatus: document.querySelector("#setup-status"),
+  setupError: document.querySelector("#setup-error"),
+  onboarding: document.querySelector("#post-project-onboarding"),
+  onboardingProgress: document.querySelector("#onboarding-progress"),
+  onboardingHeading: document.querySelector("#onboarding-heading"),
+  onboardingDetail: document.querySelector("#onboarding-detail"),
+  onboardingOperation: document.querySelector("#onboarding-operation"),
+  onboardingPlanForm: document.querySelector("#onboarding-plan-form"),
+  onboardingPlanTitle: document.querySelector("#onboarding-plan-title"),
+  onboardingPlanError: document.querySelector("#onboarding-plan-error"),
+  onboardingCreatePlan: document.querySelector("#onboarding-create-plan"),
+  onboardingSkipPlan: document.querySelector("#onboarding-skip-plan"),
+  onboardingTaskForm: document.querySelector("#onboarding-task-form"),
+  onboardingActivePlan: document.querySelector("#onboarding-active-plan"),
+  onboardingTaskTitle: document.querySelector("#onboarding-task-title"),
+  onboardingTaskError: document.querySelector("#onboarding-task-error"),
+  onboardingStartNow: document.querySelector("#onboarding-start-now"),
+  onboardingCreateTask: document.querySelector("#onboarding-create-task"),
+  onboardingFinishWithPlan: document.querySelector("#onboarding-finish-with-plan"),
+  onboardingStartFailedActions: document.querySelector("#onboarding-start-failed-actions"),
+  onboardingRetryStart: document.querySelector("#onboarding-retry-start"),
+  onboardingFinishSetup: document.querySelector("#onboarding-finish-setup"),
+  onboardingStatus: document.querySelector("#onboarding-status"),
+  onboardingError: document.querySelector("#onboarding-error"),
   board: document.querySelector("#board"),
   appVersion: document.querySelector("#app-version"),
   updatesModal: document.querySelector("#updates-modal"),
@@ -174,6 +318,7 @@ const elements = {
   dialogHelp: document.querySelector("#dialog-help"),
   dialogSubmit: document.querySelector("#dialog-submit"),
   confirmModal: document.querySelector("#workspace-confirm-modal"),
+  confirmEyebrow: document.querySelector("#workspace-confirm-eyebrow"),
   confirmHeading: document.querySelector("#workspace-confirm-heading"),
   confirmDetail: document.querySelector("#workspace-confirm-detail"),
   confirmCancel: document.querySelector("#workspace-confirm-cancel"),
@@ -349,6 +494,9 @@ const runtimeRefreshes = new RuntimeRefreshCoalescer((generation) => {
 });
 
 let workspaceState = { status: "welcome", generation: 0 };
+let firstRunState = { ...initialFirstRunState };
+let firstPlanState = { ...initialFirstPlanState };
+let recentProjectsState = { ...initialRecentProjectsState };
 let view = "board";
 let snapshot = null;
 let board = null;
@@ -364,6 +512,8 @@ let updateActionBusy = false;
 let updateCancelRequested = false;
 let confirmReturnFocus = null;
 let confirmResolve = null;
+let recentListRequest = 0;
+let recentOperationSequence = 0;
 let terminalHandle = null;
 let terminalGeneration = 0;
 let terminalProjectRoot = "";
@@ -455,7 +605,7 @@ function setSidebarHidden(hidden, persist = true) {
 }
 
 function beginSidebarResize(event) {
-  if (sidebarHidden || event.button !== 0) return;
+  if (firstPlanState.phase !== "idle" || sidebarHidden || event.button !== 0) return;
   event.preventDefault();
   sidebarDragCleanup?.();
   const startX = event.clientX;
@@ -492,7 +642,7 @@ function beginSidebarResize(event) {
 }
 
 function resizeSidebarFromKeyboard(event) {
-  if (sidebarHidden) return;
+  if (firstPlanState.phase !== "idle" || sidebarHidden) return;
   const nextWidth = sidebarWidthFromKey(sidebarWidth, event.key, window.innerWidth);
   if (nextWidth === null) return;
   event.preventDefault();
@@ -1069,6 +1219,7 @@ function columnElement(column, collapsed = false) {
 }
 
 function selectPlan(planId) {
+  if (firstPlanState.phase !== "idle") return;
   // Same selection path the topbar picker used: a snapshot for that plan.
   void loadSnapshot(planId);
 }
@@ -2129,7 +2280,7 @@ function renderUpdateState(nextState) {
   setUpdateText(elements.updatesCurrentVersion, `Current version: ${currentVersion}`);
   elements.updatesAutomatic.checked = Boolean(nextState.automaticChecks);
   elements.updatesStatus.dataset.tone = presentation.tone;
-  elements.updatesStatus.toggleAttribute("aria-busy", presentation.busy);
+  setAriaBoolean(elements.updatesStatus, "aria-busy", presentation.busy);
   setUpdateText(elements.updatesStatusTitle, presentation.title);
   setUpdateText(elements.updatesStatusDetail, presentation.detail);
   elements.updatesProgressWrap.hidden = nextState.phase !== "downloading";
@@ -2154,6 +2305,11 @@ function renderUpdateState(nextState) {
 
 function setUpdateText(element, value) {
   if (element.textContent !== value) element.textContent = value;
+}
+
+function setAriaBoolean(element, attribute, value) {
+  if (value) element.setAttribute(attribute, "true");
+  else element.removeAttribute(attribute);
 }
 
 function updateReleaseMeta(release) {
@@ -2181,6 +2337,11 @@ async function refreshUpdateState() {
 }
 
 function openAboutUpdates(invoker = document.activeElement) {
+  if (
+    firstRunState.phase !== "idle" ||
+    firstPlanState.phase !== "idle" ||
+    recentProjectOperationActive()
+  ) return false;
   const competingOverlayOpen = nativeMenuOpenOverlayIDs().some(
     (overlayID) => overlayID !== "updates-modal",
   );
@@ -2265,7 +2426,10 @@ const paletteKindLabels = {
 };
 
 function openPalette() {
-  if (workspaceController.state.status !== "open") return;
+  if (
+    workspaceController.state.status !== "open" ||
+    firstPlanState.phase !== "idle"
+  ) return;
   paletteReturnFocus = document.activeElement;
   elements.palette.hidden = false;
   renderPaletteResults();
@@ -3193,21 +3357,79 @@ async function submitAgentLaunch() {
   }
 }
 
-function showWorkspaceConfirmation(action, resources) {
-  confirmReturnFocus = document.activeElement;
+function showConfirmation(copy, returnFocus = document.activeElement) {
+  confirmReturnFocus = returnFocus;
+  elements.confirmEyebrow.textContent = copy.eyebrow;
+  elements.confirmHeading.textContent = copy.heading;
+  elements.confirmDetail.textContent = copy.detail;
+  elements.confirmCancel.textContent = copy.cancel;
+  elements.confirmSubmit.textContent = copy.submit;
+  elements.confirmModal.hidden = false;
+  requestAnimationFrame(() => elements.confirmCancel.focus());
+  return new Promise((resolve) => {
+    confirmResolve = resolve;
+  });
+}
+
+function showWorkspaceConfirmation(action, resources, returnFocus = document.activeElement) {
   const copy = confirmationCopy(
     action,
     resources.terminals,
     resources.agentRuns,
     resources.pendingAdmissions || 0,
   );
-  elements.confirmHeading.textContent = copy.heading;
-  elements.confirmDetail.textContent = copy.detail;
-  elements.confirmSubmit.textContent = copy.submit;
-  elements.confirmModal.hidden = false;
-  requestAnimationFrame(() => elements.confirmCancel.focus());
-  return new Promise((resolve) => {
-    confirmResolve = resolve;
+  return showConfirmation({
+    eyebrow: "Active project resources",
+    heading: copy.heading,
+    detail: copy.detail,
+    cancel: "Stay here",
+    submit: copy.submit,
+  }, returnFocus);
+}
+
+function showRecentRelocationConfirmation(entry, resolution) {
+  return showConfirmation({
+    eyebrow: "Recent project location",
+    heading: "Open a different project?",
+    detail:
+      `“${entry.name}” at ${entry.canonicalPath} now resolves to “${resolution.name}” at ${resolution.canonicalRoot}. Update this recent entry only after the different project opens?`,
+    cancel: "Keep Current Entry",
+    submit: "Update and Open",
+  }, null);
+}
+
+function showForgetRecentProjectConfirmation(entry) {
+  return showConfirmation({
+    eyebrow: "Recent project",
+    heading: "Forget this recent project?",
+    detail:
+      `Remove “${entry.name}” at ${entry.canonicalPath} from Recent projects only. Project files will not be changed.`,
+    cancel: "Keep Recent Entry",
+    submit: "Remove Recent Entry",
+  }, null);
+}
+
+function setRecentProjectsState(event) {
+  recentProjectsState = reduceRecentProjects(recentProjectsState, event);
+  renderRecentProjects();
+}
+
+function recentProjectActionElement(focusKey) {
+  if (focusKey === "recent-project-heading") return elements.recentHeading;
+  return [...elements.recents.querySelectorAll("[data-recent-focus-key]")]
+    .find((element) => element.dataset.recentFocusKey === focusKey) ||
+    elements.recentHeading;
+}
+
+function restoreRecentProjectFocus(focusKey, operationId = recentOperationSequence) {
+  requestAnimationFrame(() => {
+    if (
+      operationId !== recentOperationSequence ||
+      firstRunState.phase !== "idle" ||
+      workspaceController.state.status === "open" ||
+      workspaceController.state.status === "loading"
+    ) return;
+    recentProjectActionElement(focusKey)?.focus();
   });
 }
 
@@ -3221,40 +3443,1211 @@ function finishWorkspaceConfirmation(confirmed) {
   resolve(confirmed);
 }
 
-function renderRecentProjects(projects) {
+function recentProjectStateLabel(availability) {
+  if (availability === "missing") return "Folder not found";
+  if (availability === "permission-required") return "Permission required";
+  if (availability === "changed") return "Project changed";
+  return "";
+}
+
+function recentProjectPrimaryLabel(availability) {
+  if (availability === "available") return "Open";
+  if (availability === "permission-required") return "Try Again";
+  return "Locate…";
+}
+
+function recentProjectOperationActive() {
+  return !["idle", "loading", "error"].includes(recentProjectsState.phase);
+}
+
+function updateAboutUpdatesAvailability() {
+  elements.appVersion.disabled = firstRunState.phase !== "idle" ||
+    firstPlanState.phase !== "idle" ||
+    recentProjectOperationActive();
+}
+
+function recentProjectActionButton(entry, action, label, describedBy, handler) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "button-secondary";
+  button.textContent = label;
+  button.dataset.recentFocusKey = recentProjectFocusKey(entry.entryId, action);
+  button.setAttribute(
+    "aria-label",
+    action === "forget"
+      ? `Forget ${entry.name} from Recent projects only`
+      : `${label.replace("…", "")} ${entry.name}`,
+  );
+  button.setAttribute("aria-describedby", describedBy);
+  button.disabled = recentProjectsState.listLoading ||
+    !["idle", "error"].includes(recentProjectsState.phase);
+  button.addEventListener("click", handler);
+  return button;
+}
+
+function renderRecentProjects() {
   elements.recents.replaceChildren();
-  const available = projects.filter((project) => project.available);
-  if (available.length === 0) {
-    elements.recents.append(emptyMemory("No available recent projects."));
+  const projects = recentProjectsState.projects;
+  const operationActive = recentProjectOperationActive();
+  updateAboutUpdatesAvailability();
+  elements.stateInitialize.disabled = operationActive;
+  elements.stateOpen.disabled = operationActive;
+  elements.recents.setAttribute(
+    "aria-busy",
+    String(recentProjectsState.listLoading || operationActive),
+  );
+  elements.recentStatus.textContent = recentProjectsState.announcement;
+  elements.recentError.textContent = recentProjectsState.message ||
+    recentProjectsState.listError;
+  const active = projects.find(
+    (project) => project.entryId === recentProjectsState.activeEntryId,
+  );
+  if (active && operationActive) {
+    elements.recentStatus.textContent = {
+      picking: `Choose the folder for “${active.name}”.`,
+      resolving: `Checking “${active.name}”…`,
+      "confirming-relocation": `Waiting for confirmation for “${active.name}”.`,
+      opening: `Opening “${active.name}”…`,
+      "confirming-forget": `Waiting for confirmation to remove “${active.name}” from Recent projects.`,
+      forgetting: `Removing “${active.name}” from Recent projects…`,
+    }[recentProjectsState.phase] || "";
+  }
+  if (projects.length === 0) {
+    const message = recentProjectsState.listLoading
+      ? "Loading recent projects…"
+      : "No recent projects yet.";
+    const empty = emptyMemory(message);
+    empty.setAttribute("role", "listitem");
+    elements.recents.append(empty);
     return;
   }
-  available.forEach((project) => {
+  projects.forEach((project, index) => {
     const item = document.createElement("article");
     item.className = "recent-project";
+    item.setAttribute("role", "listitem");
+    item.setAttribute(
+      "aria-busy",
+      String(operationActive && project.entryId === recentProjectsState.activeEntryId),
+    );
     const content = document.createElement("div");
     const name = document.createElement("p");
     name.className = "recent-project-name";
+    name.id = `recent-project-name-${index}`;
     name.textContent = project.name;
+    item.setAttribute("aria-labelledby", name.id);
     const path = document.createElement("p");
     path.className = "recent-project-path";
-    path.textContent = `${project.path} · ${relativeTime(project.lastSeen)}`;
+    path.id = `recent-project-path-${index}`;
+    path.append(`${project.canonicalPath} · `);
+    const lastOpened = document.createElement("time");
+    lastOpened.dateTime = project.lastOpenedAt;
+    lastOpened.title = new Date(project.lastOpenedAt).toLocaleString();
+    lastOpened.textContent = relativeTime(project.lastOpenedAt);
+    path.append(lastOpened);
     content.append(name, path);
-    const open = document.createElement("button");
-    open.type = "button";
-    open.className = "button-secondary";
-    open.textContent = "Open";
-    open.addEventListener("click", () => void requestOpenProject(project.path));
-    item.append(content, open);
+    const descriptionIDs = [path.id];
+    const stateLabel = recentProjectStateLabel(project.availability);
+    if (stateLabel) {
+      const state = document.createElement("p");
+      state.className = "recent-project-state";
+      state.id = `recent-project-state-${index}`;
+      state.textContent = stateLabel;
+      content.append(state);
+      descriptionIDs.push(state.id);
+    }
+    const actions = document.createElement("div");
+    actions.className = "recent-project-actions";
+    const primaryAction = recentProjectPrimaryAction(project.availability);
+    actions.append(recentProjectActionButton(
+      project,
+      primaryAction,
+      recentProjectPrimaryLabel(project.availability),
+      descriptionIDs.join(" "),
+      (event) => {
+        if (primaryAction === "open") {
+          void openAvailableRecentProject(project, event.currentTarget);
+        } else if (primaryAction === "retry") {
+          void retryRecentProject(project, event.currentTarget);
+        } else {
+          void locateRecentProject(project, event.currentTarget);
+        }
+      },
+    ));
+    if (project.availability !== "available") {
+      actions.append(recentProjectActionButton(
+        project,
+        "forget",
+        "Forget",
+        descriptionIDs.join(" "),
+        (event) => void forgetRecentProject(project, event.currentTarget),
+      ));
+    }
+    item.append(content, actions);
     elements.recents.append(item);
   });
 }
 
-async function loadRecentProjects() {
+function beginRecentProjectOperation(entry, intent) {
+  if (
+    recentProjectsState.listLoading ||
+    !["idle", "error"].includes(recentProjectsState.phase)
+  ) return null;
+  const operationId = ++recentOperationSequence;
+  const workspace = workspaceController.capture();
+  setRecentProjectsState({ type: "begin", operationId, entry, intent });
+  return {
+    operationId,
+    entryId: entry.entryId,
+    base: entry.base,
+    epoch: workspace.epoch,
+    generation: workspace.generation,
+    intent,
+  };
+}
+
+function recentProjectOperationMatches(ticket) {
+  return recentOperationSequence === ticket.operationId &&
+    recentProjectsState.operationId === ticket.operationId &&
+    recentProjectsState.activeEntryId === ticket.entryId &&
+    recentProjectsState.activeBase === ticket.base;
+}
+
+function recentProjectOperationIsCurrent(ticket) {
+  const workspace = workspaceController.capture();
+  return recentProjectOperationMatches(ticket) &&
+    workspace.epoch === ticket.epoch &&
+    workspace.generation === ticket.generation &&
+    workspaceController.state.status !== "open" &&
+    workspaceController.state.status !== "loading";
+}
+
+function settleRecentProjectOperation(ticket, announcement, focusKey) {
+  if (!recentProjectOperationIsCurrent(ticket)) return;
+  setRecentProjectsState({ type: "settled", announcement });
+  restoreRecentProjectFocus(focusKey, ticket.operationId);
+}
+
+function failRecentProjectOperation(ticket, error, focusKey) {
+  if (!recentProjectOperationIsCurrent(ticket)) return;
+  const message =
+    `p-track could not confirm the recent-project action: ${messageFrom(error)}`;
+  setRecentProjectsState({ type: "settled" });
+  void loadRecentProjects({
+    focusKey,
+    errorMessage: message,
+  });
+}
+
+async function refreshRecentProjectsAfterOpen() {
+  const ticket = workspaceController.capture();
   try {
-    renderRecentProjects(await api().GetRecentProjects());
+    const projects = parseRecentProjects(await api().GetRecentProjectsV1());
+    if (!workspaceController.accepts(ticket, ticket.generation)) return null;
+    recentProjectsState = reduceRecentProjects(recentProjectsState, {
+      type: "loadStarted",
+    });
+    recentProjectsState = reduceRecentProjects(recentProjectsState, {
+      type: "loaded",
+      projects,
+    });
+    return projects;
+  } catch {
+    return null;
+  }
+}
+
+async function reconcileRecentProjectOpenFailure(ticket, entry, resolution, error) {
+  try {
+    const state = await api().GetWorkspaceState();
+    const exactOpen = state?.status === "open" &&
+      state.project?.root === resolution.canonicalRoot;
+    if (exactOpen) {
+      recentProjectsState = reduceRecentProjects(recentProjectsState, { type: "settled" });
+      workspaceController.publish({
+        status: state.status,
+        generation: Number(state.generation || 0),
+      });
+      renderWorkspaceState(state, true);
+      await loadSnapshot(board?.planId || 0);
+      if (resolution.canonicalRoot !== entry.canonicalPath) {
+        await refreshRecentProjectsAfterOpen();
+        showError(new Error(RECENT_RELOCATION_UNCONFIRMED));
+      }
+      return;
+    }
+    workspaceController.publish({
+      status: state.status,
+      generation: Number(state.generation || 0),
+    });
+    renderWorkspaceState(state, false);
+    if (state.status === "open") {
+      showError(error);
+      return;
+    }
+    if (!recentProjectOperationMatches(ticket)) return;
+    setRecentProjectsState({
+      type: "failed",
+      message:
+        `p-track could not confirm that “${entry.name}” opened. The recent entry was not replayed: ${messageFrom(error)}`,
+    });
+    restoreRecentProjectFocus(
+      recentProjectFocusKey(entry.entryId, ticket.intent),
+      ticket.operationId,
+    );
+  } catch (stateError) {
+    workspaceController.publish({ status: "error", generation: 0 });
+    renderWorkspaceState(
+      { status: "error", generation: 0, error: messageFrom(stateError) },
+      true,
+    );
+  }
+}
+
+async function openResolvedRecentProject(ticket, entry, resolution) {
+  if (!recentProjectOperationIsCurrent(ticket)) return;
+  setRecentProjectsState({ type: "opening" });
+  let transition = beginWorkspaceTransition();
+  try {
+    let result = parseRecentProjectOpenResult(
+      await api().OpenRecentProjectV1(
+        entry.entryId,
+        entry.base,
+        resolution.canonicalRoot,
+        resolution.confirmationToken,
+        "",
+      ),
+      entry,
+    );
+    if (!recentProjectOperationMatches(ticket)) return;
+    if (result.open.requiresConfirmation) {
+      if (!publishBackendState(result.open.state, transition, false, true)) return;
+      const confirmed = await showWorkspaceConfirmation(
+        "switch",
+        result.open.activeResources,
+        null,
+      );
+      if (!recentProjectOperationMatches(ticket)) return;
+      if (!confirmed) {
+        await api().CancelWorkspaceChange(result.open.confirmationToken);
+        setRecentProjectsState({
+          type: "settled",
+          announcement: "Project unchanged.",
+        });
+        renderWorkspaceState(result.open.state, false);
+        restoreRecentProjectFocus(
+          recentProjectFocusKey(entry.entryId, ticket.intent),
+          ticket.operationId,
+        );
+        return;
+      }
+      transition = beginWorkspaceTransition();
+      result = parseRecentProjectOpenResult(
+        await api().OpenRecentProjectV1(
+          entry.entryId,
+          entry.base,
+          resolution.canonicalRoot,
+          resolution.confirmationToken,
+          result.open.confirmationToken,
+        ),
+        entry,
+      );
+      if (!recentProjectOperationMatches(ticket)) return;
+    }
+    recentProjectsState = reduceRecentProjects(recentProjectsState, { type: "settled" });
+    if (!publishBackendState(result.open.state, transition, true)) return;
+    const warnings = [];
+    if (result.open.warning) warnings.push(result.open.warning);
+    if (result.registryStatus === "stale") {
+      warnings.push(
+        "Project opened, but its recent entry changed elsewhere and was not updated.",
+      );
+      void refreshRecentProjectsAfterOpen();
+    }
+    if (warnings.length > 0) showError(new Error(warnings.join(" ")));
   } catch (error) {
-    elements.recents.replaceChildren(emptyMemory("Recent projects are unavailable."));
-    showError(error);
+    await reconcileRecentProjectOpenFailure(ticket, entry, resolution, error);
+  }
+}
+
+async function openAvailableRecentProject(entry) {
+  const ticket = beginRecentProjectOperation(entry, "open");
+  if (!ticket) return;
+  await openResolvedRecentProject(ticket, entry, {
+    entryId: entry.entryId,
+    base: entry.base,
+    canonicalRoot: entry.canonicalPath,
+    name: entry.name,
+    resolution: "ready",
+    confirmationToken: "",
+  });
+}
+
+async function retryRecentProject(entry) {
+  const ticket = beginRecentProjectOperation(entry, "retry");
+  if (!ticket) return;
+  const focusKey = recentProjectFocusKey(entry.entryId, "retry");
+  try {
+    const resolution = parseRecentProjectResolution(
+      await api().ResolveRecentProjectV1(entry.entryId, entry.base, entry.canonicalPath),
+      entry,
+    );
+    if (!recentProjectOperationIsCurrent(ticket)) return;
+    if (resolution.resolution === "confirmation-required") {
+      setRecentProjectsState({ type: "settled" });
+      void loadRecentProjects({
+        focusKey,
+        errorMessage:
+          "This path now contains a different project. Review it with Locate…; Try Again never changes a recent entry.",
+      });
+      return;
+    }
+    await openResolvedRecentProject(ticket, entry, resolution);
+  } catch (error) {
+    failRecentProjectOperation(ticket, error, focusKey);
+  }
+}
+
+async function locateRecentProject(entry) {
+  const ticket = beginRecentProjectOperation(entry, "locate");
+  if (!ticket) return;
+  const focusKey = recentProjectFocusKey(entry.entryId, "locate");
+  try {
+    const candidatePath = await chooseProjectDirectory("locate-recent-project");
+    if (!recentProjectOperationIsCurrent(ticket)) return;
+    if (!candidatePath) {
+      settleRecentProjectOperation(
+        ticket,
+        "Folder selection canceled. Recent entry unchanged.",
+        focusKey,
+      );
+      return;
+    }
+    setRecentProjectsState({ type: "resolving" });
+    const resolution = parseRecentProjectResolution(
+      await api().ResolveRecentProjectV1(entry.entryId, entry.base, candidatePath),
+      entry,
+    );
+    if (!recentProjectOperationIsCurrent(ticket)) return;
+    if (resolution.resolution === "confirmation-required") {
+      setRecentProjectsState({ type: "confirmRelocation" });
+      const confirmed = await showRecentRelocationConfirmation(entry, resolution);
+      if (!recentProjectOperationIsCurrent(ticket)) return;
+      if (!confirmed) {
+        settleRecentProjectOperation(ticket, "Recent entry unchanged.", focusKey);
+        return;
+      }
+    }
+    await openResolvedRecentProject(ticket, entry, resolution);
+  } catch (error) {
+    failRecentProjectOperation(ticket, error, focusKey);
+  }
+}
+
+async function forgetRecentProject(entry) {
+  const ticket = beginRecentProjectOperation(entry, "forget");
+  if (!ticket) return;
+  const focusKey = recentProjectFocusKey(entry.entryId, "forget");
+  const confirmed = await showForgetRecentProjectConfirmation(entry);
+  if (!recentProjectOperationIsCurrent(ticket)) return;
+  if (!confirmed) {
+    settleRecentProjectOperation(ticket, "Recent entry unchanged.", focusKey);
+    return;
+  }
+  setRecentProjectsState({ type: "forgetting" });
+  try {
+    parseForgetRecentProjectResult(
+      await api().ForgetRecentProjectV1(entry.entryId, entry.base),
+      entry,
+    );
+    if (!recentProjectOperationIsCurrent(ticket)) return;
+    const nextFocus = focusAfterForgottenProject(
+      recentProjectsState.projects,
+      entry.entryId,
+    );
+    setRecentProjectsState({ type: "settled" });
+    await loadRecentProjects({
+      focusKey: nextFocus,
+      announcement:
+        `Removed “${entry.name}” from Recent projects. Project files were not changed.`,
+    });
+  } catch (error) {
+    failRecentProjectOperation(ticket, error, focusKey);
+  }
+}
+
+function setFirstRunState(event, focus = false) {
+  firstRunState = reduceFirstRun(firstRunState, event);
+  renderFirstRunFlow(focus);
+}
+
+function setSetupContent({ progress, eyebrow, heading, detail, status = "", error = "" }) {
+  elements.setupProgress.textContent = progress;
+  elements.setupEyebrow.textContent = eyebrow;
+  elements.setupHeading.textContent = heading;
+  elements.setupDetail.textContent = detail;
+  elements.setupStatus.textContent = status;
+  elements.setupError.textContent = error;
+}
+
+function focusFirstRunTarget() {
+  const target = document.getElementById(firstRunFocusTarget(firstRunState));
+  requestAnimationFrame(() => target?.focus());
+}
+
+function setFirstRunSectionVisible(element, visible) {
+  element.hidden = !visible;
+  element.inert = !visible;
+}
+
+function guideActionLabel(action) {
+  if (action === "create") return "Create";
+  if (action === "update") return "Update";
+  return "No change";
+}
+
+function renderProjectGuideFiles(files) {
+  elements.setupGuideFiles.replaceChildren();
+  files.forEach((file) => {
+    const item = document.createElement("article");
+    item.className = "setup-guide-file";
+    const header = document.createElement("div");
+    header.className = "setup-guide-file-header";
+    const path = document.createElement("p");
+    path.className = "setup-guide-path";
+    path.textContent = file.path;
+    const counts = document.createElement("p");
+    counts.className = "setup-guide-counts";
+    counts.textContent = file.action === "no-change"
+      ? "No change"
+      : `${guideActionLabel(file.action)} · +${file.additions} −${file.deletions}`;
+    header.append(path, counts);
+    item.append(header);
+    if (file.diff) {
+      const diff = document.createElement("pre");
+      diff.className = "setup-guide-diff";
+      diff.tabIndex = 0;
+      diff.setAttribute("aria-label", `${file.path} bounded diff`);
+      const code = document.createElement("code");
+      code.textContent = file.diff;
+      diff.append(code);
+      item.append(diff);
+    }
+    elements.setupGuideFiles.append(item);
+  });
+}
+
+function appendTextItems(target, items) {
+  target.replaceChildren();
+  items.forEach((text) => {
+    const item = document.createElement("li");
+    item.textContent = text;
+    target.append(item);
+  });
+}
+
+function renderFirstRunFlow(focus = false) {
+  const idle = firstRunState.phase === "idle";
+  updateAboutUpdatesAvailability();
+  elements.openProject.disabled = !idle;
+  elements.switchProject.disabled = !idle;
+  elements.closeProject.disabled = !idle;
+  setFirstRunSectionVisible(elements.welcomePanel, idle);
+  setFirstRunSectionVisible(elements.setupPanel, !idle);
+  // Keep the focused heading and dedicated status/alert regions outside the
+  // busy subtree so progress stays announceable while actions are locked.
+  elements.stateCard.removeAttribute("aria-busy");
+  setAriaBoolean(
+    elements.setupOperation,
+    "aria-busy",
+    firstRunState.phase === "validating" ||
+      firstRunState.phase === "guide-previewing" ||
+      firstRunState.phase === "committing" ||
+      firstRunState.phase === "reconciling",
+  );
+  elements.setupTargetSummary.hidden = true;
+  setFirstRunSectionVisible(elements.setupGoalForm, false);
+  setFirstRunSectionVisible(elements.setupGuide, false);
+  setFirstRunSectionVisible(elements.setupReview, false);
+  setFirstRunSectionVisible(elements.setupExistingActions, false);
+  setFirstRunSectionVisible(elements.setupNewTargetActions, false);
+  setFirstRunSectionVisible(elements.setupRecoveryActions, false);
+  setFirstRunSectionVisible(elements.setupUncertainActions, false);
+  elements.setupRetry.hidden = true;
+  elements.setupResume.hidden = true;
+  elements.setupOpenRecovery.hidden = true;
+  elements.setupRecoveryHelp.hidden = true;
+  elements.setupRecoveryChoose.hidden = false;
+  elements.setupReturnWelcome.hidden = false;
+  elements.setupReturnWelcome.textContent = "Return to Welcome";
+  elements.setupGoalError.textContent = "";
+  elements.setupGoal.removeAttribute("aria-invalid");
+
+  if (idle) {
+    if (focus) focusFirstRunTarget();
+    return;
+  }
+
+  const showTarget = () => {
+    elements.setupTargetSummary.hidden = false;
+    elements.setupTarget.textContent = firstRunState.canonicalRoot;
+  };
+  const showCommittedGuideRecoveryActions = () => {
+    if (!firstRunState.resumeLocked || firstRunState.checkpoint === "none") return;
+    setFirstRunSectionVisible(elements.setupRecoveryActions, true);
+    elements.setupOpenRecovery.hidden = !canOpenPreservedFirstRunProject(
+      firstRunState,
+    );
+    elements.setupRecoveryHelp.hidden = false;
+    elements.setupRecoveryChoose.hidden = true;
+    elements.setupReturnWelcome.hidden = true;
+  };
+  switch (firstRunState.phase) {
+    case "picking":
+      setSetupContent({
+        progress: "Step 1 of 4",
+        eyebrow: firstRunState.intent === "initialize" ? "Initialize project" : "Open project",
+        heading: "Choose a project folder",
+        detail: "Use the native folder picker to continue.",
+      });
+      break;
+    case "validating":
+      setSetupContent({
+        progress: "Step 1 of 4",
+        eyebrow: firstRunState.intent === "initialize" ? "Initialize project" : "Open project",
+        heading: "Checking this folder…",
+        detail: "p-track is resolving the canonical folder and checking project state without writing files.",
+        status: "Validating the selected folder without making changes.",
+      });
+      break;
+    case "existing":
+      showTarget();
+      setFirstRunSectionVisible(elements.setupExistingActions, true);
+      setSetupContent({
+        progress: "Step 1 of 4",
+        eyebrow: "Existing project found",
+        heading: "This folder already has a p-track project",
+        detail: "Open the existing project, or choose another folder to initialize.",
+      });
+      break;
+    case "target-new":
+      showTarget();
+      setFirstRunSectionVisible(elements.setupNewTargetActions, true);
+      setSetupContent({
+        progress: "Step 1 of 4",
+        eyebrow: "Initialize project",
+        heading: "Continue with this folder?",
+        detail:
+          "Your north-star goal is preserved. Continue to edit it, choose another folder, or explicitly cancel setup.",
+      });
+      break;
+    case "goal":
+      showTarget();
+      setFirstRunSectionVisible(elements.setupGoalForm, true);
+      elements.setupGoal.value = firstRunState.goal;
+      elements.setupGoalError.textContent = firstRunState.goalError;
+      setAriaBoolean(
+        elements.setupGoal,
+        "aria-invalid",
+        Boolean(firstRunState.goalError),
+      );
+      setSetupContent({
+        progress: "Step 2 of 4",
+        eyebrow: "Project direction",
+        heading: "Set the north-star goal",
+        detail: "Describe the durable outcome this project is working toward.",
+      });
+      break;
+    case "guide": {
+      showTarget();
+      setFirstRunSectionVisible(elements.setupGuide, true);
+      const hasPreview = firstRunState.guideAvailable === true &&
+        firstRunState.guideFiles.length > 0;
+      setFirstRunSectionVisible(elements.setupGuidePreview, hasPreview);
+      setFirstRunSectionVisible(elements.setupGuideInstallActions, hasPreview);
+      setFirstRunSectionVisible(elements.setupGuideDefaultActions, !hasPreview);
+      setFirstRunSectionVisible(elements.setupGuideStaleActions, false);
+      elements.setupGuideDefaultChoice.hidden = !firstRunState.guideSkipAllowed;
+      elements.setupGuideSkip.hidden = !firstRunState.guideSkipAllowed;
+      elements.setupGuidePreviewSkip.hidden = !firstRunState.guideSkipAllowed;
+      elements.setupGuidePreviewButton.hidden = firstRunState.guideAvailable === false;
+      elements.setupGuidePreviewBack.hidden = firstRunState.resumeLocked;
+      elements.setupGuidePreviewCancel.hidden = firstRunState.resumeLocked;
+      elements.setupGuideBack.hidden = firstRunState.resumeLocked;
+      elements.setupGuideCancel.hidden = firstRunState.resumeLocked;
+      showCommittedGuideRecoveryActions();
+      if (hasPreview) renderProjectGuideFiles(firstRunState.guideFiles);
+      setSetupContent({
+        progress: "Step 3 of 4",
+        eyebrow: "Project guidance",
+        heading: hasPreview ? "Review exact guide changes" : "Choose project guidance",
+        detail: hasPreview
+          ? "The diff is read-only. Install only if every target and line is expected."
+          : firstRunState.resumeNoWrite
+          ? "No project files were written. You can try again safely."
+          : !firstRunState.guideSkipAllowed
+          ? firstRunState.guidePartiallyApplied
+            ? projectGuideRecoveryCopy("partially-applied").detail
+            : "This initialization operation already has durable progress. Preview the current guide files to resume safely."
+          : "Skip Guide is selected by default. Previewing does not write files.",
+        status: firstRunState.guideAvailable === false
+          ? PROJECT_GUIDANCE_UNAVAILABLE
+          : "",
+        error: firstRunState.guideAvailable === null ? firstRunState.message : "",
+      });
+      break;
+    }
+    case "guide-previewing":
+      showTarget();
+      setSetupContent({
+        progress: "Step 3 of 4",
+        eyebrow: "Project guidance",
+        heading: "Preparing the guide preview…",
+        detail: "p-track is reading only AGENTS.md and CLAUDE.md and will not write files.",
+        status: "Checking current guide files and generating a bounded diff.",
+      });
+      break;
+    case "guide-stale":
+      showTarget();
+      setFirstRunSectionVisible(elements.setupGuide, true);
+      setFirstRunSectionVisible(elements.setupGuidePreview, false);
+      setFirstRunSectionVisible(elements.setupGuideInstallActions, false);
+      setFirstRunSectionVisible(elements.setupGuideDefaultActions, false);
+      setFirstRunSectionVisible(elements.setupGuideStaleActions, true);
+      elements.setupGuideDefaultChoice.hidden = true;
+      elements.setupGuideStaleBack.hidden = firstRunState.resumeLocked;
+      elements.setupGuideStaleCancel.hidden = firstRunState.resumeLocked;
+      elements.setupGuideStaleSkip.hidden = !firstRunState.guideSkipAllowed;
+      showCommittedGuideRecoveryActions();
+      const recoveryCopy = projectGuideRecoveryCopy(
+        firstRunState.guidePartiallyApplied ? "partially-applied" : "stale",
+      );
+      setSetupContent({
+        progress: "Guide review required",
+        eyebrow: "Project guidance",
+        heading: recoveryCopy.heading,
+        detail: firstRunState.resumeNoWrite
+          ? "No project files were written. You can try again safely."
+          : firstRunState.guidePartiallyApplied
+          ? recoveryCopy.detail
+          : firstRunState.resumeLocked
+          ? firstRunState.storageAlreadyCreated
+            ? `Private project storage is already durable. Review the current guide files${firstRunState.guideSkipAllowed ? " or explicitly skip them" : ""} to finish initialization.`
+            : "This initialization operation already has durable progress. Review the current guide files to resume safely."
+          : "Nothing was written. Review the current guide files or explicitly skip them.",
+        error: firstRunState.message,
+      });
+      break;
+    case "review":
+      showTarget();
+      setFirstRunSectionVisible(elements.setupReview, true);
+      showCommittedGuideRecoveryActions();
+      const storagePath = firstRunStoragePath(firstRunState.canonicalRoot);
+      elements.setupStorageSummary.textContent = firstRunState.storageAlreadyCreated
+        ? `${storagePath} is already durable for this operation.`
+        : firstRunState.resumedOperation || firstRunState.guidePostCommit
+        ? `Resume this operation and create ${storagePath}.`
+        : `Create ${storagePath}.`;
+      elements.setupUntouchedRoot.textContent =
+        `No files inside ${firstRunState.canonicalRoot} beyond this complete list will change.`;
+      elements.setupReviewGoal.textContent = firstRunState.goal;
+      const guideCopy = (firstRunState.resumedOperation || firstRunState.guidePostCommit) &&
+          firstRunState.guideFiles.length === 0
+        ? durableProjectGuideReviewCopy(firstRunState.guideChoice)
+        : projectGuideReviewCopy(
+          firstRunState.guideChoice,
+          firstRunState.guideFiles,
+        );
+      elements.setupReviewGuideChoice.textContent = guideCopy.label;
+      elements.setupReviewGuideDetail.textContent = guideCopy.detail;
+      appendTextItems(elements.setupReviewGuideChanges, guideCopy.changes);
+      appendTextItems(elements.setupCompleteChanges, [
+        `${storagePath} · ${firstRunState.storageAlreadyCreated ? "already created" : "create"} private project database`,
+        ...guideCopy.changes,
+      ]);
+      elements.setupReviewBack.hidden = firstRunState.resumeLocked;
+      elements.setupReviewCancel.hidden = firstRunState.resumeLocked;
+      elements.setupCommit.textContent = firstRunState.resumedOperation ||
+          firstRunState.guidePostCommit
+        ? firstRunState.resumeNoWrite ? "Resume Initialization" : "Finish Initialization"
+        : "Initialize Project";
+      setSetupContent({
+        progress: "Step 4 of 4",
+        eyebrow: "Review changes",
+        heading: firstRunState.resumedOperation || firstRunState.guidePostCommit
+          ? firstRunState.resumeNoWrite
+            ? "Resume this project initialization?"
+            : "Finish this project initialization?"
+          : "Initialize this project?",
+        detail: firstRunState.resumeNoWrite
+          ? "No project files were written. You can try again safely. Confirm to resume the same operation."
+          : firstRunState.resumedOperation || firstRunState.guidePostCommit
+          ? firstRunState.storageAlreadyCreated
+            ? "Project storage is already durable. Confirm the reviewed guide choice to resume the same operation."
+            : "This operation already has durable progress. Confirm the reviewed guide choice to resume before project storage is created."
+          : "Review every proposed change. Nothing is written until you confirm.",
+      });
+      break;
+    case "committing":
+      showTarget();
+      setSetupContent({
+        progress: "Step 4 of 4",
+        eyebrow: "Initializing project",
+        heading: firstRunState.resumedOperation || firstRunState.guidePostCommit
+          ? "Finishing project initialization…"
+          : "Creating local project state…",
+        detail: firstRunState.resumedOperation || firstRunState.guidePostCommit
+          ? firstRunState.storageAlreadyCreated
+            ? "Private project storage is already durable. p-track is resuming the same operation without replaying completed steps."
+            : "p-track is resuming the same durable operation before creating private project storage."
+          : "Keep p-track open while it completes the recoverable initialization sequence.",
+        status: "Initialization has started and can no longer be canceled.",
+      });
+      break;
+    case "reconciling":
+      showTarget();
+      setSetupContent({
+        progress: "Checking status",
+        eyebrow: "Initialization status",
+        heading: "Checking the durable operation…",
+        detail: "p-track is reading the saved operation status without replaying initialization.",
+        status: "Project navigation remains locked until the operation reaches a definitive state.",
+      });
+      break;
+    case "uncertain":
+      showTarget();
+      setFirstRunSectionVisible(elements.setupUncertainActions, true);
+      setSetupContent({
+        progress: "Status unavailable",
+        eyebrow: "Initialization status",
+        heading: "Keep this operation open",
+        detail: firstRunState.message || "p-track could not confirm whether initialization is still running.",
+        error: firstRunState.checkpoint && firstRunState.checkpoint !== "none"
+          ? `Last durable checkpoint: ${firstRunState.checkpoint}`
+          : "No definitive completion state is available yet.",
+      });
+      break;
+    case "recovery":
+      if (firstRunState.canonicalRoot) showTarget();
+      setFirstRunSectionVisible(elements.setupRecoveryActions, true);
+      const recoveryActions = firstRunRecoveryActions(
+        firstRunState.recoveryMode,
+        firstRunState.checkpoint,
+      );
+      elements.setupResume.hidden = !recoveryActions.resume;
+      elements.setupOpenRecovery.hidden = !recoveryActions.open;
+      elements.setupRecoveryHelp.hidden = !recoveryActions.help;
+      elements.setupRecoveryChoose.hidden = !recoveryActions.chooseAnother;
+      elements.setupReturnWelcome.hidden = !recoveryActions.returnToWelcome;
+      setSetupContent({
+        progress: "Recovery required",
+        eyebrow: "Project recovery",
+        heading: firstRunState.recoveryMode === "durable"
+          ? "Resume this project setup"
+          : "This project needs recovery",
+        detail: firstRunState.message || "This folder contains project state that cannot be changed safely.",
+        error: firstRunState.checkpoint && firstRunState.checkpoint !== "none"
+          ? `Last durable checkpoint: ${firstRunState.checkpoint}. The project and its setup choices are preserved.`
+          : firstRunState.recoveryMode === "durable"
+          ? "The initialization operation is preserved. Check its authoritative state before continuing."
+          : firstRunState.recoveryMode === "blocked"
+          ? "The preserved checkpoint cannot be resumed automatically. p-track will not repair or remove project files."
+          : "p-track will not repair or remove project files automatically.",
+      });
+      break;
+    case "failed":
+      if (firstRunState.canonicalRoot) showTarget();
+      setFirstRunSectionVisible(elements.setupRecoveryActions, true);
+      elements.setupRetry.hidden = !firstRunState.canonicalRoot;
+      elements.setupRecoveryChoose.hidden = !firstRunState.canonicalRoot;
+      elements.setupReturnWelcome.textContent = firstRunState.errorKind === "project-not-found"
+        ? "Cancel Setup"
+        : "Return to Welcome";
+      setSetupContent({
+        progress: "Setup stopped",
+        eyebrow: "Project setup",
+        heading: firstRunState.intent === "open"
+          ? "This project could not be opened"
+          : firstRunState.errorKind === "project-not-found"
+          ? "This folder is no longer available."
+          : "This project was not initialized",
+        detail: firstRunState.message || "p-track could not safely complete setup.",
+        error: "No project files were written by this attempt. Retry checks the folder again before any write.",
+      });
+      break;
+  }
+  if (focus) focusFirstRunTarget();
+}
+
+function setFirstPlanState(event, focus = false) {
+  firstPlanState = reduceFirstPlan(firstPlanState, event);
+  renderFirstPlanOnboarding(focus);
+}
+
+function focusFirstPlanTarget() {
+  const target = document.getElementById(firstPlanFocusTarget(firstPlanState));
+  requestAnimationFrame(() => target?.focus());
+}
+
+function renderFirstPlanOnboarding(focus = false) {
+  const active = firstPlanState.phase !== "idle" &&
+    workspaceController.state.status === "open";
+  updateAboutUpdatesAvailability();
+  setFirstRunSectionVisible(elements.onboarding, active);
+  elements.planList.inert = active;
+  elements.sidebarToggle.disabled = active;
+  elements.sidebarResize.inert = active;
+  if (terminalHandle) terminalHandle.setLayoutLocked(active);
+  else if (active) {
+    elements.boardPanelToggle.disabled = true;
+    elements.terminalPanelToggle.disabled = true;
+  }
+  if (!active) return;
+
+  elements.stateScreen.hidden = false;
+  elements.workspace.hidden = true;
+  elements.overviewPage.hidden = true;
+  elements.settingsPage.hidden = true;
+  elements.welcomePanel.hidden = true;
+  elements.welcomePanel.inert = true;
+  elements.setupPanel.hidden = true;
+  elements.setupPanel.inert = true;
+  elements.navBoard.disabled = true;
+  elements.navOverview.disabled = true;
+  elements.navSettings.disabled = true;
+  elements.switchProject.disabled = true;
+  elements.closeProject.disabled = true;
+
+  elements.stateCard.removeAttribute("aria-busy");
+  setFirstRunSectionVisible(elements.onboardingPlanForm, false);
+  setFirstRunSectionVisible(elements.onboardingTaskForm, false);
+  setFirstRunSectionVisible(elements.onboardingStartFailedActions, false);
+  elements.onboardingPlanError.textContent = "";
+  elements.onboardingTaskError.textContent = "";
+  elements.onboardingStatus.textContent = "";
+  elements.onboardingError.textContent = "";
+  elements.onboardingPlanTitle.removeAttribute("aria-invalid");
+  elements.onboardingTaskTitle.removeAttribute("aria-invalid");
+  setAriaBoolean(
+    elements.onboardingOperation,
+    "aria-busy",
+    ["creating-plan", "creating-task", "starting-task"].includes(
+      firstPlanState.phase,
+    ),
+  );
+
+  if (["plan", "creating-plan", "plan-failed"].includes(firstPlanState.phase)) {
+    setFirstRunSectionVisible(elements.onboardingPlanForm, true);
+    elements.onboardingProgress.textContent = "Next step · Plan";
+    elements.onboardingHeading.textContent = "Create the first plan";
+    elements.onboardingDetail.textContent =
+      "Give this project an active plan, or skip for now and use the empty workspace.";
+    elements.onboardingPlanTitle.value = firstPlanState.planTitle;
+    elements.onboardingPlanError.textContent = firstPlanState.planError;
+    setAriaBoolean(
+      elements.onboardingPlanTitle,
+      "aria-invalid",
+      Boolean(firstPlanState.planError),
+    );
+    const actions = postProjectOnboardingActions(
+      firstPlanState.phase === "plan-failed" ? "plan-failed" : "plan",
+    );
+    elements.onboardingCreatePlan.textContent = actions.primary;
+    elements.onboardingSkipPlan.textContent = actions.secondary;
+    elements.onboardingPlanForm.inert = firstPlanState.phase === "creating-plan";
+    if (firstPlanState.phase === "creating-plan") {
+      elements.onboardingStatus.textContent = "Saving or reconciling the first plan…";
+    } else if (firstPlanState.phase === "plan-failed") {
+      elements.onboardingError.textContent = firstPlanState.message;
+    }
+  } else if (["task", "creating-task", "task-create-failed"].includes(
+    firstPlanState.phase,
+  )) {
+    setFirstRunSectionVisible(elements.onboardingTaskForm, true);
+    elements.onboardingProgress.textContent = "Next step · Task";
+    elements.onboardingHeading.textContent = "Add the first task";
+    elements.onboardingDetail.textContent =
+      "The plan is active. Add one task, then choose whether to start it now.";
+    elements.onboardingActivePlan.textContent = firstPlanState.activePlanTitle;
+    elements.onboardingTaskTitle.value = firstPlanState.taskTitle;
+    elements.onboardingStartNow.checked = firstPlanState.startNow;
+    elements.onboardingTaskError.textContent = firstPlanState.taskError;
+    setAriaBoolean(
+      elements.onboardingTaskTitle,
+      "aria-invalid",
+      Boolean(firstPlanState.taskError),
+    );
+    const actions = postProjectOnboardingActions(
+      firstPlanState.phase === "task-create-failed" ? "task-create-failed" : "task",
+    );
+    elements.onboardingCreateTask.textContent = actions.primary;
+    elements.onboardingFinishWithPlan.textContent = actions.secondary;
+    elements.onboardingTaskForm.inert = firstPlanState.phase === "creating-task";
+    if (firstPlanState.phase === "creating-task") {
+      elements.onboardingStatus.textContent = "Saving or reconciling the first task…";
+    } else if (firstPlanState.phase === "task-create-failed") {
+      elements.onboardingError.textContent = firstPlanState.message;
+    }
+  } else if (firstPlanState.phase === "starting-task") {
+    elements.onboardingProgress.textContent = "Next step · Start task";
+    elements.onboardingHeading.textContent = "Reconciling the requested start…";
+    elements.onboardingDetail.textContent =
+      `Task #${firstPlanState.taskId} is durable. p-track is reconciling the requested start.`;
+    elements.onboardingStatus.textContent = "Checking the explicit start request…";
+  } else if (firstPlanState.phase === "task-start-failed") {
+    setFirstRunSectionVisible(elements.onboardingStartFailedActions, true);
+    elements.onboardingProgress.textContent = "Task saved · Start stopped";
+    const actions = postProjectOnboardingActions("task-start-failed");
+    elements.onboardingHeading.textContent = "Check whether the task started";
+    elements.onboardingDetail.textContent =
+      `Task #${firstPlanState.taskId} and plan “${firstPlanState.activePlanTitle}” are durable. Retry safely to reconcile its status.`;
+    elements.onboardingRetryStart.textContent = actions.primary;
+    elements.onboardingFinishSetup.textContent = actions.secondary;
+    elements.onboardingError.textContent = firstPlanState.message;
+  }
+  if (focus) focusFirstPlanTarget();
+}
+
+function beginFirstPlanOnboarding(generation) {
+  setFirstPlanState({ type: "begin", generation }, true);
+}
+
+function sidebarHeadingUnavailableForFocus() {
+  return sidebarHidden || window.matchMedia("(max-width: 600px)").matches;
+}
+
+async function finishFirstPlanOnboarding(planId = firstPlanState.planId) {
+  setFirstPlanState({ type: "finish" });
+  elements.stateCard.removeAttribute("aria-busy");
+  elements.stateScreen.hidden = true;
+  elements.workspace.inert = false;
+  elements.workspace.removeAttribute("aria-busy");
+  elements.overviewPage.inert = false;
+  elements.overviewPage.removeAttribute("aria-busy");
+  elements.settingsPage.inert = false;
+  elements.settingsPage.removeAttribute("aria-busy");
+  elements.navBoard.disabled = false;
+  elements.navOverview.disabled = false;
+  elements.navSettings.disabled = false;
+  elements.switchProject.disabled = false;
+  elements.closeProject.disabled = false;
+  view = "board";
+  applyView();
+  document.getElementById(
+    firstPlanExitFocusTarget(planId, sidebarHeadingUnavailableForFocus()),
+  )?.focus();
+  await loadSnapshot(planId > 0 ? planId : 0);
+}
+
+function onboardingContextIsCurrent(ticket, phase) {
+  const current = workspaceController.capture();
+  return workspaceController.state.status === "open" &&
+    current.epoch === ticket.epoch &&
+    current.generation === ticket.generation &&
+    firstPlanState.generation === ticket.generation &&
+    firstPlanState.phase === phase;
+}
+
+function onboardingResponseIsCurrent(ticket, phase, generation) {
+  return onboardingContextIsCurrent(ticket, phase) &&
+    workspaceController.accepts(ticket, generation);
+}
+
+async function submitFirstPlan(event) {
+  event.preventDefault();
+  if (!(firstPlanState.phase === "plan" || firstPlanState.phase === "plan-failed")) return;
+  const validation = validateOnboardingTitle(elements.onboardingPlanTitle.value, "plan");
+  if (validation.error) {
+    setFirstPlanState({
+      type: "planInvalid",
+      title: elements.onboardingPlanTitle.value,
+      message: validation.error,
+    }, true);
+    return;
+  }
+  const ticket = workspaceController.capture();
+  setFirstPlanState({ type: "createPlan", title: validation.value }, true);
+  try {
+    const result = await createFirstPlan(
+      api(),
+      ticket.generation,
+      validation.value,
+    );
+    if (!onboardingResponseIsCurrent(
+      ticket,
+      "creating-plan",
+      result.state.generation,
+    )) return;
+    setFirstPlanState({
+      type: "planCreated",
+      planId: result.plan.id,
+      title: result.plan.title,
+    }, true);
+  } catch (error) {
+    if (!onboardingContextIsCurrent(ticket, "creating-plan")) return;
+    setFirstPlanState({
+      type: "planFailed",
+      message: `p-track could not confirm the first plan. Try Again to reconcile safely: ${messageFrom(error)}`,
+    }, true);
+  }
+}
+
+async function submitFirstTask(event) {
+  event.preventDefault();
+  if (!(firstPlanState.phase === "task" || firstPlanState.phase === "task-create-failed")) return;
+  const validation = validateOnboardingTitle(elements.onboardingTaskTitle.value, "task");
+  const startNow = elements.onboardingStartNow.checked;
+  if (validation.error) {
+    setFirstPlanState({
+      type: "taskInvalid",
+      title: elements.onboardingTaskTitle.value,
+      startNow,
+      message: validation.error,
+    }, true);
+    return;
+  }
+  const ticket = workspaceController.capture();
+  const planId = firstPlanState.planId;
+  setFirstPlanState({
+    type: "createTask",
+    title: validation.value,
+    startNow,
+  }, true);
+  try {
+    const result = await createFirstTask(
+      api(),
+      ticket.generation,
+      planId,
+      validation.value,
+    );
+    if (!onboardingResponseIsCurrent(
+      ticket,
+      "creating-task",
+      result.state.generation,
+    )) return;
+    setFirstPlanState({
+      type: "taskCreated",
+      taskId: result.task.id,
+      updatedAt: result.task.updatedAt,
+      status: result.task.status,
+    }, true);
+    if (result.task.status === "doing" || !startNow) {
+      await finishFirstPlanOnboarding(planId);
+      return;
+    }
+    await startFirstTask();
+  } catch (error) {
+    if (!onboardingContextIsCurrent(ticket, "creating-task")) return;
+    setFirstPlanState({
+      type: "taskFailed",
+      message: `p-track could not confirm the first task. Try Again to reconcile safely: ${messageFrom(error)}`,
+    }, true);
+  }
+}
+
+async function startFirstTask() {
+  if (firstPlanState.phase !== "starting-task") return;
+  const ticket = workspaceController.capture();
+  const planId = firstPlanState.planId;
+  const taskId = firstPlanState.taskId;
+  const taskTitle = firstPlanState.taskTitle;
+  const expectedUpdatedAt = firstPlanState.taskUpdatedAt;
+  try {
+    const result = await runStartFirstTask(
+      api(),
+      ticket.generation,
+      planId,
+      taskId,
+      taskTitle,
+      expectedUpdatedAt,
+    );
+    if (!onboardingResponseIsCurrent(
+      ticket,
+      "starting-task",
+      result.state.generation,
+    )) return;
+    setFirstPlanState({ type: "taskStarted" });
+    await finishFirstPlanOnboarding(planId);
+  } catch (error) {
+    if (!onboardingContextIsCurrent(ticket, "starting-task")) return;
+    setFirstPlanState({
+      type: "taskStartFailed",
+      message: `p-track could not confirm whether the task started. Try Starting Again to reconcile safely: ${messageFrom(error)}`,
+    }, true);
+  }
+}
+
+function retryFirstTaskStart() {
+  if (firstPlanState.phase !== "task-start-failed") return;
+  setFirstPlanState({ type: "retryStart" }, true);
+  void startFirstTask();
+}
+
+async function loadRecentProjects({
+  focusKey = "",
+  announcement = "",
+  errorMessage = "",
+} = {}) {
+  if (
+    workspaceController.state.status === "open" ||
+    workspaceController.state.status === "loading" ||
+    recentProjectsState.phase !== "idle" ||
+    recentProjectsState.listLoading
+  ) return false;
+  const request = ++recentListRequest;
+  const ticket = workspaceController.capture();
+  const operationSequence = recentOperationSequence;
+  setRecentProjectsState({ type: "loadStarted" });
+  try {
+    const projects = parseRecentProjects(await api().GetRecentProjectsV1());
+    const current = workspaceController.capture();
+    if (
+      request !== recentListRequest ||
+      operationSequence !== recentOperationSequence ||
+      current.epoch !== ticket.epoch ||
+      current.generation !== ticket.generation ||
+      workspaceController.state.status === "open" ||
+      workspaceController.state.status === "loading"
+    ) return false;
+    setRecentProjectsState({ type: "loaded", projects, announcement });
+    if (errorMessage) {
+      setRecentProjectsState({ type: "alert", message: errorMessage });
+    }
+    if (focusKey) {
+      requestAnimationFrame(() => {
+        const focusCurrent = workspaceController.capture();
+        if (
+          request !== recentListRequest ||
+          operationSequence !== recentOperationSequence ||
+          recentProjectsState.phase !== "idle" ||
+          recentProjectsState.listLoading ||
+          firstRunState.phase !== "idle" ||
+          focusCurrent.epoch !== ticket.epoch ||
+          focusCurrent.generation !== ticket.generation ||
+          workspaceController.state.status === "open" ||
+          workspaceController.state.status === "loading"
+        ) return;
+        recentProjectActionElement(focusKey)?.focus();
+      });
+    }
+    return true;
+  } catch (error) {
+    const current = workspaceController.capture();
+    if (
+      request !== recentListRequest ||
+      operationSequence !== recentOperationSequence ||
+      current.epoch !== ticket.epoch ||
+      current.generation !== ticket.generation ||
+      workspaceController.state.status === "open" ||
+      workspaceController.state.status === "loading"
+    ) return false;
+    setRecentProjectsState({
+      type: "loadFailed",
+      message: errorMessage
+        ? `${errorMessage} Registry reload also failed: ${messageFrom(error)}`
+        : `Recent projects are unavailable: ${messageFrom(error)}`,
+    });
+    if (focusKey) restoreRecentProjectFocus(focusKey);
+    return false;
   }
 }
 
@@ -3843,6 +5236,7 @@ function applyView() {
 }
 
 function setView(nextView, focusHeading = false) {
+  if (firstPlanState.phase !== "idle") return;
   view = ["overview", "settings"].includes(nextView) ? nextView : "board";
   applyView();
   if (view === "overview") {
@@ -3884,7 +5278,7 @@ function renderWorkspaceState(state, focus = false) {
   elements.navSettings.disabled = !open;
   elements.switchProject.hidden = !open;
   elements.closeProject.hidden = !open;
-  elements.openProject.hidden = open;
+  elements.openProject.hidden = true;
   elements.workspace.removeAttribute("aria-busy");
   elements.workspace.inert = false;
   elements.overviewPage.removeAttribute("aria-busy");
@@ -3895,6 +5289,8 @@ function renderWorkspaceState(state, focus = false) {
   elements.closeProject.disabled = false;
 
   if (open) {
+    firstRunState = { ...initialFirstRunState };
+    renderFirstRunFlow(false);
     elements.projectName.textContent = state.project?.name || "Project workspace";
     if (!wasOpen) {
       elements.planTotal.textContent = "0";
@@ -3902,10 +5298,23 @@ function renderWorkspaceState(state, focus = false) {
     }
     void loadRecentProjects();
     void ensureTerminalDock(state.generation, state.project.root);
-    if (focus) requestAnimationFrame(() => elements.projectName.focus());
+    if (firstPlanState.phase !== "idle") {
+      renderFirstPlanOnboarding(focus);
+      return;
+    }
+    if (focus) {
+      requestAnimationFrame(() => {
+        (sidebarHeadingUnavailableForFocus()
+          ? elements.planTitle
+          : elements.projectName).focus();
+      });
+    }
     return;
   }
 
+  firstPlanState = { ...initialFirstPlanState };
+  renderFirstPlanOnboarding(false);
+  elements.stateCard.removeAttribute("aria-busy");
   snapshotSequence += 1;
   activeSnapshotRequest = null;
   queuedSnapshotPlanId = 0;
@@ -3941,10 +5350,14 @@ function renderWorkspaceState(state, focus = false) {
   elements.stateHeading.textContent = copy.heading;
   elements.stateDetail.textContent = copy.detail;
   elements.stateOpen.hidden = state.status === "loading";
+  elements.stateInitialize.hidden = state.status === "loading" || state.status !== "welcome";
+  if (firstRunState.phase === "idle") renderFirstRunFlow(false);
   if (state.status !== "loading") void loadRecentProjects();
   if (focus) {
     requestAnimationFrame(() => {
-      if (!elements.stateOpen.hidden) elements.stateOpen.focus();
+      if (state.status === "welcome" && !elements.stateInitialize.hidden) {
+        elements.stateInitialize.focus();
+      } else if (!elements.stateOpen.hidden) elements.stateOpen.focus();
       else elements.stateHeading.focus();
     });
   }
@@ -4012,32 +5425,735 @@ async function recoverWorkspaceState(error) {
   }
 }
 
-async function chooseProjectDirectory() {
-  const path = await api().PickProjectDirectory();
+async function chooseProjectDirectory(purpose) {
+  const path = await api().PickProjectDirectory(purpose);
   return typeof path === "string" ? path : "";
 }
 
-async function requestOpenProject(selectedPath = "") {
+function firstRunStoragePath(root) {
+  const separator = root.includes("\\") ? "\\" : "/";
+  return `${root.replace(/[\\/]$/, "")}${separator}.ptrack${separator}ptrack.redb`;
+}
+
+async function openExactProject(root) {
+  let transition = beginWorkspaceTransition();
+  const outcome = await runExactProjectOpen(
+    api(),
+    root,
+    async (result) => {
+      if (!publishBackendState(result.state, transition, false, true)) {
+        return "abort";
+      }
+      return await showWorkspaceConfirmation("switch", result.activeResources)
+        ? "confirm"
+        : "cancel";
+    },
+    () => {
+      transition = beginWorkspaceTransition();
+    },
+  );
+  if (outcome.kind === "aborted") return;
+  if (outcome.kind === "cancelled") {
+    renderWorkspaceState(outcome.result.state, true);
+    return false;
+  }
+  const result = outcome.result;
+  if (!publishBackendState(result.state, transition, true)) return false;
+  if (result.warning) showError(result.warning);
+  return result.state;
+}
+
+async function requestOpenProject(
+  selectedPath = "",
+  returnFocus = null,
+  pickerCancelState = null,
+) {
+  if (recentProjectOperationActive()) return;
+  const hadOpenWorkspace = workspaceState.status === "open";
+  const focusId = returnFocus?.id || (hadOpenWorkspace
+    ? "switch-project-button"
+    : "state-open-project-button");
+  let path = selectedPath;
   try {
-    const path = selectedPath || (await chooseProjectDirectory());
-    if (!path) return;
-    let transition = beginWorkspaceTransition();
-    let result = await api().OpenProject(path, "");
-    if (result.requiresConfirmation) {
-      if (!publishBackendState(result.state, transition, false, true)) return;
-      const confirmed = await showWorkspaceConfirmation("switch", result.activeResources);
-      if (!confirmed) {
-        await api().CancelWorkspaceChange(result.confirmationToken);
-        renderWorkspaceState(result.state, true);
+    setFirstRunState({
+      type: pickerCancelState ? "repick" : "pick",
+      intent: "open",
+      returnFocusId: focusId,
+    });
+    path ||= await chooseProjectDirectory("open");
+    if (!path) {
+      if (pickerCancelState) {
+        setFirstRunState({ type: "pickerCancelled", restore: pickerCancelState });
+      } else {
+        setFirstRunState({ type: "pickerCancelled" });
+      }
+      if (hadOpenWorkspace) requestAnimationFrame(() => returnFocus?.focus());
+      else if (pickerCancelState) requestAnimationFrame(() => returnFocus?.focus());
+      else renderFirstRunFlow(true);
+      return;
+    }
+    setFirstRunState({ type: "validate" }, !hadOpenWorkspace);
+    if (hadOpenWorkspace) setStatus("Validating the selected project folder…");
+    const validation = await validateInitializationTarget(api(), path);
+    if (validation.kind !== "existing") {
+      const message = validation.kind === "new"
+        ? "This folder is not an initialized p-track project."
+        : validation.reason || "This folder requires recovery before it can be opened.";
+      if (hadOpenWorkspace) {
+        setFirstRunState({ type: "reset", focusId });
+        setStatus("Project unchanged");
+        showError(new Error(message));
+      } else {
+        setFirstRunState({
+          type: validation.kind === "recovery-required" ? "recovery" : "failed",
+          canonicalRoot: validation.canonicalRoot,
+          message,
+        }, true);
+      }
+      return;
+    }
+    setFirstRunState({ type: "reset", focusId });
+    await openExactProject(validation.canonicalRoot);
+  } catch (error) {
+    if (pickerCancelState && !path) {
+      firstRunState = {
+        ...pickerCancelState,
+        message: `The folder picker is unavailable: ${messageFrom(error)}`,
+      };
+      renderFirstRunFlow(true);
+      elements.setupError.textContent =
+        `The folder picker is unavailable: ${messageFrom(error)}`;
+      return;
+    }
+    if (hadOpenWorkspace) {
+      setFirstRunState({ type: "reset", focusId });
+      await recoverWorkspaceState(error);
+    } else {
+      setFirstRunState({
+        type: "failed",
+        canonicalRoot: path,
+        operationId: "",
+        message: messageFrom(error),
+      }, true);
+    }
+  }
+}
+
+async function requestInitializeProject(
+  returnFocus = elements.stateInitialize,
+  pickerCancelState = null,
+) {
+  if (recentProjectOperationActive()) return;
+  const focusId = returnFocus?.id || "state-initialize-project-button";
+  let path = "";
+  try {
+    setFirstRunState({
+      type: pickerCancelState ? "repick" : "pick",
+      intent: "initialize",
+      returnFocusId: focusId,
+    });
+    path = await chooseProjectDirectory("initialize");
+    if (!path) {
+      if (pickerCancelState) {
+        setFirstRunState({ type: "pickerCancelled", restore: pickerCancelState });
+        requestAnimationFrame(() => returnFocus?.focus());
+      } else {
+        setFirstRunState({ type: "pickerCancelled" });
+        renderFirstRunFlow(true);
+      }
+      return;
+    }
+    await validateInitializeTarget(path);
+  } catch (error) {
+    if (pickerCancelState && !path) {
+      firstRunState = {
+        ...pickerCancelState,
+        message: `The folder picker is unavailable: ${messageFrom(error)}`,
+      };
+      renderFirstRunFlow(true);
+      elements.setupError.textContent =
+        `The folder picker is unavailable: ${messageFrom(error)}`;
+      return;
+    }
+    setFirstRunState({
+      type: "failed",
+      canonicalRoot: path,
+      operationId: "",
+      message: messageFrom(error),
+    }, true);
+  }
+}
+
+async function validateInitializeTarget(
+  path,
+  { durable = false, expectedOperationId = "" } = {},
+  observedValidation = null,
+) {
+  const durableCheckpoint = firstRunState.checkpoint;
+  const durableErrorKind = firstRunState.errorKind;
+  try {
+    setFirstRunState({ type: "validate" }, true);
+    const validation = observedValidation ||
+      await validateInitializationTarget(api(), path);
+    if (durable && validation.kind === "recovery-required") {
+      setFirstRunState({
+        type: "recovery",
+        canonicalRoot: validation.canonicalRoot,
+        operationId: expectedOperationId,
+        message: validation.reason ||
+          "This preserved project setup cannot be resumed automatically.",
+        checkpoint: durableCheckpoint,
+        errorKind: durableErrorKind,
+        durable: true,
+        resumable: false,
+      }, true);
+      return;
+    }
+    if (durable && (
+      validation.canonicalRoot !== path ||
+      validation.kind !== "new" ||
+      !validation.resume ||
+      validation.operationId !== expectedOperationId
+    )) {
+      setFirstRunState({
+        type: "recovery",
+        canonicalRoot: path,
+        operationId: expectedOperationId,
+        message:
+          "The preserved initialization operation changed during revalidation and cannot be resumed automatically.",
+        checkpoint: durableCheckpoint,
+        errorKind: durableErrorKind,
+        durable: true,
+        resumable: false,
+      }, true);
+      return;
+    }
+    if (validation.resume) {
+      setFirstRunState({
+        type: "resume",
+        canonicalRoot: validation.canonicalRoot,
+        operationId: validation.operationId,
+        goal: validation.resume.goal,
+        guideChoice: validation.resume.guideChoice,
+        initialization: validation.resume.initialization,
+      }, true);
+      if (
+        validation.resume.initialization.outcome === "complete" &&
+        validation.resume.initialization.checkpoint === "desktop-bound"
+      ) {
+        await applyInitializationStatus(
+          validation.operationId,
+          validation.canonicalRoot,
+          validation.resume.initialization,
+        );
+      }
+      return;
+    }
+    if (validation.kind === "existing") {
+      setFirstRunState({ type: "existing", canonicalRoot: validation.canonicalRoot }, true);
+      return;
+    }
+    if (validation.kind === "recovery-required") {
+      setFirstRunState({
+        type: "recovery",
+        canonicalRoot: validation.canonicalRoot,
+        operationId: "",
+        message: validation.reason || "This folder contains project state that cannot be changed safely.",
+        checkpoint: durableCheckpoint,
+        errorKind: durableErrorKind,
+        durable,
+      }, true);
+      return;
+    }
+    setFirstRunState({
+      type: "new",
+      canonicalRoot: validation.canonicalRoot,
+      operationId: validation.operationId,
+    }, true);
+  } catch (error) {
+    setFirstRunState({
+      type: durable ? "recovery" : "failed",
+      canonicalRoot: path,
+      operationId: durable ? expectedOperationId : "",
+      message: durable
+        ? `p-track could not revalidate the preserved operation: ${messageFrom(error)}`
+        : messageFrom(error),
+      checkpoint: durableCheckpoint,
+      errorKind: durableErrorKind,
+      durable,
+    }, true);
+  }
+}
+
+function hydratePendingInitialization(pending) {
+  const event = pendingInitializationEvent(pending);
+  if (!event) return false;
+  setFirstRunState({ type: "validate" });
+  setFirstRunState(event, true);
+  return true;
+}
+
+function submitFirstRunGoal(event) {
+  event.preventDefault();
+  const validation = validateNorthStarGoal(elements.setupGoal.value);
+  if (validation.error) {
+    setFirstRunState({
+      type: "goalInvalid",
+      goal: elements.setupGoal.value,
+      message: validation.error,
+    }, true);
+    return;
+  }
+  setFirstRunState({ type: "goalAccepted", goal: validation.value }, true);
+}
+
+function preserveFirstRunGoalDraft() {
+  firstRunState = reduceFirstRun(firstRunState, {
+    type: "goalDrafted",
+    goal: elements.setupGoal.value,
+  });
+  elements.setupGoalError.textContent = "";
+  elements.setupGoal.removeAttribute("aria-invalid");
+}
+
+function returnToSelectedFirstRunFolder() {
+  preserveFirstRunGoalDraft();
+  setFirstRunState({ type: "back" }, true);
+}
+
+async function previewFirstRunGuide() {
+  if (!(firstRunState.phase === "guide" || firstRunState.phase === "guide-stale")) return;
+  const operationId = firstRunState.operationId;
+  const canonicalRoot = firstRunState.canonicalRoot;
+  setFirstRunState({ type: "guidePreviewStarted" }, true);
+  try {
+    const preview = parseProjectGuidePreview(
+      await api().PreviewProjectGuideV1({ operationId, root: canonicalRoot }),
+    );
+    if (
+      firstRunState.operationId !== operationId ||
+      firstRunState.canonicalRoot !== canonicalRoot
+    ) return;
+    setFirstRunState({ type: "guidePreviewed", preview }, true);
+  } catch (error) {
+    if (
+      firstRunState.operationId !== operationId ||
+      firstRunState.canonicalRoot !== canonicalRoot
+    ) return;
+    setFirstRunState({
+      type: "guidePreviewFailed",
+      message: `Guide preview is unavailable: ${messageFrom(error)}`,
+    }, true);
+  }
+}
+
+function continueFirstRunWithoutGuide() {
+  setFirstRunState({ type: "guideSkipped" }, true);
+}
+
+function continueFirstRunWithGuide() {
+  setFirstRunState({ type: "guideInstalled" }, true);
+}
+
+let publishedInitializationOperationId = "";
+
+function workspaceControllerMatches(state) {
+  return workspaceController.state.status === "open" &&
+    workspaceController.state.generation === Number(state?.generation || 0);
+}
+
+async function rebindCompletedInitializationWorkspace(canonicalRoot) {
+  let openError = new Error("The completed project could not be opened in this window.");
+  try {
+    const opened = await openExactProject(canonicalRoot);
+    if (
+      completedInitializationWorkspaceMatches(opened, canonicalRoot) &&
+      workspaceControllerMatches(opened)
+    ) return opened;
+  } catch (error) {
+    openError = error;
+  }
+  try {
+    const refreshed = await api().GetWorkspaceState();
+    workspaceController.publish({
+      status: refreshed.status,
+      generation: Number(refreshed.generation || 0),
+    });
+    renderWorkspaceState(refreshed, false);
+    if (
+      completedInitializationWorkspaceMatches(refreshed, canonicalRoot) &&
+      workspaceControllerMatches(refreshed)
+    ) return refreshed;
+  } catch {
+    // The exact operation remains recoverable through its durable status.
+  }
+  throw openError;
+}
+
+async function applyInitializationStatus(
+  operationId,
+  canonicalRoot,
+  status,
+  state = null,
+  pollAttempt = 0,
+) {
+  if (
+    firstRunState.operationId !== operationId ||
+    firstRunState.canonicalRoot !== canonicalRoot
+  ) return;
+  if (!initializationStatusMatchesOperation(status, operationId, canonicalRoot)) {
+    throw new Error("Initialization status does not match the committed operation.");
+  }
+  if (isProjectGuidePartiallyApplied(status.errorKind)) {
+    const postCommit = status.outcome === "recovery-required" &&
+      status.checkpoint === "project-committed";
+    if (postCommit) {
+      setFirstRunState({
+        type: "guideStale",
+        postCommit: true,
+        checkpoint: status.checkpoint,
+        skipAllowed: false,
+        partiallyApplied: true,
+        message: projectGuideRecoveryCopy("partially-applied").error,
+      }, true);
+      return;
+    }
+    throw new Error("A partial guide apply was reported at an unknown checkpoint.");
+  }
+  if (isProjectGuidePreviewStale(status.errorKind)) {
+    const preCommit = status.outcome === "ready" && status.checkpoint === "none";
+    const postCommit = status.outcome === "recovery-required" &&
+      status.checkpoint === "project-committed";
+    if (preCommit || postCommit) {
+      setFirstRunState({
+        type: "guideStale",
+        postCommit,
+        checkpoint: status.checkpoint,
+      }, true);
+      return;
+    }
+    throw new Error("Guide preview became stale at an unknown initialization checkpoint.");
+  }
+  if (status.outcome === "complete") {
+    if (status.checkpoint !== "desktop-bound") {
+      throw new Error("Initialization completed before the desktop workspace was bound.");
+    }
+    let workspace = state || await api().GetWorkspaceState();
+    let rebound = false;
+    if (!completedInitializationWorkspaceMatches(workspace, canonicalRoot)) {
+      try {
+        workspace = await rebindCompletedInitializationWorkspace(canonicalRoot);
+        rebound = true;
+      } catch (error) {
+        setFirstRunState({
+          type: "recovery",
+          canonicalRoot,
+          operationId,
+          message:
+            `Initialization is complete, but this window could not open the project: ${messageFrom(error)}`,
+          checkpoint: status.checkpoint,
+          errorKind: status.errorKind,
+          durable: true,
+        }, true);
         return;
       }
-      transition = beginWorkspaceTransition();
-      result = await api().OpenProject(path, result.confirmationToken);
     }
-    if (!publishBackendState(result.state, transition, true)) return;
-    if (result.warning) showError(result.warning);
+    if (publishedInitializationOperationId === operationId) return;
+    if (!rebound) {
+      firstRunState = { ...initialFirstRunState };
+      if (!publishBackendState(workspace, undefined, false, true)) return;
+    } else if (!workspaceControllerMatches(workspace)) {
+      return;
+    }
+    publishedInitializationOperationId = operationId;
+    beginFirstPlanOnboarding(Number(workspace.generation));
+    return;
+  }
+  if (status.outcome === "in-progress") {
+    if (pollAttempt >= 20) {
+      setFirstRunState({
+        type: "recovery",
+        message:
+          "Initialization did not reach another checkpoint. Resume Setup will revalidate the preserved operation before continuing.",
+        checkpoint: status.checkpoint,
+        errorKind: status.errorKind,
+        durable: true,
+      }, true);
+      return;
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 250));
+    const next = await readInitializationStatus(api(), operationId);
+    await applyInitializationStatus(
+      operationId,
+      canonicalRoot,
+      next,
+      null,
+      pollAttempt + 1,
+    );
+    return;
+  }
+  if (status.outcome === "recovery-required") {
+    setFirstRunState({
+      type: "recovery",
+      message: "Project setup made a durable change and now requires recovery before continuing.",
+      checkpoint: status.checkpoint,
+      errorKind: status.errorKind,
+      durable: true,
+    }, true);
+    return;
+  }
+  setFirstRunState({
+    type: "failed",
+    message: initializationFailureMessage(status.errorKind),
+    checkpoint: status.checkpoint,
+    errorKind: status.errorKind,
+  }, true);
+}
+
+async function reconcileInitializationStatus(
+  error,
+  operationId,
+  canonicalRoot,
+  observedStatus = null,
+) {
+  try {
+    const status = observedStatus ||
+      await readInitializationStatus(api(), operationId);
+    if (isProjectGuidePartiallyApplied(error)) {
+      const postCommit = status.outcome === "recovery-required" &&
+        status.checkpoint === "project-committed";
+      if (postCommit) {
+        if (!initializationStatusMatchesOperation(status, operationId, canonicalRoot)) {
+          throw new Error("Initialization status does not match the committed operation.");
+        }
+        setFirstRunState({
+          type: "guideStale",
+          postCommit: true,
+          checkpoint: status.checkpoint,
+          skipAllowed: false,
+          partiallyApplied: true,
+          message: projectGuideRecoveryCopy("partially-applied").error,
+        }, true);
+        return;
+      }
+    }
+    if (isProjectGuidePreviewStale(error)) {
+      const preCommit = status.outcome === "ready" && status.checkpoint === "none";
+      const postCommit = status.outcome === "recovery-required" &&
+        status.checkpoint === "project-committed";
+      if (preCommit || postCommit) {
+        if (!initializationStatusMatchesOperation(status, operationId, canonicalRoot)) {
+          throw new Error("Initialization status does not match the committed operation.");
+        }
+        setFirstRunState({
+          type: "guideStale",
+          postCommit,
+          checkpoint: status.checkpoint,
+        }, true);
+        return;
+      }
+    }
+    await applyInitializationStatus(operationId, canonicalRoot, status);
+  } catch (statusError) {
+    if (
+      firstRunState.operationId !== operationId ||
+      firstRunState.canonicalRoot !== canonicalRoot
+    ) return;
+    setFirstRunState({
+      type: "uncertain",
+      message: `Initialization status is uncertain: ${messageFrom(statusError || error)}`,
+      checkpoint: firstRunState.checkpoint,
+    }, true);
+  }
+}
+
+async function commitFirstRunProject() {
+  if (firstRunState.phase !== "review") return;
+  const operationId = firstRunState.operationId;
+  const canonicalRoot = firstRunState.canonicalRoot;
+  const goal = firstRunState.goal;
+  const guide = projectGuideCommitFields(firstRunState);
+  const request = initializeProjectRequest(
+    operationId,
+    canonicalRoot,
+    goal,
+    guide,
+  );
+  setFirstRunState({ type: "commit" }, true);
+  const outcome = await commitInitialization(api(), request);
+  if (outcome.kind === "status") {
+    await reconcileInitializationStatus(
+      outcome.error,
+      operationId,
+      canonicalRoot,
+      outcome.status,
+    );
+    return;
+  }
+  if (outcome.kind === "uncertain") {
+    if (
+      firstRunState.operationId !== operationId ||
+      firstRunState.canonicalRoot !== canonicalRoot
+    ) return;
+    setFirstRunState({
+      type: "uncertain",
+      message:
+        `Initialization status is uncertain: ${messageFrom(outcome.statusError || outcome.error)}`,
+      checkpoint: firstRunState.checkpoint,
+    }, true);
+    return;
+  }
+  try {
+    await applyInitializationStatus(
+      operationId,
+      canonicalRoot,
+      outcome.result.status,
+      outcome.result.state,
+    );
+  } catch (error) {
+    await reconcileInitializationStatus(error, operationId, canonicalRoot);
+  }
+}
+
+async function retryInitializationStatus() {
+  if (firstRunState.phase !== "uncertain") return;
+  const operationId = firstRunState.operationId;
+  const canonicalRoot = firstRunState.canonicalRoot;
+  setFirstRunState({ type: "reconcile" }, true);
+  await reconcileInitializationStatus(
+    new Error("Initialization status remains unavailable."),
+    operationId,
+    canonicalRoot,
+  );
+}
+
+function cancelFirstRunSetup() {
+  if (
+    firstRunState.resumeLocked ||
+    firstRunState.recoveryMode === "durable" ||
+    ["committing", "reconciling", "uncertain"].includes(firstRunState.phase)
+  ) return;
+  if (
+    (firstRunState.goal || elements.setupGoal.value.trim()) &&
+    !window.confirm("Cancel setup? Your project has not been initialized.")
+  ) return;
+  const focusId = firstRunState.returnFocusId;
+  setFirstRunState({ type: "reset", focusId }, true);
+}
+
+async function openExistingFromSetup() {
+  if (firstRunState.phase !== "existing" || !firstRunState.canonicalRoot) return;
+  const root = firstRunState.canonicalRoot;
+  setFirstRunState({ type: "reset", focusId: "state-open-project-button" });
+  try {
+    await openExactProject(root);
   } catch (error) {
     await recoverWorkspaceState(error);
+  }
+}
+
+function chooseAnotherFirstRunFolder() {
+  if (firstRunState.recoveryMode === "durable") return;
+  const pickerCancelState = { ...firstRunState };
+  const returnFocus = firstRunState.phase === "existing"
+    ? elements.setupExistingChoose
+    : firstRunState.phase === "target-new"
+    ? elements.setupNewTargetChoose
+    : elements.setupRecoveryChoose;
+  if (firstRunState.intent === "open") {
+    void requestOpenProject("", returnFocus, pickerCancelState);
+  } else {
+    void requestInitializeProject(returnFocus, pickerCancelState);
+  }
+}
+
+function retryFirstRunValidation() {
+  if (firstRunState.phase !== "failed" || !firstRunState.canonicalRoot) return;
+  const root = firstRunState.canonicalRoot;
+  if (firstRunState.intent === "open") {
+    void requestOpenProject(root, elements.stateOpen);
+  } else {
+    void validateInitializeTarget(root);
+  }
+}
+
+function returnFirstRunToWelcome() {
+  if (
+    firstRunState.phase === "failed" ||
+    (firstRunState.phase === "recovery" &&
+      ["blocked", "ambiguous"].includes(firstRunState.recoveryMode))
+  ) {
+    const focusId = firstRunState.returnFocusId;
+    setFirstRunState({ type: "reset", focusId }, true);
+    return;
+  }
+  cancelFirstRunSetup();
+}
+
+async function resumeFirstRunSetup() {
+  if (
+    firstRunState.phase !== "recovery" ||
+    firstRunState.recoveryMode !== "durable" ||
+    !firstRunState.canonicalRoot
+  ) return;
+  const operationId = firstRunState.operationId;
+  const canonicalRoot = firstRunState.canonicalRoot;
+  const checkpoint = firstRunState.checkpoint;
+  setFirstRunState({ type: "reconcile" }, true);
+  try {
+    const outcome = await resumeInitialization(
+      api(),
+      operationId,
+      canonicalRoot,
+    );
+    if (outcome.kind === "status") {
+      if (!initializationStatusMatchesOperation(
+        outcome.status,
+        operationId,
+        canonicalRoot,
+      )) {
+        throw new Error("Initialization status does not match the preserved operation.");
+      }
+      await applyInitializationStatus(operationId, canonicalRoot, outcome.status);
+      return;
+    }
+    await validateInitializeTarget(canonicalRoot, {
+      durable: true,
+      expectedOperationId: operationId,
+    }, outcome.validation);
+  } catch (error) {
+    if (
+      firstRunState.operationId !== operationId ||
+      firstRunState.canonicalRoot !== canonicalRoot
+    ) return;
+    setFirstRunState({
+      type: "uncertain",
+      message: `p-track could not confirm the preserved operation: ${messageFrom(error)}`,
+      checkpoint,
+    }, true);
+  }
+}
+
+async function openProjectFromRecovery() {
+  if (
+    !canOpenPreservedFirstRunProject(firstRunState) ||
+    !firstRunState.canonicalRoot
+  ) return;
+  const recovery = { ...firstRunState };
+  try {
+    const opened = await rebindCompletedInitializationWorkspace(
+      recovery.canonicalRoot,
+    );
+    if (recovery.checkpoint === "desktop-bound") {
+      publishedInitializationOperationId = recovery.operationId;
+      beginFirstPlanOnboarding(Number(opened.generation));
+    }
+  } catch (error) {
+    firstRunState = {
+      ...recovery,
+      message: `The preserved project could not be opened: ${messageFrom(error)}`,
+    };
+    renderFirstRunFlow(true);
   }
 }
 
@@ -4188,6 +6304,7 @@ async function ensureTerminalDock(generation, projectRoot) {
       showError,
     });
     terminalHandle = handle;
+    handle.setLayoutLocked(firstPlanState.phase !== "idle");
     handle.setVisible(workspaceState.status === "open" && view === "board");
     applicationOverlayCoordinator.setDock(handle);
     await handle.ready;
@@ -4224,7 +6341,12 @@ function disposeTerminalDock() {
 }
 
 function boardShortcutIsBlocked(event) {
-  if (event.isComposing || workspaceController.state.status !== "open") return true;
+  if (
+    event.isComposing ||
+    workspaceController.state.status !== "open" ||
+    firstRunState.phase !== "idle" ||
+    firstPlanState.phase !== "idle"
+  ) return true;
   const active = document.activeElement;
   const interactive =
     active instanceof HTMLElement &&
@@ -4267,6 +6389,11 @@ function nativeMenuFocusTarget() {
 }
 
 function nativeCommandAllowed(command) {
+  if (
+    firstRunState.phase !== "idle" ||
+    firstPlanState.phase !== "idle" ||
+    recentProjectOperationActive()
+  ) return false;
   return nativeMenuCommandAllowed(command, {
     workspaceStatus: workspaceController.state.status,
     openOverlayIDs: nativeMenuOpenOverlayIDs(),
@@ -4344,13 +6471,22 @@ function registerNativeProjectActions() {
   nativeEventDisposers.push(
     ...registerNativeMenuActions(eventsOn, {
       openProject: () => {
-        if (nativeCommandAllowed("openProject")) void requestOpenProject();
+        if (
+          firstRunState.phase === "idle" &&
+          nativeCommandAllowed("openProject")
+        ) void requestOpenProject();
       },
       switchProject: () => {
-        if (nativeCommandAllowed("switchProject")) void requestOpenProject();
+        if (
+          firstRunState.phase === "idle" &&
+          nativeCommandAllowed("switchProject")
+        ) void requestOpenProject();
       },
       closeProject: () => {
-        if (nativeCommandAllowed("closeProject")) void requestCloseProject();
+        if (
+          firstRunState.phase === "idle" &&
+          nativeCommandAllowed("closeProject")
+        ) void requestCloseProject();
       },
       showSettings: () => {
         showNativeView("showSettings");
@@ -4380,7 +6516,10 @@ function registerNativeProjectActions() {
         }
       },
       checkForUpdates: () => {
-        if (openAboutUpdates(elements.appVersion)) void runUpdateAction("check");
+        if (
+          nativeCommandAllowed("checkForUpdates") &&
+          openAboutUpdates(elements.appVersion)
+        ) void runUpdateAction("check");
       },
     }),
     eventsOn("update:state-changed", (state) => renderUpdateState(state)),
@@ -4400,6 +6539,7 @@ function registerNativeProjectActions() {
 
 initializeSidebarLayout();
 elements.sidebarToggle.addEventListener("click", () => {
+  if (firstPlanState.phase !== "idle") return;
   setSidebarHidden(!sidebarHidden);
 });
 elements.sidebarResize.addEventListener("pointerdown", beginSidebarResize);
@@ -4518,10 +6658,73 @@ const themeController = initTheme({
 });
 elements.themeToggle.addEventListener("click", () => themeController.toggle());
 
-elements.openProject.addEventListener("click", () => void requestOpenProject());
-elements.switchProject.addEventListener("click", () => void requestOpenProject());
+elements.openProject.addEventListener("click", (event) =>
+  void requestOpenProject("", event.currentTarget),
+);
+elements.switchProject.addEventListener("click", (event) =>
+  void requestOpenProject("", event.currentTarget),
+);
 elements.closeProject.addEventListener("click", () => void requestCloseProject());
-elements.stateOpen.addEventListener("click", () => void requestOpenProject());
+elements.stateInitialize.addEventListener("click", (event) =>
+  void requestInitializeProject(event.currentTarget),
+);
+elements.stateOpen.addEventListener("click", (event) =>
+  void requestOpenProject("", event.currentTarget),
+);
+elements.setupGoalForm.addEventListener("submit", submitFirstRunGoal);
+elements.setupGoal.addEventListener("input", preserveFirstRunGoalDraft);
+elements.setupGoalBack.addEventListener("click", returnToSelectedFirstRunFolder);
+elements.setupGoalCancel.addEventListener("click", cancelFirstRunSetup);
+elements.setupGuidePreviewButton.addEventListener("click", () => void previewFirstRunGuide());
+elements.setupGuideReviewAgain.addEventListener("click", () => void previewFirstRunGuide());
+elements.setupGuideSkip.addEventListener("click", continueFirstRunWithoutGuide);
+elements.setupGuidePreviewSkip.addEventListener("click", continueFirstRunWithoutGuide);
+elements.setupGuideStaleSkip.addEventListener("click", continueFirstRunWithoutGuide);
+elements.setupGuideInstall.addEventListener("click", continueFirstRunWithGuide);
+elements.setupGuideBack.addEventListener("click", () =>
+  setFirstRunState({ type: "back" }, true),
+);
+elements.setupGuidePreviewBack.addEventListener("click", () =>
+  setFirstRunState({ type: "back" }, true),
+);
+elements.setupGuideStaleBack.addEventListener("click", () =>
+  setFirstRunState({ type: "back" }, true),
+);
+elements.setupGuideCancel.addEventListener("click", cancelFirstRunSetup);
+elements.setupGuidePreviewCancel.addEventListener("click", cancelFirstRunSetup);
+elements.setupGuideStaleCancel.addEventListener("click", cancelFirstRunSetup);
+elements.setupReviewBack.addEventListener("click", () =>
+  setFirstRunState({ type: "back" }, true),
+);
+elements.setupReviewCancel.addEventListener("click", cancelFirstRunSetup);
+elements.setupCommit.addEventListener("click", () => void commitFirstRunProject());
+elements.setupOpenExisting.addEventListener("click", () => void openExistingFromSetup());
+elements.setupExistingChoose.addEventListener("click", chooseAnotherFirstRunFolder);
+elements.setupExistingCancel.addEventListener("click", cancelFirstRunSetup);
+elements.setupNewTargetContinue.addEventListener("click", () =>
+  setFirstRunState({ type: "continueToGoal" }, true)
+);
+elements.setupNewTargetChoose.addEventListener("click", chooseAnotherFirstRunFolder);
+elements.setupNewTargetCancel.addEventListener("click", cancelFirstRunSetup);
+elements.setupRetry.addEventListener("click", retryFirstRunValidation);
+elements.setupResume.addEventListener("click", () => void resumeFirstRunSetup());
+elements.setupOpenRecovery.addEventListener("click", () => void openProjectFromRecovery());
+elements.setupRecoveryHelp.addEventListener("click", () =>
+  openHelpDestination("project-recovery")
+);
+elements.setupRecoveryChoose.addEventListener("click", chooseAnotherFirstRunFolder);
+elements.setupReturnWelcome.addEventListener("click", returnFirstRunToWelcome);
+elements.setupCheckStatus.addEventListener("click", () => void retryInitializationStatus());
+elements.onboardingPlanForm.addEventListener("submit", (event) => void submitFirstPlan(event));
+elements.onboardingSkipPlan.addEventListener("click", () => void finishFirstPlanOnboarding(0));
+elements.onboardingTaskForm.addEventListener("submit", (event) => void submitFirstTask(event));
+elements.onboardingFinishWithPlan.addEventListener("click", () =>
+  void finishFirstPlanOnboarding(firstPlanState.planId),
+);
+elements.onboardingRetryStart.addEventListener("click", retryFirstTaskStart);
+elements.onboardingFinishSetup.addEventListener("click", () =>
+  void finishFirstPlanOnboarding(firstPlanState.planId),
+);
 elements.activityMore.addEventListener("click", openMemoryHistory);
 elements.appVersion.addEventListener("click", (event) => {
   openAboutUpdates(event.currentTarget);
@@ -4760,20 +6963,32 @@ window.addEventListener("beforeunload", () => {
 });
 
 async function start() {
+  let startupError = null;
   for (let attempt = 0; attempt < 50; attempt += 1) {
     try {
       api();
-      const state = await api().GetWorkspaceState();
+      const startup = await resolveFirstRunStartupState(
+        () => api().GetWorkspaceState(),
+        () => api().GetPendingInitializationV1(),
+      );
+      const state = startup.state;
       workspaceController.publish({
         status: state.status,
         generation: Number(state.generation || 0),
       });
-      renderWorkspaceState(state);
+      renderWorkspaceState(state, false);
+      const restored = state.status === "welcome" && startup.pending
+        ? hydratePendingInitialization(startup.pending)
+        : false;
+      if (state.status === "welcome" && !restored) {
+        requestAnimationFrame(() => elements.stateInitialize.focus());
+      }
       registerNativeProjectActions();
       refreshLoop.start();
       if (state.status === "open") await loadSnapshot(0);
       return;
-    } catch {
+    } catch (error) {
+      startupError = error;
       await new Promise((resolve) => window.setTimeout(resolve, 100));
     }
   }
@@ -4782,7 +6997,7 @@ async function start() {
     {
       status: "error",
       generation: 0,
-      error: "Could not connect to the Wails backend.",
+      error: `Could not load the desktop startup state: ${messageFrom(startupError)}`,
     },
     true,
   );

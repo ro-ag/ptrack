@@ -2,18 +2,19 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::{Arc, Barrier};
 use std::time::Instant;
 
 use ptrack_capability_policy::{AuditEvent, confirm_approval, normalize, sanitize_audit};
 use ptrack_core::{
     Capability, CapabilityAudit, CapabilityAuditPolicy, CapabilityKind, CapabilityLimits, Digest32,
-    GitScope, MemoryKind, NativeRecord, NoteTarget, RecordKind, TaskStatus, Timestamp,
+    GitScope, MemoryKind, NativeRecord, NoteTarget, PlanStatus, RecordKind, TaskStatus, Timestamp,
     decode_record,
 };
 
 use crate::{
-    ActiveBinding, Clock, Collection, GlobalStore, MemoryWriteRequest, ProjectStore, RecordKey,
-    Store, StoreError, StoreKind,
+    ActiveBinding, Clock, Collection, GlobalStore, MemoryWriteRequest, ProjectRegistryCasResult,
+    ProjectStore, RecordKey, Store, StoreError, StoreKind,
 };
 
 static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -174,6 +175,190 @@ fn typed_project_mutations_conversion_cas_and_snapshot_are_atomic() {
         ProjectStore::open_existing(&path, &wrong, "test"),
         Err(StoreError::ActivationBinding(_))
     ));
+}
+
+#[test]
+fn first_plan_and_task_are_atomic_idempotent_and_fail_closed_on_ambiguity() {
+    let temp = Temp::new();
+    let path = temp.path("first-run.redb");
+    let expected = binding(&path, StoreKind::Project, "first-run");
+    let store =
+        ProjectStore::create_new_with_clock(&path, expected, "test", SteppingClock::new(100))
+            .unwrap();
+
+    let injected = store
+        .create_first_plan_inner("  First plan  ", || {
+            Err(StoreError::InvalidFirstRun("injected".to_owned()))
+        })
+        .unwrap_err();
+    assert_eq!(injected.to_string(), "invalid first-run mutation: injected");
+    assert!(store.plans().unwrap().is_empty());
+    assert_eq!(store.meta().unwrap().active_plan, 0);
+
+    let plan = store.create_first_plan("  First plan  ").unwrap();
+    assert_eq!(plan.id, 1);
+    assert_eq!(plan.title, "First plan");
+    assert_eq!(plan.status, PlanStatus::Active);
+    assert_eq!(store.meta().unwrap().active_plan, plan.id);
+    assert_eq!(store.create_first_plan("First plan").unwrap(), plan);
+    assert!(store.create_first_plan("Different plan").is_err());
+    assert_eq!(store.plans().unwrap(), std::slice::from_ref(&plan));
+
+    let task = store.create_first_task(plan.id, "  First task  ").unwrap();
+    assert_eq!(task.id, 1);
+    assert_eq!(task.title, "First task");
+    assert_eq!(task.status, TaskStatus::Todo);
+    assert_eq!(
+        store.create_first_task(plan.id, "First task").unwrap(),
+        task
+    );
+    assert!(store.create_first_task(plan.id, "Different task").is_err());
+    let doing = store.start_first_task(task.id, task.updated_at).unwrap();
+    assert_eq!(doing.status, TaskStatus::Doing);
+    assert_eq!(
+        store.start_first_task(task.id, task.updated_at).unwrap(),
+        doing
+    );
+    assert!(store.start_first_task(task.id, doing.updated_at).is_err());
+    assert_eq!(
+        store.create_first_task(plan.id, "First task").unwrap(),
+        doing
+    );
+
+    let extra = store.add_task(plan.id, "manual concurrent task").unwrap();
+    assert!(store.create_first_task(plan.id, "First task").is_err());
+    assert!(store.start_first_task(task.id, doing.updated_at).is_err());
+    assert_eq!(store.task(extra.id).unwrap().status, TaskStatus::Todo);
+    store.add_plan("manual concurrent plan", 0).unwrap();
+    assert!(store.create_first_plan("First plan").is_err());
+}
+
+#[test]
+fn first_run_titles_are_trimmed_and_utf8_byte_bounded() {
+    let temp = Temp::new();
+    let path = temp.path("first-run-title.redb");
+    let expected = binding(&path, StoreKind::Project, "first-run-title");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+
+    assert!(store.create_first_plan("   ").is_err());
+    assert!(store.create_first_plan("é".repeat(121)).is_err());
+    assert!(store.plans().unwrap().is_empty());
+    let title = "é".repeat(120);
+    assert_eq!(store.create_first_plan(&title).unwrap().title, title);
+}
+
+#[test]
+fn concurrent_first_run_requests_never_create_duplicate_entities() {
+    let temp = Temp::new();
+    let same_path = temp.path("first-run-race-same.redb");
+    let same = Arc::new(
+        ProjectStore::create_new(
+            &same_path,
+            binding(&same_path, StoreKind::Project, "same"),
+            "test",
+        )
+        .unwrap(),
+    );
+    let barrier = Arc::new(Barrier::new(3));
+    let first = {
+        let store = Arc::clone(&same);
+        let barrier = Arc::clone(&barrier);
+        std::thread::spawn(move || {
+            barrier.wait();
+            store.create_first_plan("same plan").map(|plan| plan.id)
+        })
+    };
+    let second = {
+        let store = Arc::clone(&same);
+        let barrier = Arc::clone(&barrier);
+        std::thread::spawn(move || {
+            barrier.wait();
+            store.create_first_plan(" same plan ").map(|plan| plan.id)
+        })
+    };
+    barrier.wait();
+    assert_eq!(
+        first.join().unwrap().unwrap(),
+        second.join().unwrap().unwrap()
+    );
+    assert_eq!(same.plans().unwrap().len(), 1);
+    let barrier = Arc::new(Barrier::new(3));
+    let first = {
+        let store = Arc::clone(&same);
+        let barrier = Arc::clone(&barrier);
+        std::thread::spawn(move || {
+            barrier.wait();
+            store.create_first_task(1, "same task").map(|task| task.id)
+        })
+    };
+    let second = {
+        let store = Arc::clone(&same);
+        let barrier = Arc::clone(&barrier);
+        std::thread::spawn(move || {
+            barrier.wait();
+            store
+                .create_first_task(1, " same task ")
+                .map(|task| task.id)
+        })
+    };
+    barrier.wait();
+    assert_eq!(
+        first.join().unwrap().unwrap(),
+        second.join().unwrap().unwrap()
+    );
+    assert_eq!(same.tasks().unwrap().len(), 1);
+
+    let different_path = temp.path("first-run-race-different.redb");
+    let different = Arc::new(
+        ProjectStore::create_new(
+            &different_path,
+            binding(&different_path, StoreKind::Project, "different"),
+            "test",
+        )
+        .unwrap(),
+    );
+    let barrier = Arc::new(Barrier::new(3));
+    let requests = ["alpha", "beta"].map(|title| {
+        let store = Arc::clone(&different);
+        let barrier = Arc::clone(&barrier);
+        std::thread::spawn(move || {
+            barrier.wait();
+            store
+                .create_first_plan(title)
+                .map(|plan| plan.title)
+                .map_err(|error| error.to_string())
+        })
+    });
+    barrier.wait();
+    let results = requests.map(|request| request.join().unwrap());
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| result
+                .as_ref()
+                .is_err_and(|error| error.contains("invalid first-run mutation")))
+            .count(),
+        1
+    );
+    assert_eq!(different.plans().unwrap().len(), 1);
+    let barrier = Arc::new(Barrier::new(3));
+    let requests = ["alpha task", "beta task"].map(|title| {
+        let store = Arc::clone(&different);
+        let barrier = Arc::clone(&barrier);
+        std::thread::spawn(move || {
+            barrier.wait();
+            store
+                .create_first_task(1, title)
+                .map(|task| task.title)
+                .map_err(|error| error.to_string())
+        })
+    });
+    barrier.wait();
+    let results = requests.map(|request| request.join().unwrap());
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(results.iter().filter(|result| result.is_err()).count(), 1);
+    assert_eq!(different.tasks().unwrap().len(), 1);
 }
 
 #[test]
@@ -815,6 +1000,101 @@ fn project_registry_normalizes_lexical_aliases() {
     let projects = global.projects().unwrap();
     assert_eq!(projects.len(), 1);
     assert_eq!(projects[0].name, "two");
+}
+
+#[test]
+fn project_registry_forget_and_relocation_are_compare_and_swap_idempotent() {
+    let temp = Temp::new();
+    let global_path = temp.path("registry-cas.redb");
+    let global = GlobalStore::create_new_with_clock(
+        &global_path,
+        binding(&global_path, StoreKind::Global, "registry-cas"),
+        SteppingClock::new(100),
+    )
+    .unwrap();
+    let first_root = temp.path("first");
+    let second_root = temp.path("second");
+    fs::create_dir(&first_root).unwrap();
+    fs::create_dir(&second_root).unwrap();
+    let sentinel = first_root.join("sentinel");
+    fs::write(&sentinel, b"keep").unwrap();
+
+    let first = global.register_project("first", &first_root).unwrap();
+    let replacement = global.register_project("renamed", &first_root).unwrap();
+    assert_eq!(
+        global.forget_project_if_matches(&first).unwrap(),
+        ProjectRegistryCasResult::Stale
+    );
+    let relocated = global
+        .relocate_project_if_matches(&replacement, "second", &second_root)
+        .unwrap();
+    let ProjectRegistryCasResult::Applied(relocated) = relocated else {
+        panic!("expected relocation");
+    };
+    assert_eq!(global.projects().unwrap(), vec![relocated.clone()]);
+    assert!(sentinel.exists());
+    assert_eq!(
+        global.forget_project_if_matches(&replacement).unwrap(),
+        ProjectRegistryCasResult::Absent
+    );
+    assert!(matches!(
+        global.forget_project_if_matches(&relocated).unwrap(),
+        ProjectRegistryCasResult::Applied(_)
+    ));
+    assert_eq!(
+        global.forget_project_if_matches(&relocated).unwrap(),
+        ProjectRegistryCasResult::Absent
+    );
+    assert!(sentinel.exists());
+}
+
+#[test]
+fn project_registry_touch_strictly_advances_an_equal_clock() {
+    let temp = Temp::new();
+    let global_path = temp.path("registry-touch.redb");
+    let global = GlobalStore::create_new_with_clock(
+        &global_path,
+        binding(&global_path, StoreKind::Global, "registry-touch"),
+        FixedClock(timestamp(100)),
+    )
+    .unwrap();
+    let root = temp.path("touch");
+    fs::create_dir(&root).unwrap();
+    let first = global.register_project("touch", &root).unwrap();
+    let ProjectRegistryCasResult::Applied(touched) = global
+        .relocate_project_if_matches(&first, "touch", &root)
+        .unwrap()
+    else {
+        panic!("expected touch");
+    };
+    assert!(
+        touched.last_seen.unix_nanoseconds().unwrap() > first.last_seen.unix_nanoseconds().unwrap()
+    );
+}
+
+#[test]
+fn project_registry_touch_rejects_an_exhausted_timestamp() {
+    let temp = Temp::new();
+    let global_path = temp.path("registry-touch-exhausted.redb");
+    let exhausted = Timestamp::Fixed {
+        seconds: i64::MAX,
+        nanoseconds: 999_999_999,
+        offset_seconds: 0,
+    };
+    let global = GlobalStore::create_new_with_clock(
+        &global_path,
+        binding(&global_path, StoreKind::Global, "registry-touch-exhausted"),
+        FixedClock(exhausted),
+    )
+    .unwrap();
+    let root = temp.path("touch-exhausted");
+    fs::create_dir(&root).unwrap();
+    let first = global.register_project("touch", &root).unwrap();
+    assert!(matches!(
+        global.relocate_project_if_matches(&first, "touch", &root),
+        Err(StoreError::InvalidManifest(message)) if message == "project registry timestamp is exhausted"
+    ));
+    assert_eq!(global.projects().unwrap(), vec![first]);
 }
 
 #[cfg(unix)]

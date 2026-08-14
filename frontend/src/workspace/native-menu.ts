@@ -19,10 +19,7 @@ export interface NativeMenuActions {
   checkForUpdates(): void;
 }
 
-export type NativeMenuCommand = Exclude<
-  keyof NativeMenuActions,
-  "checkForUpdates"
->;
+export type NativeMenuCommand = keyof NativeMenuActions;
 
 export type NativeMenuView = "board" | "overview" | "settings";
 
@@ -54,7 +51,11 @@ export function nativeMenuCommandAllowed(
   const paletteOpen = state.openOverlayIDs.includes("palette");
   if (command === "toggleCommandPalette" && paletteOpen) return true;
   if (state.openOverlayIDs.length > 0) return false;
-  if (command === "openProject" || command === "installShellCommand") {
+  if (
+    command === "openProject" ||
+    command === "installShellCommand" ||
+    command === "checkForUpdates"
+  ) {
     return ["welcome", "open", "error", "closed"].includes(state.workspaceStatus);
   }
   return state.workspaceStatus === "open";

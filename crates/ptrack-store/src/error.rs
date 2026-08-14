@@ -153,6 +153,8 @@ pub enum StoreError {
     MemoryWritebackReplay,
     /// A generation-scoped request belongs to another workspace generation.
     StaleWorkspaceGeneration { expected: u64, active: u64 },
+    /// A first-run plan or task request is invalid or conflicts with durable state.
+    InvalidFirstRun(String),
     /// A stored record envelope was invalid.
     Envelope(EnvelopeError),
     /// A filesystem operation failed.
@@ -326,6 +328,9 @@ impl fmt::Display for StoreError {
                 formatter,
                 "stale workspace generation: expected {expected}, active {active}"
             ),
+            Self::InvalidFirstRun(detail) => {
+                write!(formatter, "invalid first-run mutation: {detail}")
+            }
             Self::Envelope(error) => error.fmt(formatter),
             Self::Io(error) => error.fmt(formatter),
             Self::Engine(error) => error.fmt(formatter),

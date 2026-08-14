@@ -15,12 +15,11 @@ use ptrack_capability::{
 };
 use ptrack_core::{
     Commit, Issue, IssueStatus, Milestone, MilestoneStatus, Note, NoteTarget, Plan, PlanStatus,
-    ProjectRef, ProjectSnapshot, Severity, Task, TaskStatus, Timestamp, render_guide, upsert_guide,
+    ProjectRef, ProjectSnapshot, Severity, Task, TaskStatus, Timestamp, render_guide,
 };
-use ptrack_store::{ActiveBinding, GlobalStore, ProjectStore};
+use ptrack_store::{ActiveBinding, GlobalStore, PinnedProjectDirectory, ProjectStore};
 
 const NO_PROJECT: &str = "no ptrack project found (run 'ptrack init')";
-const GUIDE_FILES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
 const HOOK_BEGIN: &str = "# ptrack:begin";
 const HOOK_END: &str = "# ptrack:end";
 const HOOK_BODY: &str = "command -v ptrack >/dev/null 2>&1 && ptrack commit record --sha \"$(git rev-parse HEAD)\" --subject \"$(git log -1 --pretty=%s)\" >/dev/null 2>&1 || true";
@@ -631,13 +630,17 @@ impl ApplicationPort for LocalApplication {
             return Ok((render_guide(&extra), Vec::new()));
         }
         let root = self.verified_root()?;
-        let mut written = Vec::new();
-        for name in GUIDE_FILES {
-            let path = root.join(name);
-            if hardened_guide_upsert(&path, &extra)? {
-                written.push(path);
-            }
-        }
+        let root_identity = PinnedProjectDirectory::identify_root(&root)?;
+        let directory_identity = PinnedProjectDirectory::identify_directory(&root)?;
+        let publication = PinnedProjectDirectory::prepare_expected_identities(
+            &root,
+            root_identity,
+            directory_identity,
+        )?;
+        let written = crate::production::install_project_guide_pinned(&publication, &extra)?
+            .into_iter()
+            .map(|name| root.join(name))
+            .collect();
         Ok((String::new(), written))
     }
 
@@ -773,17 +776,6 @@ impl ApplicationPort for LocalApplication {
             McpServeOutcome::Cancelled => CapabilityMcpOutcome::Cancelled,
         })
     }
-}
-
-fn hardened_guide_upsert(path: &Path, extra: &str) -> AppResult<bool> {
-    let existing = read_regular(path, "guide destination")?;
-    let (updated, changed) =
-        upsert_guide(existing.as_ref().map_or("", |file| &file.content), extra);
-    if !changed {
-        return Ok(false);
-    }
-    atomic_publish(path, &updated, existing.as_ref(), 0o644, "guide")?;
-    Ok(true)
 }
 
 #[derive(Clone)]

@@ -6,6 +6,122 @@ interface WorkspaceCopy {
   detail: string;
 }
 
+interface ProjectGuideReviewFile {
+  path: string;
+  action: "create" | "update" | "no-change";
+  additions: number;
+  deletions: number;
+}
+
+export interface ProjectGuideReviewCopy {
+  label: string;
+  detail: string;
+  changes: string[];
+}
+
+export function firstRunRecoveryActions(
+  mode: "durable" | "blocked" | "ambiguous" | "no-write" | "none",
+  checkpoint: string,
+): {
+  resume: boolean;
+  open: boolean;
+  help: boolean;
+  chooseAnother: boolean;
+  returnToWelcome: boolean;
+} {
+  const resumable = mode === "durable";
+  return {
+    resume: resumable,
+    open: resumable && [
+      "project-committed",
+      "guide-applied",
+      "desktop-bound",
+    ].includes(checkpoint),
+    help: mode === "durable" || mode === "blocked" || mode === "ambiguous",
+    chooseAnother: mode === "blocked" || mode === "ambiguous",
+    returnToWelcome: mode === "blocked" || mode === "ambiguous",
+  };
+}
+
+export function projectGuideRecoveryCopy(
+  kind: "stale" | "partially-applied",
+): { heading: string; detail: string; error: string } {
+  if (kind === "partially-applied") {
+    return {
+      heading: "Review the applied guide changes",
+      detail:
+        "At least one guide file is already durable. Review the exact current files to finish the same initialization operation.",
+      error: "Project guidance was partially applied before setup stopped.",
+    };
+  }
+  return {
+    heading: "Review the guide again",
+    detail:
+      "Private project storage is already durable. Review the current guide files or explicitly skip them to finish initialization.",
+    error: "The guide file changed since preview.",
+  };
+}
+
+export function projectGuideReviewCopy(
+  choice: "skip" | "install",
+  files: ProjectGuideReviewFile[] = [],
+): ProjectGuideReviewCopy {
+  if (choice === "skip") {
+    return {
+      label: "Skip Guide",
+      detail: "No guide files will change.",
+      changes: [],
+    };
+  }
+  const changes = files.map((file) => {
+    if (file.action === "no-change") return `${file.path} · no change`;
+    const action = file.action === "create" ? "create" : "update";
+    return `${file.path} · ${action} · +${file.additions} −${file.deletions}`;
+  });
+  return {
+    label: "Install Guide",
+    detail: changes.some((change) => !change.endsWith("no change"))
+      ? "Only the previewed guide changes will be applied."
+      : "The guide files already match the preview.",
+    changes,
+  };
+}
+
+export function durableProjectGuideReviewCopy(
+  choice: "skip" | "install",
+): ProjectGuideReviewCopy {
+  if (choice === "skip") {
+    return {
+      label: "Skip Guide",
+      detail: "Skip Guide is already durable for this initialization operation.",
+      changes: [],
+    };
+  }
+  return {
+    label: "Install Guide",
+    detail: "The durable guide step is complete and will not be replayed.",
+    changes: ["AGENTS.md and CLAUDE.md · guide step already applied"],
+  };
+}
+
+export function postProjectOnboardingActions(
+  phase: "plan" | "plan-failed" | "task" | "task-create-failed" | "task-start-failed",
+): { primary: string; secondary: string } {
+  if (phase === "plan" || phase === "plan-failed") {
+    return {
+      primary: phase === "plan-failed" ? "Try Again" : "Create Plan",
+      secondary: "Skip for Now",
+    };
+  }
+  if (phase === "task-start-failed") {
+    return { primary: "Try Starting Again", secondary: "Finish Setup" };
+  }
+  return {
+    primary: phase === "task-create-failed" ? "Try Again" : "Create Task",
+    secondary: "Finish with Plan",
+  };
+}
+
 export function appVersionLabel(value: unknown): string {
   if (typeof value !== "string") return "dev";
   const version = value.trim();
@@ -20,8 +136,8 @@ export function workspaceStateCopy(
   const copy: Record<WorkspaceStatus, WorkspaceCopy> = {
     welcome: {
       eyebrow: "p-track projects",
-      heading: "Choose a project",
-      detail: "Open a directory containing a p-track project to begin.",
+      heading: "Start with a project",
+      detail: "Initialize p-track in a folder, or open a project you already use.",
     },
     loading: {
       eyebrow: "Project workspace",

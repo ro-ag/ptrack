@@ -4,10 +4,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use ptrack_app::{
-    ActiveRuntime, AppError, DesktopCommandRequest, DesktopEvent, DesktopEventSink, DesktopRuntime,
-    DesktopRuntimeConfig, DesktopUpdateEventSink, DesktopWorkspaceFactory,
-    ProductionDesktopWorkspaceFactory, ProductionRecentProjects, RecentProjectsProvider,
-    RoutedApplication, UpdateRuntime, resolve_global_home,
+    AppError, DesktopCommandRequest, DesktopEvent, DesktopEventSink, DesktopRuntime,
+    RoutedApplication, production_desktop_runtime, resolve_global_home,
 };
 use ptrack_desktop::{
     DesktopPlatform, MenuDispatch, MenuEntrySpec, MenuRole, menu_dispatch, menu_spec,
@@ -49,6 +47,15 @@ async fn gui_invoke(
     let runtime = Arc::clone(runtime.inner());
     let shell_command = request.method == "InstallShellCommand";
     tauri::async_runtime::spawn_blocking(move || {
+        let _dialog_lease = if shell_command {
+            Some(
+                runtime
+                    .begin_native_action()
+                    .map_err(|error| error.to_string())?,
+            )
+        } else {
+            None
+        };
         let result = runtime.invoke(request).map_err(|error| error.to_string())?;
         if shell_command {
             let message = result.as_str().ok_or_else(|| {
@@ -71,7 +78,9 @@ async fn gui_invoke(
 async fn pick_project_directory(
     runtime: tauri::State<'_, Arc<DesktopRuntime>>,
     app: AppHandle,
+    purpose: String,
 ) -> Result<String, String> {
+    let purpose = ProjectPickerPurpose::parse(&purpose)?;
     let lease = runtime
         .inner()
         .begin_native_action()
@@ -88,20 +97,56 @@ async fn pick_project_directory(
         let selected = app
             .dialog()
             .file()
-            .set_title("Open p-track Project")
+            .set_title(purpose.title())
             .set_directory(default_directory)
             .blocking_pick_folder();
-        selected.map_or_else(
-            || Ok(String::new()),
-            |path| {
-                path.into_path()
-                    .map(|path| path.to_string_lossy().into_owned())
-                    .map_err(|error| error.to_string())
-            },
-        )
+        project_picker_result(selected)
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+fn project_picker_result(
+    selected: Option<tauri_plugin_dialog::FilePath>,
+) -> Result<String, String> {
+    selected.map_or_else(
+        || Ok(String::new()),
+        |path| {
+            path.into_path()
+                .map_err(|error| error.to_string())
+                .and_then(|path| {
+                    path.into_os_string()
+                        .into_string()
+                        .map_err(|_| "selected project path is not valid UTF-8".to_owned())
+                })
+        },
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProjectPickerPurpose {
+    Initialize,
+    LocateRecentProject,
+    Open,
+}
+
+impl ProjectPickerPurpose {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "initialize" => Ok(Self::Initialize),
+            "locate-recent-project" => Ok(Self::LocateRecentProject),
+            "open" => Ok(Self::Open),
+            _ => Err("project picker purpose is invalid".to_owned()),
+        }
+    }
+
+    const fn title(self) -> &'static str {
+        match self {
+            Self::Initialize => "Initialize p-track Project",
+            Self::LocateRecentProject => "Locate p-track Project",
+            Self::Open => "Open p-track Project",
+        }
+    }
 }
 
 #[tauri::command]
@@ -208,56 +253,19 @@ fn run_desktop(initial_path: Option<PathBuf>, initial_plan: u64) {
             let sink: Arc<dyn DesktopEventSink> = Arc::new(TauriEventSink {
                 app: app.handle().clone(),
             });
-            let mut config = DesktopRuntimeConfig::unavailable(ptrack_cli::version());
-            if let Some(runtime) = ActiveRuntime::load(
+            let current = initial_path
+                .clone()
+                .map_or_else(std::env::current_dir, Ok)
+                .map_err(std::io::Error::other)?;
+            let runtime = production_desktop_runtime(
                 resolve_global_home().map_err(std::io::Error::other)?,
                 ptrack_cli::version(),
+                &current,
+                Some(Arc::clone(&sink)),
+                initial_plan,
             )
-            .map_err(std::io::Error::other)?
-            {
-                let current = initial_path
-                    .clone()
-                    .map_or_else(std::env::current_dir, Ok)
-                    .map_err(std::io::Error::other)?;
-                let update_bindings = runtime
-                    .global_bindings(&current)
-                    .map_err(std::io::Error::other)?;
-                config.update_service = UpdateRuntime::for_bindings(
-                    &update_bindings,
-                    Some(DesktopUpdateEventSink::new(Arc::clone(&sink))),
-                )
-                .map_err(std::io::Error::other)?;
-                let switch_factory = ProductionDesktopWorkspaceFactory::new(
-                    Arc::clone(&runtime),
-                    Some(Arc::clone(&sink)),
-                    0,
-                )
-                .map_err(std::io::Error::other)?;
-                config.factory = switch_factory as Arc<dyn DesktopWorkspaceFactory>;
-                config.recent_projects = ProductionRecentProjects::new(Arc::clone(&runtime))
-                    as Arc<dyn RecentProjectsProvider>;
-                match runtime.bindings_for(&current) {
-                    Ok(bindings) => {
-                        if let Some(project) = bindings.project {
-                            let initial_factory = ProductionDesktopWorkspaceFactory::new(
-                                Arc::clone(&runtime),
-                                Some(Arc::clone(&sink)),
-                                initial_plan,
-                            )
-                            .map_err(std::io::Error::other)?;
-                            config.initial_workspace = Some(
-                                initial_factory
-                                    .build(&project.root, 1)
-                                    .map_err(std::io::Error::other)?,
-                            );
-                        }
-                    }
-                    Err(AppError::NoProject) => {}
-                    Err(error) => return Err(std::io::Error::other(error).into()),
-                }
-            }
-            config.event_sink = Some(sink);
-            app.manage(DesktopRuntime::new(config));
+            .map_err(std::io::Error::other)?;
+            app.manage(runtime);
             Ok(())
         })
         .menu(build_menu)
@@ -374,3 +382,6 @@ fn validate_external_url(url: &str) -> Result<(), String> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod main_test;

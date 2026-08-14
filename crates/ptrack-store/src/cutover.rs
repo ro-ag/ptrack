@@ -20,7 +20,7 @@ pub struct CutoverLease {
     mode: CutoverLockMode,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct PrivatePathIdentity {
     pub device: u64,
     pub inode: u64,
