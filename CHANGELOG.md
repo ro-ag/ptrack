@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+- Removed the final Go source module and its build/CI integration after the
+  v0.23.0 offline migration cutover. Historical exporter source remains
+  available from that tagged revision when recovery evidence requires it.
+
 ## [0.23.0] - 2026-08-13
 
 ### Changed

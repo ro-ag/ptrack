@@ -62,8 +62,7 @@ bundle doubles as the CLI; symlink it onto your `PATH` with
 
 Building from source requires Rust 1.89, Node 24, and the
 [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your
-platform. The nested Go module under `tools/ptrack-db-export` is a read-only
-legacy migration helper; it is not the p-track application.
+platform. No Go runtime or toolchain is required.
 
 ## Updates
 
@@ -525,8 +524,7 @@ make build
 make test
 ```
 
-The retained exporter is tested separately with
-`make exporter-test`; no other Go runtime remains.
+The repository contains no Go runtime or source module.
 
 On macOS, two more targets produce the branded desktop artifacts:
 

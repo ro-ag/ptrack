@@ -21,12 +21,9 @@ npm test
 npm run build
 ```
 
-The only retained Go code is the read-only legacy exporter and is validated in
-its nested module:
-
-```sh
-(cd tools/ptrack-db-export && go test ./... && go vet ./...)
-```
+The current repository contains no Go source or Go toolchain validation. The
+legacy exporter used for the v0.23.0 offline cutover remains available in that
+tag's history, not in the application or release pipeline.
 
 Compile the updater for every release target, then execute the OS-specific Rust
 tests on native macOS, Windows, and Linux hosts. Live GitHub release and macOS

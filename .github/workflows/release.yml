@@ -65,18 +65,6 @@ jobs:
           RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
           python3 -B -m unittest tools.release_contract_test
 
-      - name: Set up retained legacy-exporter toolchain
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: tools/ptrack-db-export/go.mod
-          cache-dependency-path: tools/ptrack-db-export/go.sum
-
-      - name: Test retained read-only legacy exporter
-        shell: bash
-        run: |
-          (cd tools/ptrack-db-export && go test ./... && go vet ./... && go mod tidy)
-          git diff --exit-code -- tools/ptrack-db-export/go.mod tools/ptrack-db-export/go.sum
-
   build:
     name: build (${{ matrix.archive_os }}/${{ matrix.arch }})
     needs: test

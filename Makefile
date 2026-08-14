@@ -1,4 +1,4 @@
-.PHONY: build frontend-build frontend-install frontend-test exporter-test help-check test \
+.PHONY: build frontend-build frontend-install frontend-test help-check test \
 	package archive dmg icons sign verify-sign signed-dmg notarize release-dmg
 
 # Version and target are explicit so local packages exercise the same identity
@@ -104,10 +104,6 @@ frontend-test:
 frontend-build:
 	cd frontend && npm run build
 
-exporter-test:
-	cd tools/ptrack-db-export && go test ./...
-	cd tools/ptrack-db-export && go vet ./...
-
 help-check:
 	python3 -B -m unittest tools.help_check_test tools.release_contract_test
 	python3 -B tools/help_check.py all
@@ -117,7 +113,5 @@ test: frontend-install frontend-test frontend-build
 	cargo test --workspace --all-targets --no-fail-fast
 	cargo clippy --workspace --all-targets -- -D warnings
 	RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps
-	cd tools/ptrack-db-export && go test ./...
-	cd tools/ptrack-db-export && go vet ./...
 	python3 -B -m unittest tools.help_check_test tools.release_contract_test
 	python3 -B tools/help_check.py all

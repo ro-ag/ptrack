@@ -119,6 +119,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(workflow.count("-- --locked"), 3)
         self.assertNotIn("cargo build --locked --release", workflow)
         self.assertIn("tools/release_contract.py validate-dist", workflow)
+        self.assertNotIn("actions/setup-go", workflow)
+        self.assertNotIn("ptrack-db-export", workflow)
+        self.assertNotIn("\n          go test", workflow)
+        self.assertNotIn("go vet", workflow)
         self.assertNotIn("cmd/wails", workflow.lower())
         self.assertNotIn("wails build", workflow.lower())
 
@@ -142,6 +146,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("native-acceptance-approved", workflow)
         self.assertIn('paths:\n      - ".github/workflows/native-acceptance.yml"', workflow)
         self.assertIn("cargo test --workspace --all-targets --no-fail-fast", workflow)
+        self.assertNotIn("actions/setup-go", workflow)
+        self.assertNotIn("ptrack-db-export", workflow)
+        self.assertNotIn("\n          go test", workflow)
+        self.assertNotIn("go vet", workflow)
         self.assertEqual(
             workflow.count('chmod 700 "$RUNNER_TEMP/ptrack-home"'), 2
         )
