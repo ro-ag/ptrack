@@ -88,7 +88,8 @@ class ReleaseArtifactTests(unittest.TestCase):
             changelog = root / "CHANGELOG.md"
             output = root / "notes.md"
             changelog.write_text(
-                "## [1x2x3]\nwrong\n## [1.2.3]\n\nright\n## [1.2.2]\nold\n",
+                "## [1x2x3] - 2026-08-13\nwrong\n"
+                "## [1.2.3] - 2026-08-13\n\nright\n## [1.2.2] - 2026-08-12\nold\n",
                 encoding="utf-8",
             )
             release_contract.extract_release_notes(changelog, "1.2.3", output)
@@ -112,8 +113,11 @@ class WorkflowTests(unittest.TestCase):
         ):
             self.assertEqual(workflow.count(f"rust_target: {target}"), 1)
         self.assertIn('tags:\n      - "v*"', workflow)
-        self.assertIn("cargo build --locked --release", workflow)
-        self.assertIn("run tauri -- build", workflow)
+        self.assertEqual(workflow.count("npm --prefix frontend run tauri -- build"), 3)
+        self.assertEqual(workflow.count("--no-bundle"), 2)
+        self.assertEqual(workflow.count("--bundles app"), 1)
+        self.assertEqual(workflow.count("-- --locked"), 3)
+        self.assertNotIn("cargo build --locked --release", workflow)
         self.assertIn("tools/release_contract.py validate-dist", workflow)
         self.assertNotIn("cmd/wails", workflow.lower())
         self.assertNotIn("wails build", workflow.lower())

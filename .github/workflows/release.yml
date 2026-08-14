@@ -161,8 +161,10 @@ jobs:
         shell: bash
         run: |
           version="${GITHUB_REF_NAME#v}"
-          PTRACK_BUILD_VERSION="${version}" cargo build --locked --release \
-            --package ptrack-desktop --bin ptrack --target "${{ matrix.rust_target }}"
+          export PTRACK_BUILD_VERSION="${version}"
+          npm --prefix frontend run tauri -- build \
+            --target "${{ matrix.rust_target }}" --no-bundle --ci \
+            --config "{\"version\":\"${version}\"}" -- --locked
           python3 tools/release_contract.py validate-binary \
             "target/${{ matrix.rust_target }}/release/ptrack" \
             "${version}" linux "${{ matrix.arch }}"
@@ -173,8 +175,10 @@ jobs:
         run: |
           $version = $env:GITHUB_REF_NAME.TrimStart("v")
           $env:PTRACK_BUILD_VERSION = $version
-          cargo build --locked --release `
-            --package ptrack-desktop --bin ptrack --target "${{ matrix.rust_target }}"
+          $config = "{`"version`":`"$version`"}"
+          npm --prefix frontend run tauri -- build `
+            --target "${{ matrix.rust_target }}" --no-bundle --ci `
+            --config $config -- --locked
           python tools/release_contract.py validate-binary `
             "target/${{ matrix.rust_target }}/release/ptrack.exe" `
             $version windows "${{ matrix.arch }}"
@@ -187,7 +191,7 @@ jobs:
           export PTRACK_BUILD_VERSION="${version}"
           npm --prefix frontend run tauri -- build \
             --target "${{ matrix.rust_target }}" --bundles app --no-sign --ci \
-            --config "{\"version\":\"${version}\"}"
+            --config "{\"version\":\"${version}\"}" -- --locked
           app="target/${{ matrix.rust_target }}/release/bundle/macos/p-track.app"
           test -f "$app/Contents/MacOS/ptrack"
           python3 tools/release_contract.py validate-binary \

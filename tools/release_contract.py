@@ -172,11 +172,11 @@ def write_checksums(directory: Path, version: str) -> Path:
 def extract_release_notes(changelog: Path, version: str, destination: Path) -> None:
     require_version(version)
     lines = changelog.read_text(encoding="utf-8").splitlines(keepends=True)
-    heading = f"## [{version}]"
+    heading = re.compile(rf"^## \[{re.escape(version)}\](?: - \d{{4}}-\d{{2}}-\d{{2}})?$")
     selected: list[str] = []
     found = False
     for line in lines:
-        if line.rstrip("\r\n") == heading:
+        if heading.fullmatch(line.rstrip("\r\n")):
             found = True
             continue
         if found and line.startswith("## ["):
