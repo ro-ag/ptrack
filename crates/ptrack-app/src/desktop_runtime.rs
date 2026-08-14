@@ -22,7 +22,9 @@ use ptrack_core::{
     Capability, CapabilityKind, Commit, Issue, IssueStatus, MemoryKind, Meta, Note, NoteTarget,
     Plan, ProjectSnapshot, Task, TaskStatus, Timestamp,
 };
-use ptrack_store::{MemoryWriteRequest, ProjectStore, StoreError, find_project_database};
+use ptrack_store::{
+    FIRST_RUN_TITLE_MAX_BYTES, MemoryWriteRequest, ProjectStore, StoreError, find_project_database,
+};
 use ptrack_terminal::{SessionInfo, SessionState};
 use ptrack_terminal::{TerminalAssociation, TerminalAssociationPointer};
 use serde::{Deserialize, Serialize};
@@ -41,6 +43,8 @@ const MAX_COMMAND_BYTES: usize = 1024 * 1024;
 const DEFAULT_CONFIRMATION_TTL: Duration = Duration::from_secs(60);
 const RUNTIME_CALL_TIMEOUT: Duration = Duration::from_millis(250);
 const RECENT_PROJECT_LIMIT: usize = 20;
+const RECENT_PROJECT_PATH_LIMIT: usize = 16 * 1024;
+const RECENT_PROJECT_TOKEN_BYTES: usize = 43;
 const SEARCH_RESULT_LIMIT: usize = 50;
 const SEARCH_SNIPPET_SPAN: usize = 60;
 const TASK_CONFIRMATION_TTL: Duration = Duration::from_secs(90);
@@ -58,7 +62,9 @@ const WORKSPACE_WATCH_INTERVAL: Duration = Duration::from_secs(2);
 const WORKSPACE_WATCH_DEBOUNCE: Duration = Duration::from_millis(500);
 const WORKSPACE_OPERATION_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
 
-const COMMANDS: [&str; 64] = [
+pub const FIRST_RUN_GOAL_MAX_BYTES: usize = 4_096;
+
+const COMMANDS: [&str; 76] = [
     "AcknowledgeAgentHandoffV2",
     "AddTask",
     "AddTaskNote",
@@ -74,6 +80,8 @@ const COMMANDS: [&str; 64] = [
     "CloseProject",
     "CloseTerminal",
     "CloseTerminalV2",
+    "CreateFirstPlanV1",
+    "CreateFirstTaskV1",
     "CreateTerminal",
     "CreateTerminalV2",
     "DisableCapabilityV2",
@@ -81,6 +89,7 @@ const COMMANDS: [&str; 64] = [
     "DownloadUpdate",
     "EnableCapabilityV2",
     "ExpireCapabilityV2",
+    "ForgetRecentProjectV1",
     "GetActivityHeatmapV2",
     "GetAgentIntelligenceV2",
     "GetAgentRunsV2",
@@ -88,13 +97,17 @@ const COMMANDS: [&str; 64] = [
     "GetBoardV2",
     "GetCapabilitiesV2",
     "GetCapabilityAuditsV2",
+    "GetInitializationStatusV1",
+    "GetPendingInitializationV1",
     "GetRecentProjects",
+    "GetRecentProjectsV1",
     "GetTaskDetailV2",
     "GetTerminalProfiles",
     "GetTerminalProfilesV2",
     "GetUpdateState",
     "GetWorkspaceSnapshot",
     "GetWorkspaceState",
+    "InitializeProjectV1",
     "InstallShellCommand",
     "LaunchLinkedAgentV2",
     "MoveTask",
@@ -103,16 +116,19 @@ const COMMANDS: [&str; 64] = [
     "MutateTerminalAssociationV2",
     "OpenHelpDestination",
     "OpenProject",
+    "OpenRecentProjectV1",
     "PickProjectDirectory",
     "PrepareAgentWorkflowV2",
     "PreviewAgentHandoffV2",
     "PreviewCapabilityV2",
+    "PreviewProjectGuideV1",
     "PreviewTerminalWritebackV2",
     "RemoveCapabilityV2",
     "RenameTask",
     "RenameTaskV2",
     "ResizeTerminal",
     "ResizeTerminalV2",
+    "ResolveRecentProjectV1",
     "RollbackLinkedAgentLaunchV2",
     "SaveCapabilityV2",
     "SearchV2",
@@ -120,13 +136,14 @@ const COMMANDS: [&str; 64] = [
     "SetAgentTaskOwnershipV2",
     "SetAgentWorktreeV2",
     "SetAutomaticUpdateChecks",
+    "StartFirstTaskV1",
     "TestCapabilityV2",
+    "ValidateProjectTargetV1",
     "ValidateTerminalCWDsV2",
     "WriteTerminalMemoryV2",
 ];
 
-/// Exact current desktop bridge command allowlist (the frozen 63 methods plus
-/// the post-v0.21 symbolic Help destination method).
+/// Exact current 76-method desktop bridge command allowlist.
 #[must_use]
 pub const fn allowed_desktop_commands() -> &'static [&'static str] {
     &COMMANDS
@@ -138,6 +155,175 @@ pub struct DesktopCommandRequest {
     pub method: String,
     #[serde(default)]
     pub arguments: Vec<Value>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProjectTargetKindV1 {
+    New,
+    Existing,
+    RecoveryRequired,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTargetValidationV1 {
+    pub kind: ProjectTargetKindV1,
+    pub canonical_root: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub operation_id: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initialization: Option<InitializationStatusV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub goal: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guide_choice: Option<ProjectGuideChoiceV1>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingInitializationV1 {
+    pub pending: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initialization: Option<InitializationStatusV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub validation: Option<ProjectTargetValidationV1>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InitializeProjectRequestV1 {
+    pub operation_id: String,
+    pub root: String,
+    pub goal: String,
+    #[serde(default)]
+    pub guide_choice: ProjectGuideChoiceV1,
+    #[serde(default)]
+    pub guide_preview_token: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProjectGuideChoiceV1 {
+    #[default]
+    Skip,
+    Install,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectGuidePreviewRequestV1 {
+    pub operation_id: String,
+    pub root: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProjectGuideFileActionV1 {
+    Create,
+    Update,
+    NoChange,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectGuideFilePreviewV1 {
+    pub path: String,
+    pub action: ProjectGuideFileActionV1,
+    pub additions: usize,
+    pub deletions: usize,
+    pub diff: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectGuidePreviewV1 {
+    pub available: bool,
+    pub message: String,
+    pub preview_token: String,
+    pub files: Vec<ProjectGuideFilePreviewV1>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InitializationCheckpointV1 {
+    None,
+    Prepared,
+    RuntimeCommitted,
+    ProjectCommitted,
+    GuideApplied,
+    DesktopBound,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InitializationOutcomeV1 {
+    Ready,
+    InProgress,
+    RecoveryRequired,
+    Complete,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InitializationStatusV1 {
+    pub operation_id: String,
+    pub canonical_root: String,
+    pub checkpoint: InitializationCheckpointV1,
+    pub outcome: InitializationOutcomeV1,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub error_kind: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitializeProjectResultV1 {
+    pub initialization: InitializationStatusV1,
+    pub state: WorkspaceState,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FirstPlanV1 {
+    pub id: u64,
+    pub title: String,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FirstTaskV1 {
+    pub id: u64,
+    pub plan_id: u64,
+    pub title: String,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FirstRunWorkspaceStateV1 {
+    pub status: WorkspaceStatus,
+    pub generation: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateFirstPlanResultV1 {
+    pub plan: FirstPlanV1,
+    pub state: FirstRunWorkspaceStateV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateFirstTaskResultV1 {
+    pub task: FirstTaskV1,
+    pub state: FirstRunWorkspaceStateV1,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -195,6 +381,91 @@ pub struct WorkspaceChangeResult {
     pub active_resources: ActiveResourceSummary,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub warning: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RecentProjectAvailabilityV1 {
+    Available,
+    Missing,
+    PermissionRequired,
+    Changed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentProjectV1 {
+    pub entry_id: String,
+    pub base: String,
+    pub name: String,
+    pub canonical_path: String,
+    pub last_opened_at: String,
+    pub availability: RecentProjectAvailabilityV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentProjectsV1 {
+    pub projects: Vec<RecentProjectV1>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RecentProjectResolutionV1 {
+    Ready,
+    ConfirmationRequired,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedRecentProjectV1 {
+    pub entry_id: String,
+    pub base: String,
+    pub canonical_root: String,
+    pub name: String,
+    pub resolution: RecentProjectResolutionV1,
+    pub confirmation_token: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecentProjectOpenAuthorizationV1 {
+    pub entry_id: String,
+    pub base: String,
+    pub canonical_root: String,
+    pub name: String,
+    pub relocation_confirmation_token: String,
+    pub already_completed: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RecentProjectRegistryStatusV1 {
+    Unchanged,
+    Relocated,
+    Stale,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecentProjectRegistryCommitV1 {
+    pub base: String,
+    pub status: RecentProjectRegistryStatusV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenRecentProjectResultV1 {
+    pub open: WorkspaceChangeResult,
+    pub entry_id: String,
+    pub registry_base: String,
+    pub registry_status: RecentProjectRegistryStatusV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForgetRecentProjectResultV1 {
+    pub entry_id: String,
+    pub registry_base: String,
+    pub forgotten: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -289,6 +560,71 @@ pub trait DesktopWorkspaceFactory: Send + Sync {
 #[allow(clippy::missing_errors_doc)]
 pub trait RecentProjectsProvider: Send + Sync {
     fn recent_projects(&self) -> AppResult<Vec<Value>>;
+
+    fn recent_projects_v1(&self) -> AppResult<RecentProjectsV1> {
+        Ok(RecentProjectsV1 {
+            projects: Vec::new(),
+        })
+    }
+
+    fn resolve_recent_project(
+        &self,
+        _entry_id: &str,
+        _base: &str,
+        _candidate: &Path,
+    ) -> AppResult<ResolvedRecentProjectV1> {
+        Err(unavailable("recent-project recovery"))
+    }
+
+    fn authorize_recent_project_open(
+        &self,
+        _entry_id: &str,
+        _base: &str,
+        _canonical_root: &Path,
+        _relocation_confirmation_token: &str,
+    ) -> AppResult<RecentProjectOpenAuthorizationV1> {
+        Err(unavailable("recent-project recovery"))
+    }
+
+    fn finish_recent_project_open(
+        &self,
+        _authorization: &RecentProjectOpenAuthorizationV1,
+    ) -> AppResult<RecentProjectRegistryCommitV1> {
+        Err(unavailable("recent-project recovery"))
+    }
+
+    fn forget_recent_project(
+        &self,
+        _entry_id: &str,
+        _base: &str,
+    ) -> AppResult<ForgetRecentProjectResultV1> {
+        Err(unavailable("recent-project recovery"))
+    }
+}
+
+#[allow(clippy::missing_errors_doc)]
+pub trait DesktopInitializationService: Send + Sync {
+    fn validate_target(&self, selected: &Path) -> AppResult<ProjectTargetValidationV1>;
+    fn preview_guide(
+        &self,
+        _request: &ProjectGuidePreviewRequestV1,
+    ) -> AppResult<ProjectGuidePreviewV1> {
+        Ok(project_guide_unavailable())
+    }
+    fn initialize(&self, request: &InitializeProjectRequestV1)
+    -> AppResult<InitializationStatusV1>;
+    fn status(&self, operation_id: &str) -> AppResult<InitializationStatusV1>;
+    fn pending(&self) -> AppResult<PendingInitializationV1> {
+        Ok(PendingInitializationV1 {
+            pending: false,
+            initialization: None,
+            validation: None,
+        })
+    }
+    fn completed_initialization(&self) -> AppResult<Option<InitializationStatusV1>> {
+        Ok(None)
+    }
+    fn mark_desktop_bound(&self, operation_id: &str) -> AppResult<InitializationStatusV1>;
 }
 
 #[derive(Default)]
@@ -311,12 +647,44 @@ impl DesktopWorkspaceFactory for NoDesktopWorkspaceFactory {
     }
 }
 
+#[derive(Default)]
+pub struct NoDesktopInitializationService;
+
+impl DesktopInitializationService for NoDesktopInitializationService {
+    fn validate_target(&self, _selected: &Path) -> AppResult<ProjectTargetValidationV1> {
+        Err(unavailable("project initialization"))
+    }
+
+    fn initialize(
+        &self,
+        _request: &InitializeProjectRequestV1,
+    ) -> AppResult<InitializationStatusV1> {
+        Err(unavailable("project initialization"))
+    }
+
+    fn preview_guide(
+        &self,
+        _request: &ProjectGuidePreviewRequestV1,
+    ) -> AppResult<ProjectGuidePreviewV1> {
+        Ok(project_guide_unavailable())
+    }
+
+    fn status(&self, _operation_id: &str) -> AppResult<InitializationStatusV1> {
+        Err(unavailable("project initialization"))
+    }
+
+    fn mark_desktop_bound(&self, _operation_id: &str) -> AppResult<InitializationStatusV1> {
+        Err(unavailable("project initialization"))
+    }
+}
+
 pub struct DesktopRuntimeConfig {
     pub version: String,
     pub factory: Arc<dyn DesktopWorkspaceFactory>,
     pub event_sink: Option<Arc<dyn DesktopEventSink>>,
     pub initial_workspace: Option<Arc<dyn DesktopWorkspace>>,
     pub recent_projects: Arc<dyn RecentProjectsProvider>,
+    pub initialization: Arc<dyn DesktopInitializationService>,
     pub update_service: Arc<dyn crate::DesktopUpdateService>,
     pub confirmation_ttl: Duration,
 }
@@ -331,6 +699,7 @@ impl DesktopRuntimeConfig {
             event_sink: None,
             initial_workspace: None,
             recent_projects: Arc::new(NoRecentProjectsProvider),
+            initialization: Arc::new(NoDesktopInitializationService),
             update_service: crate::UnavailableUpdateService::new(version),
             confirmation_ttl: DEFAULT_CONFIRMATION_TTL,
         }
@@ -363,7 +732,14 @@ struct RuntimeState {
     confirmation: Option<Confirmation>,
     shutting_down: bool,
     shutdown_retry: bool,
+    authority_changing: bool,
     active_calls: usize,
+    completed_initialization: Option<CompletedInitializationReplay>,
+}
+
+struct CompletedInitializationReplay {
+    request: InitializeProjectRequestV1,
+    result: InitializeProjectResultV1,
 }
 
 struct ResourceAdmissionState {
@@ -467,10 +843,12 @@ pub struct DesktopRuntime {
     factory: Arc<dyn DesktopWorkspaceFactory>,
     event_sink: Option<Arc<dyn DesktopEventSink>>,
     transition: Mutex<()>,
+    recent_mutation: Mutex<()>,
     state: Mutex<RuntimeState>,
     calls_changed: Condvar,
     watcher: Mutex<Option<WorkspaceWatcher>>,
     recent_projects: Arc<dyn RecentProjectsProvider>,
+    initialization: Arc<dyn DesktopInitializationService>,
     update_service: Arc<dyn crate::DesktopUpdateService>,
     confirmation_ttl: Duration,
 }
@@ -489,6 +867,7 @@ impl DesktopRuntime {
             factory: config.factory,
             event_sink: config.event_sink,
             transition: Mutex::new(()),
+            recent_mutation: Mutex::new(()),
             state: Mutex::new(RuntimeState {
                 status,
                 generation,
@@ -497,11 +876,14 @@ impl DesktopRuntime {
                 confirmation: None,
                 shutting_down: false,
                 shutdown_retry: false,
+                authority_changing: false,
                 active_calls: 0,
+                completed_initialization: None,
             }),
             calls_changed: Condvar::new(),
             watcher: Mutex::new(None),
             recent_projects: config.recent_projects,
+            initialization: config.initialization,
             update_service: config.update_service,
             confirmation_ttl: if config.confirmation_ttl.is_zero() {
                 DEFAULT_CONFIRMATION_TTL
@@ -526,6 +908,17 @@ impl DesktopRuntime {
         validate_request(&request)?;
         match request.method.as_str() {
             "GetWorkspaceState" => value(self.workspace_state()),
+            "GetInitializationStatusV1" => self.initialization_status(&request.arguments),
+            "GetPendingInitializationV1" => self.pending_initialization(&request.arguments),
+            "InitializeProjectV1" => {
+                let request: InitializeProjectRequestV1 = typed_arg(&request.arguments, 0)?;
+                value(self.initialize_project(request)?)
+            }
+            "PreviewProjectGuideV1" => {
+                let _lease = self.begin_native_action()?;
+                let request: ProjectGuidePreviewRequestV1 = typed_arg(&request.arguments, 0)?;
+                value(self.initialization.preview_guide(&request)?)
+            }
             "OpenProject" => {
                 let _lease = self.begin_native_action()?;
                 let root = path_arg(&request.arguments, 0)?;
@@ -592,12 +985,135 @@ impl DesktopRuntime {
                 let _lease = self.begin_native_action()?;
                 value(crate::install_shell_command().message)
             }
-            "GetRecentProjects" => {
+            "GetRecentProjects" => self.get_recent_projects(),
+            "GetRecentProjectsV1" => self.get_recent_projects_v1(&request.arguments),
+            "ResolveRecentProjectV1" => self.resolve_recent_project_v1(&request.arguments),
+            "OpenRecentProjectV1" => self.open_recent_project_v1(&request.arguments),
+            "ForgetRecentProjectV1" => self.forget_recent_project_v1(&request.arguments),
+            "ValidateProjectTargetV1" => {
                 let _lease = self.begin_native_action()?;
-                value(self.recent_projects.recent_projects()?)
+                value(
+                    self.initialization
+                        .validate_target(&path_arg(&request.arguments, 0)?)?,
+                )
             }
             method => self.with_workspace(method, &request.arguments),
         }
+    }
+
+    fn get_recent_projects(self: &Arc<Self>) -> AppResult<Value> {
+        let _lease = self.begin_native_action()?;
+        value(self.recent_projects.recent_projects()?)
+    }
+
+    fn get_recent_projects_v1(self: &Arc<Self>, arguments: &[Value]) -> AppResult<Value> {
+        require_argument_count("GetRecentProjectsV1", arguments, 0)?;
+        let _lease = self.begin_native_action()?;
+        value(self.recent_projects.recent_projects_v1()?)
+    }
+
+    fn resolve_recent_project_v1(self: &Arc<Self>, arguments: &[Value]) -> AppResult<Value> {
+        require_argument_count("ResolveRecentProjectV1", arguments, 3)?;
+        let _lease = self.begin_native_action()?;
+        value(self.recent_projects.resolve_recent_project(
+            recent_identifier_arg(arguments, 0)?,
+            recent_identifier_arg(arguments, 1)?,
+            &recent_path_arg(arguments, 2)?,
+        )?)
+    }
+
+    fn forget_recent_project_v1(self: &Arc<Self>, arguments: &[Value]) -> AppResult<Value> {
+        require_argument_count("ForgetRecentProjectV1", arguments, 2)?;
+        let _lease = self.begin_native_action()?;
+        let _mutation = lock(&self.recent_mutation);
+        value(self.recent_projects.forget_recent_project(
+            recent_identifier_arg(arguments, 0)?,
+            recent_identifier_arg(arguments, 1)?,
+        )?)
+    }
+
+    fn open_recent_project_v1(self: &Arc<Self>, arguments: &[Value]) -> AppResult<Value> {
+        require_argument_count("OpenRecentProjectV1", arguments, 5)?;
+        let _lease = self.begin_native_action()?;
+        let _mutation = lock(&self.recent_mutation);
+        let workspace_token = recent_optional_token_arg(arguments, 4)?;
+        let authorization = (|| {
+            self.recent_projects.authorize_recent_project_open(
+                recent_identifier_arg(arguments, 0)?,
+                recent_identifier_arg(arguments, 1)?,
+                &recent_path_arg(arguments, 2)?,
+                recent_optional_token_arg(arguments, 3)?,
+            )
+        })();
+        let authorization = match authorization {
+            Ok(authorization) => authorization,
+            Err(error) => {
+                if !workspace_token.is_empty() {
+                    self.cancel_workspace_change_if_exact(workspace_token);
+                }
+                return Err(error);
+            }
+        };
+        let mut open = if authorization.already_completed
+            && let Some(completed) = self.completed_recent_open(&authorization)
+        {
+            completed
+        } else {
+            match self.open_project(Path::new(&authorization.canonical_root), workspace_token) {
+                Ok(open) => open,
+                Err(error) => {
+                    if !workspace_token.is_empty() {
+                        self.cancel_workspace_change_if_exact(workspace_token);
+                    }
+                    return Err(sanitize_recent_open_error(error));
+                }
+            }
+        };
+        let commit = if open.requires_confirmation {
+            RecentProjectRegistryCommitV1 {
+                base: authorization.base.clone(),
+                status: RecentProjectRegistryStatusV1::Unchanged,
+            }
+        } else {
+            self.recent_projects
+                .finish_recent_project_open(&authorization)
+                .unwrap_or_else(|_| {
+                    if open.warning.is_empty() {
+                        "recent-project registry update is incomplete"
+                            .clone_into(&mut open.warning);
+                    }
+                    RecentProjectRegistryCommitV1 {
+                        base: authorization.base.clone(),
+                        status: RecentProjectRegistryStatusV1::Stale,
+                    }
+                })
+        };
+        value(OpenRecentProjectResultV1 {
+            open,
+            entry_id: authorization.entry_id,
+            registry_base: commit.base,
+            registry_status: commit.status,
+        })
+    }
+
+    fn completed_recent_open(
+        &self,
+        authorization: &RecentProjectOpenAuthorizationV1,
+    ) -> Option<WorkspaceChangeResult> {
+        let state = self.workspace_state();
+        if state.status != WorkspaceStatus::Open
+            || state.project.as_ref().map(|project| project.root.as_str())
+                != Some(authorization.canonical_root.as_str())
+        {
+            return None;
+        }
+        Some(WorkspaceChangeResult {
+            state,
+            requires_confirmation: false,
+            confirmation_token: String::new(),
+            active_resources: ActiveResourceSummary::default(),
+            warning: String::new(),
+        })
     }
 
     #[must_use]
@@ -613,6 +1129,11 @@ impl DesktopRuntime {
     pub fn begin_shutdown(&self) -> AppResult<()> {
         {
             let mut state = lock(&self.state);
+            if state.authority_changing {
+                return Err(AppError::Message(
+                    "runtime authority is changing".to_owned(),
+                ));
+            }
             if state.shutting_down && state.workspace.is_none() {
                 return Ok(());
             }
@@ -676,6 +1197,11 @@ impl DesktopRuntime {
         if state.shutting_down {
             return Err(shutting_down());
         }
+        if state.authority_changing {
+            return Err(AppError::Message(
+                "runtime authority is changing".to_owned(),
+            ));
+        }
         state.active_calls = state.active_calls.saturating_add(1);
         drop(state);
         Ok(DesktopNativeActionLease {
@@ -689,6 +1215,11 @@ impl DesktopRuntime {
             if state.shutting_down {
                 return Err(shutting_down());
             }
+            if state.authority_changing {
+                return Err(AppError::Message(
+                    "runtime authority is changing".to_owned(),
+                ));
+            }
             if state.status != WorkspaceStatus::Open {
                 return Err(AppError::Message("no project workspace is open".to_owned()));
             }
@@ -701,6 +1232,275 @@ impl DesktopRuntime {
         };
         let _lease = DesktopCallLease { runtime: self };
         workspace.invoke(method, arguments)
+    }
+
+    #[allow(clippy::too_many_lines)] // One fenced authority transaction owns every recovery edge.
+    fn initialize_project(
+        self: &Arc<Self>,
+        mut request: InitializeProjectRequestV1,
+    ) -> AppResult<InitializeProjectResultV1> {
+        request.goal = request.goal.trim().to_owned();
+        if request.goal.is_empty() || request.goal.len() > FIRST_RUN_GOAL_MAX_BYTES {
+            return Err(AppError::Message(format!(
+                "project goal must contain 1 to {FIRST_RUN_GOAL_MAX_BYTES} UTF-8 bytes"
+            )));
+        }
+        match request.guide_choice {
+            ProjectGuideChoiceV1::Skip if !request.guide_preview_token.is_empty() => {
+                return Err(AppError::Message(
+                    "skipping project guidance requires an empty preview token".to_owned(),
+                ));
+            }
+            ProjectGuideChoiceV1::Skip | ProjectGuideChoiceV1::Install => {}
+        }
+        if let Some(replayed) = self.replay_completed_initialization(&request)? {
+            return Ok(replayed);
+        }
+        {
+            let mut state = lock(&self.state);
+            if state.shutting_down {
+                return Err(shutting_down());
+            }
+            if state.authority_changing {
+                return Err(AppError::Message(
+                    "runtime authority is changing".to_owned(),
+                ));
+            }
+            if state.workspace.is_some() {
+                if let Some(replay) = &state.completed_initialization
+                    && replay.request == request
+                    && replay.result.state == state_view(&state, &self.version)
+                {
+                    return Ok(replay.result.clone());
+                }
+                return Err(AppError::Message(
+                    "project initialization requires no open workspace".to_owned(),
+                ));
+            }
+            state.authority_changing = true;
+            state.status = WorkspaceStatus::Loading;
+            state.error.clear();
+            let deadline = Instant::now() + WORKSPACE_OPERATION_DRAIN_TIMEOUT;
+            while state.active_calls != 0 {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    state.authority_changing = false;
+                    state.status = WorkspaceStatus::Error;
+                    "runtime calls did not finish before initialization"
+                        .clone_into(&mut state.error);
+                    return Err(AppError::Message(state.error.clone()));
+                }
+                let (next, result) = self
+                    .calls_changed
+                    .wait_timeout(state, remaining)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                state = next;
+                if result.timed_out() && state.active_calls != 0 {
+                    state.authority_changing = false;
+                    state.status = WorkspaceStatus::Error;
+                    "runtime calls did not finish before initialization"
+                        .clone_into(&mut state.error);
+                    return Err(AppError::Message(state.error.clone()));
+                }
+            }
+        }
+        let _transition = lock(&self.transition);
+
+        let initialized = (|| -> AppResult<InitializeProjectResultV1> {
+            let status = self.initialization.initialize(&request)?;
+            if status.outcome == InitializationOutcomeV1::RecoveryRequired {
+                let mut state = lock(&self.state);
+                state.status = WorkspaceStatus::Error;
+                state.error.clone_from(&status.error_kind);
+                return Ok(InitializeProjectResultV1 {
+                    initialization: status,
+                    state: state_view(&state, &self.version),
+                });
+            }
+            if !matches!(
+                status.checkpoint,
+                InitializationCheckpointV1::GuideApplied | InitializationCheckpointV1::DesktopBound
+            ) {
+                return Err(AppError::Message(
+                    "project initialization did not commit the project".to_owned(),
+                ));
+            }
+            let root = PathBuf::from(&status.canonical_root);
+            let next_generation = lock(&self.state)
+                .generation
+                .checked_add(1)
+                .ok_or_else(|| AppError::Message("workspace generation overflow".to_owned()))?;
+            let workspace = self.factory.build(&root, next_generation)?;
+            let project = workspace.project();
+            let initialization = match self
+                .initialization
+                .mark_desktop_bound(&request.operation_id)
+            {
+                Ok(initialization) => initialization,
+                Err(error) => {
+                    let _ = workspace.shutdown();
+                    return Err(error);
+                }
+            };
+            {
+                let mut state = lock(&self.state);
+                state.workspace = Some(Arc::clone(&workspace));
+                state.generation = next_generation;
+                state.status = WorkspaceStatus::Open;
+                state.error.clear();
+            }
+            self.start_workspace_watcher(
+                next_generation,
+                PathBuf::from(project.db_path),
+                workspace,
+            );
+            let result = InitializeProjectResultV1 {
+                initialization,
+                state: self.workspace_state(),
+            };
+            lock(&self.state).completed_initialization = Some(CompletedInitializationReplay {
+                request: request.clone(),
+                result: result.clone(),
+            });
+            self.emit(DesktopEvent::WorkspaceDataChanged(next_generation));
+            Ok(result)
+        })();
+
+        let mut state = lock(&self.state);
+        state.authority_changing = false;
+        if let Err(error) = &initialized
+            && state.workspace.is_none()
+        {
+            state.status = WorkspaceStatus::Error;
+            state.error = error.to_string();
+        }
+        drop(state);
+        self.calls_changed.notify_all();
+        initialized
+    }
+
+    fn replay_completed_initialization(
+        self: &Arc<Self>,
+        request: &InitializeProjectRequestV1,
+    ) -> AppResult<Option<InitializeProjectResultV1>> {
+        if lock(&self.state).workspace.is_none() {
+            return Ok(None);
+        }
+        let _lease = self.begin_native_action()?;
+        let _transition = lock(&self.transition);
+        {
+            let state = lock(&self.state);
+            if state.workspace.is_none() {
+                return Ok(None);
+            }
+            if let Some(replay) = &state.completed_initialization
+                && replay.request == *request
+                && replay.result.state == state_view(&state, &self.version)
+            {
+                return Ok(Some(replay.result.clone()));
+            }
+        }
+        let initialization = self.initialization.initialize(request)?;
+        let mut state = lock(&self.state);
+        if state.shutting_down {
+            return Err(shutting_down());
+        }
+        if state.authority_changing {
+            return Err(AppError::Message(
+                "runtime authority is changing".to_owned(),
+            ));
+        }
+        let current = state_view(&state, &self.version);
+        if initialization.checkpoint != InitializationCheckpointV1::DesktopBound
+            || initialization.outcome != InitializationOutcomeV1::Complete
+            || initialization.canonical_root != request.root
+            || current.status != WorkspaceStatus::Open
+            || current
+                .project
+                .as_ref()
+                .is_none_or(|project| project.root != request.root)
+        {
+            return Err(AppError::Message(
+                "project initialization requires no open workspace".to_owned(),
+            ));
+        }
+        let result = InitializeProjectResultV1 {
+            initialization,
+            state: current,
+        };
+        state.completed_initialization = Some(CompletedInitializationReplay {
+            request: request.clone(),
+            result: result.clone(),
+        });
+        Ok(Some(result))
+    }
+
+    fn pending_initialization(self: &Arc<Self>, arguments: &[Value]) -> AppResult<Value> {
+        require_argument_count("GetPendingInitializationV1", arguments, 0)?;
+        let _lease = self.begin_native_action()?;
+        let _transition = lock(&self.transition);
+        let pending = self.initialization.pending()?;
+        if !pending.pending
+            && let Some(status) = self.initialization.completed_initialization()?
+        {
+            self.bind_completed_initialization_locked(&status)?;
+        }
+        value(pending)
+    }
+
+    fn initialization_status(self: &Arc<Self>, arguments: &[Value]) -> AppResult<Value> {
+        let operation_id = string_arg(arguments, 0)?;
+        let _lease = self.begin_native_action()?;
+        let _transition = lock(&self.transition);
+        let status = self.initialization.status(operation_id)?;
+        self.bind_completed_initialization_locked(&status)?;
+        value(status)
+    }
+
+    fn bind_completed_initialization_locked(
+        self: &Arc<Self>,
+        status: &InitializationStatusV1,
+    ) -> AppResult<()> {
+        if status.checkpoint != InitializationCheckpointV1::DesktopBound
+            || status.outcome != InitializationOutcomeV1::Complete
+        {
+            return Ok(());
+        }
+        self.require_not_shutting_down()?;
+        let next_generation = {
+            let mut state = lock(&self.state);
+            if state.workspace.is_some() {
+                return Ok(());
+            }
+            let next_generation = state
+                .generation
+                .checked_add(1)
+                .ok_or_else(|| AppError::Message("workspace generation overflow".to_owned()))?;
+            state.status = WorkspaceStatus::Loading;
+            state.error.clear();
+            next_generation
+        };
+        let root = PathBuf::from(&status.canonical_root);
+        let workspace = match self.factory.build(&root, next_generation) {
+            Ok(workspace) => workspace,
+            Err(error) => {
+                let mut state = lock(&self.state);
+                state.status = WorkspaceStatus::Error;
+                state.error = error.to_string();
+                return Err(error);
+            }
+        };
+        let project = workspace.project();
+        {
+            let mut state = lock(&self.state);
+            state.workspace = Some(Arc::clone(&workspace));
+            state.generation = next_generation;
+            state.status = WorkspaceStatus::Open;
+            state.error.clear();
+        }
+        self.start_workspace_watcher(next_generation, PathBuf::from(project.db_path), workspace);
+        self.emit(DesktopEvent::WorkspaceDataChanged(next_generation));
+        Ok(())
     }
 
     fn open_project(
@@ -940,6 +1740,17 @@ impl DesktopRuntime {
             Err(AppError::Message(
                 "invalid or expired workspace confirmation".to_owned(),
             ))
+        }
+    }
+
+    fn cancel_workspace_change_if_exact(&self, token: &str) {
+        let mut state = lock(&self.state);
+        if state
+            .confirmation
+            .as_ref()
+            .is_some_and(|confirmation| confirmation.token == token)
+        {
+            state.confirmation = None;
         }
     }
 
@@ -1285,6 +2096,23 @@ impl BoundDesktopWorkspace {
             )));
         }
         Ok(())
+    }
+
+    fn require_exact_generation(&self, expected: u64) -> AppResult<()> {
+        if expected == 0 || expected != self.generation {
+            return Err(AppError::Message(format!(
+                "stale workspace generation: expected {expected}, active {}",
+                self.generation
+            )));
+        }
+        Ok(())
+    }
+
+    const fn first_run_state(&self) -> FirstRunWorkspaceStateV1 {
+        FirstRunWorkspaceStateV1 {
+            status: WorkspaceStatus::Open,
+            generation: self.generation,
+        }
     }
 
     fn snapshot(&self) -> AppResult<ProjectSnapshot> {
@@ -1781,6 +2609,43 @@ impl BoundDesktopWorkspace {
         })
     }
 
+    fn start_first_task_v1(&self, task_id: u64, expected_updated_at: &str) -> AppResult<Task> {
+        let expected = parse_first_run_timestamp(expected_updated_at)?;
+        let store = self.project_store()?;
+        let task = store.task(task_id).map_err(|error| match error {
+            StoreError::NotFound => AppError::Message(format!("task #{task_id} not found")),
+            other => AppError::from(other),
+        })?;
+        if task.status == TaskStatus::Doing {
+            return store
+                .start_first_task(task_id, expected)
+                .map_err(AppError::from);
+        }
+        let _transition = lock(&self.resource_transition);
+        let _admission = self.fence_resource_admission()?;
+        if lock(&self.resource_admission.state).pending != 0 {
+            return Err(AppError::Message(
+                "first task start must retry after resource admission completes".to_owned(),
+            ));
+        }
+        if task.status != TaskStatus::Todo || timestamp(task.updated_at) != expected_updated_at {
+            return Err(AppError::Message(
+                "first task changed before it could be started".to_owned(),
+            ));
+        }
+        let snapshot = store.snapshot()?;
+        self.with_exact_task_resources(&snapshot, task_id, |resources| {
+            if !resources.is_empty() {
+                return Err(AppError::Message(
+                    "first task start requires resource confirmation".to_owned(),
+                ));
+            }
+            store
+                .start_first_task(task_id, expected)
+                .map_err(AppError::from)
+        })
+    }
+
     fn workspace_snapshot(
         generation: u64,
         project: &WorkspaceProject,
@@ -2133,6 +2998,29 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
                     json!({ "generation": self.generation, "board": self.board(u64_arg(arguments, 1)?)? }),
                 )
             }
+            "CreateFirstPlanV1" => {
+                require_argument_count(method, arguments, 2)?;
+                let generation = u64_arg(arguments, 0)?;
+                self.require_exact_generation(generation)?;
+                let title = first_run_title(string_arg(arguments, 1)?, "plan")?;
+                let plan = self.project_store()?.create_first_plan(title)?;
+                value(CreateFirstPlanResultV1 {
+                    plan: first_plan_view(&plan),
+                    state: self.first_run_state(),
+                })
+            }
+            "CreateFirstTaskV1" => {
+                require_argument_count(method, arguments, 3)?;
+                let generation = u64_arg(arguments, 0)?;
+                self.require_exact_generation(generation)?;
+                let plan_id = u64_arg(arguments, 1)?;
+                let title = first_run_title(string_arg(arguments, 2)?, "task")?;
+                let task = self.project_store()?.create_first_task(plan_id, title)?;
+                value(CreateFirstTaskResultV1 {
+                    task: first_task_view(&task),
+                    state: self.first_run_state(),
+                })
+            }
             "AddTask" | "AddTaskV2" => {
                 let (generation, offset) = if method == "AddTaskV2" {
                     (u64_arg(arguments, 0)?, 1)
@@ -2239,6 +3127,17 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
                 }
             }
             "SearchV2" => value(search(&self.snapshot()?, string_arg(arguments, 0)?)),
+            "StartFirstTaskV1" => {
+                require_argument_count(method, arguments, 3)?;
+                let generation = u64_arg(arguments, 0)?;
+                self.require_exact_generation(generation)?;
+                let task =
+                    self.start_first_task_v1(u64_arg(arguments, 1)?, string_arg(arguments, 2)?)?;
+                value(CreateFirstTaskResultV1 {
+                    task: first_task_view(&task),
+                    state: self.first_run_state(),
+                })
+            }
             "GetActivityHeatmapV2" => value(heatmap(&self.snapshot()?, i64_arg(arguments, 0)?)),
             "GetTaskDetailV2" => {
                 let generation = u64_arg(arguments, 0)?;
@@ -3972,6 +4871,43 @@ fn timestamp(value: Timestamp) -> String {
     )
 }
 
+fn parse_first_run_timestamp(value: &str) -> AppResult<Timestamp> {
+    let parsed = OffsetDateTime::parse(value, &Rfc3339)
+        .map_err(|_| AppError::Message("first task timestamp is invalid".to_owned()))?;
+    let timestamp = Timestamp::Fixed {
+        seconds: parsed.unix_timestamp(),
+        nanoseconds: parsed.nanosecond(),
+        offset_seconds: parsed.offset().whole_seconds(),
+    };
+    if self::timestamp(timestamp) != value {
+        return Err(AppError::Message(
+            "first task timestamp is not canonical".to_owned(),
+        ));
+    }
+    Ok(timestamp)
+}
+
+fn first_plan_view(plan: &Plan) -> FirstPlanV1 {
+    FirstPlanV1 {
+        id: plan.id,
+        title: plan.title.clone(),
+        status: plan.status.as_str().to_owned(),
+        created_at: timestamp(plan.created_at),
+        updated_at: timestamp(plan.updated_at),
+    }
+}
+
+fn first_task_view(task: &Task) -> FirstTaskV1 {
+    FirstTaskV1 {
+        id: task.id,
+        plan_id: task.plan_id,
+        title: task.title.clone(),
+        status: task.status.as_str().to_owned(),
+        created_at: timestamp(task.created_at),
+        updated_at: timestamp(task.updated_at),
+    }
+}
+
 fn timestamp_datetime(value: Timestamp) -> Option<OffsetDateTime> {
     let Timestamp::Fixed {
         seconds,
@@ -4022,6 +4958,7 @@ fn help_destination(name: &str) -> AppResult<&'static str> {
         "help-center" => Ok("https://ro-ag.github.io/ptrack/help/"),
         "keyboard-shortcuts" => Ok("https://ro-ag.github.io/ptrack/help/reference/shortcuts/"),
         "terminals" => Ok("https://ro-ag.github.io/ptrack/help/terminals/"),
+        "project-recovery" => Ok("https://ro-ag.github.io/ptrack/help/troubleshooting/"),
         "capabilities" => {
             Ok("https://ro-ag.github.io/ptrack/help/agents-and-capabilities/#capability-model")
         }
@@ -4034,6 +4971,15 @@ fn random_token() -> AppResult<String> {
     let mut bytes = [0_u8; 32];
     getrandom::fill(&mut bytes).map_err(|error| AppError::Message(error.to_string()))?;
     Ok(URL_SAFE_NO_PAD.encode(bytes))
+}
+
+fn project_guide_unavailable() -> ProjectGuidePreviewV1 {
+    ProjectGuidePreviewV1 {
+        available: false,
+        message: "Project guidance is not available on this platform yet".to_owned(),
+        preview_token: String::new(),
+        files: Vec::new(),
+    }
 }
 
 fn parse_task_status(value: &str) -> AppResult<TaskStatus> {
@@ -4206,6 +5152,16 @@ fn path_arg(arguments: &[Value], index: usize) -> AppResult<PathBuf> {
     Ok(PathBuf::from(string_arg(arguments, index)?))
 }
 
+fn typed_arg<T: for<'de> Deserialize<'de>>(arguments: &[Value], index: usize) -> AppResult<T> {
+    serde_json::from_value(
+        arguments
+            .get(index)
+            .cloned()
+            .ok_or_else(|| missing_arg(index))?,
+    )
+    .map_err(|_| missing_arg(index))
+}
+
 fn string_arg(arguments: &[Value], index: usize) -> AppResult<&str> {
     arguments
         .get(index)
@@ -4267,6 +5223,74 @@ fn trimmed_nonempty(value: &str, error: &str) -> AppResult<String> {
         Err(AppError::Message(error.to_owned()))
     } else {
         Ok(value.to_owned())
+    }
+}
+
+fn first_run_title(value: &str, kind: &str) -> AppResult<String> {
+    let title = value.trim();
+    if title.is_empty() || title.len() > FIRST_RUN_TITLE_MAX_BYTES {
+        return Err(AppError::Message(format!(
+            "{kind} title must contain 1 to {FIRST_RUN_TITLE_MAX_BYTES} UTF-8 bytes"
+        )));
+    }
+    Ok(title.to_owned())
+}
+
+fn require_argument_count(method: &str, arguments: &[Value], expected: usize) -> AppResult<()> {
+    if arguments.len() == expected {
+        Ok(())
+    } else {
+        Err(AppError::Message(format!(
+            "{method} requires exactly {expected} arguments"
+        )))
+    }
+}
+
+fn recent_identifier_arg(arguments: &[Value], index: usize) -> AppResult<&str> {
+    let value = string_arg(arguments, index)?;
+    if value.len() == RECENT_PROJECT_TOKEN_BYTES
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        Ok(value)
+    } else {
+        Err(missing_arg(index))
+    }
+}
+
+fn recent_optional_token_arg(arguments: &[Value], index: usize) -> AppResult<&str> {
+    let value = string_arg(arguments, index)?;
+    if value.is_empty() {
+        Ok(value)
+    } else {
+        recent_identifier_arg(arguments, index)
+    }
+}
+
+fn recent_path_arg(arguments: &[Value], index: usize) -> AppResult<PathBuf> {
+    let value = string_arg(arguments, index)?;
+    if value.is_empty() || value.len() > RECENT_PROJECT_PATH_LIMIT {
+        return Err(missing_arg(index));
+    }
+    Ok(PathBuf::from(value))
+}
+
+fn sanitize_recent_open_error(error: AppError) -> AppError {
+    match error {
+        AppError::Io(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            AppError::Message("recent-project-folder-not-found".to_owned())
+        }
+        AppError::Io(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            AppError::Message("recent-project-permission-required".to_owned())
+        }
+        AppError::Message(message) if message == "invalid or expired workspace confirmation" => {
+            AppError::Message(message)
+        }
+        AppError::NoProject
+        | AppError::NotImplemented(_)
+        | AppError::Io(_)
+        | AppError::Message(_) => AppError::Message("recent-project-open-failed".to_owned()),
     }
 }
 

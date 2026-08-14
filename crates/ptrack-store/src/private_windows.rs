@@ -9,6 +9,10 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::path::Path;
 use std::ptr;
 
+use windows_sys::Wdk::Storage::FileSystem::{
+    FILE_RENAME_INFORMATION, FileRenameInformation, NtSetInformationFile,
+};
+use windows_sys::Win32::Foundation::RtlNtStatusToDosError;
 use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_ALL, HANDLE, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
     EXPLICIT_ACCESS_W, GetNamedSecurityInfoW, GetSecurityInfo, SE_FILE_OBJECT, SET_ACCESS,
@@ -22,12 +26,14 @@ use windows_sys::Win32::Security::{
     SUB_CONTAINERS_AND_OBJECTS_INHERIT, TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_DIRECTORY,
-    FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    GetFileInformationByHandle, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
-    OPEN_EXISTING,
+    BY_HANDLE_FILE_INFORMATION, CreateFileW, DELETE, FILE_ALL_ACCESS, FILE_ATTRIBUTE_DIRECTORY,
+    FILE_ATTRIBUTE_REPARSE_POINT, FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_DELETE,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, FileDispositionInfo, GetFileInformationByHandle,
+    MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW, OPEN_EXISTING,
+    SetFileInformationByHandle, WRITE_DAC, WRITE_OWNER,
 };
+use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -43,17 +49,135 @@ pub(crate) fn open_no_reparse(
     writable: bool,
     exclusive: bool,
 ) -> io::Result<File> {
-    let wide = wide_path(path);
-    let access = if writable {
-        FILE_GENERIC_READ | FILE_GENERIC_WRITE
-    } else {
-        FILE_GENERIC_READ
-    };
     let share = if exclusive {
         0
     } else {
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
     };
+    open_no_reparse_with_share(path, directory, writable, share)
+}
+
+pub(crate) fn open_no_reparse_no_delete(
+    path: &Path,
+    directory: bool,
+    writable: bool,
+) -> io::Result<File> {
+    open_no_reparse_with_share(
+        path,
+        directory,
+        writable,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+    )
+}
+
+pub(crate) fn open_staging_directory_for_publish(path: &Path) -> io::Result<File> {
+    open_no_reparse_with_access(
+        path,
+        true,
+        FILE_GENERIC_READ | FILE_GENERIC_WRITE | WRITE_DAC | WRITE_OWNER | DELETE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+    )
+}
+
+pub(crate) fn delete_directory_handle(directory: &File) -> io::Result<()> {
+    let mut information = FILE_DISPOSITION_INFO { DeleteFile: true };
+    // SAFETY: directory owns a live handle with DELETE access and information
+    // is retained for the duration of the synchronous call.
+    if unsafe {
+        SetFileInformationByHandle(
+            directory.as_raw_handle().cast(),
+            FileDispositionInfo,
+            ptr::addr_of_mut!(information).cast(),
+            u32::try_from(std::mem::size_of_val(&information))
+                .expect("FILE_DISPOSITION_INFO size fits u32"),
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+pub(crate) fn rename_directory_handle_no_replace(
+    directory: &File,
+    root: &File,
+    name: &str,
+) -> io::Result<()> {
+    let name = name.encode_utf16().collect::<Vec<_>>();
+    let name_bytes = name
+        .len()
+        .checked_mul(std::mem::size_of::<u16>())
+        .ok_or_else(|| io::Error::other("name too long"))?;
+    let bytes = std::mem::size_of::<FILE_RENAME_INFORMATION>()
+        .checked_add(name_bytes)
+        .ok_or_else(|| io::Error::other("name too long"))?;
+    let units = bytes.div_ceil(std::mem::size_of::<usize>());
+    let mut storage = vec![0_usize; units];
+    let information = storage.as_mut_ptr().cast::<FILE_RENAME_INFORMATION>();
+    // SAFETY: storage is pointer-aligned and sized for FILE_RENAME_INFORMATION plus
+    // the exact UTF-16 filename payload consumed synchronously by the kernel.
+    unsafe {
+        (*information).Anonymous.ReplaceIfExists = false;
+        (*information).RootDirectory = root.as_raw_handle().cast();
+        (*information).FileNameLength =
+            u32::try_from(name_bytes).map_err(|_| io::Error::other("name too long"))?;
+        ptr::copy_nonoverlapping(
+            name.as_ptr(),
+            ptr::addr_of_mut!((*information).FileName).cast::<u16>(),
+            name.len(),
+        );
+        let mut status = IO_STATUS_BLOCK::default();
+        let result = NtSetInformationFile(
+            directory.as_raw_handle().cast(),
+            &mut status,
+            information.cast_const().cast(),
+            u32::try_from(bytes).map_err(|_| io::Error::other("name too long"))?,
+            FileRenameInformation,
+        );
+        if result != 0 {
+            return Err(io::Error::from_raw_os_error(
+                RtlNtStatusToDosError(result) as i32
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn random_staging_bytes(output: &mut [u8]) -> io::Result<()> {
+    #[link(name = "advapi32")]
+    unsafe extern "system" {
+        #[link_name = "SystemFunction036"]
+        fn rtl_gen_random(buffer: *mut c_void, length: u32) -> u8;
+    }
+    let length = u32::try_from(output.len()).map_err(|_| io::Error::other("buffer too large"))?;
+    // SAFETY: output is a live writable buffer retained for the synchronous call.
+    if unsafe { rtl_gen_random(output.as_mut_ptr().cast(), length) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn open_no_reparse_with_share(
+    path: &Path,
+    directory: bool,
+    writable: bool,
+    share: u32,
+) -> io::Result<File> {
+    let access = if writable {
+        FILE_GENERIC_READ | FILE_GENERIC_WRITE
+    } else {
+        FILE_GENERIC_READ
+    };
+    open_no_reparse_with_access(path, directory, access, share)
+}
+
+fn open_no_reparse_with_access(
+    path: &Path,
+    directory: bool,
+    access: u32,
+    share: u32,
+) -> io::Result<File> {
+    let wide = wide_path(path);
     let flags = FILE_FLAG_OPEN_REPARSE_POINT
         | if directory {
             FILE_FLAG_BACKUP_SEMANTICS
@@ -103,8 +227,16 @@ pub(crate) fn protect_file(path: &Path) -> io::Result<()> {
 }
 
 pub(crate) fn protect_handle(file: &File) -> io::Result<()> {
+    protect_handle_with_inheritance(file, NO_INHERITANCE)
+}
+
+pub(crate) fn protect_directory_handle(file: &File) -> io::Result<()> {
+    protect_handle_with_inheritance(file, SUB_CONTAINERS_AND_OBJECTS_INHERIT)
+}
+
+fn protect_handle_with_inheritance(file: &File, inheritance: u32) -> io::Result<()> {
     let user = current_user()?;
-    let acl = current_user_acl(user.sid, NO_INHERITANCE)?;
+    let acl = current_user_acl(user.sid, inheritance)?;
     // SAFETY: file owns a live handle with WRITE_DAC and WRITE_OWNER; the SID
     // and ACL remain valid for the duration of the synchronous call.
     let status = unsafe {

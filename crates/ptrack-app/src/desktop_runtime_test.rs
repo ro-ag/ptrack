@@ -19,15 +19,18 @@ use serde_json::{Value, json};
 
 use super::desktop_runtime::{
     ActiveResourceSummary, BoundDesktopWorkspace, DesktopCommandRequest, DesktopRuntime,
-    DesktopRuntimeConfig, DesktopWorkspace, DesktopWorkspaceFactory, RecentProjectsProvider,
-    WorkspaceProject, WorkspaceStatus, agent_intelligence_for_task_result,
+    DesktopRuntimeConfig, DesktopWorkspace, DesktopWorkspaceFactory,
+    RecentProjectOpenAuthorizationV1, RecentProjectRegistryCommitV1, RecentProjectRegistryStatusV1,
+    RecentProjectsProvider, WorkspaceProject, WorkspaceStatus, agent_intelligence_for_task_result,
     allowed_desktop_commands, capture_git_snapshot_with, confirm_linked_launch, heatmap_at,
     project_storage, watch_workspace_data,
 };
 use crate::{
-    AppError, AppResult, DesktopEvent, DesktopEventSink, DesktopUpdateService, LocalApplication,
-    ProjectEndpoint, TerminalRuntime, TerminalRuntimeConfig, UnavailableUpdateService, UpdatePhase,
-    UpdateState, WorkspaceBindings,
+    AppError, AppResult, DesktopEvent, DesktopEventSink, DesktopInitializationService,
+    DesktopUpdateService, InitializationCheckpointV1, InitializationOutcomeV1,
+    InitializationStatusV1, InitializeProjectRequestV1, LocalApplication, ProjectEndpoint,
+    ProjectTargetKindV1, ProjectTargetValidationV1, TerminalRuntime, TerminalRuntimeConfig,
+    UnavailableUpdateService, UpdatePhase, UpdateState, WorkspaceBindings,
 };
 
 use super::terminal_runtime_test::{TestEvents, TestFactory, TestIdentity, profile};
@@ -141,6 +144,190 @@ struct FixedRecentProjects(Vec<Value>);
 impl RecentProjectsProvider for FixedRecentProjects {
     fn recent_projects(&self) -> AppResult<Vec<Value>> {
         Ok(self.0.clone())
+    }
+}
+
+struct BlockingRecentProjects {
+    entered: Arc<Barrier>,
+    release: Arc<Barrier>,
+}
+
+struct RecordingRecentRecovery {
+    authorization: RecentProjectOpenAuthorizationV1,
+    finishes: AtomicUsize,
+    fail_finish: AtomicBool,
+    completed: AtomicBool,
+}
+
+struct FailingSecondRecentAuthorization {
+    authorization: RecentProjectOpenAuthorizationV1,
+    calls: AtomicUsize,
+}
+
+impl RecentProjectsProvider for FailingSecondRecentAuthorization {
+    fn recent_projects(&self) -> AppResult<Vec<Value>> {
+        Ok(Vec::new())
+    }
+
+    fn authorize_recent_project_open(
+        &self,
+        _entry_id: &str,
+        _base: &str,
+        _canonical_root: &Path,
+        _relocation_confirmation_token: &str,
+    ) -> AppResult<RecentProjectOpenAuthorizationV1> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            Ok(self.authorization.clone())
+        } else {
+            Err(AppError::Message("recent-project-entry-stale".to_owned()))
+        }
+    }
+}
+
+impl RecentProjectsProvider for RecordingRecentRecovery {
+    fn recent_projects(&self) -> AppResult<Vec<Value>> {
+        Ok(Vec::new())
+    }
+
+    fn authorize_recent_project_open(
+        &self,
+        _entry_id: &str,
+        _base: &str,
+        _canonical_root: &Path,
+        _relocation_confirmation_token: &str,
+    ) -> AppResult<RecentProjectOpenAuthorizationV1> {
+        let mut authorization = self.authorization.clone();
+        authorization.already_completed = self.completed.load(Ordering::SeqCst);
+        Ok(authorization)
+    }
+
+    fn finish_recent_project_open(
+        &self,
+        authorization: &RecentProjectOpenAuthorizationV1,
+    ) -> AppResult<RecentProjectRegistryCommitV1> {
+        if authorization.already_completed {
+            return Ok(RecentProjectRegistryCommitV1 {
+                base: authorization.base.clone(),
+                status: RecentProjectRegistryStatusV1::Unchanged,
+            });
+        }
+        self.finishes.fetch_add(1, Ordering::SeqCst);
+        self.completed.store(true, Ordering::SeqCst);
+        if self.fail_finish.load(Ordering::SeqCst) {
+            return Err(AppError::Message("registry unavailable".to_owned()));
+        }
+        Ok(RecentProjectRegistryCommitV1 {
+            base: authorization.base.clone(),
+            status: RecentProjectRegistryStatusV1::Unchanged,
+        })
+    }
+}
+
+impl RecentProjectsProvider for BlockingRecentProjects {
+    fn recent_projects(&self) -> AppResult<Vec<Value>> {
+        self.entered.wait();
+        self.release.wait();
+        Ok(Vec::new())
+    }
+}
+
+struct RecordingInitialization {
+    root: PathBuf,
+    requests: Mutex<Vec<InitializeProjectRequestV1>>,
+    status: Mutex<Option<InitializationStatusV1>>,
+    fail_mark: AtomicBool,
+}
+
+impl RecordingInitialization {
+    fn new(root: PathBuf) -> Arc<Self> {
+        Arc::new(Self {
+            root,
+            requests: Mutex::new(Vec::new()),
+            status: Mutex::new(None),
+            fail_mark: AtomicBool::new(false),
+        })
+    }
+}
+
+impl DesktopInitializationService for RecordingInitialization {
+    fn validate_target(&self, _selected: &Path) -> AppResult<ProjectTargetValidationV1> {
+        Ok(ProjectTargetValidationV1 {
+            kind: ProjectTargetKindV1::New,
+            canonical_root: self.root.to_string_lossy().into_owned(),
+            operation_id: "A".repeat(43),
+            reason: String::new(),
+            initialization: None,
+            goal: None,
+            guide_choice: None,
+        })
+    }
+
+    fn initialize(
+        &self,
+        request: &InitializeProjectRequestV1,
+    ) -> AppResult<InitializationStatusV1> {
+        let durable_request = {
+            let mut requests = self.requests.lock().unwrap();
+            let durable_request = requests.first().cloned();
+            requests.push(request.clone());
+            durable_request
+        };
+        if let Some(status) = self.status.lock().unwrap().clone()
+            && status.operation_id == request.operation_id
+            && status.canonical_root == request.root
+            && status.checkpoint == InitializationCheckpointV1::DesktopBound
+            && status.outcome == InitializationOutcomeV1::Complete
+        {
+            if durable_request.as_ref() != Some(request) {
+                return Err(AppError::Message(
+                    "initialization operation goal does not match its durable request".to_owned(),
+                ));
+            }
+            return Ok(status);
+        }
+        let status = InitializationStatusV1 {
+            operation_id: request.operation_id.clone(),
+            canonical_root: self.root.to_string_lossy().into_owned(),
+            checkpoint: InitializationCheckpointV1::GuideApplied,
+            outcome: InitializationOutcomeV1::InProgress,
+            error_kind: String::new(),
+        };
+        *self.status.lock().unwrap() = Some(status.clone());
+        Ok(status)
+    }
+
+    fn status(&self, operation_id: &str) -> AppResult<InitializationStatusV1> {
+        self.status
+            .lock()
+            .unwrap()
+            .clone()
+            .filter(|status| status.operation_id == operation_id)
+            .ok_or_else(|| AppError::Message("initialization operation is unknown".to_owned()))
+    }
+
+    fn completed_initialization(&self) -> AppResult<Option<InitializationStatusV1>> {
+        Ok(self
+            .status
+            .lock()
+            .unwrap()
+            .clone()
+            .filter(|status| status.outcome == InitializationOutcomeV1::Complete))
+    }
+
+    fn mark_desktop_bound(&self, operation_id: &str) -> AppResult<InitializationStatusV1> {
+        if self.fail_mark.load(Ordering::SeqCst) {
+            return Err(AppError::Message(
+                "desktop-bound checkpoint unavailable".to_owned(),
+            ));
+        }
+        let mut status = self.status.lock().unwrap();
+        let status = status
+            .as_mut()
+            .filter(|status| status.operation_id == operation_id)
+            .ok_or_else(|| AppError::Message("initialization operation is unknown".to_owned()))?;
+        status.checkpoint = InitializationCheckpointV1::DesktopBound;
+        status.outcome = InitializationOutcomeV1::Complete;
+        Ok(status.clone())
     }
 }
 
@@ -284,6 +471,334 @@ fn request(method: &str, arguments: Vec<Value>) -> DesktopCommandRequest {
     }
 }
 
+fn first_run_runtime(
+    root: &Path,
+    recents: Arc<dyn RecentProjectsProvider>,
+) -> (
+    Arc<DesktopRuntime>,
+    Arc<FakeFactory>,
+    Arc<RecordingInitialization>,
+    Arc<Events>,
+) {
+    let factory = Arc::new(FakeFactory::default());
+    let initialization = RecordingInitialization::new(root.to_path_buf());
+    let events = Arc::new(Events::default());
+    let runtime = DesktopRuntime::new(DesktopRuntimeConfig {
+        version: "test".to_owned(),
+        factory: factory.clone(),
+        event_sink: Some(events.clone()),
+        initial_workspace: None,
+        recent_projects: recents,
+        initialization: initialization.clone(),
+        update_service: UnavailableUpdateService::new("test"),
+        confirmation_ttl: Duration::from_secs(60),
+    });
+    (runtime, factory, initialization, events)
+}
+
+fn initialize_request(root: &Path, goal: &str) -> DesktopCommandRequest {
+    request(
+        "InitializeProjectV1",
+        vec![json!({
+            "operationId": "A".repeat(43),
+            "root": root,
+            "goal": goal,
+        })],
+    )
+}
+
+#[test]
+fn initialize_project_v1_publishes_exactly_one_workspace_and_complete_status() {
+    let directory = TestDirectory::new("initialize-publish");
+    let project = directory.0.join("project");
+    std::fs::create_dir(&project).unwrap();
+    let (runtime, factory, initialization, events) = first_run_runtime(
+        &project,
+        Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+    );
+
+    let initialize = initialize_request(&project, "ship the first run");
+    let result = runtime.invoke(initialize.clone()).unwrap();
+
+    assert_eq!(result["state"]["status"], "open");
+    assert_eq!(result["state"]["generation"], 1);
+    assert_eq!(result["initialization"]["checkpoint"], "desktop-bound");
+    assert_eq!(result["initialization"]["outcome"], "complete");
+    assert_eq!(
+        factory.builds.lock().unwrap().as_slice(),
+        &[(project.clone(), 1)]
+    );
+    assert_eq!(factory.built.lock().unwrap().len(), 1);
+    assert_eq!(initialization.requests.lock().unwrap().len(), 1);
+    assert_eq!(
+        events.0.lock().unwrap().as_slice(),
+        &[DesktopEvent::WorkspaceDataChanged(1)]
+    );
+    assert_eq!(runtime.invoke(initialize).unwrap(), result);
+    assert_eq!(factory.builds.lock().unwrap().len(), 1);
+    assert_eq!(initialization.requests.lock().unwrap().len(), 1);
+    assert_eq!(events.0.lock().unwrap().len(), 1);
+
+    runtime
+        .invoke(request("CloseProject", vec![json!("")]))
+        .unwrap();
+    let reopened = runtime
+        .invoke(request("OpenProject", vec![json!(project), json!("")]))
+        .unwrap();
+    assert_eq!(reopened["state"]["generation"], 2);
+    let builds_before_replay = factory.builds.lock().unwrap().len();
+    let events_before_replay = events.0.lock().unwrap().len();
+    let replayed = runtime
+        .invoke(initialize_request(&project, "ship the first run"))
+        .unwrap();
+    assert_eq!(replayed["initialization"], result["initialization"]);
+    assert_eq!(replayed["state"], reopened["state"]);
+    assert_eq!(factory.builds.lock().unwrap().len(), builds_before_replay);
+    assert_eq!(events.0.lock().unwrap().len(), events_before_replay);
+    assert_eq!(initialization.requests.lock().unwrap().len(), 2);
+    assert_eq!(
+        runtime
+            .invoke(initialize_request(&project, "different goal"))
+            .unwrap_err()
+            .to_string(),
+        "initialization operation goal does not match its durable request"
+    );
+    assert_eq!(
+        runtime
+            .invoke(request(
+                "GetInitializationStatusV1",
+                vec![json!("A".repeat(43))],
+            ))
+            .unwrap()["outcome"],
+        "complete"
+    );
+}
+
+#[test]
+fn desktop_bound_failure_never_publishes_candidate_and_exact_retry_succeeds() {
+    let directory = TestDirectory::new("initialize-desktop-bound-retry");
+    let project = directory.0.join("project");
+    std::fs::create_dir(&project).unwrap();
+    let (runtime, factory, initialization, events) = first_run_runtime(
+        &project,
+        Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+    );
+    initialization.fail_mark.store(true, Ordering::SeqCst);
+
+    let error = runtime
+        .invoke(initialize_request(&project, "resume desktop binding"))
+        .unwrap_err();
+
+    assert_eq!(error.to_string(), "desktop-bound checkpoint unavailable");
+    assert_eq!(runtime.workspace_state().status, WorkspaceStatus::Error);
+    assert_eq!(runtime.workspace_state().generation, 0);
+    assert!(runtime.workspace_state().project.is_none());
+    assert_eq!(factory.built.lock().unwrap().len(), 1);
+    assert_eq!(
+        factory.built.lock().unwrap()[0]
+            .shutdowns
+            .load(Ordering::SeqCst),
+        1
+    );
+    assert!(events.0.lock().unwrap().is_empty());
+    let interrupted = initialization.status(&"A".repeat(43)).unwrap();
+    assert_eq!(
+        interrupted.checkpoint,
+        InitializationCheckpointV1::GuideApplied
+    );
+    assert_eq!(interrupted.outcome, InitializationOutcomeV1::InProgress);
+
+    initialization.fail_mark.store(false, Ordering::SeqCst);
+    let retried = runtime
+        .invoke(initialize_request(&project, "resume desktop binding"))
+        .unwrap();
+
+    assert_eq!(retried["state"]["status"], "open");
+    assert_eq!(retried["state"]["generation"], 1);
+    assert_eq!(retried["initialization"]["checkpoint"], "desktop-bound");
+    assert_eq!(factory.built.lock().unwrap().len(), 2);
+    assert_eq!(
+        events.0.lock().unwrap().as_slice(),
+        &[DesktopEvent::WorkspaceDataChanged(1)]
+    );
+}
+
+#[test]
+fn initialize_project_v1_enforces_goal_byte_bounds_before_authority_change() {
+    for (label, goal, accepted) in [
+        ("empty", String::new(), false),
+        ("one", "x".to_owned(), true),
+        ("max", "x".repeat(4_096), true),
+        ("too-long", "x".repeat(4_097), false),
+    ] {
+        let directory = TestDirectory::new(label);
+        let project = directory.0.join("project");
+        std::fs::create_dir(&project).unwrap();
+        let (runtime, _factory, initialization, _events) = first_run_runtime(
+            &project,
+            Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+        );
+
+        let result = runtime.invoke(initialize_request(&project, &goal));
+        assert_eq!(result.is_ok(), accepted, "goal case {label}");
+        assert_eq!(
+            initialization.requests.lock().unwrap().len(),
+            usize::from(accepted),
+            "goal case {label}"
+        );
+        if !accepted {
+            assert_eq!(runtime.workspace_state().status, WorkspaceStatus::Welcome);
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "project goal must contain 1 to 4096 UTF-8 bytes"
+            );
+        }
+    }
+}
+
+#[test]
+fn get_pending_initialization_v1_is_strict_and_omits_absent_metadata() {
+    let directory = TestDirectory::new("pending-initialization-command");
+    let project = directory.0.join("project");
+    std::fs::create_dir(&project).unwrap();
+    let (runtime, _factory, _initialization, _events) = first_run_runtime(
+        &project,
+        Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+    );
+
+    assert_eq!(
+        runtime
+            .invoke(request("GetPendingInitializationV1", Vec::new()))
+            .unwrap(),
+        json!({ "pending": false })
+    );
+    assert!(
+        runtime
+            .invoke(request("GetPendingInitializationV1", vec![Value::Null],))
+            .is_err()
+    );
+}
+
+#[test]
+fn concurrent_completed_status_checks_reload_and_bind_exactly_once() {
+    let directory = TestDirectory::new("completed-initialization-concurrency");
+    let project = directory.0.join("project");
+    std::fs::create_dir(&project).unwrap();
+    let (runtime, factory, initialization, events) = first_run_runtime(
+        &project,
+        Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+    );
+    *initialization.status.lock().unwrap() = Some(InitializationStatusV1 {
+        operation_id: "A".repeat(43),
+        canonical_root: project.to_string_lossy().into_owned(),
+        checkpoint: InitializationCheckpointV1::DesktopBound,
+        outcome: InitializationOutcomeV1::Complete,
+        error_kind: String::new(),
+    });
+    let barrier = Arc::new(Barrier::new(3));
+    let invoke = |runtime: Arc<DesktopRuntime>, barrier: Arc<Barrier>, method: &'static str| {
+        thread::spawn(move || {
+            barrier.wait();
+            runtime.invoke(request(
+                method,
+                if method == "GetInitializationStatusV1" {
+                    vec![json!("A".repeat(43))]
+                } else {
+                    Vec::new()
+                },
+            ))
+        })
+    };
+    let pending = invoke(
+        Arc::clone(&runtime),
+        Arc::clone(&barrier),
+        "GetPendingInitializationV1",
+    );
+    let status = invoke(
+        Arc::clone(&runtime),
+        Arc::clone(&barrier),
+        "GetInitializationStatusV1",
+    );
+    barrier.wait();
+
+    assert_eq!(
+        pending.join().unwrap().unwrap(),
+        json!({ "pending": false })
+    );
+    assert_eq!(
+        status.join().unwrap().unwrap()["checkpoint"],
+        "desktop-bound"
+    );
+    assert_eq!(factory.built.lock().unwrap().len(), 1);
+    assert_eq!(runtime.workspace_state().status, WorkspaceStatus::Open);
+    assert_eq!(runtime.workspace_state().generation, 1);
+    assert_eq!(
+        events.0.lock().unwrap().as_slice(),
+        &[DesktopEvent::WorkspaceDataChanged(1)]
+    );
+}
+
+#[test]
+fn initialization_drains_an_active_native_call_and_rejects_shutdown_and_new_calls() {
+    let directory = TestDirectory::new("initialize-drain");
+    let project = directory.0.join("project");
+    std::fs::create_dir(&project).unwrap();
+    let entered = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let recents = Arc::new(BlockingRecentProjects {
+        entered: entered.clone(),
+        release: release.clone(),
+    });
+    let (runtime, factory, _initialization, _events) = first_run_runtime(&project, recents);
+
+    let recent_runtime = runtime.clone();
+    let recent =
+        thread::spawn(move || recent_runtime.invoke(request("GetRecentProjects", Vec::new())));
+    entered.wait();
+
+    let (finished, completion) = channel();
+    let initialize_runtime = runtime.clone();
+    let initialize_project = project.clone();
+    let initialize = thread::spawn(move || {
+        let result = initialize_runtime.invoke(initialize_request(
+            &initialize_project,
+            "drain before transition",
+        ));
+        finished.send(()).unwrap();
+        result
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while runtime.workspace_state().status != WorkspaceStatus::Loading && Instant::now() < deadline
+    {
+        thread::yield_now();
+    }
+    assert_eq!(runtime.workspace_state().status, WorkspaceStatus::Loading);
+    assert!(matches!(
+        completion.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    assert_eq!(
+        runtime
+            .invoke(request("ValidateProjectTargetV1", vec![json!(project)]))
+            .unwrap_err()
+            .to_string(),
+        "runtime authority is changing"
+    );
+    assert_eq!(
+        runtime.begin_shutdown().unwrap_err().to_string(),
+        "runtime authority is changing"
+    );
+    assert!(factory.builds.lock().unwrap().is_empty());
+
+    release.wait();
+    assert!(recent.join().unwrap().is_ok());
+    assert!(initialize.join().unwrap().is_ok());
+    completion.recv().unwrap();
+    assert_eq!(runtime.workspace_state().status, WorkspaceStatus::Open);
+    assert_eq!(factory.builds.lock().unwrap().len(), 1);
+}
+
 #[test]
 fn desktop_update_commands_delegate_exact_arguments_and_return_full_state() {
     let updates = RecordingUpdates::new();
@@ -327,7 +842,7 @@ fn desktop_update_commands_delegate_exact_arguments_and_return_full_state() {
 }
 
 #[test]
-#[allow(clippy::too_many_lines)] // Full 64-command freeze fixture is intentionally explicit.
+#[allow(clippy::too_many_lines)] // Full 76-command freeze fixture is intentionally explicit.
 fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
     let commands = allowed_desktop_commands();
     assert_eq!(
@@ -348,6 +863,8 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "CloseProject",
             "CloseTerminal",
             "CloseTerminalV2",
+            "CreateFirstPlanV1",
+            "CreateFirstTaskV1",
             "CreateTerminal",
             "CreateTerminalV2",
             "DisableCapabilityV2",
@@ -355,6 +872,7 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "DownloadUpdate",
             "EnableCapabilityV2",
             "ExpireCapabilityV2",
+            "ForgetRecentProjectV1",
             "GetActivityHeatmapV2",
             "GetAgentIntelligenceV2",
             "GetAgentRunsV2",
@@ -362,13 +880,17 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "GetBoardV2",
             "GetCapabilitiesV2",
             "GetCapabilityAuditsV2",
+            "GetInitializationStatusV1",
+            "GetPendingInitializationV1",
             "GetRecentProjects",
+            "GetRecentProjectsV1",
             "GetTaskDetailV2",
             "GetTerminalProfiles",
             "GetTerminalProfilesV2",
             "GetUpdateState",
             "GetWorkspaceSnapshot",
             "GetWorkspaceState",
+            "InitializeProjectV1",
             "InstallShellCommand",
             "LaunchLinkedAgentV2",
             "MoveTask",
@@ -377,16 +899,19 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "MutateTerminalAssociationV2",
             "OpenHelpDestination",
             "OpenProject",
+            "OpenRecentProjectV1",
             "PickProjectDirectory",
             "PrepareAgentWorkflowV2",
             "PreviewAgentHandoffV2",
             "PreviewCapabilityV2",
+            "PreviewProjectGuideV1",
             "PreviewTerminalWritebackV2",
             "RemoveCapabilityV2",
             "RenameTask",
             "RenameTaskV2",
             "ResizeTerminal",
             "ResizeTerminalV2",
+            "ResolveRecentProjectV1",
             "RollbackLinkedAgentLaunchV2",
             "SaveCapabilityV2",
             "SearchV2",
@@ -394,7 +919,9 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "SetAgentTaskOwnershipV2",
             "SetAgentWorktreeV2",
             "SetAutomaticUpdateChecks",
+            "StartFirstTaskV1",
             "TestCapabilityV2",
+            "ValidateProjectTargetV1",
             "ValidateTerminalCWDsV2",
             "WriteTerminalMemoryV2",
         ]
@@ -423,6 +950,15 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             .invoke(request("OpenHelpDestination", vec![json!("terminals")],))
             .unwrap(),
         json!("https://ro-ag.github.io/ptrack/help/terminals/")
+    );
+    assert_eq!(
+        runtime
+            .invoke(request(
+                "OpenHelpDestination",
+                vec![json!("project-recovery")],
+            ))
+            .unwrap(),
+        json!("https://ro-ag.github.io/ptrack/help/troubleshooting/")
     );
     assert_eq!(
         runtime
@@ -531,6 +1067,7 @@ fn workspace_publication_is_monotonic_and_failed_candidate_preserves_active_gene
         event_sink: Some(events.clone()),
         initial_workspace: None,
         recent_projects: Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+        initialization: Arc::new(super::desktop_runtime::NoDesktopInitializationService),
         update_service: super::update_runtime::UnavailableUpdateService::new("0.22.0"),
         confirmation_ttl: Duration::from_secs(60),
     });
@@ -585,6 +1122,7 @@ fn workspace_confirmation_is_random_single_use_and_revision_fenced() {
         event_sink: None,
         initial_workspace: Some(current.clone()),
         recent_projects: Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+        initialization: Arc::new(super::desktop_runtime::NoDesktopInitializationService),
         update_service: super::update_runtime::UnavailableUpdateService::new("test"),
         confirmation_ttl: Duration::from_secs(60),
     });
@@ -631,6 +1169,7 @@ fn shutdown_is_idempotent_and_fences_future_calls() {
         event_sink: None,
         initial_workspace: Some(workspace.clone()),
         recent_projects: Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+        initialization: Arc::new(super::desktop_runtime::NoDesktopInitializationService),
         update_service: super::update_runtime::UnavailableUpdateService::new("test"),
         confirmation_ttl: Duration::from_secs(60),
     });
@@ -672,6 +1211,7 @@ fn close_is_idempotent_returns_closed_then_settles_to_welcome() {
         event_sink: None,
         initial_workspace: Some(workspace),
         recent_projects: Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+        initialization: Arc::new(super::desktop_runtime::NoDesktopInitializationService),
         update_service: super::update_runtime::UnavailableUpdateService::new("test"),
         confirmation_ttl: Duration::from_secs(60),
     });
@@ -702,6 +1242,7 @@ fn failed_shutdown_remains_fenced_and_retries_cleanup() {
         event_sink: None,
         initial_workspace: Some(workspace),
         recent_projects: Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+        initialization: Arc::new(super::desktop_runtime::NoDesktopInitializationService),
         update_service: super::update_runtime::UnavailableUpdateService::new("test"),
         confirmation_ttl: Duration::from_secs(60),
     });
@@ -732,6 +1273,7 @@ fn project_change_cleanup_warnings_preserve_exact_context() {
             attempts: AtomicUsize::new(0),
         })),
         recent_projects: Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+        initialization: Arc::new(super::desktop_runtime::NoDesktopInitializationService),
         update_service: super::update_runtime::UnavailableUpdateService::new("test"),
         confirmation_ttl: Duration::from_secs(60),
     });
@@ -750,6 +1292,7 @@ fn project_change_cleanup_warnings_preserve_exact_context() {
             attempts: AtomicUsize::new(0),
         })),
         recent_projects: Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+        initialization: Arc::new(super::desktop_runtime::NoDesktopInitializationService),
         update_service: super::update_runtime::UnavailableUpdateService::new("test"),
         confirmation_ttl: Duration::from_secs(60),
     });
@@ -774,6 +1317,7 @@ fn recent_projects_are_available_without_an_open_workspace_and_fenced_on_close()
             "lastSeen": "2026-08-13T00:00:00Z",
             "available": true
         })])),
+        initialization: Arc::new(super::desktop_runtime::NoDesktopInitializationService),
         update_service: super::update_runtime::UnavailableUpdateService::new("test"),
         confirmation_ttl: Duration::from_secs(60),
     });
@@ -788,6 +1332,226 @@ fn recent_projects_are_available_without_an_open_workspace_and_fenced_on_close()
             .unwrap_err()
             .to_string(),
         "terminal lifecycle is shutting down"
+    );
+}
+
+#[test]
+fn recent_open_uses_authorized_root_and_registry_failure_preserves_open_success() {
+    let requested = TestDirectory::new("recent-requested");
+    let authorized = TestDirectory::new("recent-authorized");
+    let factory = Arc::new(FakeFactory::default());
+    let provider = Arc::new(RecordingRecentRecovery {
+        authorization: RecentProjectOpenAuthorizationV1 {
+            entry_id: "E".repeat(43),
+            base: "B".repeat(43),
+            canonical_root: authorized.0.to_string_lossy().into_owned(),
+            name: "authorized".to_owned(),
+            relocation_confirmation_token: String::new(),
+            already_completed: false,
+        },
+        finishes: AtomicUsize::new(0),
+        fail_finish: AtomicBool::new(true),
+        completed: AtomicBool::new(false),
+    });
+    let runtime = DesktopRuntime::new(DesktopRuntimeConfig {
+        version: "test".to_owned(),
+        factory: factory.clone(),
+        event_sink: None,
+        initial_workspace: None,
+        recent_projects: provider.clone(),
+        initialization: Arc::new(super::desktop_runtime::NoDesktopInitializationService),
+        update_service: super::update_runtime::UnavailableUpdateService::new("test"),
+        confirmation_ttl: Duration::from_secs(60),
+    });
+    let result = runtime
+        .invoke(request(
+            "OpenRecentProjectV1",
+            vec![
+                json!("E".repeat(43)),
+                json!("B".repeat(43)),
+                json!(requested.0.to_string_lossy()),
+                json!(""),
+                json!(""),
+            ],
+        ))
+        .unwrap();
+    assert_eq!(
+        result["open"]["state"]["project"]["root"],
+        authorized.0.to_string_lossy().as_ref()
+    );
+    assert_eq!(result["registryStatus"], "stale");
+    assert_eq!(
+        result["open"]["warning"],
+        "recent-project registry update is incomplete"
+    );
+    assert_eq!(factory.builds.lock().unwrap()[0].0, authorized.0);
+    assert_eq!(provider.finishes.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn concurrent_identical_recent_opens_build_and_commit_once() {
+    let target = TestDirectory::new("recent-concurrent");
+    let factory = Arc::new(FakeFactory::default());
+    let provider = Arc::new(RecordingRecentRecovery {
+        authorization: RecentProjectOpenAuthorizationV1 {
+            entry_id: "E".repeat(43),
+            base: "B".repeat(43),
+            canonical_root: target.0.to_string_lossy().into_owned(),
+            name: "target".to_owned(),
+            relocation_confirmation_token: String::new(),
+            already_completed: false,
+        },
+        finishes: AtomicUsize::new(0),
+        fail_finish: AtomicBool::new(false),
+        completed: AtomicBool::new(false),
+    });
+    let runtime = DesktopRuntime::new(DesktopRuntimeConfig {
+        version: "test".to_owned(),
+        factory: factory.clone(),
+        event_sink: None,
+        initial_workspace: None,
+        recent_projects: provider.clone(),
+        initialization: Arc::new(super::desktop_runtime::NoDesktopInitializationService),
+        update_service: super::update_runtime::UnavailableUpdateService::new("test"),
+        confirmation_ttl: Duration::from_secs(60),
+    });
+    let arguments = vec![
+        json!("E".repeat(43)),
+        json!("B".repeat(43)),
+        json!(target.0.to_string_lossy()),
+        json!(""),
+        json!(""),
+    ];
+    let start = Arc::new(Barrier::new(3));
+    let handles = (0..2)
+        .map(|_| {
+            let runtime = runtime.clone();
+            let arguments = arguments.clone();
+            let start = start.clone();
+            thread::spawn(move || {
+                start.wait();
+                runtime.invoke(request("OpenRecentProjectV1", arguments))
+            })
+        })
+        .collect::<Vec<_>>();
+    start.wait();
+    for handle in handles {
+        assert_eq!(
+            handle.join().unwrap().unwrap()["open"]["state"]["generation"],
+            1
+        );
+    }
+    assert_eq!(factory.builds.lock().unwrap().len(), 1);
+    assert_eq!(provider.finishes.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn recent_open_resource_challenge_never_mutates_registry_before_confirmation() {
+    let current = TestDirectory::new("recent-current");
+    let target = TestDirectory::new("recent-target");
+    let initial = FakeWorkspace::new(&current.0, 1);
+    initial.resources.lock().unwrap().terminals = 1;
+    let provider = Arc::new(RecordingRecentRecovery {
+        authorization: RecentProjectOpenAuthorizationV1 {
+            entry_id: "E".repeat(43),
+            base: "B".repeat(43),
+            canonical_root: target.0.to_string_lossy().into_owned(),
+            name: "target".to_owned(),
+            relocation_confirmation_token: "R".repeat(43),
+            already_completed: false,
+        },
+        finishes: AtomicUsize::new(0),
+        fail_finish: AtomicBool::new(false),
+        completed: AtomicBool::new(false),
+    });
+    let runtime = DesktopRuntime::new(DesktopRuntimeConfig {
+        version: "test".to_owned(),
+        factory: Arc::new(FakeFactory::default()),
+        event_sink: None,
+        initial_workspace: Some(initial),
+        recent_projects: provider.clone(),
+        initialization: Arc::new(super::desktop_runtime::NoDesktopInitializationService),
+        update_service: super::update_runtime::UnavailableUpdateService::new("test"),
+        confirmation_ttl: Duration::from_secs(60),
+    });
+    let arguments = vec![
+        json!("E".repeat(43)),
+        json!("B".repeat(43)),
+        json!(target.0.to_string_lossy()),
+        json!("R".repeat(43)),
+        json!(""),
+    ];
+    let challenged = runtime
+        .invoke(request("OpenRecentProjectV1", arguments.clone()))
+        .unwrap();
+    assert_eq!(challenged["open"]["requiresConfirmation"], true);
+    assert_eq!(challenged["registryStatus"], "unchanged");
+    assert_eq!(provider.finishes.load(Ordering::SeqCst), 0);
+
+    let mut confirmed = arguments;
+    confirmed[4] = challenged["open"]["confirmationToken"].clone();
+    let opened = runtime
+        .invoke(request("OpenRecentProjectV1", confirmed))
+        .unwrap();
+    assert_eq!(opened["open"]["requiresConfirmation"], false);
+    assert_eq!(provider.finishes.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn recent_open_reauthorization_failure_cancels_the_exact_workspace_confirmation() {
+    let current = TestDirectory::new("recent-cancel-current");
+    let target = TestDirectory::new("recent-cancel-target");
+    let initial = FakeWorkspace::new(&current.0, 1);
+    initial.resources.lock().unwrap().terminals = 1;
+    let provider = Arc::new(FailingSecondRecentAuthorization {
+        authorization: RecentProjectOpenAuthorizationV1 {
+            entry_id: "E".repeat(43),
+            base: "B".repeat(43),
+            canonical_root: target.0.to_string_lossy().into_owned(),
+            name: "target".to_owned(),
+            relocation_confirmation_token: String::new(),
+            already_completed: false,
+        },
+        calls: AtomicUsize::new(0),
+    });
+    let runtime = DesktopRuntime::new(DesktopRuntimeConfig {
+        version: "test".to_owned(),
+        factory: Arc::new(FakeFactory::default()),
+        event_sink: None,
+        initial_workspace: Some(initial),
+        recent_projects: provider,
+        initialization: Arc::new(super::desktop_runtime::NoDesktopInitializationService),
+        update_service: super::update_runtime::UnavailableUpdateService::new("test"),
+        confirmation_ttl: Duration::from_secs(60),
+    });
+    let mut arguments = vec![
+        json!("E".repeat(43)),
+        json!("B".repeat(43)),
+        json!(target.0.to_string_lossy()),
+        json!(""),
+        json!(""),
+    ];
+    let challenged = runtime
+        .invoke(request("OpenRecentProjectV1", arguments.clone()))
+        .unwrap();
+    let token = challenged["open"]["confirmationToken"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    arguments[4] = json!(token);
+    assert_eq!(
+        runtime
+            .invoke(request("OpenRecentProjectV1", arguments))
+            .unwrap_err()
+            .to_string(),
+        "recent-project-entry-stale"
+    );
+    assert_eq!(
+        runtime
+            .invoke(request("CancelWorkspaceChange", vec![json!(token)]))
+            .unwrap_err()
+            .to_string(),
+        "invalid or expired workspace confirmation"
     );
 }
 
@@ -808,6 +1572,7 @@ fn close_timeout_restores_admission_and_retry_finishes_after_runtime_call() {
         event_sink: None,
         initial_workspace: Some(workspace),
         recent_projects: Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+        initialization: Arc::new(super::desktop_runtime::NoDesktopInitializationService),
         update_service: super::update_runtime::UnavailableUpdateService::new("test"),
         confirmation_ttl: Duration::from_secs(60),
     });
@@ -843,6 +1608,7 @@ fn in_flight_open_is_bounded_by_shutdown_and_cannot_republish_after_success() {
         event_sink: None,
         initial_workspace: None,
         recent_projects: Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+        initialization: Arc::new(super::desktop_runtime::NoDesktopInitializationService),
         update_service: super::update_runtime::UnavailableUpdateService::new("test"),
         confirmation_ttl: Duration::from_secs(60),
     });
@@ -926,6 +1692,201 @@ fn bound_workspace(directory: &TestDirectory) -> BoundDesktopWorkspace {
         None,
         None,
     )
+}
+
+fn empty_bound_workspace(directory: &TestDirectory) -> (BoundDesktopWorkspace, WorkspaceBindings) {
+    let root = directory.0.join("empty-project");
+    let home = directory.0.join("empty-home");
+    std::fs::create_dir_all(root.join(".ptrack")).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    let project_database = root.join(".ptrack/ptrack.redb");
+    let global_database = home.join("global.redb");
+    let project_binding = binding(&project_database, StoreKind::Project, "empty-project-7");
+    let global_binding = binding(&global_database, StoreKind::Global, "empty-global-7");
+    drop(ProjectStore::create_new(&project_database, project_binding.clone(), "test").unwrap());
+    drop(GlobalStore::create_new(&global_database, global_binding.clone()).unwrap());
+    let bindings = WorkspaceBindings {
+        current_dir: root.clone(),
+        project: Some(ProjectEndpoint {
+            root,
+            database: project_database,
+            binding: project_binding,
+        }),
+        global_database,
+        global_binding,
+        global_home: home,
+        writer_version: "test".to_owned(),
+    };
+    (
+        BoundDesktopWorkspace::new(
+            7,
+            0,
+            bindings.clone(),
+            Box::new(LocalApplication::new(bindings.clone())),
+            None,
+            None,
+            None,
+        ),
+        bindings,
+    )
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // One wire lifecycle proves fencing, replay, and CAS semantics.
+fn first_run_workspace_mutations_are_exact_fenced_and_idempotent() {
+    let directory = TestDirectory::new("first-run-mutations");
+    let (workspace, bindings) = empty_bound_workspace(&directory);
+    for generation in [0, 8] {
+        assert!(
+            workspace
+                .invoke("CreateFirstPlanV1", &[json!(generation), json!("Plan")],)
+                .unwrap_err()
+                .to_string()
+                .contains("stale workspace generation")
+        );
+    }
+    assert!(
+        workspace
+            .invoke(
+                "CreateFirstPlanV1",
+                &[json!(7), json!("Plan"), json!("extra")],
+            )
+            .is_err()
+    );
+
+    let created = workspace
+        .invoke("CreateFirstPlanV1", &[json!(7), json!("  First plan  ")])
+        .unwrap();
+    assert_eq!(created["plan"]["id"], 1);
+    assert_eq!(created["plan"]["title"], "First plan");
+    assert_eq!(created["plan"]["status"], "active");
+    assert_eq!(created["state"]["status"], "open");
+    assert_eq!(created["state"]["generation"], 7);
+    assert_eq!(
+        workspace
+            .invoke("CreateFirstPlanV1", &[json!(7), json!("First plan")],)
+            .unwrap(),
+        created
+    );
+    assert!(
+        workspace
+            .invoke("CreateFirstPlanV1", &[json!(7), json!("Different plan")],)
+            .is_err()
+    );
+
+    assert!(
+        workspace
+            .invoke("CreateFirstTaskV1", &[json!(7), json!(1), json!("   ")],)
+            .is_err()
+    );
+    let store = ProjectStore::open_existing(
+        &bindings.project.as_ref().unwrap().database,
+        &bindings.project.as_ref().unwrap().binding,
+        "test",
+    )
+    .unwrap();
+    assert_eq!(store.plans().unwrap().len(), 1);
+    assert_eq!(store.meta().unwrap().active_plan, 1);
+    assert!(store.tasks().unwrap().is_empty());
+    drop(store);
+
+    let task = workspace
+        .invoke(
+            "CreateFirstTaskV1",
+            &[json!(7), json!(1), json!("  First task  ")],
+        )
+        .unwrap();
+    assert_eq!(task["task"]["id"], 1);
+    assert_eq!(task["task"]["planId"], 1);
+    assert_eq!(task["task"]["title"], "First task");
+    assert_eq!(task["task"]["status"], "todo");
+    assert_eq!(
+        workspace
+            .invoke(
+                "CreateFirstTaskV1",
+                &[json!(7), json!(1), json!("First task")],
+            )
+            .unwrap(),
+        task
+    );
+    assert!(
+        workspace
+            .invoke(
+                "CreateFirstTaskV1",
+                &[json!(7), json!(1), json!("Different task")],
+            )
+            .is_err()
+    );
+
+    let expected_updated_at = task["task"]["updatedAt"].as_str().unwrap();
+    assert!(
+        workspace
+            .invoke(
+                "StartFirstTaskV1",
+                &[json!(0), json!(1), json!(expected_updated_at)],
+            )
+            .is_err()
+    );
+    assert!(
+        workspace
+            .invoke(
+                "StartFirstTaskV1",
+                &[json!(7), json!(1), json!("2020-01-01T00:00:00Z")],
+            )
+            .is_err()
+    );
+    let started = workspace
+        .invoke(
+            "StartFirstTaskV1",
+            &[json!(7), json!(1), json!(expected_updated_at)],
+        )
+        .unwrap();
+    assert_eq!(started["task"]["status"], "doing");
+    assert_eq!(started["state"]["generation"], 7);
+    assert_eq!(
+        workspace
+            .invoke(
+                "StartFirstTaskV1",
+                &[json!(7), json!(1), json!(expected_updated_at)],
+            )
+            .unwrap(),
+        started
+    );
+    assert_eq!(
+        workspace
+            .invoke(
+                "CreateFirstTaskV1",
+                &[json!(7), json!(1), json!("First task")],
+            )
+            .unwrap()["task"]["status"],
+        "doing"
+    );
+
+    let store = ProjectStore::open_existing(
+        &bindings.project.as_ref().unwrap().database,
+        &bindings.project.as_ref().unwrap().binding,
+        "test",
+    )
+    .unwrap();
+    store
+        .set_task_status(1, ptrack_core::TaskStatus::Done)
+        .unwrap();
+    drop(store);
+    assert!(
+        workspace
+            .invoke(
+                "StartFirstTaskV1",
+                &[json!(7), json!(1), started["task"]["updatedAt"].clone()],
+            )
+            .is_err()
+    );
+    let store = ProjectStore::open_existing(
+        &bindings.project.as_ref().unwrap().database,
+        &bindings.project.as_ref().unwrap().binding,
+        "test",
+    )
+    .unwrap();
+    assert_eq!(store.task(1).unwrap().status, ptrack_core::TaskStatus::Done);
 }
 
 #[test]
@@ -1527,6 +2488,75 @@ async fn task_transition_challenge_is_opaque_single_use_and_resource_revision_fe
 }
 
 #[tokio::test]
+async fn first_task_start_refuses_resource_confirmation_and_preserves_todo() {
+    let directory = TestDirectory::new("first-task-resource");
+    let (seed, bindings) = empty_bound_workspace(&directory);
+    seed.invoke("CreateFirstPlanV1", &[json!(7), json!("Plan")])
+        .unwrap();
+    let created = seed
+        .invoke("CreateFirstTaskV1", &[json!(7), json!(1), json!("Task")])
+        .unwrap();
+    let expected_updated_at = created["task"]["updatedAt"].as_str().unwrap().to_owned();
+    drop(seed);
+
+    let root = bindings.project.as_ref().unwrap().root.clone();
+    let manager = Manager::new(&root, vec![profile(&root)], Arc::new(TestFactory))
+        .await
+        .unwrap();
+    let terminal = TerminalRuntime::new(TerminalRuntimeConfig {
+        generation: 7,
+        project_root: root,
+        manager,
+        identity: Arc::new(TestIdentity::default()),
+        events: Arc::new(TestEvents::default()),
+        attachment_lease: Duration::from_secs(30),
+    })
+    .unwrap();
+    let session = terminal.create(7, "shell-default", None, 24, 80).unwrap();
+    terminal
+        .associate(
+            7,
+            &session.session_id,
+            TerminalAssociationPointer {
+                version: 1,
+                plan_id: 1,
+                task_id: 1,
+            },
+        )
+        .unwrap();
+    let workspace = BoundDesktopWorkspace::new(
+        7,
+        0,
+        bindings.clone(),
+        Box::new(LocalApplication::new(bindings.clone())),
+        Some(terminal.clone()),
+        None,
+        None,
+    );
+
+    assert_eq!(
+        workspace
+            .invoke(
+                "StartFirstTaskV1",
+                &[json!(7), json!(1), json!(expected_updated_at)],
+            )
+            .unwrap_err()
+            .to_string(),
+        "first task start requires resource confirmation"
+    );
+    let store = ProjectStore::open_existing(
+        &bindings.project.as_ref().unwrap().database,
+        &bindings.project.as_ref().unwrap().binding,
+        "test",
+    )
+    .unwrap();
+    assert_eq!(store.task(1).unwrap().status, ptrack_core::TaskStatus::Todo);
+    drop(store);
+    terminal.close(7, &session.session_id, true).unwrap();
+    terminal.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 #[allow(clippy::too_many_lines)] // One table verifies exact preflight precedence.
 async fn linked_launch_preflight_requires_an_exact_installed_agent_profile() {
     let directory = TestDirectory::new("linked-preflight");
@@ -1656,6 +2686,7 @@ async fn workspace_confirmation_owns_and_expires_the_resource_admission_fence() 
         event_sink: None,
         initial_workspace: Some(workspace.clone()),
         recent_projects: Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+        initialization: Arc::new(super::desktop_runtime::NoDesktopInitializationService),
         update_service: super::update_runtime::UnavailableUpdateService::new("test"),
         confirmation_ttl: Duration::from_millis(30),
     });

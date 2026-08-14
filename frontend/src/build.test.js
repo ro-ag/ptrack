@@ -33,6 +33,22 @@ describe("production asset layout", () => {
       resolve(frontendRoot, "src/app.js"),
       "utf8",
     );
+    const firstRunSource = readFileSync(
+      resolve(frontendRoot, "src/workspace/first-run.ts"),
+      "utf8",
+    );
+    const firstRunJourneySource = readFileSync(
+      resolve(frontendRoot, "src/workspace/first-run-journey.ts"),
+      "utf8",
+    );
+    const firstPlanSource = readFileSync(
+      resolve(frontendRoot, "src/workspace/first-plan.ts"),
+      "utf8",
+    );
+    const recentProjectsSource = readFileSync(
+      resolve(frontendRoot, "src/workspace/recent-projects.ts"),
+      "utf8",
+    );
     const applicationOverlaySource = readFileSync(
       resolve(frontendRoot, "src/workspace/application-overlay.ts"),
       "utf8",
@@ -48,6 +64,267 @@ describe("production asset layout", () => {
     expect(styles).toMatch(/\.state-card\{[^}]*box-shadow:/);
     expect(styles).not.toMatch(
       /\.state-card\{[^}]*(?:animation|transform|opacity):/,
+    );
+    expect(index).toMatch(
+      /id="project-state-card"[\s\S]*id="workspace-state-heading"[^>]*>Start with a project<\/h2>[\s\S]*Initialize p-track in a folder, or open a project you already use\.[\s\S]*id="state-initialize-project-button"[^>]*>Initialize Project<\/button>[\s\S]*id="state-open-project-button"[\s\S]*>Open Project…<\/button>[\s\S]*>Recent projects<\/p>/,
+    );
+    expect(index.match(/class="state-card"/g)).toHaveLength(1);
+    expect(index).toMatch(
+      /id="post-project-onboarding"[\s\S]*aria-labelledby="onboarding-heading"[\s\S]*id="onboarding-plan-form"[\s\S]*id="onboarding-create-plan"[^>]*>Create Plan<\/button>[\s\S]*id="onboarding-skip-plan"[^>]*>Skip for Now<\/button>[\s\S]*id="onboarding-task-form"[\s\S]*id="onboarding-start-now"[\s\S]*>Start this task now<[\s\S]*id="onboarding-create-task"[^>]*>Create Task<\/button>[\s\S]*id="onboarding-finish-with-plan"[^>]*>Finish with Plan<\/button>/,
+    );
+    expect(index).toMatch(
+      /id="recent-project-heading"[\s\S]*tabindex="-1"[\s\S]*>Recent projects<\/p>[\s\S]*id="recent-project-list"[\s\S]*role="list"[\s\S]*aria-busy="false"[\s\S]*id="recent-project-status"[\s\S]*role="status"[\s\S]*aria-live="polite"[\s\S]*id="recent-project-error"[\s\S]*role="alert"/,
+    );
+    expect(index).not.toMatch(/id="workspace-state-screen"[^>]*aria-live/);
+    for (const id of [
+      "recent-project-error",
+      "setup-goal-error",
+      "setup-error",
+      "onboarding-plan-error",
+      "onboarding-task-error",
+      "onboarding-error",
+    ]) {
+      expect(index).toMatch(
+        new RegExp(`id="${id}"[^>]*role="alert"[^>]*aria-atomic="true"`),
+      );
+    }
+    expect(index).toMatch(
+      /id="setup-operation"[^>]*role="group"[^>]*aria-labelledby="setup-heading"[^>]*aria-busy="false"/,
+    );
+    expect(index).toMatch(
+      /id="onboarding-operation"[^>]*role="group"[^>]*aria-labelledby="onboarding-heading"[^>]*aria-busy="false"/,
+    );
+    expect(index).toMatch(
+      /id="onboarding-start-failed-actions"[\s\S]*id="onboarding-retry-start"[^>]*>Try Starting Again<\/button>[\s\S]*id="onboarding-finish-setup"[^>]*>Finish Setup<\/button>/,
+    );
+    expect(index).toMatch(
+      /id="setup-panel"[\s\S]*aria-labelledby="setup-heading"[\s\S]*id="setup-progress"[\s\S]*id="setup-heading"[^>]*tabindex="-1"[\s\S]*id="setup-goal"[\s\S]*aria-describedby="setup-goal-help setup-goal-error"[\s\S]*id="setup-status"[\s\S]*role="status"[\s\S]*aria-live="polite"[\s\S]*id="setup-error"[^>]*role="alert"/,
+    );
+    expect(index).toMatch(
+      /id="setup-goal-back"[^>]*>Back<\/button>/,
+    );
+    expect(index).toMatch(
+      /id="setup-new-target-actions"[\s\S]*id="setup-new-target-continue"[^>]*>Continue to Goal<\/button>[\s\S]*id="setup-new-target-choose"[^>]*>Choose Another Folder<\/button>[\s\S]*id="setup-new-target-cancel"[^>]*>Cancel Setup<\/button>/,
+    );
+    expect(index).toMatch(
+      /id="setup-guide"[\s\S]*aria-label="Project guide choice"[\s\S]*Skip Guide[\s\S]*id="setup-guide-preview"[\s\S]*aria-label="Exact guide file preview"[\s\S]*id="setup-guide-preview-button"[^>]*>Preview Guide Changes<\/button>[\s\S]*id="setup-guide-install"[^>]*>Install These Guide Changes<\/button>/,
+    );
+    expect(index).toMatch(
+      /id="setup-guide-stale-actions"[\s\S]*id="setup-guide-review-again"[^>]*>Review Again<\/button>[\s\S]*id="setup-guide-stale-skip"[^>]*>Skip Guide<\/button>[\s\S]*id="setup-guide-stale-back"[^>]*>Back<\/button>/,
+    );
+    expect(index).toMatch(
+      /id="setup-review"[\s\S]*id="setup-review-goal"[\s\S]*id="setup-review-guide-choice"[\s\S]*id="setup-complete-changes"/,
+    );
+    expect(index).toContain("Private p-track project storage");
+    expect(index).toMatch(
+      /id="setup-recovery-actions"[\s\S]*id="setup-retry"[^>]*hidden[^>]*>Try Again<\/button>[\s\S]*id="setup-resume"[^>]*>Resume Setup<\/button>[\s\S]*id="setup-open-recovery"[^>]*>Open Project<\/button>[\s\S]*id="setup-recovery-help"[^>]*>Open Recovery Help<\/button>[\s\S]*id="setup-recovery-choose"[\s\S]*id="setup-return-welcome"/,
+    );
+    expect(index).toMatch(
+      /id="setup-uncertain-actions"[\s\S]*id="setup-check-status"[^>]*>Check Status Again<\/button>/,
+    );
+    expect(appSource).not.toContain(".ptrack/ptrack.redb");
+    expect(firstRunJourneySource).toContain("api.ValidateProjectTargetV1(root)");
+    expect(firstRunJourneySource).toContain("api.InitializeProjectV1(request)");
+    expect(appSource).toContain("validateInitializationTarget(api(), path)");
+    expect(appSource).toContain("commitInitialization(api(), request)");
+    expect(appSource).toContain("runExactProjectOpen(");
+    expect(appSource).toMatch(
+      /resumeInitialization\(\s*api\(\),\s*operationId,\s*canonicalRoot,?\s*\)/,
+    );
+    expect(appSource).toContain("PreviewProjectGuideV1({ operationId, root: canonicalRoot })");
+    expect(firstRunJourneySource).toContain("guideChoice: guide.guideChoice");
+    expect(firstRunJourneySource).toContain(
+      "guidePreviewToken: guide.guidePreviewToken",
+    );
+    expect(firstRunSource).toContain("project-guide-partially-applied");
+    expect(firstRunSource).toContain(
+      'const resumeFields = ["initialization", "goal", "guideChoice"]',
+    );
+    expect(firstRunSource).toContain('state.checkpoint === "guide-applied"');
+    expect(appSource).toContain("if (validation.resume)");
+    expect(appSource).toContain("goal: validation.resume.goal");
+    expect(appSource).toContain("firstRunState.storageAlreadyCreated");
+    expect(appSource).toContain("firstRunState.resumeLocked");
+    expect(appSource).toContain(
+      "No project files were written. You can try again safely.",
+    );
+    expect(firstRunSource).toContain('event.initialization.outcome === "in-progress"');
+    expect(firstPlanSource).toContain("parseCreateFirstPlanResult");
+    expect(firstPlanSource).toContain('task.status === "todo" || task.status === "doing"');
+    expect(firstPlanSource).toContain("api.CreateFirstPlanV1(generation, title)");
+    expect(firstPlanSource).toContain(
+      "api.CreateFirstTaskV1(generation, planId, title)",
+    );
+    expect(firstPlanSource).toContain(
+      "api.StartFirstTaskV1(generation, taskId, expectedUpdatedAt)",
+    );
+    expect(appSource).toContain("await createFirstPlan(");
+    expect(appSource).toContain("await createFirstTask(");
+    expect(appSource).toContain("await runStartFirstTask(");
+    expect(appSource).toContain("workspaceController.accepts(ticket, generation)");
+    expect(appSource).toContain('firstPlanState.phase !== "idle"');
+    expect(appSource).toMatch(
+      /function selectPlan\(planId\) \{\s*if \(firstPlanState\.phase !== "idle"\) return;/,
+    );
+    expect(appSource).toMatch(
+      /function openPalette\(\) \{\s*if \([\s\S]*workspaceController\.state\.status !== "open" \|\|[\s\S]*firstPlanState\.phase !== "idle"[\s\S]*\) return;/,
+    );
+    expect(appSource).toContain("elements.planList.inert = active");
+    expect(appSource).toContain("elements.sidebarToggle.disabled = active");
+    expect(appSource).toContain("elements.sidebarResize.inert = active");
+    expect(appSource).toContain("terminalHandle.setLayoutLocked(active)");
+    expect(appSource).toContain(
+      'handle.setLayoutLocked(firstPlanState.phase !== "idle")',
+    );
+    expect(appSource).toContain(
+      "firstPlanState = { ...initialFirstPlanState };\n  renderFirstPlanOnboarding(false);",
+    );
+    expect(paneSource).toContain("setLayoutLocked(locked: boolean)");
+    expect(paneSource).toContain(
+      "this.#boardToggle.disabled = this.#layoutLocked || !dockInteractionEligible",
+    );
+    expect(appSource).toContain(
+      "firstPlanExitFocusTarget(planId, sidebarHeadingUnavailableForFocus())",
+    );
+    expect(appSource).toContain("await loadSnapshot(planId > 0 ? planId : 0)");
+    expect(appSource).toMatch(
+      /applyView\(\);\s*document\.getElementById\(\s*firstPlanExitFocusTarget\(planId, sidebarHeadingUnavailableForFocus\(\)\),\s*\)\?\.focus\(\);\s*await loadSnapshot\(planId > 0 \? planId : 0\);/,
+    );
+    expect(appSource).toContain("Saving or reconciling the first plan…");
+    expect(appSource).toContain("Saving or reconciling the first task…");
+    expect(appSource).toContain("p-track is reconciling the requested start.");
+    expect(appSource).not.toContain("Creating the first task in Todo…");
+    expect(appSource).not.toContain("safely stored in Todo while p-track starts it");
+    expect(recentProjectsSource).toMatch(
+      /export type RecentProjectAvailability\s*=\s*\| "available"\s*\| "missing"\s*\| "permission-required"\s*\| "changed"/,
+    );
+    expect(recentProjectsSource).toContain("Recent projects exceeded the 20-entry limit.");
+    expect(recentProjectsSource).toContain("Recent projects were not newest first.");
+    expect(appSource).toContain("GetRecentProjectsV1");
+    expect(appSource).toContain("ResolveRecentProjectV1");
+    expect(appSource).toContain("OpenRecentProjectV1");
+    expect(appSource).toContain("ForgetRecentProjectV1");
+    expect(appSource).toContain("recentProjectOperationIsCurrent(ticket)");
+    expect(appSource).toContain("function recentProjectOperationActive()");
+    expect(appSource).toContain("elements.stateInitialize.disabled = operationActive");
+    expect(appSource).toContain("elements.stateOpen.disabled = operationActive");
+    expect(appSource).toMatch(
+      /async function requestOpenProject\([^)]*\) \{\s*if \(recentProjectOperationActive\(\)\) return;/,
+    );
+    expect(appSource).toMatch(
+      /async function requestInitializeProject\([^)]*\) \{\s*if \(recentProjectOperationActive\(\)\) return;/,
+    );
+    expect(appSource).toMatch(
+      /function nativeCommandAllowed\(command\) \{[\s\S]*recentProjectOperationActive\(\)/,
+    );
+    expect(appSource).toContain(
+      "button.disabled = recentProjectsState.listLoading ||",
+    );
+    expect(appSource).toMatch(
+      /function beginRecentProjectOperation\(entry, intent\) \{[\s\S]*recentProjectsState\.listLoading \|\|[\s\S]*!\["idle", "error"\]\.includes\(recentProjectsState\.phase\)[\s\S]*return null;/,
+    );
+    expect(appSource).toContain(
+      "operationSequence !== recentOperationSequence",
+    );
+    expect(appSource).toContain('warnings.join(" ")');
+    expect(appSource).toContain("Folder not found");
+    expect(appSource).toContain("Permission required");
+    expect(appSource).toContain("Project changed");
+    expect(appSource).toContain("Project files will not be changed.");
+    expect(appSource).toContain("registryStatus === \"stale\"");
+    expect(appSource).toContain("await refreshRecentProjectsAfterOpen()");
+    expect(appSource).toContain("RECENT_RELOCATION_UNCONFIRMED");
+    expect(recentProjectsSource).toContain("bounded registry list");
+    expect(appSource).toMatch(
+      /CancelWorkspaceChange\(result\.open\.confirmationToken\)[\s\S]*setRecentProjectsState\(\{[\s\S]*type: "settled"[\s\S]*renderWorkspaceState\(result\.open\.state, false\)[\s\S]*restoreRecentProjectFocus/,
+    );
+    expect(appSource).not.toContain("projects.filter((project) => project.available)");
+    expect(appSource).not.toContain("The first plan was not created");
+    expect(appSource).not.toContain("The first task was not created");
+    expect(appSource).not.toContain("The task remains in Todo");
+    expect(appSource).toContain(
+      "elements.setupGuideStaleSkip.hidden = !firstRunState.guideSkipAllowed",
+    );
+    expect(appSource).toContain("skipAllowed: false");
+    expect(appSource).toContain("code.textContent = file.diff");
+    expect(appSource).not.toContain("code.innerHTML = file.diff");
+    expect(appSource).toContain("element.inert = !visible");
+    expect(appSource).not.toMatch(/toggleAttribute\(\s*["']aria-/);
+    expect(appSource).toMatch(
+      /setAriaBoolean\(\s*elements\.setupOperation,\s*"aria-busy"/,
+    );
+    expect(appSource).toMatch(
+      /setAriaBoolean\(\s*elements\.onboardingOperation,\s*"aria-busy"/,
+    );
+    expect(appSource).toContain('nativeCommandAllowed("checkForUpdates")');
+    expect(appSource).toMatch(
+      /function openAboutUpdates[\s\S]*?firstRunState\.phase !== "idle"[\s\S]*?firstPlanState\.phase !== "idle"[\s\S]*?recentProjectOperationActive\(\)/,
+    );
+    expect(appSource).toMatch(
+      /function updateAboutUpdatesAvailability\(\) \{[\s\S]*?elements\.appVersion\.disabled = firstRunState\.phase !== "idle" \|\|[\s\S]*?firstPlanState\.phase !== "idle" \|\|[\s\S]*?recentProjectOperationActive\(\)/,
+    );
+    expect(appSource.match(/updateAboutUpdatesAvailability\(\);/g)?.length)
+      .toBeGreaterThanOrEqual(3);
+    expect(appSource).toContain('lastOpened.dateTime = project.lastOpenedAt');
+    expect(appSource).toContain('item.setAttribute("aria-labelledby", name.id)');
+    expect(appSource).toContain('button.setAttribute("aria-describedby", describedBy)');
+    expect(appSource).toContain('status.checkpoint !== "desktop-bound"');
+    expect(firstRunJourneySource).toContain(
+      "api.GetInitializationStatusV1(operationId)",
+    );
+    expect(appSource).toContain("GetPendingInitializationV1()");
+    expect(firstRunSource).toContain("parsePendingInitialization");
+    expect(appSource).toContain("resolveFirstRunStartupState");
+    expect(appSource).toContain("hydratePendingInitialization(pending)");
+    expect(appSource).toContain("elements.openProject.disabled = !idle");
+    expect(appSource).toContain("elements.closeProject.disabled = !idle");
+    expect(appSource).toContain('firstRunState.phase === "idle"');
+    expect(appSource).toContain('elements.setupRetry.addEventListener("click", retryFirstRunValidation)');
+    expect(appSource).toContain("retryInitializationStatus");
+    expect(appSource).toContain('openHelpDestination("project-recovery")');
+    expect(appSource).toContain("resumeFirstRunSetup");
+    expect(appSource).toContain("openProjectFromRecovery");
+    expect(appSource).toContain("rebindCompletedInitializationWorkspace");
+    expect(appSource).toContain(
+      "completedInitializationWorkspaceMatches(workspace, canonicalRoot)",
+    );
+    expect(appSource).toContain(
+      "Initialization is complete, but this window could not open the project:",
+    );
+    expect(appSource).toContain('firstRunState.recoveryMode === "durable"');
+    expect(firstRunSource).toContain(
+      '["project-committed", "guide-applied", "desktop-bound"]',
+    );
+    expect(appSource).toContain("showCommittedGuideRecoveryActions");
+    expect(appSource).toMatch(
+      /case "review":[\s\S]*setFirstRunSectionVisible\(elements\.setupReview, true\);\s*showCommittedGuideRecoveryActions\(\);/,
+    );
+    expect(appSource).toMatch(
+      /async function openProjectFromRecovery\(\) \{[\s\S]*canOpenPreservedFirstRunProject\(firstRunState\)/,
+    );
+    expect(firstRunSource).toContain(
+      '["recovery", "guide", "guide-stale", "review"]',
+    );
+    expect(appSource).toContain("resumable: false");
+    expect(appSource).toContain(
+      "Could not load the desktop startup state:",
+    );
+    expect(appSource).toMatch(
+      /function cancelFirstRunSetup\(\) \{[\s\S]*firstRunState\.resumeLocked[\s\S]*firstRunState\.recoveryMode === "durable"[\s\S]*"committing", "reconciling", "uncertain"/,
+    );
+    expect(appSource).toContain(
+      'elements.setupGoalBack.addEventListener("click", returnToSelectedFirstRunFolder)',
+    );
+    expect(appSource).toContain(
+      'elements.setupGoal.addEventListener("input", preserveFirstRunGoalDraft)',
+    );
+    expect(appSource).toContain('type: "goalDrafted"');
+    expect(appSource).toContain('type: "continueToGoal"');
+    expect(appSource).toContain("pickerCancelState = { ...firstRunState }");
+    expect(appSource).toContain('type: pickerCancelState ? "repick" : "pick"');
+    expect(appSource).toContain("elements.setupNewTargetChoose");
+    expect(appSource).toMatch(
+      /type: "pickerCancelled", restore: pickerCancelState[\s\S]*requestAnimationFrame\(\(\) => returnFocus\?\.focus\(\)\)/,
     );
     expect(index).toMatch(
       /id="updates-modal"[\s\S]*role="dialog"[\s\S]*aria-modal="true"[\s\S]*id="updates-automatic"[\s\S]*aria-label="Update download progress"[\s\S]*id="updates-primary"/,

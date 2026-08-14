@@ -45,6 +45,7 @@ pub struct Store {
     kind: StoreKind,
     path: PathBuf,
     identity: FileIdentity,
+    pinned_project: Option<crate::PinnedProjectDirectory>,
 }
 
 #[derive(Debug)]
@@ -206,6 +207,51 @@ impl Store {
             kind,
             path: path.to_path_buf(),
             identity,
+            pinned_project: None,
+        })
+    }
+
+    pub(crate) fn create_new_pinned_inner(
+        pinned: &crate::PinnedProjectDirectory,
+        kind: StoreKind,
+        before_open: impl FnOnce() -> StoreResult<()>,
+    ) -> StoreResult<Self> {
+        let path = pinned.database_path();
+        reject_legacy_path(path)?;
+        ensure_destination_absent(path)?;
+        pinned.verify()?;
+        before_open()?;
+        let file = pinned.create_database_file().map_err(|error| match error {
+            StoreError::Io(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                StoreError::DestinationExists {
+                    path: path.to_path_buf(),
+                }
+            }
+            other => other,
+        })?;
+        let identity = FileIdentity::from_file(&file)?;
+        pinned.verify()?;
+        ensure_path_identity(path, identity)?;
+        pinned.sync()?;
+        let shared = ProcessDatabase::new(file)?;
+        if let Err(error) = initialize_database(
+            &shared.database,
+            kind,
+            STORE_STATE_READY,
+            STORE_ORIGIN_CREATED,
+        ) {
+            drop(shared);
+            return Err(error);
+        }
+        pinned.verify()?;
+        ensure_path_identity(path, identity)?;
+        pinned.sync()?;
+        Ok(Self {
+            shared,
+            kind,
+            path: path.to_path_buf(),
+            identity,
+            pinned_project: Some(pinned.clone()),
         })
     }
 
@@ -287,6 +333,7 @@ impl Store {
             kind: import.data.kind,
             path: path.to_path_buf(),
             identity,
+            pinned_project: None,
         };
         Ok((store, import.report))
     }
@@ -353,6 +400,7 @@ impl Store {
             kind: import.data.kind,
             path: path.to_path_buf(),
             identity,
+            pinned_project: None,
         };
         Ok((store, import.report))
     }
@@ -377,6 +425,50 @@ impl Store {
             kind: expected,
             path: path.to_path_buf(),
             identity,
+            pinned_project: None,
+        })
+    }
+
+    pub(crate) fn open_existing_pinned_inner(
+        pinned: &crate::PinnedProjectDirectory,
+        expected: StoreKind,
+        before_open: impl FnOnce() -> StoreResult<()>,
+    ) -> StoreResult<Self> {
+        let path = pinned.database_path();
+        reject_legacy_path(path)?;
+        pinned.verify()?;
+        before_open()?;
+        let file = pinned.open_database_file()?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file() {
+            return Err(StoreError::NotRegularFile {
+                path: path.to_path_buf(),
+            });
+        }
+        validate_private_permissions(path, &metadata)?;
+        let identity = FileIdentity::from_file(&file)?;
+        pinned.verify()?;
+        ensure_path_identity(path, identity)?;
+        match file.try_lock_shared() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => return Err(StoreError::Busy),
+            Err(TryLockError::Error(error)) => return Err(error.into()),
+        }
+        let snapshot = read_file_snapshot(&file)?;
+        let probe = Database::builder().create_with_backend(MemoryProbeBackend::new(snapshot))?;
+        validate_database(&probe, expected)?;
+        drop(probe);
+        file.unlock()?;
+        let shared = ProcessDatabase::new(file)?;
+        pinned.verify()?;
+        ensure_path_identity(path, identity)?;
+        validate_database(&shared.database, expected)?;
+        Ok(Self {
+            shared,
+            kind: expected,
+            path: path.to_path_buf(),
+            identity,
+            pinned_project: Some(pinned.clone()),
         })
     }
 
@@ -393,6 +485,9 @@ impl Store {
     }
 
     pub(crate) fn ensure_current_path(&self) -> StoreResult<()> {
+        if let Some(pinned) = &self.pinned_project {
+            pinned.verify()?;
+        }
         ensure_path_identity(&self.path, self.identity)?;
         validate_private_permissions(&self.path, &fs::symlink_metadata(&self.path)?)
     }
@@ -439,7 +534,7 @@ impl Store {
         expected: &crate::ActiveBinding,
         operation: impl FnOnce(&mut WriteTransaction) -> StoreResult<R>,
     ) -> StoreResult<R> {
-        ensure_path_identity(&self.path, self.identity)?;
+        self.ensure_current_path()?;
         crate::activation::validate_binding_for_path(expected, self.kind, &self.path)?;
         if self.active_binding()?.as_ref() != Some(expected) {
             return Err(StoreError::ActivationBinding(
@@ -447,7 +542,7 @@ impl Store {
             ));
         }
         let result = self.write_inner(true, operation)?;
-        ensure_path_identity(&self.path, self.identity)?;
+        self.ensure_current_path()?;
         Ok(result)
     }
 
@@ -456,7 +551,7 @@ impl Store {
         expected: &crate::ActiveBinding,
         operation: impl FnOnce(&mut WriteTransaction) -> StoreResult<R>,
     ) -> StoreResult<R> {
-        ensure_path_identity(&self.path, self.identity)?;
+        self.ensure_current_path()?;
         crate::activation::validate_binding_for_path(expected, self.kind, &self.path)?;
         if self.active_binding()?.as_ref() != Some(expected) {
             return Err(StoreError::ActivationBinding(
@@ -464,7 +559,7 @@ impl Store {
             ));
         }
         let result = self.write_inner(false, operation)?;
-        ensure_path_identity(&self.path, self.identity)?;
+        self.ensure_current_path()?;
         Ok(result)
     }
 
@@ -532,6 +627,7 @@ impl Store {
     }
 
     pub(crate) fn activate(&self, binding: &crate::ActiveBinding) -> StoreResult<()> {
+        self.ensure_current_path()?;
         crate::activation::validate_binding_for_path(binding, self.kind, &self.path)?;
         let current = self.active_binding()?;
         if let Some(current) = current {
@@ -561,7 +657,8 @@ impl Store {
             manifest.insert(MANIFEST_KEY_APPLICATION_WRITES, b"false".as_slice())?;
         }
         transaction.commit()?;
-        validate_database(&self.shared.database, self.kind)
+        validate_database(&self.shared.database, self.kind)?;
+        self.ensure_current_path()
     }
 
     pub(crate) fn with_writer_barrier<R>(
@@ -1661,6 +1758,30 @@ impl FileIdentity {
         }
     }
 
+    #[cfg(windows)]
+    fn from_path_no_delete(path: &Path, directory: bool) -> StoreResult<Self> {
+        let file = crate::private_windows::open_no_reparse_no_delete(path, directory, false)?;
+        Self::from_file(&file)
+    }
+
+    fn private_identity(self) -> crate::PrivatePathIdentity {
+        #[cfg(unix)]
+        return crate::PrivatePathIdentity {
+            device: self.device,
+            inode: self.inode,
+        };
+        #[cfg(windows)]
+        return crate::PrivatePathIdentity {
+            device: u64::from(self.volume),
+            inode: self.index,
+        };
+        #[cfg(not(any(unix, windows)))]
+        crate::PrivatePathIdentity {
+            device: 0,
+            inode: 0,
+        }
+    }
+
     #[cfg(not(windows))]
     pub(crate) fn from_metadata(metadata: &fs::Metadata) -> Self {
         #[cfg(unix)]
@@ -1680,16 +1801,70 @@ impl FileIdentity {
     }
 }
 
-struct DestinationParent {
+#[cfg(windows)]
+fn random_staging_directory_name() -> StoreResult<String> {
+    let mut random = [0_u8; 16];
+    crate::private_windows::random_staging_bytes(&mut random)?;
+
+    use std::fmt::Write;
+    let mut name = String::from(".ptrack-stage-");
+    for byte in random {
+        write!(&mut name, "{byte:02x}").expect("writing to a string cannot fail");
+    }
+    Ok(name)
+}
+
+#[cfg(unix)]
+/// Artifact-free cooperative publication fence on the retained project root.
+pub(crate) struct ProjectRootPublicationLease {
+    directory: File,
+}
+
+#[cfg(unix)]
+impl Drop for ProjectRootPublicationLease {
+    fn drop(&mut self) {
+        let _ = rustix::fs::flock(&self.directory, rustix::fs::FlockOperation::Unlock);
+    }
+}
+
+pub(crate) struct DestinationParent {
     path: PathBuf,
+    #[cfg(windows)]
+    require_private: bool,
     #[cfg(any(unix, windows))]
     identity: FileIdentity,
     #[cfg(any(unix, windows))]
     directory: File,
+    #[cfg(windows)]
+    deny_replace: bool,
+    #[cfg(windows)]
+    retained_handle_has_delete_access: bool,
 }
 
 impl DestinationParent {
-    fn capture(destination: &Path) -> StoreResult<Self> {
+    pub(crate) fn try_clone_directory(&self) -> StoreResult<File> {
+        Ok(self.directory.try_clone()?)
+    }
+
+    pub(crate) fn capture(destination: &Path) -> StoreResult<Self> {
+        Self::capture_inner(destination, false)
+    }
+
+    fn capture_inner(destination: &Path, deny_replace: bool) -> StoreResult<Self> {
+        Self::capture_with_policy(destination, true, deny_replace)
+    }
+
+    pub(crate) fn capture_unrestricted(destination: &Path) -> StoreResult<Self> {
+        Self::capture_with_policy(destination, false, true)
+    }
+
+    fn capture_with_policy(
+        destination: &Path,
+        require_private: bool,
+        deny_replace: bool,
+    ) -> StoreResult<Self> {
+        #[cfg(not(windows))]
+        let _ = require_private;
         let path = destination
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
@@ -1698,28 +1873,44 @@ impl DestinationParent {
 
         #[cfg(not(any(unix, windows)))]
         {
+            let _ = deny_replace;
             Err(StoreError::DestinationParentIdentityUnavailable { path })
         }
 
         #[cfg(windows)]
         {
-            let directory = crate::private_windows::open_no_reparse(&path, true, true, false)
-                .map_err(|_| StoreError::DestinationParentInvalid { path: path.clone() })?;
-            crate::private_windows::verify_private(&path)
-                .map_err(|_| StoreError::DestinationParentInvalid { path: path.clone() })?;
+            let directory = if deny_replace {
+                crate::private_windows::open_no_reparse_no_delete(&path, true, true)
+            } else {
+                crate::private_windows::open_no_reparse(&path, true, true, false)
+            }
+            .map_err(|_| StoreError::DestinationParentInvalid { path: path.clone() })?;
+            if require_private {
+                crate::private_windows::verify_private(&path)
+                    .map_err(|_| StoreError::DestinationParentInvalid { path: path.clone() })?;
+            }
             let identity = FileIdentity::from_file(&directory)?;
-            if FileIdentity::from_path(&path, true)? != identity {
+            let current = if deny_replace {
+                FileIdentity::from_path_no_delete(&path, true)?
+            } else {
+                FileIdentity::from_path(&path, true)?
+            };
+            if current != identity {
                 return Err(StoreError::DestinationParentChanged { path });
             }
             Ok(Self {
                 path,
+                require_private,
                 identity,
                 directory,
+                deny_replace,
+                retained_handle_has_delete_access: false,
             })
         }
 
         #[cfg(unix)]
         {
+            let _ = deny_replace;
             let before = fs::symlink_metadata(&path)
                 .map_err(|_| StoreError::DestinationParentInvalid { path: path.clone() })?;
             if before.file_type().is_symlink() || !before.is_dir() {
@@ -1747,7 +1938,7 @@ impl DestinationParent {
         }
     }
 
-    fn ensure_current(&self) -> StoreResult<()> {
+    pub(crate) fn ensure_current(&self) -> StoreResult<()> {
         #[cfg(not(any(unix, windows)))]
         {
             Err(StoreError::DestinationParentIdentityUnavailable {
@@ -1781,12 +1972,19 @@ impl DestinationParent {
 
         #[cfg(windows)]
         {
-            crate::private_windows::verify_private(&self.path).map_err(|_| {
-                StoreError::DestinationParentChanged {
-                    path: self.path.clone(),
-                }
-            })?;
-            if FileIdentity::from_path(&self.path, true)? != self.identity
+            if self.require_private {
+                crate::private_windows::verify_private(&self.path).map_err(|_| {
+                    StoreError::DestinationParentChanged {
+                        path: self.path.clone(),
+                    }
+                })?;
+            }
+            let current = if self.retained_handle_has_delete_access || !self.deny_replace {
+                FileIdentity::from_path(&self.path, true)?
+            } else {
+                FileIdentity::from_path_no_delete(&self.path, true)?
+            };
+            if current != self.identity
                 || FileIdentity::from_file(&self.directory)? != self.identity
             {
                 return Err(StoreError::DestinationParentChanged {
@@ -1797,17 +1995,277 @@ impl DestinationParent {
         }
     }
 
+    #[cfg(unix)]
+    pub(crate) fn acquire_project_publication_lease(
+        &self,
+    ) -> StoreResult<ProjectRootPublicationLease> {
+        let directory = self.directory.try_clone()?;
+        match rustix::fs::flock(
+            &directory,
+            rustix::fs::FlockOperation::NonBlockingLockExclusive,
+        ) {
+            Ok(()) => Ok(ProjectRootPublicationLease { directory }),
+            Err(error) if error == rustix::io::Errno::WOULDBLOCK => Err(StoreError::Busy),
+            Err(error) => Err(io::Error::from(error).into()),
+        }
+    }
+
+    pub(crate) fn ensure_private_current(&self) -> StoreResult<()> {
+        self.ensure_current()?;
+        let metadata = self.directory.metadata()?;
+        validate_private_permissions(&self.path, &metadata)?;
+        #[cfg(windows)]
+        crate::private_windows::verify_private_handle(&self.directory).map_err(|_| {
+            StoreError::DestinationParentChanged {
+                path: self.path.clone(),
+            }
+        })?;
+        self.ensure_current()
+    }
+
     fn ensure_destination(&self, destination: &Path, identity: FileIdentity) -> StoreResult<()> {
         self.ensure_current()?;
         ensure_path_identity(destination, identity)?;
         self.ensure_current()
     }
 
-    fn sync(&self) -> StoreResult<()> {
+    pub(crate) fn sync(&self) -> StoreResult<()> {
         self.ensure_current()?;
         #[cfg(any(unix, windows))]
         self.directory.sync_all()?;
         self.ensure_current()
+    }
+
+    pub(crate) fn identity(&self) -> crate::PrivatePathIdentity {
+        self.identity.private_identity()
+    }
+
+    pub(crate) fn pin_private_child_directory(
+        &self,
+        name: &str,
+        path: &Path,
+        create: bool,
+        require_absent: bool,
+        before_open: impl FnOnce() -> StoreResult<()>,
+        after_child_creation: impl FnOnce() -> StoreResult<()>,
+    ) -> StoreResult<Self> {
+        self.ensure_current()?;
+        let mut before_open = Some(before_open);
+        let mut after_child_creation = Some(after_child_creation);
+        #[cfg(unix)]
+        let (directory, created) = {
+            use rustix::fs::{Mode, OFlags};
+
+            let mode = Mode::RUSR | Mode::WUSR | Mode::XUSR;
+            let open_child = |child_name: &str| {
+                rustix::fs::openat(
+                    &self.directory,
+                    child_name,
+                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+                    Mode::empty(),
+                )
+            };
+            let created = if create {
+                match rustix::fs::mkdirat(&self.directory, name, mode) {
+                    Ok(()) => true,
+                    Err(rustix::io::Errno::EXIST) if !require_absent => false,
+                    Err(rustix::io::Errno::EXIST) => {
+                        return Err(StoreError::DestinationExists {
+                            path: path.to_path_buf(),
+                        });
+                    }
+                    Err(error) => return Err(io::Error::from(error).into()),
+                }
+            } else {
+                false
+            };
+            before_open.take().expect("hook is called once")()?;
+            let directory = open_child(name).map_err(io::Error::from)?;
+            if created {
+                rustix::fs::fchmod(&directory, mode).map_err(io::Error::from)?;
+            }
+            after_child_creation.take().expect("hook is called once")()?;
+            (File::from(directory), created)
+        };
+        #[cfg(windows)]
+        let (directory, created) = {
+            let existing = if create {
+                match crate::private_windows::open_no_reparse_no_delete(path, true, true) {
+                    Ok(_) if require_absent => {
+                        return Err(StoreError::DestinationExists {
+                            path: path.to_path_buf(),
+                        });
+                    }
+                    Ok(directory) => Some(directory),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                    Err(error) => return Err(error.into()),
+                }
+            } else {
+                None
+            };
+
+            if let Some(directory) = existing {
+                before_open.take().expect("hook is called once")()?;
+                after_child_creation.take().expect("hook is called once")()?;
+                (directory, false)
+            } else if !create {
+                before_open.take().expect("hook is called once")()?;
+                after_child_creation.take().expect("hook is called once")()?;
+                (
+                    crate::private_windows::open_no_reparse_no_delete(path, true, true)?,
+                    false,
+                )
+            } else {
+                let mut staging_path = None;
+                for _ in 0..16 {
+                    let candidate = self.path.join(random_staging_directory_name()?);
+                    match fs::create_dir(&candidate) {
+                        Ok(()) => {
+                            staging_path = Some(candidate);
+                            break;
+                        }
+                        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                        Err(error) => return Err(error.into()),
+                    }
+                }
+                let staging_path = staging_path.ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        "could not allocate a private staging directory",
+                    )
+                })?;
+                let staging =
+                    crate::private_windows::open_staging_directory_for_publish(&staging_path)?;
+                crate::private_windows::protect_directory_handle(&staging)?;
+                let staging_identity = FileIdentity::from_file(&staging)?;
+
+                if let Err(error) = before_open.take().expect("hook is called once")() {
+                    let _ = crate::private_windows::delete_directory_handle(&staging);
+                    return Err(error);
+                }
+                if let Err(error) = after_child_creation.take().expect("hook is called once")() {
+                    let _ = crate::private_windows::delete_directory_handle(&staging);
+                    return Err(error);
+                }
+                if let Err(error) = crate::private_windows::rename_directory_handle_no_replace(
+                    &staging,
+                    &self.directory,
+                    name,
+                ) {
+                    let _ = crate::private_windows::delete_directory_handle(&staging);
+                    return Err(error.into());
+                }
+                if FileIdentity::from_path(path, true)? != staging_identity {
+                    return Err(StoreError::DestinationParentChanged {
+                        path: path.to_path_buf(),
+                    });
+                }
+                (staging, true)
+            }
+        };
+        #[cfg(not(any(unix, windows)))]
+        let (directory, created) = {
+            let _ = (
+                name,
+                path,
+                create,
+                require_absent,
+                before_open,
+                after_child_creation,
+            );
+            return Err(StoreError::DestinationParentIdentityUnavailable {
+                path: self.path.clone(),
+            });
+        };
+        let metadata = directory.metadata()?;
+        if !metadata.is_dir() {
+            return Err(StoreError::DestinationParentInvalid {
+                path: path.to_path_buf(),
+            });
+        }
+        validate_private_permissions(path, &metadata)?;
+        #[cfg(windows)]
+        crate::private_windows::verify_private_handle(&directory).map_err(|_| {
+            StoreError::DestinationParentInvalid {
+                path: path.to_path_buf(),
+            }
+        })?;
+        let identity = FileIdentity::from_file(&directory)?;
+        let child = Self {
+            path: path.to_path_buf(),
+            #[cfg(windows)]
+            require_private: true,
+            identity,
+            directory,
+            #[cfg(windows)]
+            deny_replace: true,
+            #[cfg(windows)]
+            retained_handle_has_delete_access: created,
+        };
+        self.ensure_current()?;
+        child.ensure_current()?;
+        if created {
+            self.sync()?;
+        }
+        Ok(child)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn create_private_file_at(&self, name: &str) -> StoreResult<File> {
+        use rustix::fs::{Mode, OFlags};
+
+        let descriptor = rustix::fs::openat(
+            &self.directory,
+            name,
+            OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::RUSR | Mode::WUSR,
+        )
+        .map_err(std::io::Error::from)?;
+        rustix::fs::fchmod(&descriptor, Mode::RUSR | Mode::WUSR).map_err(std::io::Error::from)?;
+        Ok(File::from(descriptor))
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn create_private_file_at(&self, name: &str) -> StoreResult<File> {
+        create_private_file(&self.path.join(name))
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    pub(crate) fn create_private_file_at(&self, _: &str) -> StoreResult<File> {
+        Err(StoreError::DestinationParentIdentityUnavailable {
+            path: self.path.clone(),
+        })
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn open_private_file_at(&self, name: &str) -> StoreResult<File> {
+        use rustix::fs::{Mode, OFlags};
+
+        let descriptor = rustix::fs::openat(
+            &self.directory,
+            name,
+            OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::empty(),
+        )
+        .map_err(std::io::Error::from)?;
+        Ok(File::from(descriptor))
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn open_private_file_at(&self, name: &str) -> StoreResult<File> {
+        Ok(crate::private_windows::open_no_reparse(
+            &self.path.join(name),
+            false,
+            true,
+            false,
+        )?)
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    pub(crate) fn open_private_file_at(&self, _: &str) -> StoreResult<File> {
+        Err(StoreError::DestinationParentIdentityUnavailable {
+            path: self.path.clone(),
+        })
     }
 }
 

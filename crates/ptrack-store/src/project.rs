@@ -12,13 +12,15 @@ use ptrack_core::{
 
 use crate::typed::{self, StoredRecord};
 use crate::{
-    ActivatedStore, ActiveBinding, Clock, Collection, ReadTransaction, RecordKey, StagedStore,
-    Store, StoreError, StoreKind, StoreResult, SystemClock, WriteTransaction,
+    ActivatedStore, ActiveBinding, Clock, Collection, PinnedProjectDirectory, ReadTransaction,
+    RecordKey, StagedStore, Store, StoreError, StoreKind, StoreResult, SystemClock,
+    WriteTransaction,
 };
 
 pub const CURRENT_PROJECT_FORMAT: u64 = 5;
 pub const MEMORY_WRITEBACK_REPLAY_LIMIT: usize = 256;
 pub const CAPABILITY_AUDIT_GLOBAL_LIMIT: i64 = 5_000;
+pub const FIRST_RUN_TITLE_MAX_BYTES: usize = 240;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MemoryWriteRequest {
@@ -68,7 +70,55 @@ impl ProjectStore {
             ));
         }
         let store = Store::create_new(path, StoreKind::Project)?;
+        Self::initialize_new(store, binding, writer_version, clock, || Ok(()))
+    }
+
+    /// Creates a project store while retaining and rechecking the exact root
+    /// and `.ptrack` directory identities through activation.
+    ///
+    /// # Errors
+    /// Returns an error when the binding does not name the pinned database,
+    /// either directory changes identity, or store creation/activation fails.
+    pub fn create_new_pinned(
+        pinned: &PinnedProjectDirectory,
+        binding: ActiveBinding,
+        writer_version: impl Into<String>,
+    ) -> StoreResult<Self> {
+        Self::create_new_pinned_inner(pinned, binding, writer_version, || Ok(()))
+    }
+
+    pub(crate) fn create_new_pinned_inner(
+        pinned: &PinnedProjectDirectory,
+        binding: ActiveBinding,
+        writer_version: impl Into<String>,
+        before_open: impl FnOnce() -> StoreResult<()>,
+    ) -> StoreResult<Self> {
+        if binding.kind != StoreKind::Project {
+            return Err(StoreError::ActivationBinding(
+                "project store requires project binding".to_owned(),
+            ));
+        }
+        if binding.canonical_path != pinned.database_path() {
+            return Err(StoreError::ActivationBinding(
+                "project binding does not name the pinned database".to_owned(),
+            ));
+        }
+        let store = Store::create_new_pinned_inner(pinned, StoreKind::Project, before_open)?;
+        Self::initialize_new(store, binding, writer_version, SystemClock, || {
+            pinned.verify()
+        })
+    }
+
+    fn initialize_new(
+        store: Store,
+        binding: ActiveBinding,
+        writer_version: impl Into<String>,
+        clock: impl Clock + 'static,
+        verify: impl Fn() -> StoreResult<()>,
+    ) -> StoreResult<Self> {
+        verify()?;
         store.activate(&binding)?;
+        verify()?;
         let project = Self {
             active: ActivatedStore::new(store, binding)?,
             clock: Arc::new(clock),
@@ -92,6 +142,7 @@ impl ProjectStore {
             )?;
             Ok(())
         })?;
+        verify()?;
         Ok(project)
     }
 
@@ -112,6 +163,47 @@ impl ProjectStore {
     ) -> StoreResult<Self> {
         Self::from_activated(
             ActivatedStore::open(path, binding)?,
+            writer_version,
+            SystemClock,
+        )
+    }
+
+    /// Opens an existing project store through the retained `.ptrack`
+    /// directory handle and keeps the namespace guards for all later writes.
+    ///
+    /// # Errors
+    /// Returns an error when the binding/path is inconsistent, either pinned
+    /// directory changes, or the store fails validation.
+    pub fn open_existing_pinned(
+        pinned: &PinnedProjectDirectory,
+        binding: &ActiveBinding,
+        writer_version: impl Into<String>,
+    ) -> StoreResult<Self> {
+        Self::open_existing_pinned_inner(pinned, binding, writer_version, || Ok(()))
+    }
+
+    pub(crate) fn open_existing_pinned_inner(
+        pinned: &PinnedProjectDirectory,
+        binding: &ActiveBinding,
+        writer_version: impl Into<String>,
+        before_open: impl FnOnce() -> StoreResult<()>,
+    ) -> StoreResult<Self> {
+        if binding.kind != StoreKind::Project || binding.canonical_path != pinned.database_path() {
+            return Err(StoreError::ActivationBinding(
+                "project binding does not name the pinned database".to_owned(),
+            ));
+        }
+        let store = Store::open_existing_pinned_inner(pinned, StoreKind::Project, before_open)?;
+        let actual = store
+            .active_binding()?
+            .ok_or_else(|| StoreError::ActivationBinding("store is not active".to_owned()))?;
+        if actual != *binding {
+            return Err(StoreError::ActivationBinding(
+                "stored binding does not match the active runtime".to_owned(),
+            ));
+        }
+        Self::from_activated(
+            ActivatedStore::new(store, actual)?,
             writer_version,
             SystemClock,
         )
@@ -305,6 +397,55 @@ impl ProjectStore {
         })
     }
 
+    /// Creates and activates the first plan in one transaction, or returns the
+    /// exact durable result of an unambiguous replay.
+    pub fn create_first_plan(&self, title: impl Into<String>) -> StoreResult<Plan> {
+        self.create_first_plan_inner(title, || Ok(()))
+    }
+
+    pub(crate) fn create_first_plan_inner(
+        &self,
+        title: impl Into<String>,
+        before_activate: impl FnOnce() -> StoreResult<()>,
+    ) -> StoreResult<Plan> {
+        let title = first_run_title(title.into(), "plan")?;
+        let now = self.clock.now_local();
+        let writer = self.writer_version.clone();
+        self.write(|transaction| {
+            let plans = typed::scan_write::<Plan>(transaction)?;
+            let mut meta = required_write::<Meta>(transaction, RecordKey::Singleton)?;
+            if let [plan] = plans.as_slice()
+                && plan.order == 0
+                && plan.status == PlanStatus::Active
+                && plan.title == title
+                && meta.active_plan == plan.id
+            {
+                return Ok(plan.clone());
+            }
+            if !plans.is_empty() || meta.active_plan != 0 {
+                return Err(StoreError::InvalidFirstRun(
+                    "first plan already exists or is ambiguous".to_owned(),
+                ));
+            }
+            let id = transaction.next_id(Collection::Plans)?;
+            let plan = Plan {
+                id,
+                title,
+                status: PlanStatus::Active,
+                milestone_id: 0,
+                order: 0,
+                created_at: now,
+                updated_at: now,
+            };
+            typed::put(transaction, RecordKey::Id(id), &plan)?;
+            before_activate()?;
+            meta.active_plan = id;
+            stamp_meta(&mut meta, now, writer);
+            typed::put(transaction, RecordKey::Singleton, &meta)?;
+            Ok(plan)
+        })
+    }
+
     pub fn plans(&self) -> StoreResult<Vec<Plan>> {
         self.list_ordered::<Plan>()
     }
@@ -363,6 +504,109 @@ impl ProjectStore {
             };
             typed::put(transaction, RecordKey::Id(id), &value)?;
             Ok(value)
+        })
+    }
+
+    /// Creates the sole first task, or returns its exact durable todo/doing
+    /// state when an unambiguous request is replayed.
+    pub fn create_first_task(&self, plan_id: u64, title: impl Into<String>) -> StoreResult<Task> {
+        let title = first_run_title(title.into(), "task")?;
+        let now = self.clock.now_local();
+        self.write(|transaction| {
+            let meta = required_write::<Meta>(transaction, RecordKey::Singleton)?;
+            let plans = typed::scan_write::<Plan>(transaction)?;
+            let [plan] = plans.as_slice() else {
+                return Err(StoreError::InvalidFirstRun(
+                    "first task requires one unambiguous plan".to_owned(),
+                ));
+            };
+            if plan.id != plan_id
+                || plan.order != 0
+                || plan.status != PlanStatus::Active
+                || meta.active_plan != plan_id
+            {
+                return Err(StoreError::InvalidFirstRun(
+                    "first task plan is not the sole active first plan".to_owned(),
+                ));
+            }
+            let tasks = typed::scan_write::<Task>(transaction)?;
+            if let [task] = tasks.as_slice()
+                && task.plan_id == plan_id
+                && task.order == 0
+                && task.title == title
+                && matches!(task.status, TaskStatus::Todo | TaskStatus::Doing)
+            {
+                return Ok(task.clone());
+            }
+            if !tasks.is_empty() {
+                return Err(StoreError::InvalidFirstRun(
+                    "first task already exists or is ambiguous".to_owned(),
+                ));
+            }
+            let id = transaction.next_id(Collection::Tasks)?;
+            let task = Task {
+                id,
+                plan_id,
+                title,
+                status: TaskStatus::Todo,
+                order: 0,
+                created_at: now,
+                updated_at: now,
+            };
+            typed::put(transaction, RecordKey::Id(id), &task)?;
+            Ok(task)
+        })
+    }
+
+    /// Starts the sole first task with an exact todo timestamp CAS. A doing
+    /// task is the idempotent lost-response result; all other states reject.
+    pub fn start_first_task(
+        &self,
+        task_id: u64,
+        expected_updated_at: Timestamp,
+    ) -> StoreResult<Task> {
+        let now = self.clock.now_local();
+        self.write(|transaction| {
+            let meta = required_write::<Meta>(transaction, RecordKey::Singleton)?;
+            let plans = typed::scan_write::<Plan>(transaction)?;
+            let tasks = typed::scan_write::<Task>(transaction)?;
+            let ([plan], [task]) = (plans.as_slice(), tasks.as_slice()) else {
+                return Err(StoreError::InvalidFirstRun(
+                    "first task start is ambiguous".to_owned(),
+                ));
+            };
+            if plan.order != 0
+                || plan.status != PlanStatus::Active
+                || meta.active_plan != plan.id
+                || task.id != task_id
+                || task.plan_id != plan.id
+                || task.order != 0
+            {
+                return Err(StoreError::InvalidFirstRun(
+                    "first task start does not match durable onboarding state".to_owned(),
+                ));
+            }
+            if task.status == TaskStatus::Doing {
+                return if same_instant(task.created_at, expected_updated_at) {
+                    Ok(task.clone())
+                } else {
+                    Err(StoreError::InvalidFirstRun(
+                        "first task replay does not match its creation timestamp".to_owned(),
+                    ))
+                };
+            }
+            if task.status != TaskStatus::Todo
+                || !same_instant(task.updated_at, expected_updated_at)
+            {
+                return Err(StoreError::InvalidFirstRun(
+                    "first task changed before it could be started".to_owned(),
+                ));
+            }
+            let mut task = task.clone();
+            task.status = TaskStatus::Doing;
+            task.updated_at = now;
+            typed::put(transaction, RecordKey::Id(task.id), &task)?;
+            Ok(task)
         })
     }
 
@@ -1066,6 +1310,16 @@ fn require_id_write<R: StoredRecord>(transaction: &WriteTransaction, id: u64) ->
 fn count_write<R: StoredRecord>(transaction: &WriteTransaction) -> StoreResult<i64> {
     i64::try_from(typed::scan_write::<R>(transaction)?.len())
         .map_err(|_| StoreError::InvalidManifest("record count exceeds i64".to_owned()))
+}
+
+fn first_run_title(title: String, kind: &str) -> StoreResult<String> {
+    let title = title.trim();
+    if title.is_empty() || title.len() > FIRST_RUN_TITLE_MAX_BYTES {
+        return Err(StoreError::InvalidFirstRun(format!(
+            "{kind} title must contain 1 to {FIRST_RUN_TITLE_MAX_BYTES} UTF-8 bytes"
+        )));
+    }
+    Ok(title.to_owned())
 }
 
 fn stamp_meta(meta: &mut Meta, now: Timestamp, writer_version: String) {

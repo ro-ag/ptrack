@@ -269,6 +269,7 @@ export interface TerminalDockHandle {
     accepts?: () => boolean,
   ): Promise<TerminalWritebackResult>;
   setVisible(visible: boolean): void;
+  setLayoutLocked(locked: boolean): void;
   setApplicationOverlayOpen(open: boolean, focusTerminal: false): void;
   dispose(): void;
 }
@@ -479,6 +480,7 @@ class TerminalDock {
   #boardHidden = false;
   #terminalHidden = false;
   #workspaceViewVisible = true;
+  #layoutLocked = false;
   #applicationOverlayOpen = false;
   #panelVisibilityRevision = 0;
   #modernUnicodeEnabled = true;
@@ -627,13 +629,13 @@ class TerminalDock {
     this.#listen(this.#resetWorkspace, "click", () =>
       void this.#resetTerminalWorkspace(),
     );
-    this.#listen(this.#boardToggle, "click", () =>
-      this.#setBoardHidden(!this.#boardHidden),
-    );
-    this.#listen(this.#terminalToggle, "click", () =>
-      this.#setTerminalHidden(!this.#terminalHidden),
-    );
-    this.#terminalToggle.disabled = false;
+    this.#listen(this.#boardToggle, "click", () => {
+      if (!this.#layoutLocked) this.#setBoardHidden(!this.#boardHidden);
+    });
+    this.#listen(this.#terminalToggle, "click", () => {
+      if (!this.#layoutLocked) this.#setTerminalHidden(!this.#terminalHidden);
+    });
+    this.#terminalToggle.disabled = this.#layoutLocked;
     this.#modernUnicodeEnabled = readModernUnicodeSetting(localStorage);
     this.#modernUnicode.checked = this.#modernUnicodeEnabled;
     this.#listen(this.#modernUnicode, "change", () =>
@@ -2253,7 +2255,7 @@ class TerminalDock {
     this.#rendererRetry.hidden = diagnosticInput.renderer !== "fallback";
     this.#forceStop.hidden = !diagnosticInput.hasSession ||
       !["starting", "running", "failed"].includes(diagnosticInput.process);
-    this.#boardToggle.disabled = !dockInteractionEligible;
+    this.#boardToggle.disabled = this.#layoutLocked || !dockInteractionEligible;
     const terminalActionsDisabled = !resources;
     this.#searchOpen.disabled = terminalActionsDisabled;
     this.#zoomReset.disabled = terminalActionsDisabled;
@@ -3188,6 +3190,13 @@ class TerminalDock {
     this.#renderPanelVisibility();
   }
 
+  setLayoutLocked(locked: boolean): void {
+    if (this.#disposed) return;
+    this.#layoutLocked = locked;
+    this.#terminalToggle.disabled = locked;
+    this.#boardToggle.disabled = locked || !this.#dockInteractionEligible();
+  }
+
   setApplicationOverlayOpen(open: boolean, focusTerminal: false): void {
     if (this.#disposed || this.#applicationOverlayOpen === open) return;
     this.#applicationOverlayOpen = open;
@@ -3226,6 +3235,7 @@ export function mountTerminalDock(
       );
     },
     setVisible: (visible) => dock.setVisible(visible),
+    setLayoutLocked: (locked) => dock.setLayoutLocked(locked),
     setApplicationOverlayOpen: (open, focusTerminal) =>
       dock.setApplicationOverlayOpen(open, focusTerminal),
     dispose: () => dock.dispose(),

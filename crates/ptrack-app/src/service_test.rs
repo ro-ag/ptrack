@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use ptrack_capability::{BrokerConfig, BrokerServer, BrokerServerConfig, McpCancellation};
 use ptrack_core::PlanStatus;
-use ptrack_store::{ActiveBinding, GlobalStore, ProjectStore, StoreKind};
+use ptrack_store::{ActiveBinding, GlobalStore, PinnedProjectDirectory, ProjectStore, StoreKind};
 
 use crate::{
     ApplicationPort, CapabilityMcpOutcome, CapabilitySessionEnvironment, InitRequest,
@@ -48,6 +48,8 @@ fn configured(test: &TestDirectory, create_project: bool) -> (LocalApplication, 
     let root = test.0.join("project");
     let home = test.0.join("home");
     std::fs::create_dir_all(root.join(".ptrack")).expect("project directory");
+    ptrack_store::protect_private_directory(&root.join(".ptrack"))
+        .expect("protect project directory");
     std::fs::create_dir_all(&home).expect("home directory");
     let project_database = root.join(".ptrack/ptrack.redb");
     let global_database = home.join("global.redb");
@@ -238,7 +240,7 @@ fn guide_install_rejects_a_symbolic_link_destination() {
     let error = application
         .guide(GuideAction::Install)
         .expect_err("symlink must fail");
-    assert!(error.to_string().contains("symbolic link"));
+    assert_eq!(error.to_string(), "project-guide-preview-stale");
     assert_eq!(
         std::fs::read_to_string(outside).expect("outside unchanged"),
         "private"
@@ -267,6 +269,53 @@ fn guide_refresh_preserves_existing_mode() {
             & 0o777,
         0o600
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn guide_install_uses_the_shared_project_root_publication_lock() {
+    let directory = TestDirectory::new("guide-root-lock");
+    let (mut application, endpoint) = configured(&directory, true);
+    let retained = PinnedProjectDirectory::prepare(&endpoint.root).expect("retain root lock");
+
+    let error = application
+        .guide(GuideAction::Install)
+        .expect_err("concurrent ptrack publisher must be fenced");
+    assert!(error.to_string().contains("busy"));
+    assert!(!endpoint.root.join("AGENTS.md").exists());
+    assert!(!endpoint.root.join("CLAUDE.md").exists());
+
+    drop(retained);
+    application
+        .guide(GuideAction::Install)
+        .expect("guide install after lock release");
+}
+
+#[cfg(unix)]
+#[test]
+fn guide_install_publishes_through_retained_root_after_path_replacement() {
+    let directory = TestDirectory::new("guide-root-replacement");
+    let (mut application, endpoint) = configured(&directory, true);
+    let moved = directory.0.join("moved-project");
+    let root = endpoint.root.clone();
+    let root_for_hook = root.clone();
+    let moved_for_hook = moved.clone();
+    crate::production::set_guide_before_publish_hook(move || {
+        std::fs::rename(&root_for_hook, &moved_for_hook).expect("move retained root");
+        std::fs::create_dir(&root_for_hook).expect("replacement root");
+        std::fs::write(root_for_hook.join("marker"), "replacement\n").expect("replacement marker");
+    });
+
+    application
+        .guide(GuideAction::Install)
+        .expect_err("replaced root path must fail closed");
+    assert_eq!(
+        std::fs::read_to_string(root.join("marker")).unwrap(),
+        "replacement\n"
+    );
+    assert!(!root.join("AGENTS.md").exists());
+    assert!(!root.join("CLAUDE.md").exists());
+    assert!(!moved.join("AGENTS.md").exists());
 }
 
 #[cfg(unix)]

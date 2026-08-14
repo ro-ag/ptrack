@@ -32,15 +32,15 @@ pub use cutover::{
     verify_private_open_handle, verify_private_path,
 };
 pub use discovery::{
-    GLOBAL_DATABASE_FILENAME, PROJECT_DATABASE_FILENAME, PROJECT_DIRECTORY, find_project_database,
-    global_home_from, init_project_directory,
+    GLOBAL_DATABASE_FILENAME, PROJECT_DATABASE_FILENAME, PROJECT_DIRECTORY, PinnedProjectDirectory,
+    find_project_database, global_home_from, init_project_directory,
 };
 pub use envelope::{
     LEGACY_CODEC_GO_GOB, LEGACY_CODEC_RAW, NATIVE_CODEC, NATIVE_PAYLOAD_SCHEMA,
     RECORD_ENVELOPE_VERSION, RecordEnvelope,
 };
 pub use error::{EnvelopeError, StoreError, StoreResult};
-pub use global::GlobalStore;
+pub use global::{GlobalStore, ProjectRegistryCasResult};
 pub use import::{
     IMPORT_BUNDLE_VERSION, ImportCollection, ImportCollectionReport, ImportData, ImportProvenance,
     ImportRecord, ImportReport, JSON_STAGE_VERSION, JsonStageImportData, JsonStageProvenance,
@@ -48,8 +48,8 @@ pub use import::{
     MAX_IMPORT_RECORDS,
 };
 pub use project::{
-    CAPABILITY_AUDIT_GLOBAL_LIMIT, CURRENT_PROJECT_FORMAT, MEMORY_WRITEBACK_REPLAY_LIMIT,
-    MemoryWriteRequest, MemoryWriteResult, ProjectStore,
+    CAPABILITY_AUDIT_GLOBAL_LIMIT, CURRENT_PROJECT_FORMAT, FIRST_RUN_TITLE_MAX_BYTES,
+    MEMORY_WRITEBACK_REPLAY_LIMIT, MemoryWriteRequest, MemoryWriteResult, ProjectStore,
 };
 pub use quarantine::{QuarantineReason, QuarantinedLegacyRecord};
 pub use runtime_binding::{
@@ -58,6 +58,7 @@ pub use runtime_binding::{
     load_active_generation, restore_active_generation, validate_active_generation,
 };
 pub use schema::{Collection, OwnedRecordKey, RecordKey, STORE_SCHEMA_VERSION, StoreKind};
+pub use sha256::digest as sha256_digest;
 pub use store::{ReadTransaction, Store, WriteTransaction};
 pub use typed::{Clock, SystemClock};
 

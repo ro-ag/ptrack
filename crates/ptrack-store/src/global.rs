@@ -15,6 +15,14 @@ pub struct GlobalStore {
     clock: Arc<dyn Clock>,
 }
 
+/// Result of a compare-and-swap mutation of one recent-project registry row.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProjectRegistryCasResult {
+    Applied(ProjectRef),
+    Absent,
+    Stale,
+}
+
 impl GlobalStore {
     pub fn create_new(path: impl AsRef<Path>, binding: ActiveBinding) -> StoreResult<Self> {
         Self::create_new_with_clock(path, binding, SystemClock)
@@ -125,6 +133,67 @@ impl GlobalStore {
         Ok(value)
     }
 
+    pub fn project(&self, path: impl AsRef<Path>) -> StoreResult<Option<ProjectRef>> {
+        let path = registry_path(path.as_ref())?;
+        self.active
+            .store()
+            .read(|tx| typed::get::<ProjectRef>(tx, RecordKey::Bytes(path.as_bytes())))
+    }
+
+    pub fn forget_project_if_matches(
+        &self,
+        expected: &ProjectRef,
+    ) -> StoreResult<ProjectRegistryCasResult> {
+        self.active.write(|transaction| {
+            let key = RecordKey::Bytes(expected.path.as_bytes());
+            let Some(current) = typed::get_write::<ProjectRef>(transaction, key)? else {
+                return Ok(ProjectRegistryCasResult::Absent);
+            };
+            if current != *expected {
+                return Ok(ProjectRegistryCasResult::Stale);
+            }
+            transaction.delete(Collection::GlobalProjects, key)?;
+            Ok(ProjectRegistryCasResult::Applied(current))
+        })
+    }
+
+    pub fn relocate_project_if_matches(
+        &self,
+        expected: &ProjectRef,
+        name: impl Into<String>,
+        path: impl AsRef<Path>,
+    ) -> StoreResult<ProjectRegistryCasResult> {
+        let path = registry_path(path.as_ref())?;
+        let mut value = ProjectRef {
+            name: name.into(),
+            path: path.clone(),
+            last_seen: self.clock.now_local(),
+        };
+        self.active.write(|transaction| {
+            let old_key = RecordKey::Bytes(expected.path.as_bytes());
+            let Some(current) = typed::get_write::<ProjectRef>(transaction, old_key)? else {
+                return Ok(ProjectRegistryCasResult::Absent);
+            };
+            if current != *expected {
+                return Ok(ProjectRegistryCasResult::Stale);
+            }
+            let mut previous = current.last_seen;
+            if value.path != expected.path
+                && let Some(target) = typed::get_write::<ProjectRef>(
+                    transaction,
+                    RecordKey::Bytes(value.path.as_bytes()),
+                )?
+                && timestamp_key(target.last_seen) > timestamp_key(previous)
+            {
+                previous = target.last_seen;
+            }
+            value.last_seen = timestamp_after(value.last_seen, previous)?;
+            transaction.delete(Collection::GlobalProjects, old_key)?;
+            typed::put(transaction, RecordKey::Bytes(value.path.as_bytes()), &value)?;
+            Ok(ProjectRegistryCasResult::Applied(value.clone()))
+        })
+    }
+
     pub fn projects(&self) -> StoreResult<Vec<ProjectRef>> {
         self.active.store().read(|tx| {
             let mut values = typed::scan::<ProjectRef>(tx)?;
@@ -164,4 +233,48 @@ impl GlobalStore {
 
 fn timestamp_key(value: Timestamp) -> i128 {
     value.unix_nanoseconds().unwrap_or(i128::MIN)
+}
+
+fn timestamp_after(candidate: Timestamp, previous: Timestamp) -> StoreResult<Timestamp> {
+    if timestamp_key(candidate) > timestamp_key(previous) {
+        return Ok(candidate);
+    }
+    let next = match previous {
+        Timestamp::Zero => Timestamp::Fixed {
+            seconds: 0,
+            nanoseconds: 0,
+            offset_seconds: 0,
+        },
+        Timestamp::Fixed {
+            seconds,
+            nanoseconds,
+            offset_seconds,
+        } if nanoseconds < 999_999_999 => Timestamp::Fixed {
+            seconds,
+            nanoseconds: nanoseconds + 1,
+            offset_seconds,
+        },
+        Timestamp::Fixed {
+            seconds,
+            offset_seconds,
+            ..
+        } => seconds
+            .checked_add(1)
+            .ok_or_else(|| {
+                StoreError::InvalidManifest("project registry timestamp is exhausted".to_owned())
+            })
+            .map(|seconds| Timestamp::Fixed {
+                seconds,
+                nanoseconds: 0,
+                offset_seconds,
+            })?,
+    };
+    Ok(next)
+}
+
+fn registry_path(path: &Path) -> StoreResult<String> {
+    lexical_absolute(path, &std::env::current_dir()?)?
+        .to_str()
+        .ok_or_else(|| StoreError::InvalidManifest("project path must be UTF-8".to_owned()))
+        .map(str::to_owned)
 }
