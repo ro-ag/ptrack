@@ -247,8 +247,8 @@ jobs:
               -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
             Start-Sleep -Seconds 8
             if ($process.HasExited) {
-              $stdout = ([string](Get-Content -Raw -ErrorAction SilentlyContinue $stdoutPath)).Trim()
-              $stderr = ([string](Get-Content -Raw -ErrorAction SilentlyContinue $stderrPath)).Trim()
+              $stdout = @(Get-Content -Tail 20 -ErrorAction SilentlyContinue $stdoutPath) -join "`n"
+              $stderr = @(Get-Content -Tail 20 -ErrorAction SilentlyContinue $stderrPath) -join "`n"
               throw "native desktop candidate exited during startup smoke (code=$($process.ExitCode), stdout=$stdout, stderr=$stderr)"
             }
           } finally {
