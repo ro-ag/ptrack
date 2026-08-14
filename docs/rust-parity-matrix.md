@@ -1463,7 +1463,7 @@ task #74 and are not inferred from cross-builds (UPD-007, UPD-017–026).
 
 | ID | Subsystem | Checkable contract | Verification method | Go freeze source / evidence |
 |---|---|---|---|---|
-| `PKG-001` | Packaging/release | The release workflow runs only for pushed `v*` tags, then rejects anything except canonical stable `vX.Y.Z`. Its Linux gate runs full Rust format/test/clippy/doc, frontend test/build, producer-contract fixtures, and test/vet/tidy for the isolated read-only legacy exporter before any build job. | Existing automated test — `tools/release_contract_test.py`<br>Manual acceptance `MANUAL-PKG-001` | `.github/workflows/release.yml` test job; `tools/ptrack-db-export/go.mod`; frozen workflow |
+| `PKG-001` | Packaging/release | The release workflow runs only for pushed `v*` tags, then rejects anything except canonical stable `vX.Y.Z`. Its Linux gate runs full Rust format/test/clippy/doc, frontend test/build, and producer-contract fixtures before any build job. | Existing automated test — `tools/release_contract_test.py`<br>Manual acceptance `MANUAL-PKG-001` | `.github/workflows/release.yml` test job; frozen workflow |
 | `PKG-002` | Packaging/release | Release builds cover exactly six native targets: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64, and windows/arm64, and the release job waits for every build target. | Fixture/golden — .github/workflows/release.yml build matrix<br>Manual acceptance `MANUAL-PKG-002` | .github/workflows/release.yml:45-80,309-315 |
 
 ### Build products
@@ -1507,9 +1507,9 @@ task #74 and are not inferred from cross-builds (UPD-007, UPD-017–026).
 
 The Go references above remain immutable freeze evidence; they are not active
 runtime paths. The shipped CLI, TUI, Tauri desktop, terminal host, capability
-broker, updater, and stores are Rust. The only retained Go module is
-`tools/ptrack-db-export`, a separately invoked, read-only legacy bbolt exporter
-with no application IPC or write authority.
+broker, updater, and stores are Rust. No Go module remains in the current tree;
+the read-only legacy exporter used for the v0.23.0 cutover is recoverable from
+that tagged revision when historical migration evidence must be inspected.
 
 Runtime routing is fail-closed through the private
 `$PTRACK_HOME/runtime/active-generation.json` marker. A retained shared cutover

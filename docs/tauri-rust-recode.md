@@ -31,7 +31,7 @@ Tauri WebView --> IPC-+          |       |
                                  +--> capability broker --> HTTP / Git / SSH
                                  +--> updater verifier --> platform handoff
 
-offline operator only:
+historical v0.23.0 offline cutover only (retired from the current tree):
 legacy bbolt --read-only--> Go exporter --> bounded stage --> Rust importer
 ```
 
@@ -58,7 +58,6 @@ crates/ptrack-updater/     discovery, verified staging, recovery, native handoff
 crates/ptrack-cli/         command parsing, output and exit compatibility
 crates/ptrack-tui/         terminal UI presentation and input flows
 crates/ptrack-db-import/   offline batch validation and redb candidate creation
-tools/ptrack-db-export/    retained read-only Go migration helper
 ```
 
 Dependencies point inward. `ptrack-core` has no platform or storage authority.
@@ -210,10 +209,10 @@ output limits, process-tree cleanup, and no credential values in diagnostics.
    parity matrix and its current-feature extension on every supported target.
 6. Exercise migration, activation, application writes, recovery, and rollback
    only with disposable copies.
-7. Remove the Wails and Go runtime after every gate passes, retaining only the
-   isolated read-only exporter.
+7. Remove the Wails and Go runtime after every gate passes, then retire the
+   isolated read-only exporter after the real-data cutover evidence is sealed.
 
-The Go/Wails runtime has been retired from the candidate. The isolated
-read-only exporter remains solely for explicit offline legacy migration.
-Compilation or cross-compilation alone is not parity, and an unavailable
-native result is not a pass.
+The Go/Wails runtime and isolated exporter have been retired from the current
+tree. The exporter used for the v0.23.0 cutover remains recoverable from Git
+history. Compilation or cross-compilation alone is not parity, and an
+unavailable native result is not a pass.

@@ -60,7 +60,7 @@
           <p>Download the native package for your operating system and CPU from the <a href="https://github.com/ro-ag/ptrack/releases">official GitHub Releases page</a>. Release archives contain the CLI, terminal dashboard, and Desktop GUI. Put the executable on your <code>PATH</code>.</p>
           <p>On macOS, you can instead open <code>p-track_&lt;version&gt;_darwin_&lt;arch&gt;.dmg</code> and drag <strong>p-track.app</strong> into <code>/Applications</code>. The executable inside the app bundle also provides the CLI.</p>
           <div class="callout warning">
-            <p><strong>Use an official package.</strong> Source builds require Rust, Node, the Tauri prerequisites, and the repository's complete validation workflow. The retained Go exporter is only an offline legacy-migration helper, not an application installer.</p>
+            <p><strong>Use an official package.</strong> Source builds require Rust, Node, the Tauri prerequisites, and the repository's complete validation workflow. No Go runtime or toolchain is required.</p>
           </div>
           <p>On macOS, <strong>Install 'ptrack' Shell Command…</strong> writes one managed block to <code>~/.zprofile</code>. It appends the running app's binary directory to the end of the existing <code>PATH</code>, leaves an existing managed block alone, and takes effect in a new terminal session.</p>
 
