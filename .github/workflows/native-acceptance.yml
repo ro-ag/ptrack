@@ -234,11 +234,10 @@ jobs:
           $binary = "target/release/ptrack.exe"
           python tools/release_contract.py validate-binary `
             $binary $version windows "${{ matrix.arch }}"
-          $env:PTRACK_HOME = Join-Path $env:RUNNER_TEMP "ptrack-home"
-          New-Item -ItemType Directory -Force -Path $env:PTRACK_HOME | Out-Null
-          $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-          icacls $env:PTRACK_HOME /setowner "*$sid" | Out-Null
-          icacls $env:PTRACK_HOME /inheritance:r /grant:r "*${sid}:(OI)(CI)F" | Out-Null
+          $env:PTRACK_HOME = Join-Path $env:RUNNER_TEMP "ptrack-home-$([guid]::NewGuid())"
+          if (Test-Path $env:PTRACK_HOME) {
+            throw "native desktop smoke home must start absent"
+          }
           $process = $null
           $stdoutPath = Join-Path $env:RUNNER_TEMP "ptrack-gui.stdout"
           $stderrPath = Join-Path $env:RUNNER_TEMP "ptrack-gui.stderr"

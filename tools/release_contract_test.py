@@ -141,9 +141,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(
             workflow.count('chmod 700 "$RUNNER_TEMP/ptrack-home"'), 2
         )
-        self.assertIn("WindowsIdentity]::GetCurrent().User.Value", workflow)
-        self.assertIn("icacls $env:PTRACK_HOME /setowner", workflow)
-        self.assertIn("icacls $env:PTRACK_HOME /inheritance:r /grant:r", workflow)
+        self.assertIn('"ptrack-home-$([guid]::NewGuid())"', workflow)
+        self.assertIn("native desktop smoke home must start absent", workflow)
+        self.assertNotIn("icacls $env:PTRACK_HOME", workflow)
         self.assertIn("permissions:\n  contents: read", workflow)
         self.assertNotIn("gh release", workflow)
         self.assertNotIn("actions/upload-artifact", workflow)
