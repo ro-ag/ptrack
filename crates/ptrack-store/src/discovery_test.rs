@@ -68,6 +68,32 @@ fn windows_pinned_project_directory_protects_a_new_child_from_its_handle() {
     assert_eq!(pinned.database_path(), root.join(".ptrack/ptrack.redb"));
 }
 
+#[cfg(windows)]
+#[test]
+fn windows_pinned_project_directory_never_replaces_a_publish_collision() {
+    let temp = Temp::new();
+    let root = temp.0.join("windows-project-collision");
+    fs::create_dir(&root).unwrap();
+    let root = root.canonicalize().unwrap();
+    let marker = root.join(".ptrack/attacker");
+
+    let result = PinnedProjectDirectory::prepare_with_after_child_creation(&root, || {
+        fs::create_dir(root.join(".ptrack"))?;
+        fs::write(&marker, b"attacker")?;
+        Ok(())
+    });
+
+    assert!(result.is_err());
+    assert_eq!(fs::read(marker).unwrap(), b"attacker");
+    assert!(fs::read_dir(&root).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".ptrack-stage-")
+    }));
+}
+
 #[cfg(unix)]
 #[test]
 fn discovery_rejects_symlink_database_and_git_marker() {

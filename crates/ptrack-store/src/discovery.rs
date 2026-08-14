@@ -154,7 +154,7 @@ impl PinnedProjectDirectory {
         })
     }
 
-    #[cfg(all(test, unix))]
+    #[cfg(all(test, any(unix, windows)))]
     pub(crate) fn prepare_with_after_child_creation(
         canonical_root: &Path,
         after_child_creation: impl FnOnce() -> StoreResult<()>,

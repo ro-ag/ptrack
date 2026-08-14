@@ -9,6 +9,10 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::path::Path;
 use std::ptr;
 
+use windows_sys::Wdk::Storage::FileSystem::{
+    FILE_RENAME_INFORMATION, FileRenameInformation, NtSetInformationFile,
+};
+use windows_sys::Win32::Foundation::RtlNtStatusToDosError;
 use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_ALL, HANDLE, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
     EXPLICIT_ACCESS_W, GetNamedSecurityInfoW, GetSecurityInfo, SE_FILE_OBJECT, SET_ACCESS,
@@ -24,11 +28,12 @@ use windows_sys::Win32::Security::{
 use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, CreateFileW, DELETE, FILE_ALL_ACCESS, FILE_ATTRIBUTE_DIRECTORY,
     FILE_ATTRIBUTE_REPARSE_POINT, FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS,
-    FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_RENAME_INFO,
-    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileDispositionInfo, FileRenameInfo,
-    GetFileInformationByHandle, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
-    OPEN_EXISTING, SetFileInformationByHandle, WRITE_DAC, WRITE_OWNER,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_DELETE,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, FileDispositionInfo, GetFileInformationByHandle,
+    MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW, OPEN_EXISTING,
+    SetFileInformationByHandle, WRITE_DAC, WRITE_OWNER,
 };
+use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -99,37 +104,40 @@ pub(crate) fn rename_directory_handle_no_replace(
     name: &str,
 ) -> io::Result<()> {
     let name = name.encode_utf16().collect::<Vec<_>>();
-    let header = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
-    let bytes = header
-        .checked_add(
-            name.len()
-                .checked_mul(2)
-                .ok_or_else(|| io::Error::other("name too long"))?,
-        )
+    let name_bytes = name
+        .len()
+        .checked_mul(std::mem::size_of::<u16>())
+        .ok_or_else(|| io::Error::other("name too long"))?;
+    let bytes = std::mem::size_of::<FILE_RENAME_INFORMATION>()
+        .checked_add(name_bytes)
         .ok_or_else(|| io::Error::other("name too long"))?;
     let units = bytes.div_ceil(std::mem::size_of::<usize>());
     let mut storage = vec![0_usize; units];
-    let information = storage.as_mut_ptr().cast::<FILE_RENAME_INFO>();
-    // SAFETY: storage is pointer-aligned and sized for FILE_RENAME_INFO plus
+    let information = storage.as_mut_ptr().cast::<FILE_RENAME_INFORMATION>();
+    // SAFETY: storage is pointer-aligned and sized for FILE_RENAME_INFORMATION plus
     // the exact UTF-16 filename payload consumed synchronously by the kernel.
     unsafe {
         (*information).Anonymous.ReplaceIfExists = false;
         (*information).RootDirectory = root.as_raw_handle().cast();
         (*information).FileNameLength =
-            u32::try_from(name.len() * 2).map_err(|_| io::Error::other("name too long"))?;
+            u32::try_from(name_bytes).map_err(|_| io::Error::other("name too long"))?;
         ptr::copy_nonoverlapping(
             name.as_ptr(),
             ptr::addr_of_mut!((*information).FileName).cast::<u16>(),
             name.len(),
         );
-        if SetFileInformationByHandle(
+        let mut status = IO_STATUS_BLOCK::default();
+        let result = NtSetInformationFile(
             directory.as_raw_handle().cast(),
-            FileRenameInfo,
-            information.cast(),
+            &mut status,
+            information.cast_const().cast(),
             u32::try_from(bytes).map_err(|_| io::Error::other("name too long"))?,
-        ) == 0
-        {
-            return Err(io::Error::last_os_error());
+            FileRenameInformation,
+        );
+        if result != 0 {
+            return Err(io::Error::from_raw_os_error(
+                RtlNtStatusToDosError(result) as i32
+            ));
         }
     }
     Ok(())
