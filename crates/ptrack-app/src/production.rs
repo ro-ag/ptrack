@@ -10,7 +10,9 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ptrack_agent::{Association, AssociationTarget, CoordinationSession, CoordinationSessions};
 use ptrack_capability::{BrokerConfig, BrokerServer, BrokerServerConfig};
-use ptrack_core::{ProjectRef, ProjectSnapshot, upsert_guide};
+#[cfg(unix)]
+use ptrack_core::upsert_guide;
+use ptrack_core::{ProjectRef, ProjectSnapshot};
 use ptrack_store::{
     ActiveBinding, ActiveGeneration, ActiveGenerationProject, CutoverLease, CutoverLockMode,
     GlobalStore, PinnedProjectDirectory, PrivatePathIdentity, ProjectRegistryCasResult,
@@ -27,6 +29,8 @@ use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+#[cfg(unix)]
+use crate::ProjectGuideFilePreviewV1;
 use crate::{
     AgentRuntime, AgentRuntimeConfig, AppError, AppResult, ApplicationPort, BoundDesktopWorkspace,
     CapabilityCancellation, CapabilityMcpOutcome, DesktopAgentRuntime, DesktopEventSink,
@@ -36,14 +40,14 @@ use crate::{
     InitializationCheckpointV1, InitializationOutcomeV1, InitializationStatusV1,
     InitializeProjectRequestV1, LocalApplication, Mutation, MutationResult,
     PendingInitializationV1, ProcessOutput, ProductionTerminalIdentityAuthority, ProjectEndpoint,
-    ProjectGuideChoiceV1, ProjectGuideFileActionV1, ProjectGuideFilePreviewV1,
-    ProjectGuidePreviewRequestV1, ProjectGuidePreviewV1, ProjectTargetKindV1,
-    ProjectTargetValidationV1, RecentProjectAvailabilityV1, RecentProjectOpenAuthorizationV1,
-    RecentProjectRegistryCommitV1, RecentProjectRegistryStatusV1, RecentProjectResolutionV1,
-    RecentProjectV1, RecentProjectsProvider, RecentProjectsV1, ResolvedRecentProjectV1,
-    TerminalAgentAuthority, TerminalEventSink, TerminalIdentityAuthority, TerminalRuntime,
-    TerminalRuntimeConfig, UnavailableUpdateService, UpdateEventSink, UpdateRuntime, UpdateState,
-    WorkspaceBindings, WorkspaceProject,
+    ProjectGuideChoiceV1, ProjectGuideFileActionV1, ProjectGuidePreviewRequestV1,
+    ProjectGuidePreviewV1, ProjectTargetKindV1, ProjectTargetValidationV1,
+    RecentProjectAvailabilityV1, RecentProjectOpenAuthorizationV1, RecentProjectRegistryCommitV1,
+    RecentProjectRegistryStatusV1, RecentProjectResolutionV1, RecentProjectV1,
+    RecentProjectsProvider, RecentProjectsV1, ResolvedRecentProjectV1, TerminalAgentAuthority,
+    TerminalEventSink, TerminalIdentityAuthority, TerminalRuntime, TerminalRuntimeConfig,
+    UnavailableUpdateService, UpdateEventSink, UpdateRuntime, UpdateState, WorkspaceBindings,
+    WorkspaceProject,
 };
 
 const RECOVERY_REQUIRED: &str = "runtime recovery is required";
@@ -3506,11 +3510,7 @@ struct DirectoryIdentity {
 }
 
 #[cfg(windows)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct DirectoryIdentity {
-    volume: u32,
-    index: u64,
-}
+type DirectoryIdentity = PrivatePathIdentity;
 
 #[cfg(unix)]
 fn directory_identity(path: &Path) -> AppResult<DirectoryIdentity> {
@@ -3530,22 +3530,13 @@ fn directory_identity(path: &Path) -> AppResult<DirectoryIdentity> {
 
 #[cfg(windows)]
 fn directory_identity(path: &Path) -> AppResult<DirectoryIdentity> {
-    use std::os::windows::fs::MetadataExt as _;
-
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() || fs::canonicalize(path)? != path {
         return Err(recovery(
             "selected project root changed before initialization",
         ));
     }
-    Ok(DirectoryIdentity {
-        volume: metadata
-            .volume_serial_number()
-            .ok_or_else(|| recovery("selected project volume identity is unavailable"))?,
-        index: metadata
-            .file_index()
-            .ok_or_else(|| recovery("selected project file identity is unavailable"))?,
-    })
+    PinnedProjectDirectory::identify_root(path).map_err(recovery)
 }
 
 #[cfg(not(any(unix, windows)))]
