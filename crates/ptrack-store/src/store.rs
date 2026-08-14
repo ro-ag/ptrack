@@ -3,22 +3,27 @@ use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use redb::{Database, Durability, ReadableDatabase, ReadableTable, StorageBackend, TableHandle};
+use redb::{
+    Database, Durability, ReadableDatabase, ReadableTable, ReadableTableMetadata, StorageBackend,
+    TableHandle,
+};
 
 use crate::import::MAX_LEGACY_PROJECT_FORMAT;
 use crate::schema::{
-    MANIFEST_KEY_BATCH_MANIFEST_SHA256, MANIFEST_KEY_DATABASE_JSON_SHA256, MANIFEST_KEY_FAMILY,
-    MANIFEST_KEY_IMPORT_BUNDLE_SHA256, MANIFEST_KEY_IMPORT_BUNDLE_VERSION,
-    MANIFEST_KEY_IMPORT_SOURCE_FORMAT, MANIFEST_KEY_ORIGIN, MANIFEST_KEY_OWNER,
-    MANIFEST_KEY_QUARANTINE_COUNT, MANIFEST_KEY_SCHEMA_VERSION, MANIFEST_KEY_SOURCE_FORMAT,
-    MANIFEST_KEY_STAGE_VERSION, MANIFEST_KEY_STATE, MANIFEST_KEY_STORE_KIND, MANIFEST_TABLE,
-    QUARANTINE_TABLE, SEQUENCES_TABLE, STORE_FAMILY, STORE_ORIGIN_CREATED, STORE_ORIGIN_IMPORTED,
-    STORE_ORIGIN_JSON_STAGE, STORE_OWNER, STORE_SCHEMA_VERSION, STORE_STATE_IMPORTING,
-    STORE_STATE_READY, collections_for, decode_key,
+    MANIFEST_KEY_ACTIVATION_GENERATION, MANIFEST_KEY_APPLICATION_WRITES,
+    MANIFEST_KEY_BATCH_MANIFEST_SHA256, MANIFEST_KEY_CANONICAL_PATH, MANIFEST_KEY_DATABASE_ID,
+    MANIFEST_KEY_DATABASE_JSON_SHA256, MANIFEST_KEY_FAMILY, MANIFEST_KEY_IMPORT_BUNDLE_SHA256,
+    MANIFEST_KEY_IMPORT_BUNDLE_VERSION, MANIFEST_KEY_IMPORT_SOURCE_FORMAT, MANIFEST_KEY_ORIGIN,
+    MANIFEST_KEY_OWNER, MANIFEST_KEY_QUARANTINE_COUNT, MANIFEST_KEY_SCHEMA_VERSION,
+    MANIFEST_KEY_SOURCE_FORMAT, MANIFEST_KEY_STAGE_VERSION, MANIFEST_KEY_STATE,
+    MANIFEST_KEY_STORE_KIND, MANIFEST_TABLE, QUARANTINE_TABLE, SEQUENCES_TABLE, STORE_FAMILY,
+    STORE_ORIGIN_CREATED, STORE_ORIGIN_IMPORTED, STORE_ORIGIN_JSON_STAGE, STORE_OWNER,
+    STORE_SCHEMA_VERSION, STORE_STATE_ACTIVE, STORE_STATE_IMPORTING, STORE_STATE_READY,
+    collections_for, decode_key,
 };
 use crate::{
     Collection, IMPORT_BUNDLE_VERSION, ImportData, ImportReport, JSON_STAGE_VERSION,
@@ -36,9 +41,118 @@ const LEGACY_GLOBAL_FILENAME: &str = "global.db";
 /// The raw engine handle is deliberately private. Real paths are intended to
 /// be supplied only by the ptrack storage or migration executable.
 pub struct Store {
-    database: Database,
+    shared: ProcessDatabase,
     kind: StoreKind,
     path: PathBuf,
+    identity: FileIdentity,
+}
+
+#[derive(Debug)]
+struct ProcessDatabase {
+    database: Database,
+    backend: OwnedFileBackend,
+}
+
+impl ProcessDatabase {
+    fn new(file: File) -> StoreResult<Self> {
+        let backend = OwnedFileBackend::new(file)?;
+        let database = Database::builder().create_with_backend(backend.clone())?;
+        Ok(Self { database, backend })
+    }
+}
+
+#[derive(Clone, Debug)]
+struct OwnedFileBackend(Arc<OwnedFileBackendInner>);
+
+#[derive(Debug)]
+struct OwnedFileBackendInner {
+    file: File,
+}
+
+impl OwnedFileBackend {
+    fn new(file: File) -> StoreResult<Self> {
+        match file.try_lock() {
+            Ok(()) => Ok(Self(Arc::new(OwnedFileBackendInner { file }))),
+            Err(TryLockError::WouldBlock) => Err(StoreError::Busy),
+            Err(TryLockError::Error(error)) => Err(error.into()),
+        }
+    }
+
+    fn file(&self) -> &File {
+        &self.0.file
+    }
+}
+
+impl Drop for OwnedFileBackendInner {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
+
+impl StorageBackend for OwnedFileBackend {
+    fn len(&self) -> io::Result<u64> {
+        Ok(self.file().metadata()?.len())
+    }
+
+    #[cfg(unix)]
+    fn read(&self, offset: u64, out: &mut [u8]) -> io::Result<()> {
+        use std::os::unix::fs::FileExt;
+
+        self.file().read_exact_at(out, offset)
+    }
+
+    #[cfg(windows)]
+    fn read(&self, mut offset: u64, out: &mut [u8]) -> io::Result<()> {
+        use std::os::windows::fs::FileExt;
+
+        let mut position = 0;
+        while position < out.len() {
+            let read = self.file().seek_read(&mut out[position..], offset)?;
+            if read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "database changed while it was read",
+                ));
+            }
+            position += read;
+            offset += read as u64;
+        }
+        Ok(())
+    }
+
+    fn set_len(&self, len: u64) -> io::Result<()> {
+        self.file().set_len(len)
+    }
+
+    fn sync_data(&self) -> io::Result<()> {
+        self.file().sync_data()
+    }
+
+    #[cfg(unix)]
+    fn write(&self, offset: u64, data: &[u8]) -> io::Result<()> {
+        use std::os::unix::fs::FileExt;
+
+        self.file().write_all_at(data, offset)
+    }
+
+    #[cfg(windows)]
+    fn write(&self, mut offset: u64, data: &[u8]) -> io::Result<()> {
+        use std::os::windows::fs::FileExt;
+
+        let mut position = 0;
+        while position < data.len() {
+            let written = self.file().seek_write(&data[position..], offset)?;
+            if written == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "database write made no progress",
+                ));
+            }
+            position += written;
+            offset += written as u64;
+        }
+        Ok(())
+    }
 }
 
 impl Store {
@@ -50,7 +164,7 @@ impl Store {
         Self::create_new_inner(path.as_ref(), kind, || Ok(()), || Ok(()))
     }
 
-    fn create_new_inner(
+    pub(crate) fn create_new_inner(
         path: &Path,
         kind: StoreKind,
         before_create: impl FnOnce() -> StoreResult<()>,
@@ -64,7 +178,7 @@ impl Store {
         ensure_destination_absent(path)?;
 
         let file = create_private_file(path)?;
-        let identity = FileIdentity::from_metadata(&file.metadata()?);
+        let identity = FileIdentity::from_file(&file)?;
         // Once create_new succeeds at the filesystem level, leave that exact
         // path in place on every later error. Unlinking by pathname cannot be
         // made race-free with portable std APIs and could delete a replacement.
@@ -72,12 +186,15 @@ impl Store {
         parent.ensure_destination(path, identity)?;
         parent.sync()?;
         parent.ensure_destination(path, identity)?;
-        let database = Database::builder().create_file(file)?;
+        let shared = ProcessDatabase::new(file)?;
 
-        if let Err(error) =
-            initialize_database(&database, kind, STORE_STATE_READY, STORE_ORIGIN_CREATED)
-        {
-            drop(database);
+        if let Err(error) = initialize_database(
+            &shared.database,
+            kind,
+            STORE_STATE_READY,
+            STORE_ORIGIN_CREATED,
+        ) {
+            drop(shared);
             return Err(error);
         }
         parent.ensure_destination(path, identity)?;
@@ -85,20 +202,11 @@ impl Store {
         parent.ensure_destination(path, identity)?;
 
         Ok(Self {
-            database,
+            shared,
             kind,
             path: path.to_path_buf(),
+            identity,
         })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn create_new_with_creation_hooks(
-        path: impl AsRef<Path>,
-        kind: StoreKind,
-        before_create: impl FnOnce() -> StoreResult<()>,
-        after_create: impl FnOnce() -> StoreResult<()>,
-    ) -> StoreResult<Self> {
-        Self::create_new_inner(path.as_ref(), kind, before_create, after_create)
     }
 
     /// Imports one complete legacy database into a new destination.
@@ -121,7 +229,7 @@ impl Store {
         )
     }
 
-    fn import_new_inner(
+    pub(crate) fn import_new_inner(
         path: &Path,
         data: ImportData,
         before_create: impl FnOnce() -> StoreResult<()>,
@@ -138,14 +246,14 @@ impl Store {
         ensure_destination_absent(path)?;
 
         let file = create_private_file(path)?;
-        let identity = FileIdentity::from_metadata(&file.metadata()?);
+        let identity = FileIdentity::from_file(&file)?;
         after_create()?;
         parent.ensure_destination(path, identity)?;
         parent.sync()?;
         parent.ensure_destination(path, identity)?;
-        let database = Database::builder().create_file(file)?;
+        let shared = ProcessDatabase::new(file)?;
         initialize_database(
-            &database,
+            &shared.database,
             import.data.kind,
             STORE_STATE_IMPORTING,
             STORE_ORIGIN_IMPORTED,
@@ -154,11 +262,11 @@ impl Store {
         parent.sync()?;
         parent.ensure_destination(path, identity)?;
 
-        if let Err(error) = crate::import::write_import(&database, &import, path, || {
+        if let Err(error) = crate::import::write_import(&shared.database, &import, path, || {
             before_ready()?;
             parent.ensure_destination(path, identity)
         }) {
-            drop(database);
+            drop(shared);
             return Err(error);
         }
         if let Err(error) = after_ready() {
@@ -170,14 +278,15 @@ impl Store {
             .sync()
             .map_err(|error| committed_import_verification_error(path, error))?;
         ensure_committed_import_destination(&parent, path, identity)?;
-        validate_database(&database, import.data.kind)
+        validate_database(&shared.database, import.data.kind)
             .map_err(|error| committed_import_verification_error(path, error))?;
         ensure_committed_import_destination(&parent, path, identity)?;
 
         let store = Self {
-            database,
+            shared,
             kind: import.data.kind,
             path: path.to_path_buf(),
+            identity,
         };
         Ok((store, import.report))
     }
@@ -193,7 +302,7 @@ impl Store {
         Self::import_json_stage_new_inner(path.as_ref(), data, || Ok(()))
     }
 
-    fn import_json_stage_new_inner(
+    pub(crate) fn import_json_stage_new_inner(
         path: &Path,
         data: JsonStageImportData,
         before_ready: impl FnOnce() -> StoreResult<()>,
@@ -206,13 +315,13 @@ impl Store {
         ensure_destination_absent(path)?;
 
         let file = create_private_file(path)?;
-        let identity = FileIdentity::from_metadata(&file.metadata()?);
+        let identity = FileIdentity::from_file(&file)?;
         parent.ensure_destination(path, identity)?;
         parent.sync()?;
         parent.ensure_destination(path, identity)?;
-        let database = Database::builder().create_file(file)?;
+        let shared = ProcessDatabase::new(file)?;
         initialize_database(
-            &database,
+            &shared.database,
             import.data.kind,
             STORE_STATE_IMPORTING,
             STORE_ORIGIN_JSON_STAGE,
@@ -221,11 +330,13 @@ impl Store {
         parent.sync()?;
         parent.ensure_destination(path, identity)?;
 
-        if let Err(error) = crate::import::write_json_stage_import(&database, &import, path, || {
-            before_ready()?;
-            parent.ensure_destination(path, identity)
-        }) {
-            drop(database);
+        if let Err(error) =
+            crate::import::write_json_stage_import(&shared.database, &import, path, || {
+                before_ready()?;
+                parent.ensure_destination(path, identity)
+            })
+        {
+            drop(shared);
             return Err(error);
         }
         ensure_committed_import_destination(&parent, path, identity)?;
@@ -233,60 +344,17 @@ impl Store {
             .sync()
             .map_err(|error| committed_import_verification_error(path, error))?;
         ensure_committed_import_destination(&parent, path, identity)?;
-        validate_database(&database, import.data.kind)
+        validate_database(&shared.database, import.data.kind)
             .map_err(|error| committed_import_verification_error(path, error))?;
         ensure_committed_import_destination(&parent, path, identity)?;
 
         let store = Self {
-            database,
+            shared,
             kind: import.data.kind,
             path: path.to_path_buf(),
+            identity,
         };
         Ok((store, import.report))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn import_json_stage_new_with_before_ready(
-        path: impl AsRef<Path>,
-        data: JsonStageImportData,
-        before_ready: impl FnOnce() -> StoreResult<()>,
-    ) -> StoreResult<(Self, ImportReport)> {
-        Self::import_json_stage_new_inner(path.as_ref(), data, before_ready)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn import_new_with_before_ready(
-        path: impl AsRef<Path>,
-        data: ImportData,
-        before_ready: impl FnOnce() -> StoreResult<()>,
-    ) -> StoreResult<(Self, ImportReport)> {
-        Self::import_new_inner(
-            path.as_ref(),
-            data,
-            || Ok(()),
-            || Ok(()),
-            before_ready,
-            || Ok(()),
-        )
-    }
-
-    #[cfg(test)]
-    pub(crate) fn import_new_with_parent_hooks(
-        path: impl AsRef<Path>,
-        data: ImportData,
-        before_create: impl FnOnce() -> StoreResult<()>,
-        after_create: impl FnOnce() -> StoreResult<()>,
-        before_ready: impl FnOnce() -> StoreResult<()>,
-        after_ready: impl FnOnce() -> StoreResult<()>,
-    ) -> StoreResult<(Self, ImportReport)> {
-        Self::import_new_inner(
-            path.as_ref(),
-            data,
-            before_create,
-            after_create,
-            before_ready,
-            after_ready,
-        )
     }
 
     /// Opens an existing database after a read-only schema and ownership probe.
@@ -297,17 +365,18 @@ impl Store {
     pub fn open_existing(path: impl AsRef<Path>, expected: StoreKind) -> StoreResult<Self> {
         let path = path.as_ref();
         reject_legacy_path(path)?;
-        // The file resolved by this exclusive open is authoritative. Avoid a
+        // The file resolved by this open is authoritative. Avoid a
         // check-then-open window in which a pathname could be replaced.
         let (file, identity) = probe_existing_with_retry(path, expected)?;
-        let database = open_writable_with_retry(path, identity, &file)?;
+        let shared = open_writable_with_retry(path, identity, file)?;
         ensure_path_identity(path, identity)?;
-        validate_database(&database, expected)?;
+        validate_database(&shared.database, expected)?;
 
         Ok(Self {
-            database,
+            shared,
             kind: expected,
             path: path.to_path_buf(),
+            identity,
         })
     }
 
@@ -323,9 +392,14 @@ impl Store {
         &self.path
     }
 
+    pub(crate) fn ensure_current_path(&self) -> StoreResult<()> {
+        ensure_path_identity(&self.path, self.identity)?;
+        validate_private_permissions(&self.path, &fs::symlink_metadata(&self.path)?)
+    }
+
     /// Returns attested standalone-stage provenance without exposing quarantine bytes.
     pub fn json_stage_provenance(&self) -> StoreResult<Option<JsonStageProvenance>> {
-        let transaction = self.database.begin_read()?;
+        let transaction = self.shared.database.begin_read()?;
         let entries = read_manifest_entries(&transaction)?;
         json_stage_provenance(&entries)
     }
@@ -335,7 +409,7 @@ impl Store {
         &self,
         operation: impl FnOnce(&ReadTransaction) -> StoreResult<R>,
     ) -> StoreResult<R> {
-        let transaction = self.database.begin_read()?;
+        let transaction = self.shared.database.begin_read()?;
         let transaction = ReadTransaction {
             inner: transaction,
             kind: self.kind,
@@ -353,11 +427,53 @@ impl Store {
     ) -> StoreResult<R> {
         if self.json_stage_provenance()?.is_some() {
             return Err(StoreError::InvalidImport(
-                "JSON-stage candidates are immutable until explicit activation replaces their provenance"
+                "JSON-stage databases are immutable through the raw store API; activated application writes require a typed store"
                     .to_owned(),
             ));
         }
-        let mut inner = self.database.begin_write()?;
+        self.write_inner(false, operation)
+    }
+
+    pub(crate) fn write_application<R>(
+        &self,
+        expected: &crate::ActiveBinding,
+        operation: impl FnOnce(&mut WriteTransaction) -> StoreResult<R>,
+    ) -> StoreResult<R> {
+        ensure_path_identity(&self.path, self.identity)?;
+        crate::activation::validate_binding_for_path(expected, self.kind, &self.path)?;
+        if self.active_binding()?.as_ref() != Some(expected) {
+            return Err(StoreError::ActivationBinding(
+                "stored binding does not match the active runtime".to_owned(),
+            ));
+        }
+        let result = self.write_inner(true, operation)?;
+        ensure_path_identity(&self.path, self.identity)?;
+        Ok(result)
+    }
+
+    pub(crate) fn write_activation<R>(
+        &self,
+        expected: &crate::ActiveBinding,
+        operation: impl FnOnce(&mut WriteTransaction) -> StoreResult<R>,
+    ) -> StoreResult<R> {
+        ensure_path_identity(&self.path, self.identity)?;
+        crate::activation::validate_binding_for_path(expected, self.kind, &self.path)?;
+        if self.active_binding()?.as_ref() != Some(expected) {
+            return Err(StoreError::ActivationBinding(
+                "stored binding does not match the active runtime".to_owned(),
+            ));
+        }
+        let result = self.write_inner(false, operation)?;
+        ensure_path_identity(&self.path, self.identity)?;
+        Ok(result)
+    }
+
+    fn write_inner<R>(
+        &self,
+        application_write: bool,
+        operation: impl FnOnce(&mut WriteTransaction) -> StoreResult<R>,
+    ) -> StoreResult<R> {
+        let mut inner = self.shared.database.begin_write()?;
         inner.set_durability(Durability::Immediate)?;
         // Persist allocator state with every commit. Besides faster crash
         // recovery, this keeps the next open eligible for the side-effect-free
@@ -368,6 +484,11 @@ impl Store {
             kind: self.kind,
             poisoned: false,
         };
+
+        if application_write {
+            let mut manifest = transaction.raw().open_table(MANIFEST_TABLE)?;
+            manifest.insert(MANIFEST_KEY_APPLICATION_WRITES, b"true".as_slice())?;
+        }
 
         match catch_unwind(AssertUnwindSafe(|| operation(&mut transaction))) {
             Ok(Ok(value)) => {
@@ -387,6 +508,70 @@ impl Store {
                 resume_unwind(payload)
             }
         }
+    }
+
+    pub(crate) fn active_binding(&self) -> StoreResult<Option<crate::ActiveBinding>> {
+        let transaction = self.shared.database.begin_read()?;
+        let entries = read_manifest_entries(&transaction)?;
+        crate::activation::binding_from_manifest(&entries)
+    }
+
+    pub(crate) fn application_writes(&self) -> StoreResult<bool> {
+        let transaction = self.shared.database.begin_read()?;
+        let entries = read_manifest_entries(&transaction)?;
+        match entries
+            .get(MANIFEST_KEY_APPLICATION_WRITES)
+            .map(Vec::as_slice)
+        {
+            None | Some(b"false") => Ok(false),
+            Some(b"true") => Ok(true),
+            Some(_) => Err(StoreError::InvalidManifest(
+                "application_writes must be true or false".to_owned(),
+            )),
+        }
+    }
+
+    pub(crate) fn activate(&self, binding: &crate::ActiveBinding) -> StoreResult<()> {
+        crate::activation::validate_binding_for_path(binding, self.kind, &self.path)?;
+        let current = self.active_binding()?;
+        if let Some(current) = current {
+            return if current == *binding {
+                Ok(())
+            } else {
+                Err(StoreError::ActivationBinding(
+                    "store is already bound to another generation".to_owned(),
+                ))
+            };
+        }
+        let mut transaction = self.shared.database.begin_write()?;
+        transaction.set_durability(Durability::Immediate)?;
+        transaction.set_quick_repair(true);
+        {
+            let mut manifest = transaction.open_table(MANIFEST_TABLE)?;
+            manifest.insert(MANIFEST_KEY_STATE, STORE_STATE_ACTIVE)?;
+            manifest.insert(
+                MANIFEST_KEY_ACTIVATION_GENERATION,
+                binding.generation.to_be_bytes().as_slice(),
+            )?;
+            manifest.insert(MANIFEST_KEY_DATABASE_ID, binding.database_id.as_bytes())?;
+            manifest.insert(
+                MANIFEST_KEY_CANONICAL_PATH,
+                binding.canonical_path.as_os_str().as_encoded_bytes(),
+            )?;
+            manifest.insert(MANIFEST_KEY_APPLICATION_WRITES, b"false".as_slice())?;
+        }
+        transaction.commit()?;
+        validate_database(&self.shared.database, self.kind)
+    }
+
+    pub(crate) fn with_writer_barrier<R>(
+        &self,
+        operation: impl FnOnce(&Path, &File) -> StoreResult<R>,
+    ) -> StoreResult<R> {
+        let transaction = self.shared.database.begin_write()?;
+        let result = operation(&self.path, self.shared.backend.file());
+        transaction.abort()?;
+        result
     }
 }
 
@@ -430,6 +615,68 @@ impl ReadTransaction {
             ));
         }
         Ok(records)
+    }
+
+    /// Returns a collection's exact row count without decoding its values.
+    pub fn collection_len(&self, collection: Collection) -> StoreResult<usize> {
+        collection.validate_store(self.kind)?;
+        let table = self.inner.open_table(collection.table())?;
+        usize::try_from(table.len()?).map_err(|_| {
+            StoreError::InvalidManifest("collection length does not fit usize".to_owned())
+        })
+    }
+
+    /// Decodes at most `limit` rows from one end of a collection.
+    pub fn scan_limited(
+        &self,
+        collection: Collection,
+        limit: usize,
+        newest_first: bool,
+    ) -> StoreResult<Vec<(OwnedRecordKey, RecordEnvelope)>> {
+        collection.validate_store(self.kind)?;
+        let table = self.inner.open_table(collection.table())?;
+        let mut iterator = table.iter()?;
+        let mut records = Vec::with_capacity(limit);
+        while records.len() < limit {
+            let entry = if newest_first {
+                iterator.next_back()
+            } else {
+                iterator.next()
+            };
+            let Some(entry) = entry else { break };
+            let (key, value) = entry?;
+            records.push((
+                decode_key(collection, key.value())?,
+                RecordEnvelope::decode(value.value())?,
+            ));
+        }
+        Ok(records)
+    }
+
+    /// Visits rows without collecting them, optionally newest first.
+    pub fn visit(
+        &self,
+        collection: Collection,
+        newest_first: bool,
+        mut visitor: impl FnMut(OwnedRecordKey, RecordEnvelope) -> StoreResult<()>,
+    ) -> StoreResult<()> {
+        collection.validate_store(self.kind)?;
+        let table = self.inner.open_table(collection.table())?;
+        let mut iterator = table.iter()?;
+        loop {
+            let entry = if newest_first {
+                iterator.next_back()
+            } else {
+                iterator.next()
+            };
+            let Some(entry) = entry else { break };
+            let (key, value) = entry?;
+            visitor(
+                decode_key(collection, key.value())?,
+                RecordEnvelope::decode(value.value())?,
+            )?;
+        }
+        Ok(())
     }
 
     /// Reads the collection's independent persisted high-water mark.
@@ -762,15 +1009,35 @@ fn validate_database(
             ));
         }
     };
+    let state = entries
+        .get(MANIFEST_KEY_STATE)
+        .ok_or_else(|| StoreError::InvalidManifest("state is missing".to_owned()))?;
+    let mut expected_manifest_keys = expected_manifest_keys;
+    if state.as_slice() == STORE_STATE_ACTIVE {
+        expected_manifest_keys.extend([
+            MANIFEST_KEY_ACTIVATION_GENERATION.to_vec(),
+            MANIFEST_KEY_DATABASE_ID.to_vec(),
+            MANIFEST_KEY_CANONICAL_PATH.to_vec(),
+            MANIFEST_KEY_APPLICATION_WRITES.to_vec(),
+        ]);
+    } else if state.as_slice() != STORE_STATE_READY {
+        return Err(StoreError::InvalidManifest(
+            "unexpected state value".to_owned(),
+        ));
+    }
     let actual_manifest_keys = entries.keys().cloned().collect::<BTreeSet<_>>();
     if actual_manifest_keys != expected_manifest_keys {
         return Err(StoreError::InvalidManifest(
-            "schema metadata keys do not match the version-3 origin contract".to_owned(),
+            "schema metadata keys do not match the version-4 origin contract".to_owned(),
         ));
     }
 
     require_manifest_value(&entries, MANIFEST_KEY_OWNER, STORE_OWNER, "owner")?;
-    require_manifest_value(&entries, MANIFEST_KEY_STATE, STORE_STATE_READY, "state")?;
+    if state.as_slice() == STORE_STATE_ACTIVE {
+        crate::activation::binding_from_manifest(&entries)?.ok_or_else(|| {
+            StoreError::InvalidManifest("active store has no activation binding".to_owned())
+        })?;
+    }
 
     let source_format = if origin == STORE_ORIGIN_IMPORTED {
         require_manifest_value(
@@ -1083,7 +1350,7 @@ fn validate_existing_path(path: &Path) -> StoreResult<FileIdentity> {
         });
     }
     validate_private_permissions(path, &metadata)?;
-    Ok(FileIdentity::from_metadata(&metadata))
+    FileIdentity::from_path(path, false)
 }
 
 fn create_private_file(path: &Path) -> StoreResult<File> {
@@ -1097,8 +1364,16 @@ fn create_private_file(path: &Path) -> StoreResult<File> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE, WRITE_DAC,
+            WRITE_OWNER,
+        };
 
-        options.share_mode(0);
+        options.access_mode(FILE_GENERIC_READ | FILE_GENERIC_WRITE | WRITE_DAC | WRITE_OWNER);
+        // Runtime services reopen the same redb while it is live. Redb and the
+        // file lock coordinate writers; omitting FILE_SHARE_DELETE prevents
+        // rename/delete replacement while any database handle remains open.
+        options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
     }
 
     match options.open(path) {
@@ -1108,6 +1383,8 @@ fn create_private_file(path: &Path) -> StoreResult<File> {
                 use std::os::unix::fs::PermissionsExt;
                 file.set_permissions(fs::Permissions::from_mode(0o600))?;
             }
+            #[cfg(windows)]
+            crate::private_windows::protect_handle(&file)?;
             Ok(file)
         }
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -1124,10 +1401,10 @@ fn probe_existing_with_retry(path: &Path, kind: StoreKind) -> StoreResult<(File,
     loop {
         let file = match open_existing_file(path) {
             Ok(file) => file,
-            Err(StoreError::Io(error))
-                if error.kind() == io::ErrorKind::PermissionDenied
-                    && start.elapsed() < LOCK_TIMEOUT =>
-            {
+            Err(StoreError::Io(error)) if open_conflicts_with_writer(&error) => {
+                if start.elapsed() >= LOCK_TIMEOUT {
+                    return Err(StoreError::Busy);
+                }
                 thread::sleep(LOCK_RETRY_INTERVAL);
                 continue;
             }
@@ -1135,7 +1412,7 @@ fn probe_existing_with_retry(path: &Path, kind: StoreKind) -> StoreResult<(File,
         };
         let metadata = file.metadata()?;
         validate_private_permissions(path, &metadata)?;
-        let expected = FileIdentity::from_metadata(&metadata);
+        let expected = FileIdentity::from_file(&file)?;
         validate_opened_path(path, expected)?;
         ensure_path_identity(path, expected)?;
 
@@ -1153,35 +1430,55 @@ fn probe_existing_with_retry(path: &Path, kind: StoreKind) -> StoreResult<(File,
             Database::builder().create_with_backend(MemoryProbeBackend::new(snapshot))?;
         validate_database(&database, kind)?;
         drop(database);
+        file.unlock()?;
         ensure_path_identity(path, expected)?;
         return Ok((file, expected));
     }
 }
 
+fn open_conflicts_with_writer(error: &io::Error) -> bool {
+    if error.kind() == io::ErrorKind::PermissionDenied {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
+
+        return error.raw_os_error() == Some(ERROR_SHARING_VIOLATION as i32);
+    }
+    #[cfg(not(windows))]
+    false
+}
+
 fn open_writable_with_retry(
     path: &Path,
     expected: FileIdentity,
-    file: &File,
-) -> StoreResult<Database> {
+    file: File,
+) -> StoreResult<ProcessDatabase> {
     let start = Instant::now();
+    let mut file = Some(file);
     loop {
-        let file_metadata = file.metadata()?;
+        let candidate = match file.take() {
+            Some(file) => file,
+            None => open_existing_file(path)?,
+        };
+        let file_metadata = candidate.metadata()?;
         validate_private_permissions(path, &file_metadata)?;
-        if FileIdentity::from_metadata(&file_metadata) != expected {
+        if FileIdentity::from_file(&candidate)? != expected {
             return Err(StoreError::PathChanged {
                 path: path.to_path_buf(),
             });
         }
         ensure_path_identity(path, expected)?;
-        match Database::builder().create_file(file.try_clone()?) {
-            Ok(database) => {
+        match ProcessDatabase::new(candidate) {
+            Ok(shared) => {
                 ensure_path_identity(path, expected)?;
-                return Ok(database);
+                return Ok(shared);
             }
-            Err(redb::DatabaseError::DatabaseAlreadyOpen) if start.elapsed() < LOCK_TIMEOUT => {
+            Err(StoreError::Busy) if start.elapsed() < LOCK_TIMEOUT => {
                 thread::sleep(LOCK_RETRY_INTERVAL);
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(error),
         }
     }
 }
@@ -1300,9 +1597,11 @@ fn open_existing_file(path: &Path) -> StoreResult<File> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
 
-        // Prevent rename/delete replacement while the database handle exists.
-        options.share_mode(0);
+        // Allow redb's coordinated reopenings but keep rename/delete
+        // replacement denied for the lifetime of every database handle.
+        options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
     }
     Ok(options.open(path)?)
 }
@@ -1313,9 +1612,56 @@ pub(crate) struct FileIdentity {
     device: u64,
     #[cfg(unix)]
     inode: u64,
+    #[cfg(windows)]
+    volume: u32,
+    #[cfg(windows)]
+    index: u64,
 }
 
 impl FileIdentity {
+    pub(crate) fn from_file(file: &File) -> StoreResult<Self> {
+        #[cfg(unix)]
+        {
+            Ok(Self::from_metadata(&file.metadata()?))
+        }
+        #[cfg(windows)]
+        {
+            let identity = crate::private_windows::identity(file)?;
+            Ok(Self {
+                volume: identity.volume,
+                index: identity.index,
+            })
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = file;
+            Err(StoreError::DestinationParentIdentityUnavailable {
+                path: PathBuf::new(),
+            })
+        }
+    }
+
+    pub(crate) fn from_path(path: &Path, directory: bool) -> StoreResult<Self> {
+        #[cfg(unix)]
+        {
+            let _ = directory;
+            Ok(Self::from_metadata(&fs::symlink_metadata(path)?))
+        }
+        #[cfg(windows)]
+        {
+            let file = crate::private_windows::open_no_reparse(path, directory, false, false)?;
+            Self::from_file(&file)
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = directory;
+            Err(StoreError::DestinationParentIdentityUnavailable {
+                path: path.to_path_buf(),
+            })
+        }
+    }
+
+    #[cfg(not(windows))]
     pub(crate) fn from_metadata(metadata: &fs::Metadata) -> Self {
         #[cfg(unix)]
         {
@@ -1326,7 +1672,7 @@ impl FileIdentity {
                 inode: metadata.ino(),
             }
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = metadata;
             Self {}
@@ -1336,9 +1682,9 @@ impl FileIdentity {
 
 struct DestinationParent {
     path: PathBuf,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     identity: FileIdentity,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     directory: File,
 }
 
@@ -1350,9 +1696,26 @@ impl DestinationParent {
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
 
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             Err(StoreError::DestinationParentIdentityUnavailable { path })
+        }
+
+        #[cfg(windows)]
+        {
+            let directory = crate::private_windows::open_no_reparse(&path, true, true, false)
+                .map_err(|_| StoreError::DestinationParentInvalid { path: path.clone() })?;
+            crate::private_windows::verify_private(&path)
+                .map_err(|_| StoreError::DestinationParentInvalid { path: path.clone() })?;
+            let identity = FileIdentity::from_file(&directory)?;
+            if FileIdentity::from_path(&path, true)? != identity {
+                return Err(StoreError::DestinationParentChanged { path });
+            }
+            Ok(Self {
+                path,
+                identity,
+                directory,
+            })
         }
 
         #[cfg(unix)]
@@ -1385,7 +1748,7 @@ impl DestinationParent {
     }
 
     fn ensure_current(&self) -> StoreResult<()> {
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             Err(StoreError::DestinationParentIdentityUnavailable {
                 path: self.path.clone(),
@@ -1415,6 +1778,23 @@ impl DestinationParent {
             }
             Ok(())
         }
+
+        #[cfg(windows)]
+        {
+            crate::private_windows::verify_private(&self.path).map_err(|_| {
+                StoreError::DestinationParentChanged {
+                    path: self.path.clone(),
+                }
+            })?;
+            if FileIdentity::from_path(&self.path, true)? != self.identity
+                || FileIdentity::from_file(&self.directory)? != self.identity
+            {
+                return Err(StoreError::DestinationParentChanged {
+                    path: self.path.clone(),
+                });
+            }
+            Ok(())
+        }
     }
 
     fn ensure_destination(&self, destination: &Path, identity: FileIdentity) -> StoreResult<()> {
@@ -1425,7 +1805,7 @@ impl DestinationParent {
 
     fn sync(&self) -> StoreResult<()> {
         self.ensure_current()?;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         self.directory.sync_all()?;
         self.ensure_current()
     }
@@ -1460,27 +1840,18 @@ fn committed_import_verification_error(path: &Path, error: StoreError) -> StoreE
 
 fn validate_opened_path(path: &Path, opened: FileIdentity) -> StoreResult<()> {
     let path_identity = validate_existing_path(path)?;
-    #[cfg(unix)]
     if path_identity != opened {
         return Err(StoreError::PathChanged {
             path: path.to_path_buf(),
         });
     }
-    #[cfg(not(unix))]
-    let _ = (path_identity, opened);
     Ok(())
 }
 
 pub(crate) fn ensure_path_identity(path: &Path, expected: FileIdentity) -> StoreResult<()> {
     let metadata = fs::symlink_metadata(path)?;
     let invalid_type = metadata.file_type().is_symlink() || !metadata.is_file();
-    #[cfg(unix)]
-    let wrong_identity = FileIdentity::from_metadata(&metadata) != expected;
-    #[cfg(not(unix))]
-    let wrong_identity = {
-        let _ = expected;
-        false
-    };
+    let wrong_identity = FileIdentity::from_path(path, false)? != expected;
     if invalid_type || wrong_identity {
         Err(StoreError::PathChanged {
             path: path.to_path_buf(),
@@ -1505,7 +1876,15 @@ fn validate_private_permissions(path: &Path, metadata: &fs::Metadata) -> StoreRe
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn validate_private_permissions(path: &Path, _metadata: &fs::Metadata) -> StoreResult<()> {
+    crate::private_windows::verify_private(path).map_err(|_| StoreError::InsecurePermissions {
+        path: path.to_path_buf(),
+        mode: 0,
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
 fn validate_private_permissions(_path: &Path, _metadata: &fs::Metadata) -> StoreResult<()> {
     Ok(())
 }

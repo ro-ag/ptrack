@@ -126,6 +126,33 @@ pub enum StoreError {
     },
     /// A failed mutating operation prevents this transaction from committing.
     TransactionPoisoned,
+    /// A store is not bound to the exact active runtime generation.
+    ActivationBinding(String),
+    /// A typed record was not found.
+    NotFound,
+    /// A compare-and-set task fence observed different state.
+    TaskStatusChanged(String),
+    /// A capability draft or lifecycle mutation observed a stale revision.
+    CapabilityRevisionChanged { expected: u64, actual: u64 },
+    /// Approval was attempted against a digest other than the stored preview.
+    CapabilityScopeChanged,
+    /// Expiry was requested for a capability which is not currently enabled.
+    CapabilityNotEnabled,
+    /// A bounded read used an unsafe resource limit.
+    InvalidBoundedLimit,
+    /// A bounded aggregate would traverse more rows than its hard ceiling.
+    BoundedScanLimit {
+        collection: &'static str,
+        maximum: usize,
+    },
+    /// A caller-owned presentation deadline expired during a bounded scan.
+    DeadlineExceeded,
+    /// A memory write-back request is malformed or its target is stale.
+    InvalidMemoryWriteback(String),
+    /// A memory request identifier was reused for different content.
+    MemoryWritebackReplay,
+    /// A generation-scoped request belongs to another workspace generation.
+    StaleWorkspaceGeneration { expected: u64, active: u64 },
     /// A stored record envelope was invalid.
     Envelope(EnvelopeError),
     /// A filesystem operation failed.
@@ -260,6 +287,44 @@ impl fmt::Display for StoreError {
             Self::TransactionPoisoned => write!(
                 formatter,
                 "transaction contains a failed mutation and cannot be committed"
+            ),
+            Self::ActivationBinding(detail) => {
+                write!(formatter, "invalid activation binding: {detail}")
+            }
+            Self::NotFound => formatter.write_str("not found"),
+            Self::TaskStatusChanged(detail) => {
+                write!(formatter, "task status changed: {detail}")
+            }
+            Self::CapabilityRevisionChanged { expected, actual } => write!(
+                formatter,
+                "capability revision changed: expected {expected}, found {actual}"
+            ),
+            Self::CapabilityScopeChanged => {
+                formatter.write_str("effective scope changed; preview again before enabling")
+            }
+            Self::CapabilityNotEnabled => {
+                formatter.write_str("only an enabled capability can be expired")
+            }
+            Self::InvalidBoundedLimit => {
+                formatter.write_str("bounded read limit must be between 1 and 1000")
+            }
+            Self::BoundedScanLimit {
+                collection,
+                maximum,
+            } => write!(
+                formatter,
+                "bounded {collection} scan exceeds its limit of {maximum} records"
+            ),
+            Self::DeadlineExceeded => formatter.write_str("context deadline exceeded"),
+            Self::InvalidMemoryWriteback(detail) => {
+                write!(formatter, "invalid memory write-back: {detail}")
+            }
+            Self::MemoryWritebackReplay => {
+                formatter.write_str("memory write-back request ID was already used")
+            }
+            Self::StaleWorkspaceGeneration { expected, active } => write!(
+                formatter,
+                "stale workspace generation: expected {expected}, active {active}"
             ),
             Self::Envelope(error) => error.fmt(formatter),
             Self::Io(error) => error.fmt(formatter),

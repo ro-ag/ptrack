@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "p-track",
+  "version": "0.22.0",
+  "identifier": "com.ro-ag.ptrack",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../frontend/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "p-track Project Workspace",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 880,
+        "minHeight": 560,
+        "backgroundColor": "#080d12",
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "capabilities": ["main-window"],
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:* ws://localhost:*; font-src 'self' data:; img-src 'self' data:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "category": "DeveloperTool",
+    "icon": [
+      "../assets/brand/icon-32.png",
+      "../assets/brand/icon-128.png",
+      "../assets/brand/icon-256.png",
+      "../assets/brand/AppIcon.icns"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "12.0",
+      "entitlements": "../build/darwin/entitlements.plist"
+    }
+  }
+}

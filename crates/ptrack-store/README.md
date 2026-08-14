@@ -29,10 +29,31 @@ Safety boundaries:
 - Closure errors and panics abort both record changes and sequence allocation.
 - Project and global collections, key representations, and sequence ownership
   are closed enums checked by the wrapper.
-- Schema v3 manifests have exact origin-specific key sets. Standalone imports
+- Schema v4 manifests have exact origin-specific key sets. Standalone imports
   use `json-stage` origin and atomically commit stage version, source format,
   batch-manifest SHA-256, per-database JSON SHA-256, quarantine count, and the
-  `ready` state. Schema v1, v2, and newer files are rejected without upgrade.
+  `ready` state. Schema v1-v3 and newer files are rejected without upgrade.
+- `StagedStore` has no write surface. Explicit activation retains the JSON-stage
+  origin, hashes, source format, and private quarantine while binding the store
+  to an exact nonzero generation, database identity, kind, and canonical path.
+  `ProjectStore` and `GlobalStore` verify that binding on every writable open;
+  the first application mutation records `application_writes=true` in the same
+  transaction as the mutation.
+- Typed project mutations allocate IDs, validate foreign keys, update related
+  rows, and prune replay/audit history in one immediate-durability transaction.
+  Typed reads expose consistent `ProjectSnapshot`, counts, and fixed-limit DTOs.
+- Every typed application write revalidates the persisted activation binding,
+  canonical path, and originally opened file identity before mutation and the
+  file identity again after commit. Capability CRUD cannot mint approval:
+  creation is forced disabled and ordinary edits preserve or revoke approval.
+- Bounded result construction decodes only its retained window; filtered exact
+  totals stream rows without collecting them. Association aggregates bound both
+  requested task IDs and total source rows before scanning.
+- Backups take the store writer barrier, create a private destination without
+  clobbering, copy to an identity-pinned temporary file, reopen and attest its
+  exact kind/binding/provenance, then publish with a no-replace hard link and
+  sync the pinned parent. Failed verification never publishes a final path.
+  Platforms where safe parent identity cannot be proven fail closed.
 - Imports accept canonical native codec/schema payloads for every modeled
   collection. Only global config and backup values retain the validated raw
   codec. Every native value is decoded, validated, canonically re-encoded, and

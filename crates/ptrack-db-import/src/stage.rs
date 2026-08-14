@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
@@ -74,7 +74,6 @@ pub(crate) fn load_stage(manifest_path: &Path) -> ImportResult<LoadedStage> {
     if manifest.databases.first().map(|database| database.kind) != Some(DatabaseKind::Global) {
         return invalid("migration batch must begin with exactly one global database");
     }
-    ensure_platform_supported()?;
     let root = manifest_path
         .parent()
         .ok_or_else(|| ImportError::InvalidStage("manifest has no staging directory".to_owned()))?;
@@ -813,39 +812,35 @@ fn open_stable_private_file(path: &Path, expected_or_limit: u64) -> ImportResult
     if before.file_type().is_symlink() || !before.is_file() {
         return invalid("stage artifact must be a regular non-symlink file");
     }
-    validate_private_file(&before)?;
+    validate_private_file(path, &before)?;
     if before.len() > expected_or_limit {
         return invalid("stage artifact size exceeds expected or fixed limit");
     }
-    let file = OpenOptions::new().read(true).open(path)?;
+    let identity = ptrack_store::verify_private_path(path, false)?;
+    let file = ptrack_store::open_private_path(path, false, false)?;
     let opened = file.metadata()?;
-    let after = fs::symlink_metadata(path)?;
-    if !same_file(&before, &opened) || !same_file(&after, &opened) || opened.len() != before.len() {
+    if ptrack_store::verify_private_path(path, false)? != identity || opened.len() != before.len() {
         return invalid("stage artifact changed while opening");
     }
     Ok(file)
 }
 
 #[cfg(unix)]
-fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    left.dev() == right.dev() && left.ino() == right.ino()
-}
-#[cfg(not(unix))]
-fn same_file(_: &fs::Metadata, _: &fs::Metadata) -> bool {
-    false
-}
-#[cfg(unix)]
-fn validate_private_file(info: &fs::Metadata) -> ImportResult<()> {
+fn validate_private_file(_: &Path, info: &fs::Metadata) -> ImportResult<()> {
     use std::os::unix::fs::PermissionsExt;
     if info.permissions().mode() & 0o777 != 0o600 {
         return invalid("stage artifact permissions must be 0600");
     }
     Ok(())
 }
-#[cfg(not(unix))]
-fn validate_private_file(_: &fs::Metadata) -> ImportResult<()> {
+#[cfg(windows)]
+fn validate_private_file(path: &Path, _: &fs::Metadata) -> ImportResult<()> {
+    ptrack_store::verify_private_path(path, false)?;
     Ok(())
+}
+#[cfg(not(any(unix, windows)))]
+fn validate_private_file(_: &Path, _: &fs::Metadata) -> ImportResult<()> {
+    invalid("stage file privacy is unsupported on this platform")
 }
 #[cfg(unix)]
 fn validate_private_directory(path: &Path) -> ImportResult<()> {
@@ -857,22 +852,12 @@ fn validate_private_directory(path: &Path) -> ImportResult<()> {
     }
     Ok(())
 }
-#[cfg(not(unix))]
+#[cfg(windows)]
 fn validate_private_directory(path: &Path) -> ImportResult<()> {
-    let info = fs::symlink_metadata(path)?;
-    if info.file_type().is_symlink() || !info.is_dir() {
-        return invalid("staging root is unsafe");
-    }
+    ptrack_store::verify_private_path(path, true)?;
     Ok(())
 }
-
-#[cfg(unix)]
-#[allow(clippy::unnecessary_wraps)]
-fn ensure_platform_supported() -> ImportResult<()> {
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn ensure_platform_supported() -> ImportResult<()> {
-    invalid("safe stage identity verification is not supported on this platform")
+#[cfg(not(any(unix, windows)))]
+fn validate_private_directory(_: &Path) -> ImportResult<()> {
+    invalid("staging directory privacy is unsupported on this platform")
 }

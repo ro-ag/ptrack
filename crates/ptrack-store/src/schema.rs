@@ -11,9 +11,10 @@ use crate::{
 pub(crate) const STORE_FAMILY: &[u8] = b"ptrack-redb";
 pub(crate) const STORE_OWNER: &[u8] = b"ptrack-storage-tool";
 pub(crate) const STORE_STATE_READY: &[u8] = b"ready";
+pub(crate) const STORE_STATE_ACTIVE: &[u8] = b"active";
 pub(crate) const STORE_STATE_IMPORTING: &[u8] = b"importing";
 /// The current application-level ptrack database schema.
-pub const STORE_SCHEMA_VERSION: u32 = 3;
+pub const STORE_SCHEMA_VERSION: u32 = 4;
 
 pub(crate) const MANIFEST_KEY_FAMILY: &[u8] = b"family";
 pub(crate) const MANIFEST_KEY_OWNER: &[u8] = b"owner";
@@ -29,6 +30,10 @@ pub(crate) const MANIFEST_KEY_BATCH_MANIFEST_SHA256: &[u8] = b"batch_manifest_sh
 pub(crate) const MANIFEST_KEY_DATABASE_JSON_SHA256: &[u8] = b"database_json_sha256";
 pub(crate) const MANIFEST_KEY_SOURCE_FORMAT: &[u8] = b"source_format";
 pub(crate) const MANIFEST_KEY_QUARANTINE_COUNT: &[u8] = b"quarantine_count";
+pub(crate) const MANIFEST_KEY_ACTIVATION_GENERATION: &[u8] = b"activation_generation";
+pub(crate) const MANIFEST_KEY_DATABASE_ID: &[u8] = b"database_id";
+pub(crate) const MANIFEST_KEY_CANONICAL_PATH: &[u8] = b"canonical_path";
+pub(crate) const MANIFEST_KEY_APPLICATION_WRITES: &[u8] = b"application_writes";
 pub(crate) const STORE_ORIGIN_CREATED: &[u8] = b"created";
 pub(crate) const STORE_ORIGIN_IMPORTED: &[u8] = b"imported";
 pub(crate) const STORE_ORIGIN_JSON_STAGE: &[u8] = b"json-stage";

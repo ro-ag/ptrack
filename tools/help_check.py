@@ -12,6 +12,7 @@ import posixpath
 import re
 import struct
 import sys
+import tomllib
 from urllib.parse import unquote, urlsplit
 
 
@@ -262,13 +263,19 @@ def stable_version(validation: Validation) -> str:
 def check_version(validation: Validation, documents: dict[Path, HelpHTMLParser]) -> str:
     version = stable_version(validation)
     readme = (REPO / "README.md").read_text(encoding="utf-8")
-    wails = json_file(REPO / "wails.json")
+    tauri = json_file(REPO / "src-tauri" / "tauri.conf.json")
+    with (REPO / "src-tauri" / "Cargo.toml").open("rb") as source:
+        desktop_manifest = tomllib.load(source)
+    with (REPO / "crates" / "ptrack-cli" / "Cargo.toml").open("rb") as source:
+        cli_manifest = tomllib.load(source)
     site = json_file(HELP / "site.json")
     search = json_file(HELP / "search-index.json")
     manifest = json_file(SCREENSHOTS / "manifest.json")
     validation.require(f"release-v{version}-" in readme, "README.md: release badge is stale")
     validation.require(f"help-v{version}-" in readme, "README.md: Help badge is stale")
-    validation.require(wails.get("info", {}).get("productVersion") == version, "wails.json: productVersion is stale")
+    validation.require(tauri.get("version") == version, "src-tauri/tauri.conf.json: version is stale")
+    validation.require(desktop_manifest.get("package", {}).get("version") == version, "src-tauri/Cargo.toml: version is stale")
+    validation.require(cli_manifest.get("package", {}).get("version") == version, "ptrack-cli/Cargo.toml: version is stale")
     validation.require(site.get("productVersion") == version, "docs/help/site.json: productVersion is stale")
     validation.require(search.get("productVersion") == version, "docs/help/search-index.json: productVersion is stale")
     validation.require(manifest.get("productVersion") == version, "screenshot manifest: productVersion is stale")
@@ -392,9 +399,9 @@ def check_routes(validation: Validation) -> None:
             f"site route is missing a directory index: {route}",
         )
     destinations = site.get("nativeDestinations", {})
-    go_source = (REPO / "internal" / "gui" / "project_menu.go").read_text(encoding="utf-8")
+    native_source = (REPO / "crates" / "ptrack-app" / "src" / "desktop_runtime.rs").read_text(encoding="utf-8")
     for name, target in destinations.items():
-        validation.require(target in go_source, f"native destination {name} differs from Go allowlist")
+        validation.require(target in native_source, f"native destination {name} differs from Rust allowlist")
         parsed = urlsplit(target)
         if parsed.hostname == "ro-ag.github.io":
             prefix = "/ptrack/help/"

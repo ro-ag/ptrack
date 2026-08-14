@@ -1,4 +1,7 @@
 use std::fmt;
+use std::sync::OnceLock;
+
+use regex::Regex;
 
 use crate::model::CAPABILITY_MODEL_VERSION;
 use crate::{
@@ -12,6 +15,9 @@ const MAX_TRANSFER_BYTES: i64 = 32 * 1024 * 1024;
 const MAX_REDIRECTS: i64 = 10;
 const MAX_CONCURRENT: i64 = 8;
 const MAX_AUDIT_RECORDS: i64 = 1_000;
+const MAX_AUDIT_DURATION_MILLIS: i64 = 24 * 60 * 60 * 1_000;
+const MAX_AUDIT_BYTES: i64 = 1 << 40;
+const MAX_AUDIT_TARGET_BYTES: usize = 256;
 
 /// A stable field-level reason a native record cannot be trusted.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -370,6 +376,45 @@ impl Validate for CapabilityAudit {
         require_nonnegative(self.request_bytes, "capability_audit.request_bytes")?;
         require_nonnegative(self.response_bytes, "capability_audit.response_bytes")?;
         require_nonnegative(self.redirects, "capability_audit.redirects")?;
+        if self.duration_millis > MAX_AUDIT_DURATION_MILLIS {
+            return Err(ValidationError::new(
+                "capability_audit.duration_millis",
+                "exceeds the metadata bound",
+            ));
+        }
+        if self.request_bytes > MAX_AUDIT_BYTES || self.response_bytes > MAX_AUDIT_BYTES {
+            return Err(ValidationError::new(
+                "capability_audit.bytes",
+                "exceeds the metadata bound",
+            ));
+        }
+        if self.redirects > MAX_REDIRECTS {
+            return Err(ValidationError::new(
+                "capability_audit.redirects",
+                "exceeds the metadata bound",
+            ));
+        }
+        if !valid_audit_profile(&self.agent_profile) {
+            return Err(ValidationError::new(
+                "capability_audit.agent_profile",
+                "must be sanitized",
+            ));
+        }
+        if !valid_audit_operation(self.kind, &self.operation) {
+            return Err(ValidationError::new(
+                "capability_audit.operation",
+                "must be sanitized",
+            ));
+        }
+        if self.target.is_empty()
+            || self.target.len() > MAX_AUDIT_TARGET_BYTES
+            || self.target.chars().any(char::is_control)
+        {
+            return Err(ValidationError::new(
+                "capability_audit.target",
+                "must be sanitized",
+            ));
+        }
         let valid_error_class = if self.success {
             self.error_class == "none"
         } else {
@@ -402,6 +447,52 @@ impl Validate for CapabilityAudit {
         }
         self.created_at.validate()
     }
+}
+
+fn valid_audit_profile(value: &str) -> bool {
+    value == "unknown-profile"
+        || (!value.is_empty()
+            && value.len() <= 64
+            && !value.starts_with('-')
+            && value.chars().all(|character| {
+                audit_letter_or_decimal_digit(character) || matches!(character, '.' | '_' | '-')
+            }))
+}
+
+fn audit_letter_or_decimal_digit(character: char) -> bool {
+    static VALUE: OnceLock<Regex> = OnceLock::new();
+    let mut buffer = [0; 4];
+    VALUE
+        .get_or_init(|| Regex::new(r"^[\p{L}\p{Nd}]$").expect("static Unicode regex"))
+        .is_match(character.encode_utf8(&mut buffer))
+}
+
+fn valid_audit_operation(kind: CapabilityKind, value: &str) -> bool {
+    let http_operation = value.to_ascii_lowercase();
+    value == "unknown"
+        || match kind {
+            CapabilityKind::Http => matches!(
+                http_operation.as_str(),
+                "get" | "head" | "post" | "put" | "patch" | "delete" | "options" | "test"
+            ),
+            CapabilityKind::Git => {
+                matches!(
+                    value,
+                    "status" | "fetch" | "pull" | "push" | "ls-remote" | "test"
+                )
+            }
+            CapabilityKind::Ssh => matches!(
+                value,
+                "git"
+                    | "remote-command"
+                    | "upload"
+                    | "download"
+                    | "interactive-shell"
+                    | "local-forward"
+                    | "remote-forward"
+                    | "test"
+            ),
+        }
 }
 
 impl Validate for MemoryWritebackRecord {

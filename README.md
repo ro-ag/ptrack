@@ -5,7 +5,7 @@
 Observe agent work, keep project state durable, and pass bounded context to
 the next agent—without a hosted service or cloud account.
 
-[![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![Rust](https://img.shields.io/badge/Rust-1.89%2B-CE6A3D?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Release](https://img.shields.io/badge/release-v0.22.0-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.22.0)
 [![Help Center](https://img.shields.io/badge/help-v0.22.0-3DD6A3)](https://ro-ag.github.io/ptrack/help/)
 [![License](https://img.shields.io/badge/License-Apache--2.0-3DD6A3)](LICENSE)
@@ -52,7 +52,7 @@ without the dashboard holding a long-lived lock.
 Download the native archive for your platform from the
 [GitHub releases page](https://github.com/ro-ag/ptrack/releases), then place the
 `ptrack` executable somewhere on your `PATH`. Every release binary includes the
-CLI, terminal dashboard, and Wails desktop GUI.
+CLI, terminal dashboard, and Tauri desktop GUI.
 
 On macOS you can instead download `p-track_<version>_darwin_<arch>.dmg` and drag
 **p-track.app** into `/Applications`. Release disk images are Developer ID-signed,
@@ -60,11 +60,10 @@ notarized, and stapled by the tag workflow. The same executable inside the
 bundle doubles as the CLI; symlink it onto your `PATH` with
 `ln -s /Applications/p-track.app/Contents/MacOS/ptrack /usr/local/bin/ptrack`.
 
-Do not install p-track with `go install`. Wails requires platform-specific build
-tags, CGO setup, and native linker flags that `go install module@version` cannot
-apply. p-track rejects plain Go application builds instead of producing a
-binary whose `--gui` option fails at runtime. Building from source requires Go
-1.26 or newer and the Wails prerequisites for your platform.
+Building from source requires Rust 1.89, Node 24, and the
+[Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your
+platform. The nested Go module under `tools/ptrack-db-export` is a read-only
+legacy migration helper; it is not the p-track application.
 
 ## Updates
 
@@ -192,7 +191,7 @@ project root, database location, schema, last writer, and backup destination.
 
 ## The desktop project workspace
 
-Use the Wails GUI for the canonical native project workspace:
+Use the Tauri GUI for the canonical native project workspace:
 
 ```sh
 ptrack gui
@@ -477,7 +476,7 @@ Put `#<task-id>` in a commit message to link the commit to that task.
 | `ptrack context [--json]` | Print the bounded resume digest. |
 | `ptrack next [--json]` | Print the most-actionable task in the active plan. |
 | `ptrack gui [PATH]` | Open the canonical desktop project workspace; PATH defaults to the current directory. |
-| `ptrack board [--plan N] [--json] [--gui]` | Print a kanban board or open it as a Wails desktop GUI. |
+| `ptrack board [--plan N] [--json] [--gui]` | Print a kanban board or open it as a Tauri desktop GUI. |
 | `ptrack search <term> [--json]` | Search plan and task titles plus note bodies. |
 | `ptrack status [--json]` | Print a compact project overview. |
 | `ptrack projects [--json]` | List projects in the global registry. |
@@ -494,42 +493,47 @@ agent integrations and explicitly approved broker capabilities.
 
 | Store | Location | Contents |
 |---|---|---|
-| Project | `.ptrack/ptrack.db` | Goal, summary, milestones, plans, tasks, issues, notes, and commit records. |
-| Global | `~/.ptrack/global.db` | Configuration, the project registry, and backup metadata. |
+| Project | `.ptrack/ptrack.redb` | Goal, summary, milestones, plans, tasks, issues, notes, capabilities, and commit records. |
+| Global | `~/.ptrack/global.redb` | Configuration, the project registry, and backup metadata. |
+| Runtime routing | `~/.ptrack/runtime/active-generation.json` | The attested generation and exact global/project store bindings. |
 | Backups | `~/.ptrack/backups/` | Timestamped copies created by `ptrack backup` or `B` in the TUI. |
 | Updates | `~/.ptrack/updates/` | Private verified release stages and bounded crash-recovery state. |
 
 Set `PTRACK_HOME` to move the global store, backups, and update staging. The
-persisted automatic-check opt-in is ordinary configuration in `global.db`; no
-GitHub credential or asset URL is stored. Project discovery walks upward from
-the current directory, similar to git. Values are encoded Go structures stored
-in [bbolt](https://github.com/etcd-io/bbolt); JSON is produced only when a
-command is explicitly asked for `--json` output.
+persisted automatic-check opt-in is ordinary configuration in `global.redb`;
+no GitHub credential or asset URL is stored. Runtime commands resolve only
+stores named by the attested active-generation marker; they never fall back to
+an old bbolt database. JSON is produced only when a command is explicitly
+asked for `--json` output.
+
+Migration from a legacy bbolt store is an explicit offline operation. It keeps
+the legacy files untouched, validates imported candidates, and publishes the
+active-generation marker last. Automatic rollback is allowed only before any
+application write reaches the new global or project stores; afterward, stop
+and recover from preserved evidence instead of forcing a downgrade.
 
 ## Development
 
-```sh
-go test ./...
-go vet ./...
-```
-
-Application builds always go through Wails so the resulting executable includes
-the CLI, terminal dashboard, and desktop GUI. Install the
-[Wails v2 prerequisites](https://wails.io/docs/gettingstarted/installation/)
-for your platform, then run:
+The Rust/Tauri application builds one `ptrack` executable containing the CLI,
+terminal dashboard, and desktop GUI. Install the
+[Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your
+platform, then run:
 
 ```sh
 make build
-./build/bin/ptrack version
+./target/$(rustc -vV | sed -n 's/^host: //p')/release/ptrack version
+make test
 ```
+
+The retained exporter is tested separately with
+`make exporter-test`; no other Go runtime remains.
 
 On macOS, two more targets produce the branded desktop artifacts:
 
 ```sh
-make package   # build/bin/p-track.app — bundle id com.ro-ag.ptrack, version
-               # stamped from git, icon from build/appicon.png
-make dmg       # build/bin/p-track-<version>-macOS-<arch>.dmg with an
-               # /Applications drop link
+make package   # target/<triple>/release/bundle/macos/p-track.app
+make archive   # exact updater-compatible macOS CLI tar.gz
+make dmg       # exact p-track_<version>_darwin_<arch>.dmg
 ```
 
 With a Developer ID identity in the login keychain (`SIGN_IDENTITY` is the
@@ -545,31 +549,27 @@ make release-dmg # full pipeline: sign, DMG, sign, notarize, staple — needs a
                  # one-time `xcrun notarytool store-credentials ptrack-notarize`
 ```
 
-The release workflow runs the same steps on tag pushes: macOS builds are
-signed when the `APPLE_CERTIFICATE_*` secrets exist, and notarized as well
-once the `APPLE_API_*` secrets are added.
+The tag-only release workflow runs the same steps for six native targets.
+macOS release jobs fail closed unless the complete Developer ID and Apple
+notary credential sets are present; unsigned macOS assets are never published.
 
-Bundle metadata lives in `build/darwin/` (`Info.plist`, `Info.dev.plist`,
-hardened-runtime `entitlements.plist` for future signed releases). Brand
-assets — the icon generator, PNG exports, `AppIcon.icns`, the README banner,
-and a social card — live in [`assets/brand/`](assets/brand/); regenerate them
-with `make icons`.
+Bundle configuration lives in `src-tauri/tauri.conf.json`; the frozen launcher
+and hardened-runtime entitlements live in `build/darwin/`. Brand assets — the
+icon generator, PNG exports, `AppIcon.icns`, README banner, and social card —
+live in [`assets/brand/`](assets/brand/); regenerate them with `make icons`.
 
 The equivalent command, for environments without `make`, is:
 
 ```sh
-cd frontend
-npm ci
-npm run build
-cd ..
-go run github.com/wailsapp/wails/v2/cmd/wails@v2.13.0 build \
-  -clean -nopackage -trimpath -windowsconsole
+npm --prefix frontend ci
+npm --prefix frontend run build
+cargo build --locked --release --package ptrack-desktop --bin ptrack
 ```
 
 Architecture and product design notes live in
-[`docs/superpowers/`](docs/superpowers/). The deferred cgo-free Tauri host,
-`native-ipc` runner, and libghostty-vt migration is captured separately in
-[`docs/tauri-rust-recode.md`](docs/tauri-rust-recode.md).
+[`docs/superpowers/`](docs/superpowers/). The approved all-Rust runtime, Tauri
+boundary, storage activation contract, and fail-closed cutover design are
+captured in [`docs/tauri-rust-recode.md`](docs/tauri-rust-recode.md).
 
 ## License
 

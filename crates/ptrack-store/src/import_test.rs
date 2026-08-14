@@ -15,6 +15,7 @@ use super::{
     StoreError, StoreKind,
 };
 use crate::import::validated_record_size;
+use crate::protect_private_directory;
 use crate::schema::{
     MANIFEST_KEY_FAMILY, MANIFEST_KEY_IMPORT_BUNDLE_SHA256, MANIFEST_KEY_IMPORT_BUNDLE_VERSION,
     MANIFEST_KEY_IMPORT_SOURCE_FORMAT, MANIFEST_KEY_ORIGIN, MANIFEST_KEY_OWNER,
@@ -35,6 +36,7 @@ impl TestDirectory {
             std::process::id()
         ));
         fs::create_dir(&path).unwrap();
+        protect_private_directory(&path).unwrap();
         Self(path)
     }
 
@@ -99,6 +101,14 @@ fn collection_mut(data: &mut ImportData, collection: Collection) -> &mut ImportC
         .iter_mut()
         .find(|imported| imported.collection == collection)
         .unwrap()
+}
+
+fn project_registry_path() -> &'static [u8] {
+    if cfg!(windows) {
+        br"C:\tmp\project"
+    } else {
+        b"/tmp/project"
+    }
 }
 
 fn record(collection: Collection, key: OwnedRecordKey, payload: &[u8]) -> ImportRecord {
@@ -245,7 +255,7 @@ fn successful_global_import_uses_raw_and_native_codecs() {
         .records
         .push(record(
             Collection::GlobalProjects,
-            OwnedRecordKey::Bytes(b"/tmp/project".to_vec()),
+            OwnedRecordKey::Bytes(project_registry_path().to_vec()),
             b"gob project ref",
         ));
     collection_mut(&mut data, Collection::GlobalBackups)
@@ -274,7 +284,7 @@ fn successful_global_import_uses_raw_and_native_codecs() {
             let project = transaction
                 .get(
                     Collection::GlobalProjects,
-                    RecordKey::Bytes(b"/tmp/project"),
+                    RecordKey::Bytes(project_registry_path()),
                 )?
                 .unwrap();
             assert_eq!(project.codec(), Collection::GlobalProjects.import_codec());

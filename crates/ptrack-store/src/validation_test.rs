@@ -30,21 +30,25 @@ fn store_validation_binds_native_payloads_to_collection_keys() {
     validation::record(Collection::ProjectMeta, &OwnedRecordKey::Singleton, &meta).unwrap();
     assert!(validation::record(Collection::Plans, &OwnedRecordKey::Id(1), &meta).is_err());
 
+    let project_path = std::env::temp_dir().join("project");
+    let project_path = project_path.to_string_lossy().into_owned();
+    let other_path = std::env::temp_dir().join("other");
+    let other_path = other_path.to_string_lossy().into_owned();
     let project = native(NativeRecord::ProjectRef(ProjectRef {
         name: "project".to_owned(),
-        path: "/tmp/project".to_owned(),
+        path: project_path.clone(),
         last_seen: Timestamp::Zero,
     }));
     validation::record(
         Collection::GlobalProjects,
-        &OwnedRecordKey::Bytes(b"/tmp/project".to_vec()),
+        &OwnedRecordKey::Bytes(project_path.as_bytes().to_vec()),
         &project,
     )
     .unwrap();
     assert!(
         validation::record(
             Collection::GlobalProjects,
-            &OwnedRecordKey::Bytes(b"/tmp/other".to_vec()),
+            &OwnedRecordKey::Bytes(other_path.as_bytes().to_vec()),
             &project,
         )
         .is_err()
@@ -53,7 +57,7 @@ fn store_validation_binds_native_payloads_to_collection_keys() {
         decode_record(RecordKind::ProjectRef, project.payload()).unwrap(),
         NativeRecord::ProjectRef(ProjectRef {
             name: "project".to_owned(),
-            path: "/tmp/project".to_owned(),
+            path: project_path,
             last_seen: Timestamp::Zero,
         })
     );

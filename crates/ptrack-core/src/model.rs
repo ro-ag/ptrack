@@ -1,5 +1,45 @@
+use std::fmt;
+use std::str::FromStr;
+
 /// Version of the persistent capability record contract.
 pub const CAPABILITY_MODEL_VERSION: u64 = 1;
+
+/// An unrecognized persistent enum name.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ParseEnumError {
+    enum_name: &'static str,
+    value: String,
+}
+
+impl ParseEnumError {
+    const fn new(enum_name: &'static str, value: String) -> Self {
+        Self { enum_name, value }
+    }
+
+    /// Returns the enum type whose value was rejected.
+    #[must_use]
+    pub const fn enum_name(&self) -> &'static str {
+        self.enum_name
+    }
+
+    /// Returns the rejected value.
+    #[must_use]
+    pub fn value(&self) -> &str {
+        &self.value
+    }
+}
+
+impl fmt::Display for ParseEnumError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "invalid {} value {:?}",
+            self.enum_name, self.value
+        )
+    }
+}
+
+impl std::error::Error for ParseEnumError {}
 
 /// A SHA-256-sized digest.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
@@ -52,10 +92,79 @@ impl Timestamp {
             } => Some(i128::from(seconds) * 1_000_000_000 + i128::from(nanoseconds)),
         }
     }
+
+    /// Returns the stored calendar date using the timestamp's persisted fixed
+    /// offset, without consulting the host timezone.
+    #[must_use]
+    pub fn stored_date(self) -> Option<StoredDate> {
+        let Self::Fixed {
+            seconds,
+            offset_seconds,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        let local_seconds = i128::from(seconds) + i128::from(offset_seconds);
+        Some(StoredDate::from_unix_days(local_seconds.div_euclid(86_400)))
+    }
+}
+
+/// A proleptic-Gregorian calendar date derived from a stored fixed offset.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StoredDate {
+    pub year: i64,
+    pub month: u8,
+    pub day: u8,
+}
+
+impl StoredDate {
+    fn from_unix_days(days: i128) -> Self {
+        // Howard Hinnant's civil-from-days algorithm, shifted from the Unix
+        // epoch. i128 arithmetic keeps all possible Timestamp values safe.
+        let shifted = days + 719_468;
+        let era = shifted.div_euclid(146_097);
+        let day_of_era = shifted - era * 146_097;
+        let year_of_era =
+            (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+        let mut year = year_of_era + era * 400;
+        let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+        let month_prime = (5 * day_of_year + 2) / 153;
+        let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+        let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+        if month <= 2 {
+            year += 1;
+        }
+        Self {
+            year: i64::try_from(year).expect("i64 timestamp year fits i64"),
+            month: u8::try_from(month).expect("civil month fits u8"),
+            day: u8::try_from(day).expect("civil day fits u8"),
+        }
+    }
+}
+
+impl fmt::Display for StoredDate {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.year < 0 {
+            write!(
+                formatter,
+                "-{:04}-{:02}-{:02}",
+                self.year.unsigned_abs(),
+                self.month,
+                self.day
+            )
+        } else {
+            write!(
+                formatter,
+                "{:04}-{:02}-{:02}",
+                self.year, self.month, self.day
+            )
+        }
+    }
 }
 
 macro_rules! persistent_enum {
-    ($name:ident { $($variant:ident = $tag:literal),+ $(,)? }) => {
+    ($name:ident { $($variant:ident = $tag:literal => $value:literal),+ $(,)? }) => {
         #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
         #[repr(u8)]
         pub enum $name {
@@ -77,46 +186,86 @@ macro_rules! persistent_enum {
                     _ => None,
                 }
             }
+
+            /// Returns the stable Go-compatible string value.
+            #[must_use]
+            pub const fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $value,)+
+                }
+            }
+
+            /// Parses the exact, case-sensitive Go-compatible string value.
+            #[must_use]
+            pub fn from_name(value: &str) -> Option<Self> {
+                match value {
+                    $($value => Some(Self::$variant),)+
+                    _ => None,
+                }
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str(self.as_str())
+            }
+        }
+
+        impl FromStr for $name {
+            type Err = ParseEnumError;
+
+            fn from_str(value: &str) -> Result<Self, Self::Err> {
+                Self::from_name(value)
+                    .ok_or_else(|| ParseEnumError::new(stringify!($name), value.to_owned()))
+            }
         }
     };
 }
 
 persistent_enum!(PlanStatus {
-    Active = 1,
-    Done = 2,
-    Archived = 3,
+    Active = 1 => "active",
+    Done = 2 => "done",
+    Archived = 3 => "archived",
 });
 persistent_enum!(TaskStatus {
-    Todo = 1,
-    Doing = 2,
-    Done = 3,
-    Blocked = 4,
+    Todo = 1 => "todo",
+    Doing = 2 => "doing",
+    Done = 3 => "done",
+    Blocked = 4 => "blocked",
 });
 persistent_enum!(NoteTarget {
-    Project = 1,
-    Plan = 2,
-    Task = 3,
+    Project = 1 => "project",
+    Plan = 2 => "plan",
+    Task = 3 => "task",
 });
 persistent_enum!(MemoryKind {
-    Legacy = 0,
-    Decision = 1,
-    Blocker = 2,
-    Handoff = 3,
-    Summary = 4,
+    Legacy = 0 => "",
+    Decision = 1 => "decision",
+    Blocker = 2 => "blocker",
+    Handoff = 3 => "handoff",
+    Summary = 4 => "summary",
 });
-persistent_enum!(MilestoneStatus { Open = 1, Done = 2 });
-persistent_enum!(IssueStatus { Open = 1, Closed = 2 });
+persistent_enum!(MilestoneStatus { Open = 1 => "open", Done = 2 => "done" });
+persistent_enum!(IssueStatus { Open = 1 => "open", Closed = 2 => "closed" });
 persistent_enum!(Severity {
-    Low = 1,
-    Medium = 2,
-    High = 3,
-    Critical = 4,
+    Low = 1 => "low",
+    Medium = 2 => "medium",
+    High = 3 => "high",
+    Critical = 4 => "critical",
 });
 persistent_enum!(CapabilityKind {
-    Http = 1,
-    Git = 2,
-    Ssh = 3,
+    Http = 1 => "http",
+    Git = 2 => "git",
+    Ssh = 3 => "ssh",
 });
+
+impl TaskStatus {
+    /// Reports whether the task counts as open in reports and inventory.
+    #[must_use]
+    pub const fn is_open(self) -> bool {
+        !matches!(self, Self::Done)
+    }
+}
 
 /// Singleton project metadata.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -143,6 +292,14 @@ pub struct Milestone {
     pub updated_at: Timestamp,
 }
 
+impl Milestone {
+    /// Returns the externally visible display order.
+    #[must_use]
+    pub const fn ord(&self) -> i64 {
+        self.order
+    }
+}
+
 /// An ordered unit of work.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Plan {
@@ -154,6 +311,14 @@ pub struct Plan {
     pub order: i64,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+}
+
+impl Plan {
+    /// Returns the externally visible display order.
+    #[must_use]
+    pub const fn ord(&self) -> i64 {
+        self.order
+    }
 }
 
 /// A git commit linked to a plan or task.
@@ -191,6 +356,14 @@ pub struct Task {
     pub order: i64,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+}
+
+impl Task {
+    /// Returns the externally visible display order.
+    #[must_use]
+    pub const fn ord(&self) -> i64 {
+        self.order
+    }
 }
 
 /// A durable observation attached to a project, plan, or task.
@@ -324,20 +497,38 @@ pub struct ProjectRef {
     pub last_seen: Timestamp,
 }
 
+/// Project-wide inventory totals used by the bounded context footer.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Counts {
+    pub milestones: usize,
+    pub milestones_done: usize,
+    pub plans: usize,
+    pub plans_done: usize,
+    pub tasks: usize,
+    pub tasks_done: usize,
+    pub tasks_blocked: usize,
+    /// Every task not in the done state.
+    pub tasks_open: usize,
+    pub issues: usize,
+    pub issues_open: usize,
+    pub commits: usize,
+    pub notes: usize,
+}
+
 persistent_enum!(RecordKind {
-    Meta = 1,
-    Plan = 2,
-    Task = 3,
-    Note = 4,
-    Milestone = 5,
-    Issue = 6,
-    Commit = 7,
-    Capability = 8,
-    CapabilityAudit = 9,
-    MemoryWriteback = 10,
-    ProjectRef = 11,
-    GlobalConfig = 12,
-    GlobalBackup = 13,
+    Meta = 1 => "meta",
+    Plan = 2 => "plan",
+    Task = 3 => "task",
+    Note = 4 => "note",
+    Milestone = 5 => "milestone",
+    Issue = 6 => "issue",
+    Commit = 7 => "commit",
+    Capability = 8 => "capability",
+    CapabilityAudit = 9 => "capability_audit",
+    MemoryWriteback = 10 => "memory_writeback",
+    ProjectRef = 11 => "project_ref",
+    GlobalConfig = 12 => "global_config",
+    GlobalBackup = 13 => "global_backup",
 });
 
 /// One typed persistent ptrack value.

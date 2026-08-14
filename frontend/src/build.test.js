@@ -131,7 +131,7 @@ describe("production asset layout", () => {
       /id="task-transition-modal"[\s\S]*role="alertdialog"[\s\S]*aria-modal="true"[\s\S]*id="task-transition-detail"[\s\S]*id="task-transition-cancel"[\s\S]*id="task-transition-submit"/,
     );
     expect(app).toContain("MoveTaskV3");
-    expect(app).not.toContain("MoveTaskV2");
+    expect(appSource).not.toContain("api().MoveTaskV2");
     expect(app).toContain("linked sessions, processes, and capabilities stay unchanged");
     expect(app).toContain("Finish the current task status change before starting another.");
     expect(app).toContain("Stale task transition response ignored");

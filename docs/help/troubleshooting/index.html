@@ -58,7 +58,7 @@
 
           <h2 id="project-and-database">Project and database errors</h2>
           <h3>“No p-track project found”</h3>
-          <p>p-track searches upward only to the nearest Git boundary. Confirm where you are, then change to the repository that owns the project:</p>
+          <p>p-track resolves the deepest canonical project root in the attested active-generation marker. Confirm where you are, then change to the registered project:</p>
           <pre><code>pwd
 git rev-parse --show-toplevel
 cd /path/to/repository
@@ -66,7 +66,7 @@ ptrack context</code></pre>
           <p>If this repository has never been initialized, run <code>ptrack init</code> once at its intended root. Do not initialize a different directory merely to silence the error; see <a href="../start-here/#first-project">Start Here</a>.</p>
 
           <h3>Database busy or read timeout</h3>
-          <p>Project and global databases wait for their file lock for one second. Let an active p-track operation finish, close an unintended duplicate p-track process that has the same database open, and retry. Do not delete <code>.ptrack/ptrack.db</code> or invent a lock-file cleanup.</p>
+          <p>Project and global databases wait for their file lock for one second. Let an active p-track operation finish, close an unintended duplicate p-track process that has the same database open, and retry. Do not delete <code>.ptrack/ptrack.redb</code>, <code>global.redb</code>, <code>active-generation.json</code>, or a cutover lock. During migration, preserve the complete journal, handoff, receipt, marker, and legacy files.</p>
 
           <h3>Database format is newer than this p-track</h3>
           <p>Install a compatible newer p-track binary and retry. The older binary refuses the database and leaves it untouched. Do not force it open, downgrade it, or attempt a schema edit. Review the documented <a href="../install-and-safety/#migration">migration boundary</a>.</p>

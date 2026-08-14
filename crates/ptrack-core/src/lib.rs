@@ -5,22 +5,50 @@
 //! policy normalization before enabling or using a decoded capability.
 
 mod codec;
+mod guide;
 mod model;
+mod report;
+mod search;
+mod snapshot;
 mod validation;
+mod views;
 
 pub use codec::{
     CodecError, MAX_LIST_ITEMS, MAX_PAYLOAD_BYTES, MAX_STRING_BYTES, NATIVE_CODEC,
     NATIVE_PAYLOAD_SCHEMA, decode_record, encode_record,
 };
+pub use guide::{GUIDE_BEGIN, GUIDE_END, guide_block, guide_body, render_guide, upsert_guide};
 pub use model::{
     CAPABILITY_MODEL_VERSION, Capability, CapabilityAudit, CapabilityAuditPolicy, CapabilityKind,
-    CapabilityLimits, Commit, Digest32, GitScope, HttpScope, Issue, IssueStatus, MemoryKind,
-    MemoryWritebackRecord, Meta, Milestone, MilestoneStatus, NativeRecord, Note, NoteTarget, Plan,
-    PlanStatus, ProjectRef, RecordKind, Severity, SshScope, Task, TaskStatus, Timestamp,
+    CapabilityLimits, Commit, Counts, Digest32, GitScope, HttpScope, Issue, IssueStatus,
+    MemoryKind, MemoryWritebackRecord, Meta, Milestone, MilestoneStatus, NativeRecord, Note,
+    NoteTarget, ParseEnumError, Plan, PlanStatus, ProjectRef, RecordKind, Severity, SshScope,
+    StoredDate, Task, TaskStatus, Timestamp,
 };
+pub use report::{Digest, IssueLine, NoteLine, PlanBrief, ReportError, TaskLine, context};
+pub use search::{SearchView, search};
+pub use snapshot::ProjectSnapshot;
 pub use validation::{Validate, ValidationError};
+pub use views::{
+    Board, IssueShow, MilestoneRef, MilestoneShow, NextView, PlanRef, PlanShow, TaskShow,
+    board_for, next, show_issue, show_milestone, show_plan, show_task,
+};
 
 #[cfg(test)]
 mod codec_test;
 #[cfg(test)]
+mod guide_test;
+#[cfg(test)]
+mod model_behavior_test;
+#[cfg(test)]
+mod report_test;
+#[cfg(test)]
+mod search_test;
+#[cfg(test)]
+mod snapshot_test;
+#[cfg(test)]
+mod test_support;
+#[cfg(test)]
 mod validation_test;
+#[cfg(test)]
+mod views_test;

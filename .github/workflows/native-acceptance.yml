@@ -1,0 +1,353 @@
+name: native acceptance
+
+# This workflow validates a candidate revision without publishing, signing,
+# tagging, uploading packages, or using update/release credentials.
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/native-acceptance.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/**"
+      - "src-tauri/**"
+      - "frontend/**"
+      - "tools/help_check.py"
+      - "tools/help_check_test.py"
+      - "tools/release_contract.py"
+      - "tools/release_contract_test.py"
+      - "tools/ptrack-db-export/**"
+      - "build/**"
+      - "assets/brand/**"
+      - "docs/help/**"
+      - "docs/rust-parity-matrix.md"
+      - "docs/terminal-acceptance.md"
+      - "docs/updater-acceptance.md"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/native-acceptance.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/**"
+      - "src-tauri/**"
+      - "frontend/**"
+      - "tools/help_check.py"
+      - "tools/help_check_test.py"
+      - "tools/release_contract.py"
+      - "tools/release_contract_test.py"
+      - "tools/ptrack-db-export/**"
+      - "build/**"
+      - "assets/brand/**"
+      - "docs/help/**"
+      - "docs/rust-parity-matrix.md"
+      - "docs/terminal-acceptance.md"
+      - "docs/updater-acceptance.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-acceptance-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  portable:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.89.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: portable-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Set up retained exporter toolchain
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: tools/ptrack-db-export/go.mod
+          cache-dependency-path: tools/ptrack-db-export/go.sum
+
+      - name: Install Linux desktop libraries
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - name: Validate frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm test
+          npm run build
+
+      - name: Validate portable contracts
+        shell: bash
+        run: |
+          cargo fmt --all -- --check
+          cargo test --workspace --all-targets --no-fail-fast
+          cargo clippy --workspace --all-targets -- -D warnings
+          RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+          python3 -B -m unittest tools.help_check_test tools.release_contract_test
+          python3 -B tools/help_check.py all
+          (cd tools/ptrack-db-export && go test ./... && go vet ./... && go mod tidy)
+          git diff --exit-code -- tools/ptrack-db-export/go.mod tools/ptrack-db-export/go.sum
+
+  native:
+    name: native (${{ matrix.archive_os }}/${{ matrix.arch }})
+    needs: portable
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            rust_target: x86_64-unknown-linux-gnu
+            archive_os: linux
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            rust_target: aarch64-unknown-linux-gnu
+            archive_os: linux
+            arch: arm64
+          - runner: windows-2025
+            rust_target: x86_64-pc-windows-msvc
+            archive_os: windows
+            arch: amd64
+          - runner: windows-11-arm
+            rust_target: aarch64-pc-windows-msvc
+            archive_os: windows
+            arch: arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up native Rust toolchain
+        uses: dtolnay/rust-toolchain@1.89.0
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: native-${{ matrix.rust_target }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Set up retained exporter toolchain
+        if: runner.os == 'Windows'
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: tools/ptrack-db-export/go.mod
+          cache-dependency-path: tools/ptrack-db-export/go.sum
+
+      - name: Install Linux desktop libraries
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf xvfb
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Verify exact native host
+        shell: bash
+        run: |
+          test "$(rustc -vV | sed -n 's/^host: //p')" = "${{ matrix.rust_target }}"
+
+      - name: Execute native Rust suites
+        shell: bash
+        run: |
+          cargo test --all-targets --no-fail-fast \
+            -p ptrack-app \
+            -p ptrack-capability \
+            -p ptrack-desktop \
+            -p ptrack-store \
+            -p ptrack-terminal \
+            -p ptrack-updater
+
+      - name: Execute native Windows legacy-exporter suite
+        if: runner.os == 'Windows'
+        shell: bash
+        working-directory: tools/ptrack-db-export
+        run: |
+          go test ./...
+          go vet ./...
+
+      - name: Build and smoke Linux candidate
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          version="0.22.0"
+          export PTRACK_BUILD_VERSION="$version"
+          cargo build --locked --release --package ptrack-desktop --bin ptrack
+          binary="target/release/ptrack"
+          python3 tools/release_contract.py validate-binary \
+            "$binary" "$version" linux "${{ matrix.arch }}"
+          mkdir -p "$RUNNER_TEMP/ptrack-home"
+          chmod 700 "$RUNNER_TEMP/ptrack-home"
+          set +e
+          PTRACK_HOME="$RUNNER_TEMP/ptrack-home" \
+            timeout 10s xvfb-run --auto-servernum "$binary" gui
+          status=$?
+          set -e
+          test "$status" -eq 124
+
+      - name: Build and smoke Windows candidate
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = "0.22.0"
+          $env:PTRACK_BUILD_VERSION = $version
+          cargo build --locked --release --package ptrack-desktop --bin ptrack
+          $binary = "target/release/ptrack.exe"
+          python tools/release_contract.py validate-binary `
+            $binary $version windows "${{ matrix.arch }}"
+          $env:PTRACK_HOME = Join-Path $env:RUNNER_TEMP "ptrack-home-$([guid]::NewGuid())"
+          if (Test-Path $env:PTRACK_HOME) {
+            throw "native desktop smoke home must start absent"
+          }
+          $process = $null
+          $stdoutPath = Join-Path $env:RUNNER_TEMP "ptrack-gui.stdout"
+          $stderrPath = Join-Path $env:RUNNER_TEMP "ptrack-gui.stderr"
+          try {
+            $process = Start-Process -FilePath $binary -ArgumentList "gui" -PassThru `
+              -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+            Start-Sleep -Seconds 8
+            if ($process.HasExited) {
+              $stdout = @(Get-Content -Tail 20 -ErrorAction SilentlyContinue $stdoutPath) -join "`n"
+              $stderr = @(Get-Content -Tail 20 -ErrorAction SilentlyContinue $stderrPath) -join "`n"
+              throw "native desktop candidate exited during startup smoke (code=$($process.ExitCode), stdout=$stdout, stderr=$stderr)"
+            }
+          } finally {
+            if ($null -ne $process -and -not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force
+              $process.WaitForExit()
+            }
+          }
+
+  native-macos:
+    name: native (${{ matrix.archive_os }}/${{ matrix.arch }})
+    needs: portable
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'native-acceptance-approved')
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            rust_target: x86_64-apple-darwin
+            archive_os: darwin
+            arch: amd64
+          - runner: macos-15
+            rust_target: aarch64-apple-darwin
+            archive_os: darwin
+            arch: arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up native Rust toolchain
+        uses: dtolnay/rust-toolchain@1.89.0
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: native-${{ matrix.rust_target }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Verify exact native host
+        shell: bash
+        run: |
+          test "$(rustc -vV | sed -n 's/^host: //p')" = "${{ matrix.rust_target }}"
+
+      - name: Execute native Rust suites
+        shell: bash
+        run: |
+          cargo test --all-targets --no-fail-fast \
+            -p ptrack-app \
+            -p ptrack-capability \
+            -p ptrack-desktop \
+            -p ptrack-store \
+            -p ptrack-terminal \
+            -p ptrack-updater
+
+      - name: Build and smoke packaged macOS launcher
+        shell: bash
+        run: |
+          version="0.22.0"
+          export PTRACK_BUILD_VERSION="$version"
+          npm --prefix frontend run tauri -- build \
+            --target "${{ matrix.rust_target }}" --bundles app --no-sign --ci \
+            --config "{\"version\":\"${version}\"}"
+          app="target/${{ matrix.rust_target }}/release/bundle/macos/p-track.app"
+          cp build/darwin/launcher "$app/Contents/MacOS/p-track"
+          chmod +x "$app/Contents/MacOS/p-track"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable p-track" "$app/Contents/Info.plist"
+          python3 tools/release_contract.py validate-binary \
+            "$app/Contents/MacOS/ptrack" "$version" darwin "${{ matrix.arch }}"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")" = "p-track"
+          mkdir -p "$RUNNER_TEMP/ptrack-home"
+          chmod 700 "$RUNNER_TEMP/ptrack-home"
+          pid=""
+          cleanup() {
+            if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+              kill "$pid" || true
+              wait "$pid" || true
+            fi
+          }
+          trap cleanup EXIT
+          PTRACK_HOME="$RUNNER_TEMP/ptrack-home" "$app/Contents/MacOS/p-track" &
+          pid=$!
+          sleep 8
+          kill -0 "$pid"

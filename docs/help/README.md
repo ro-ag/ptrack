@@ -47,8 +47,8 @@ navigation when JavaScript is unavailable.
 ## Version contract
 
 `site.json` records the Help Center schema and the stable product version. The
-version must match the newest released heading in `CHANGELOG.md`, the desktop
-product version in `wails.json`, the README release badge, the visible Help
+version must match the newest released heading in `CHANGELOG.md`, the Tauri
+and CLI Cargo versions, the README release badge, the visible Help
 Center release banner, the search index, and the screenshot manifest. Local
 validation enforces this contract.
 

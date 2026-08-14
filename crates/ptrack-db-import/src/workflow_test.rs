@@ -1,6 +1,6 @@
 use std::fs;
 
-use ptrack_store::{Store, StoreKind};
+use ptrack_store::{Store, StoreKind, protect_private_directory};
 
 use super::stage_test::empty_global_stage;
 use super::workflow::{
@@ -10,7 +10,7 @@ use super::workflow::{
 #[test]
 fn imports_to_an_absent_root_and_writes_receipt_last() {
     let (source_root, manifest) = empty_global_stage();
-    let destination = source_root.with_extension("candidates");
+    let destination = source_root.join("candidates");
 
     let refused = import_stage(&manifest, &destination, false).unwrap_err();
     assert!(refused.to_string().contains("--accept-all"));
@@ -32,22 +32,19 @@ fn imports_to_an_absent_root_and_writes_receipt_last() {
     );
 
     drop(store);
-    fs::remove_dir_all(source_root).expect("remove temporary stage");
     fs::remove_dir_all(destination).expect("remove temporary destination");
+    fs::remove_dir_all(source_root).expect("remove temporary stage");
 }
 
-#[cfg(unix)]
 #[test]
 fn refuses_a_replaced_destination_root() {
-    use std::os::unix::fs::PermissionsExt;
-
     let (source_root, manifest) = empty_global_stage();
-    let destination = source_root.with_extension("swap-candidates");
-    let moved = source_root.with_extension("original-candidates");
+    let destination = source_root.join("swap-candidates");
+    let moved = source_root.join("original-candidates");
     let result = import_stage_with_after_incomplete(&manifest, &destination, |root| {
         fs::rename(root, &moved).expect("move pinned root");
         fs::create_dir(root).expect("replacement root");
-        fs::set_permissions(root, fs::Permissions::from_mode(0o700)).expect("private replacement");
+        protect_private_directory(root).expect("private replacement");
     });
     assert!(
         result
@@ -58,29 +55,29 @@ fn refuses_a_replaced_destination_root() {
     assert!(!destination.join("receipt.json").exists());
     assert!(moved.join("incomplete.json").exists());
 
-    fs::remove_dir_all(source_root).expect("remove temporary stage");
     fs::remove_dir_all(destination).expect("remove replacement destination");
     fs::remove_dir_all(moved).expect("remove moved destination");
+    fs::remove_dir_all(source_root).expect("remove temporary stage");
 }
 
-#[cfg(unix)]
 #[test]
 fn refuses_a_replaced_destination_parent_before_root_creation() {
     let (source_root, manifest) = empty_global_stage();
     let parent = source_root.with_extension("destination-parent");
     let moved = source_root.with_extension("original-parent");
     fs::create_dir(&parent).expect("destination parent");
+    protect_private_directory(&parent).expect("private destination parent");
     let destination = parent.join("candidates");
     let result = import_stage_with_before_create(&manifest, &destination, |captured_parent| {
         assert_eq!(captured_parent, parent);
         fs::rename(&parent, &moved).expect("move pinned parent");
         fs::create_dir(&parent).expect("replacement parent");
+        protect_private_directory(&parent).expect("private replacement parent");
     });
+    let error = result.unwrap_err().to_string();
     assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("destination parent identity changed")
+        error.contains("destination parent identity changed"),
+        "unexpected error: {error}"
     );
     assert!(!destination.join("receipt.json").exists());
     assert!(!moved.join("candidates/receipt.json").exists());

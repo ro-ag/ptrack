@@ -107,3 +107,8 @@ Checks, downloads, and applies are single-flight and bound to app shutdown.
 Canceling signals the active context and retains the operation fence until the
 worker exits. Public errors are static and bounded so transport details, URLs,
 paths, and credentials cannot cross into the frontend.
+
+The Rust implementation keeps this authority in `ptrack-updater` and the
+app-owned `UpdateRuntime`. The native Tauri shell receives only the existing
+six typed desktop commands and the one-way `update:state-changed` event; it is
+not granted an updater, HTTP, filesystem, process, or shell plugin.

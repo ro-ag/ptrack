@@ -22,6 +22,7 @@ use crate::schema::{
     STORE_ORIGIN_CREATED, STORE_OWNER, STORE_STATE_READY,
 };
 use crate::store::{FileIdentity, ensure_path_identity};
+use crate::{protect_private_directory, protect_private_file};
 
 static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(1);
 
@@ -33,6 +34,7 @@ impl TestDirectory {
         let path =
             std::env::temp_dir().join(format!("ptrack-store-test-{}-{number}", std::process::id()));
         fs::create_dir(&path).unwrap();
+        protect_private_directory(&path).unwrap();
         Self(path)
     }
 
@@ -120,7 +122,7 @@ fn memory(sequence: u64) -> RecordEnvelope {
 }
 
 #[test]
-fn created_store_uses_exact_schema_v3_manifest() {
+fn created_store_uses_exact_schema_v4_manifest() {
     let (directory, path, store) = project_store();
     drop(store);
 
@@ -133,7 +135,7 @@ fn created_store_uses_exact_schema_v3_manifest() {
             (MANIFEST_KEY_OWNER.to_vec(), STORE_OWNER.to_vec()),
             (
                 MANIFEST_KEY_SCHEMA_VERSION.to_vec(),
-                3_u32.to_be_bytes().to_vec(),
+                4_u32.to_be_bytes().to_vec(),
             ),
             (MANIFEST_KEY_STATE.to_vec(), STORE_STATE_READY.to_vec()),
             (MANIFEST_KEY_STORE_KIND.to_vec(), b"project".to_vec()),
@@ -450,7 +452,7 @@ fn file_identity_detects_path_replacement() {
     let directory = TestDirectory::new();
     let path = directory.path("identity.redb");
     write_private_file(&path, b"first");
-    let identity = FileIdentity::from_metadata(&fs::metadata(&path).unwrap());
+    let identity = FileIdentity::from_path(&path, false).unwrap();
     fs::rename(&path, directory.path("old.redb")).unwrap();
     write_private_file(&path, b"second");
 
@@ -506,7 +508,7 @@ fn newer_application_schema_is_rejected_without_mutation() {
     {
         let mut manifest = transaction.open_table(MANIFEST_TABLE).unwrap();
         manifest
-            .insert(MANIFEST_KEY_SCHEMA_VERSION, 4_u32.to_be_bytes().as_slice())
+            .insert(MANIFEST_KEY_SCHEMA_VERSION, 5_u32.to_be_bytes().as_slice())
             .unwrap();
         manifest
             .insert(b"future_key".as_slice(), b"future_value".as_slice())
@@ -519,8 +521,8 @@ fn newer_application_schema_is_rejected_without_mutation() {
     assert!(matches!(
         Store::open_existing(&path, StoreKind::Project),
         Err(StoreError::UnsupportedSchemaVersion {
-            actual: 4,
-            current: 3
+            actual: 5,
+            current: 4
         })
     ));
     assert_eq!(fs::read(path).unwrap(), before);
@@ -531,14 +533,14 @@ fn older_application_schema_is_rejected_without_mutation() {
     let (_directory, path, store) = project_store();
     drop(store);
 
-    for version in [1, 2] {
+    for version in [1, 2, 3] {
         set_schema_version(&path, version);
         let before = fs::read(&path).unwrap();
         assert!(matches!(
             Store::open_existing(&path, StoreKind::Project),
             Err(StoreError::UnsupportedSchemaVersion {
                 actual,
-                current: 3
+                current: 4
             }) if actual == version
         ));
         assert_eq!(fs::read(&path).unwrap(), before);
@@ -695,11 +697,6 @@ fn manifest_entries(path: &Path) -> BTreeMap<Vec<u8>, Vec<u8>> {
         .collect()
 }
 
-#[cfg(unix)]
 fn make_private(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    protect_private_file(path).unwrap();
 }
-
-#[cfg(not(unix))]
-fn make_private(_path: &Path) {}
