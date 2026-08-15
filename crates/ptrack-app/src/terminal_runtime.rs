@@ -9,7 +9,7 @@ use ptrack_agent::{Association, AssociationPointer, Registration};
 use ptrack_capability::Broker;
 use ptrack_terminal::{
     CwdPolicy, ExitResult, MAX_RUNTIME_SESSION_CANDIDATES, Manager, ManagerErrorKind, Profile,
-    ProfileKind, Session, SessionInfo, SessionState, ShellIntegrationDescriptor,
+    ProfileKind, Session, SessionInfo, SessionState, ShellIntegrationDescriptor, StreamTicket,
     TerminalAssociation, TerminalAssociationChange, TerminalAssociationPointer, resolve_cwd,
     sort_profiles,
 };
@@ -19,6 +19,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{AppError, AppResult, LaunchedEventAuthority, LinkedAgentRuntimeHooks};
 
+/// How long a session may stay unattached before it is closed. Releasing a
+/// renderer restarts this window instead of terminating the session.
 const DEFAULT_ATTACH_LEASE: Duration = Duration::from_secs(30);
 const MAX_CWD_VALIDATIONS: usize = 96;
 const MAX_CWD_BYTES: usize = 4_096;
@@ -893,8 +895,8 @@ impl TerminalRuntime {
                 self.manager.close_session(session.id(), true),
             ));
         }
-        let stream_url = match self.manager.session_url(session.id()) {
-            Ok(url) => url,
+        let stream_url = match self.manager.mint_stream_ticket(session.id(), 0) {
+            Ok(ticket) => ticket.url,
             Err(error) => {
                 if linked.is_some() {
                     self.identity.revoke_pending(self.generation, &identity);
@@ -934,20 +936,40 @@ impl TerminalRuntime {
         Ok(result)
     }
 
-    /// Resizes one generation-fenced live terminal.
+    /// Resizes one generation-fenced live terminal. `lease` fences the request
+    /// against a renderer that no longer owns the session.
     ///
     /// # Errors
-    /// Returns lifecycle, generation, session, state, or PTY resize errors.
+    /// Returns lifecycle, generation, session, lease, state, or PTY resize errors.
     pub fn resize(
         &self,
         generation: u64,
         session_id: &str,
+        lease: Option<u64>,
         rows: u16,
         columns: u16,
     ) -> AppResult<()> {
         let _operation = self.begin(generation)?;
         self.manager
-            .resize_session(session_id, rows, columns)
+            .resize_session(session_id, lease, rows, columns)
+            .map_err(|error| AppError::Message(error.to_string()))
+    }
+
+    /// Mints one single-use stream ticket so a renderer can claim the session
+    /// lease, replaying from the last sequence it rendered. Releasing a lease
+    /// never terminates the session, so this is the only way back in.
+    ///
+    /// # Errors
+    /// Returns lifecycle, generation, session, or manager shutdown errors.
+    pub fn claim_stream_ticket(
+        &self,
+        generation: u64,
+        session_id: &str,
+        from_sequence: u64,
+    ) -> AppResult<StreamTicket> {
+        let _operation = self.begin(generation)?;
+        self.manager
+            .mint_stream_ticket(session_id, from_sequence)
             .map_err(|error| AppError::Message(error.to_string()))
     }
 
@@ -1151,18 +1173,27 @@ impl TerminalRuntime {
         }));
     }
 
+    /// Closes a session that stayed unattached past the re-claim grace window.
+    /// Releasing a renderer only restarts this window; it never terminates.
     fn monitor_attachment(self: &Arc<Self>, session: &Arc<Session>) {
         let weak = Arc::downgrade(self);
         let session = Arc::clone(session);
         let cancellation = self.cancellation.clone();
-        let lease = self.attachment_lease;
+        let grace = self.attachment_lease;
         self.push_monitor(tokio::spawn(async move {
-            tokio::select! {
-                () = cancellation.cancelled() => return,
-                () = tokio::time::sleep(lease) => {}
-            }
-            if !session.attachment_expiry_wins() {
-                return;
+            let mut retry = grace;
+            loop {
+                tokio::select! {
+                    () = cancellation.cancelled() => return,
+                    () = tokio::time::sleep(retry) => {}
+                }
+                match session.reclaim_window_expiry_wins(grace) {
+                    Ok(()) => break,
+                    Err(retry_after) => retry = retry_after,
+                }
+                if session.state() == SessionState::Closed {
+                    return;
+                }
             }
             if let Some(runtime) = weak.upgrade() {
                 runtime

@@ -1,11 +1,13 @@
+use std::collections::VecDeque;
 use std::fmt;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
+use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use tokio::sync::mpsc as tokio_mpsc;
@@ -13,9 +15,9 @@ use tokio::sync::mpsc as tokio_mpsc;
 use crate::profile::ProfileKind;
 use crate::pty::{PtyFactory, PtyProcess, StartRequest};
 use crate::shell_integration::ShellIntegrationDescriptor;
-use crate::stream::{StreamAttachment, StreamSession, StreamSessionError};
+use crate::stream::{StreamAttachRefusal, StreamAttachment, StreamSession, StreamSessionError};
 
-pub const DEFAULT_STARTUP_BUFFER_BYTES: usize = 64 * 1024;
+pub const DEFAULT_REPLAY_BUFFER_BYTES: usize = 256 * 1024;
 pub const DEFAULT_GRACEFUL_TIMEOUT: Duration = Duration::from_millis(750);
 pub const DEFAULT_OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_millis(250);
 pub const MAX_TERMINAL_ROWS: u16 = 1_000;
@@ -128,7 +130,6 @@ pub struct SessionInfo {
 #[derive(Clone, Debug)]
 pub struct SessionMetadata {
     pub id: String,
-    pub stream_token: String,
     pub profile_id: String,
     pub profile_kind: ProfileKind,
     pub provider: String,
@@ -138,7 +139,7 @@ pub struct SessionMetadata {
 
 #[derive(Clone, Copy, Debug)]
 pub struct SessionOptions {
-    pub startup_buffer_bytes: usize,
+    pub replay_buffer_bytes: usize,
     pub graceful_timeout: Duration,
     pub output_drain_timeout: Duration,
 }
@@ -146,10 +147,61 @@ pub struct SessionOptions {
 impl Default for SessionOptions {
     fn default() -> Self {
         Self {
-            startup_buffer_bytes: DEFAULT_STARTUP_BUFFER_BYTES,
+            replay_buffer_bytes: DEFAULT_REPLAY_BUFFER_BYTES,
             graceful_timeout: DEFAULT_GRACEFUL_TIMEOUT,
             output_drain_timeout: DEFAULT_OUTPUT_DRAIN_TIMEOUT,
         }
+    }
+}
+
+/// Bounded, sequenced, in-memory replay window.
+///
+/// Sequence numbers count every byte the PTY ever produced, so a re-attaching
+/// renderer resumes mid-chunk exactly. Oldest bytes are dropped once the budget
+/// is reached: the PTY is never stalled by a renderer that is not attached.
+#[derive(Debug)]
+struct ReplayRing {
+    bytes: VecDeque<u8>,
+    capacity: usize,
+    end: u64,
+}
+
+impl ReplayRing {
+    fn new(capacity: usize) -> Self {
+        Self {
+            bytes: VecDeque::new(),
+            capacity,
+            end: 0,
+        }
+    }
+
+    fn start(&self) -> u64 {
+        self.end
+            .saturating_sub(u64::try_from(self.bytes.len()).unwrap_or(u64::MAX))
+    }
+
+    fn append(&mut self, output: &[u8]) {
+        self.end = self
+            .end
+            .saturating_add(u64::try_from(output.len()).unwrap_or(u64::MAX));
+        let retained = output.len().min(self.capacity);
+        self.bytes.extend(&output[output.len() - retained..]);
+        let overflow = self.bytes.len().saturating_sub(self.capacity);
+        drop(self.bytes.drain(..overflow));
+    }
+
+    /// Retained bytes from `sequence` onwards, or `None` when that point is no
+    /// longer retained or was never produced.
+    fn replay_from(&self, sequence: u64) -> Option<Vec<u8>> {
+        if sequence < self.start() || sequence > self.end {
+            return None;
+        }
+        let skip = usize::try_from(sequence - self.start()).ok()?;
+        let (front, back) = self.bytes.as_slices();
+        let mut replay = Vec::with_capacity(self.bytes.len() - skip);
+        replay.extend_from_slice(&front[skip.min(front.len())..]);
+        replay.extend_from_slice(&back[skip.saturating_sub(front.len()).min(back.len())..]);
+        Some(replay)
     }
 }
 
@@ -162,10 +214,14 @@ struct SessionInner {
     columns: u16,
     started_at: String,
     last_activity_at: String,
-    startup_output: Vec<u8>,
+    replay: ReplayRing,
+    ticket: Option<String>,
+    lease: u64,
     attached: bool,
-    attach_expired: bool,
+    unattached_since: Option<Instant>,
+    reclaim_expired: bool,
     live_sender: Option<tokio_mpsc::Sender<Vec<u8>>>,
+    output_done: bool,
     association: Option<TerminalAssociation>,
     stream_error: Option<String>,
     exit_done: bool,
@@ -218,8 +274,8 @@ impl Session {
         factory: Arc<dyn PtyFactory>,
         mut options: SessionOptions,
     ) -> Arc<Self> {
-        if options.startup_buffer_bytes == 0 {
-            options.startup_buffer_bytes = DEFAULT_STARTUP_BUFFER_BYTES;
+        if options.replay_buffer_bytes == 0 {
+            options.replay_buffer_bytes = DEFAULT_REPLAY_BUFFER_BYTES;
         }
         if options.graceful_timeout.is_zero() {
             options.graceful_timeout = DEFAULT_GRACEFUL_TIMEOUT;
@@ -244,10 +300,14 @@ impl Session {
                 columns,
                 started_at: String::new(),
                 last_activity_at: String::new(),
-                startup_output: Vec::with_capacity(options.startup_buffer_bytes),
+                replay: ReplayRing::new(options.replay_buffer_bytes),
+                ticket: None,
+                lease: 0,
                 attached: false,
-                attach_expired: false,
+                unattached_since: Some(Instant::now()),
+                reclaim_expired: false,
                 live_sender: None,
+                output_done: false,
                 association: None,
                 stream_error: None,
                 exit_done: false,
@@ -375,11 +435,6 @@ impl Session {
     }
 
     #[must_use]
-    pub fn stream_token(&self) -> &str {
-        &self.metadata.stream_token
-    }
-
-    #[must_use]
     pub fn shell_integration(&self) -> &ShellIntegrationDescriptor {
         &self.metadata.shell_integration
     }
@@ -419,36 +474,116 @@ impl Session {
             .take()
     }
 
-    #[must_use]
-    pub fn attachment_expiry_wins(&self) -> bool {
-        let mut inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if inner.attached
-            || inner.attach_expired
-            || matches!(inner.state, SessionState::Closing | SessionState::Closed)
-        {
-            return false;
-        }
-        inner.attach_expired = true;
-        true
-    }
-
-    /// Claim the single output attachment lease.
+    /// Race the renderer re-claim grace window exactly once.
     ///
     /// # Errors
     ///
-    /// Returns an error after attachment/expiry or in a terminal state.
-    pub fn attach_output(&self) -> Result<StreamAttachment, SessionError> {
+    /// Returns the duration after which it is worth checking again when the
+    /// session is attached, still re-claimable, or already torn down.
+    pub fn reclaim_window_expiry_wins(&self, grace: Duration) -> Result<(), Duration> {
         let mut inner = self
             .inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if inner.reclaim_expired
+            || matches!(inner.state, SessionState::Closing | SessionState::Closed)
+        {
+            return Err(grace);
+        }
+        let Some(unattached_since) = inner.unattached_since else {
+            return Err(grace);
+        };
+        let waited = unattached_since.elapsed();
+        if waited < grace {
+            return Err(grace.saturating_sub(waited));
+        }
+        inner.reclaim_expired = true;
+        Ok(())
+    }
+
+    pub(crate) fn set_ticket(&self, ticket: String) {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .ticket = Some(ticket);
+    }
+
+    /// Compare a presented stream ticket in constant time and burn it on match.
+    #[must_use]
+    pub fn consume_ticket(&self, presented: &str) -> bool {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let matched = ticket_matches(&inner, presented);
+        if matched {
+            inner.ticket = None;
+        }
+        matched
+    }
+
+    /// Claim the lease with a presented single-use ticket, burning the ticket
+    /// only once the lease is actually granted. Ticket check and attachment
+    /// share one lock, so the ticket can never be spent on a refusal.
+    ///
+    /// # Errors
+    ///
+    /// Returns why the attachment was refused. A refusal never terminates the
+    /// session and never spends the ticket.
+    pub fn attach_with_ticket(
+        &self,
+        presented: &str,
+        from_sequence: u64,
+    ) -> Result<StreamAttachment, StreamAttachRefusal> {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !ticket_matches(&inner, presented) {
+            return Err(StreamAttachRefusal::Unauthorized);
+        }
+        let attachment = self
+            .attach_locked(&mut inner, from_sequence)
+            .map_err(|_| StreamAttachRefusal::Unavailable)?;
+        inner.ticket = None;
+        Ok(attachment)
+    }
+
+    /// Oldest retained and newest produced replay sequence numbers.
+    #[must_use]
+    pub fn replay_bounds(&self) -> (u64, u64) {
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (inner.replay.start(), inner.replay.end)
+    }
+
+    /// Claim the single renderer lease, replaying retained output from
+    /// `from_sequence`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a lease is held, the re-claim window expired, the
+    /// requested sequence was never produced, or the session is terminal.
+    /// A refusal never terminates the session.
+    pub fn attach_output(&self, from_sequence: u64) -> Result<StreamAttachment, SessionError> {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.attach_locked(&mut inner, from_sequence)
+    }
+
+    fn attach_locked(
+        &self,
+        inner: &mut SessionInner,
+        from_sequence: u64,
+    ) -> Result<StreamAttachment, SessionError> {
         if inner.attached {
             return Err(SessionError::new("terminal output is already attached"));
         }
-        if inner.attach_expired {
+        if inner.reclaim_expired {
             return Err(SessionError::new(
                 "terminal output attachment lease expired",
             ));
@@ -459,28 +594,86 @@ impl Session {
                 inner.state.to_string()
             )));
         }
+        // Claiming output the PTY never produced is a renderer bug and is
+        // refused. A wrapped buffer is not: it resumes from the oldest retained
+        // byte and reports the gap, because the clamp a mint computed is
+        // already stale by the time the socket connects.
+        if from_sequence > inner.replay.end {
+            return Err(SessionError::new("terminal replay sequence is unavailable"));
+        }
+        let resumed = from_sequence.max(inner.replay.start());
+        let replay = inner.replay.replay_from(resumed).unwrap_or_default();
+        inner.lease = inner.lease.saturating_add(1);
         inner.attached = true;
-        let startup = std::mem::take(&mut inner.startup_output);
+        inner.unattached_since = None;
+        let lease = inner.lease;
         let (sender, receiver) = tokio_mpsc::channel(1);
-        inner.live_sender = Some(sender);
+        // The reader thread is gone once output is done, so nothing would ever
+        // send on or drop a fresh sender. Leaving it unset ends the stream after
+        // the replay instead of pinning an exited session past its grace window.
+        if !inner.output_done {
+            inner.live_sender = Some(sender);
+        }
         self.changed.notify_all();
         Ok(StreamAttachment {
-            startup,
+            lease,
+            gap: resumed != from_sequence,
+            replay,
             live: receiver,
         })
     }
 
+    /// Release an exact renderer lease without terminating the session. The PTY
+    /// keeps running and its output keeps accumulating in the replay window.
+    pub fn release_output(&self, lease: u64) -> bool {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !inner.attached || inner.lease != lease {
+            return false;
+        }
+        inner.attached = false;
+        inner.lease = inner.lease.saturating_add(1);
+        inner.unattached_since = Some(Instant::now());
+        inner.live_sender.take();
+        self.changed.notify_all();
+        true
+    }
+
+    /// The lease a renderer holds right now, if one does.
+    #[must_use]
+    pub fn current_lease(&self) -> Option<u64> {
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.attached.then_some(inner.lease)
+    }
+
     /// Resize a running terminal, clamping dimensions to the frozen bounds.
+    /// `lease` fences the request against a stale renderer; `None` means "no
+    /// renderer has ever attached", never "skip the check".
     ///
     /// # Errors
     ///
-    /// Returns an error for a non-running session or PTY resize failure.
-    pub fn resize(&self, rows: u16, columns: u16) -> Result<(), SessionError> {
+    /// Returns an error for a stale or missing lease, a non-running session, or
+    /// PTY resize failure.
+    pub fn resize(&self, lease: Option<u64>, rows: u16, columns: u16) -> Result<(), SessionError> {
         let (rows, columns) = clamp_dimensions(rows, columns);
         let mut inner = self
             .inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match lease {
+            Some(lease) if !inner.attached || inner.lease != lease => {
+                return Err(SessionError::new("terminal resize lease is stale"));
+            }
+            None if inner.lease != 0 => {
+                return Err(SessionError::new("terminal resize requires a lease"));
+            }
+            _ => {}
+        }
         if inner.state != SessionState::Running {
             return Err(SessionError::new(format!(
                 "resize terminal session in state {:?}",
@@ -501,32 +694,18 @@ impl Session {
         Ok(())
     }
 
-    /// Fully write input, retrying short PTY writes.
+    /// Fully write input from the exact lease holder, retrying short PTY writes.
     ///
     /// # Errors
     ///
-    /// Returns an error for a non-running session, PTY failure, or zero progress.
-    pub fn write_input(&self, mut input: &[u8]) -> Result<(), SessionError> {
-        let process = {
-            let mut inner = self
-                .inner
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if inner.state != SessionState::Running {
-                return Err(SessionError::new(format!(
-                    "write terminal input in state {:?}",
-                    inner.state.to_string()
-                )));
-            }
-            inner.last_activity_at = now_string();
-            Arc::clone(
-                inner
-                    .process
-                    .as_ref()
-                    .ok_or_else(|| SessionError::new("running terminal session has no PTY"))?,
-            )
-        };
+    /// Returns an error for a stale lease, a non-running session, PTY failure,
+    /// or zero progress.
+    pub fn write_input(&self, lease: u64, mut input: &[u8]) -> Result<(), SessionError> {
         while !input.is_empty() {
+            // Re-fenced before every write: a PTY write can stall for as long as
+            // the reader is slow, and bytes from a lease released meanwhile must
+            // not land in a PTY another renderer now owns.
+            let process = self.live_process(lease)?;
             let written = process.write(input).map_err(SessionError::from)?;
             if written == 0 {
                 return Err(SessionError::new(
@@ -536,6 +715,26 @@ impl Session {
             input = &input[written..];
         }
         Ok(())
+    }
+
+    fn live_process(&self, lease: u64) -> Result<Arc<dyn PtyProcess>, SessionError> {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !inner.attached || inner.lease != lease {
+            return Err(SessionError::new("terminal input lease is stale"));
+        }
+        if inner.state != SessionState::Running {
+            return Err(SessionError::new(format!(
+                "write terminal input in state {:?}",
+                inner.state.to_string()
+            )));
+        }
+        inner.last_activity_at = now_string();
+        Ok(Arc::clone(inner.process.as_ref().ok_or_else(|| {
+            SessionError::new("running terminal session has no PTY")
+        })?))
     }
 
     /// Store a new application-validated pointer at the next revision.
@@ -771,28 +970,7 @@ impl Session {
     fn read_output(&self, process: &dyn PtyProcess) {
         let mut buffer = vec![0_u8; OUTPUT_READ_BYTES];
         loop {
-            let read_size = {
-                let mut inner = self
-                    .inner
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                while !inner.attached
-                    && inner.startup_output.len() >= self.options.startup_buffer_bytes
-                    && !self.closing.load(Ordering::Acquire)
-                {
-                    inner = self
-                        .changed
-                        .wait(inner)
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                }
-                if self.closing.load(Ordering::Acquire) || inner.attached {
-                    OUTPUT_READ_BYTES
-                } else {
-                    (self.options.startup_buffer_bytes - inner.startup_output.len())
-                        .min(OUTPUT_READ_BYTES)
-                }
-            };
-            match process.read(&mut buffer[..read_size]) {
+            match process.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(read) => self.deliver_output(buffer[..read].to_vec()),
                 Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => break,
@@ -815,6 +993,7 @@ impl Session {
             .inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.output_done = true;
         inner.live_sender.take();
         self.changed.notify_all();
     }
@@ -826,8 +1005,8 @@ impl Session {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             inner.last_activity_at = now_string();
+            inner.replay.append(&output);
             if !inner.attached {
-                inner.startup_output.extend_from_slice(&output);
                 return;
             }
             inner.live_sender.clone()
@@ -925,19 +1104,30 @@ impl StreamSession for Session {
         self.id()
     }
 
-    fn stream_token(&self) -> &str {
-        self.stream_token()
+    fn attach_with_ticket(
+        &self,
+        presented: &str,
+        from_sequence: u64,
+    ) -> Result<StreamAttachment, StreamAttachRefusal> {
+        self.attach_with_ticket(presented, from_sequence)
     }
 
-    fn attach_output(&self) -> Result<StreamAttachment, StreamSessionError> {
-        self.attach_output()
-            .map_err(|error| StreamSessionError(error.to_string()))
+    fn release_output(&self, lease: u64) {
+        self.release_output(lease);
     }
 
-    fn write_input(&self, input: &[u8]) -> Result<(), StreamSessionError> {
-        self.write_input(input)
+    fn write_input(&self, lease: u64, input: &[u8]) -> Result<(), StreamSessionError> {
+        self.write_input(lease, input)
             .map_err(|error| StreamSessionError(error.to_string()))
     }
+}
+
+fn ticket_matches(inner: &SessionInner, presented: &str) -> bool {
+    !presented.is_empty()
+        && inner
+            .ticket
+            .as_ref()
+            .is_some_and(|ticket| presented.as_bytes().ct_eq(ticket.as_bytes()).unwrap_u8() == 1)
 }
 
 #[must_use]

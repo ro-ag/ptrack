@@ -459,6 +459,105 @@ async fn unattached_session_lease_revokes_authority_and_closes() {
 }
 
 #[tokio::test]
+async fn a_released_renderer_keeps_the_session_and_re_claims_it_with_a_fresh_ticket() {
+    let root = TempDirectory::new();
+    let manager = Manager::new(&root.0, vec![profile(&root.0)], Arc::new(TestFactory))
+        .await
+        .unwrap();
+    let identity = Arc::new(TestIdentity::default());
+    let runtime = TerminalRuntime::new(TerminalRuntimeConfig {
+        generation: 5,
+        project_root: root.0.clone(),
+        manager: Arc::clone(&manager),
+        identity: identity.clone(),
+        events: Arc::new(TestEvents::default()),
+        attachment_lease: Duration::from_secs(30),
+    })
+    .unwrap();
+    let created = runtime.create(5, "shell-default", None, 24, 80).unwrap();
+    let session = manager.get(&created.session_id).unwrap();
+
+    let attachment = session.attach_output(0).unwrap();
+    assert!(session.release_output(attachment.lease));
+
+    // Releasing a renderer is not terminating a session: the PTY keeps running
+    // and no session authority is revoked.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        manager.get(&created.session_id).unwrap().state(),
+        ptrack_terminal::SessionState::Running
+    );
+    assert!(
+        !identity
+            .calls
+            .lock()
+            .unwrap()
+            .contains(&format!("revoke:{}", created.session_id))
+    );
+
+    // Re-attaching requires a freshly minted single-use ticket.
+    let ticket = runtime
+        .claim_stream_ticket(5, &created.session_id, 0)
+        .unwrap();
+    assert!(!ticket.gap);
+    assert_eq!(ticket.from_sequence, 0);
+    assert_ne!(ticket.url, created.stream_url);
+    let reclaimed = session.attach_output(ticket.from_sequence).unwrap();
+    assert!(reclaimed.lease > attachment.lease);
+
+    // The released renderer's lease no longer resizes the terminal.
+    assert!(
+        runtime
+            .resize(5, &created.session_id, Some(attachment.lease), 30, 100)
+            .is_err()
+    );
+    runtime
+        .resize(5, &created.session_id, Some(reclaimed.lease), 30, 100)
+        .unwrap();
+    runtime.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_attached_session_outlives_the_grace_window_and_a_released_one_does_not() {
+    let root = TempDirectory::new();
+    let manager = Manager::new(&root.0, vec![profile(&root.0)], Arc::new(TestFactory))
+        .await
+        .unwrap();
+    let identity = Arc::new(TestIdentity::default());
+    let runtime = TerminalRuntime::new(TerminalRuntimeConfig {
+        generation: 9,
+        project_root: root.0.clone(),
+        manager: Arc::clone(&manager),
+        identity: identity.clone(),
+        events: Arc::new(TestEvents::default()),
+        attachment_lease: Duration::from_millis(20),
+    })
+    .unwrap();
+    let created = runtime.create(9, "shell-default", None, 24, 80).unwrap();
+    let session = manager.get(&created.session_id).unwrap();
+    let attachment = session.attach_output(0).unwrap();
+
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    assert!(manager.get(&created.session_id).is_ok());
+
+    // An unclaimed session cannot leak: the grace window closes it.
+    assert!(session.release_output(attachment.lease));
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    assert_eq!(
+        manager.get(&created.session_id).unwrap_err().kind(),
+        ptrack_terminal::ManagerErrorKind::SessionNotFound
+    );
+    assert!(
+        identity
+            .calls
+            .lock()
+            .unwrap()
+            .contains(&format!("revoke:{}", created.session_id))
+    );
+    runtime.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn runtime_drop_revokes_authority_closes_sessions_and_preserves_join() {
     let root = TempDirectory::new();
     let manager = Manager::new(&root.0, vec![profile(&root.0)], Arc::new(TestFactory))

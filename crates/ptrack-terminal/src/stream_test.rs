@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
@@ -13,20 +13,49 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::{Error as WebSocketError, Message};
 
 use super::{
-    MAX_INPUT_FRAME_BYTES, OUTPUT_CHUNK_BYTES, STREAM_PATH_PREFIX, StreamAttachment, StreamServer,
-    StreamSession, StreamSessionError, StreamSessionHost, allowed_stream_origin_str,
+    MAX_INPUT_FRAME_BYTES, OUTPUT_CHUNK_BYTES, STREAM_GAP_CONTROL, STREAM_PATH_PREFIX,
+    StreamAttachRefusal, StreamAttachment, StreamServer, StreamSession, StreamSessionError,
+    StreamSessionHost, allowed_stream_origin_str,
 };
 
 const TEST_WAIT: Duration = Duration::from_secs(3);
 
 struct TestSession {
     id: String,
-    token: String,
-    startup: Vec<u8>,
-    live: Mutex<Option<mpsc::Receiver<Vec<u8>>>>,
-    attached: AtomicBool,
+    ticket: Mutex<Option<String>>,
+    tickets: AtomicUsize,
+    scrollback: Vec<u8>,
+    gap: AtomicBool,
+    live: Mutex<Option<mpsc::Sender<Vec<u8>>>>,
+    attached: AtomicU64,
+    leases: AtomicU64,
+    released: AtomicUsize,
+    changed: Notify,
     input: mpsc::UnboundedSender<Vec<u8>>,
     input_block: Option<Arc<BlockingInput>>,
+}
+
+impl TestSession {
+    /// Mint the next single-use ticket, retiring any earlier one.
+    fn mint(&self) -> String {
+        let ticket = format!("ticket-{}", self.tickets.fetch_add(1, Ordering::AcqRel));
+        *self.ticket.lock().expect("test ticket lock poisoned") = Some(ticket.clone());
+        ticket
+    }
+
+    async fn send(&self, output: Vec<u8>) {
+        let sender = self
+            .live
+            .lock()
+            .expect("test live lock poisoned")
+            .clone()
+            .expect("terminal output requires an attached renderer");
+        sender.send(output).await.expect("live output send failed");
+    }
+
+    fn end_output(&self) {
+        self.live.lock().expect("test live lock poisoned").take();
+    }
 }
 
 #[derive(Default)]
@@ -56,27 +85,57 @@ impl StreamSession for TestSession {
         &self.id
     }
 
-    fn stream_token(&self) -> &str {
-        &self.token
-    }
-
-    fn attach_output(&self) -> Result<StreamAttachment, StreamSessionError> {
-        if self.attached.swap(true, Ordering::AcqRel) {
-            return Err(StreamSessionError("already attached".into()));
+    fn attach_with_ticket(
+        &self,
+        presented: &str,
+        from_sequence: u64,
+    ) -> Result<StreamAttachment, StreamAttachRefusal> {
+        let mut ticket = self.ticket.lock().expect("test ticket lock poisoned");
+        if presented.is_empty() || ticket.as_deref() != Some(presented) {
+            return Err(StreamAttachRefusal::Unauthorized);
         }
-        let live = self
-            .live
-            .lock()
-            .expect("test live lock poisoned")
-            .take()
-            .ok_or_else(|| StreamSessionError("output unavailable".into()))?;
+        if self.attached.load(Ordering::Acquire) != 0 {
+            return Err(StreamAttachRefusal::Unavailable);
+        }
+        let start = usize::try_from(from_sequence)
+            .ok()
+            .filter(|start| *start <= self.scrollback.len())
+            .ok_or(StreamAttachRefusal::Unavailable)?;
+        let lease = self.leases.fetch_add(1, Ordering::AcqRel) + 1;
+        let (sender, live) = mpsc::channel(32);
+        *self.live.lock().expect("test live lock poisoned") = Some(sender);
+        self.attached.store(lease, Ordering::Release);
+        // Burned only now that the lease is actually granted.
+        *ticket = None;
         Ok(StreamAttachment {
-            startup: self.startup.clone(),
+            lease,
+            gap: self.gap.load(Ordering::Acquire),
+            replay: self.scrollback[start..].to_vec(),
             live,
         })
     }
 
-    fn write_input(&self, input: &[u8]) -> Result<(), StreamSessionError> {
+    fn release_output(&self, lease: u64) {
+        if self
+            .attached
+            .compare_exchange(lease, 0, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        self.end_output();
+        // Deliberately does not unblock a stalled input write: the real
+        // `Session::release_output` touches neither the PTY nor its writers,
+        // so a double that released the block would hide a stream that cannot
+        // tear down while a write is stalled.
+        self.released.fetch_add(1, Ordering::AcqRel);
+        self.changed.notify_waiters();
+    }
+
+    fn write_input(&self, lease: u64, input: &[u8]) -> Result<(), StreamSessionError> {
+        if self.attached.load(Ordering::Acquire) != lease {
+            return Err(StreamSessionError("stale lease".into()));
+        }
         if let Some(block) = &self.input_block {
             block.wait();
         }
@@ -89,8 +148,6 @@ impl StreamSession for TestSession {
 #[derive(Default)]
 struct TestHost {
     sessions: Mutex<HashMap<String, Arc<TestSession>>>,
-    close_count: AtomicUsize,
-    closed: Notify,
 }
 
 impl StreamSessionHost for TestHost {
@@ -102,53 +159,44 @@ impl StreamSessionHost for TestHost {
             .cloned()
             .map(|session| session as Arc<dyn StreamSession>)
     }
-
-    fn close_stream_session(
-        &self,
-        session_id: &str,
-        force: bool,
-    ) -> Result<(), StreamSessionError> {
-        assert!(!force, "stream teardown must be graceful");
-        if let Some(session) = self
-            .sessions
-            .lock()
-            .expect("test sessions lock poisoned")
-            .remove(session_id)
-            && let Some(block) = &session.input_block
-        {
-            block.release();
-        }
-        self.close_count.fetch_add(1, Ordering::AcqRel);
-        self.closed.notify_waiters();
-        Ok(())
-    }
 }
 
 struct Fixture {
     server: Arc<StreamServer>,
     host: Arc<TestHost>,
     session: Arc<TestSession>,
-    output: mpsc::Sender<Vec<u8>>,
     input: mpsc::UnboundedReceiver<Vec<u8>>,
     url: String,
 }
 
-async fn fixture(startup: Vec<u8>) -> Fixture {
-    fixture_with_input_block(startup, None).await
+impl Fixture {
+    /// A URL carrying a freshly minted single-use ticket.
+    fn mint(&self, from_sequence: u64) -> String {
+        self.server
+            .session_url(&self.session.id, &self.session.mint(), from_sequence)
+    }
+}
+
+async fn fixture(scrollback: Vec<u8>) -> Fixture {
+    fixture_with_input_block(scrollback, None).await
 }
 
 async fn fixture_with_input_block(
-    startup: Vec<u8>,
+    scrollback: Vec<u8>,
     input_block: Option<Arc<BlockingInput>>,
 ) -> Fixture {
-    let (output, live) = mpsc::channel(32);
     let (input, input_rx) = mpsc::unbounded_channel();
     let session = Arc::new(TestSession {
         id: "0123456789abcdefghijklmnopqrstuvwxyzABCDEFG".into(),
-        token: "token_0123456789abcdefghijklmnopqrstuvwxyzA".into(),
-        startup,
-        live: Mutex::new(Some(live)),
-        attached: AtomicBool::new(false),
+        ticket: Mutex::new(None),
+        tickets: AtomicUsize::new(0),
+        scrollback,
+        gap: AtomicBool::new(false),
+        live: Mutex::new(None),
+        attached: AtomicU64::new(0),
+        leases: AtomicU64::new(0),
+        released: AtomicUsize::new(0),
+        changed: Notify::new(),
         input,
         input_block,
     });
@@ -161,15 +209,21 @@ async fn fixture_with_input_block(
     let server = StreamServer::bind(Arc::downgrade(&trait_host))
         .await
         .unwrap();
-    let url = server.session_url(session.as_ref());
+    let url = server.session_url(&session.id, &session.mint(), 0);
     Fixture {
         server,
         host,
         session,
-        output,
         input: input_rx,
         url,
     }
+}
+
+fn ticket_of(url: &str) -> &str {
+    url.split("?token=")
+        .nth(1)
+        .and_then(|query| query.split('&').next())
+        .expect("stream URL carries a ticket")
 }
 
 async fn dial(
@@ -256,8 +310,13 @@ async fn one_ipv4_listener_serves_opaque_authenticated_session_urls() {
         fixture.session.id
     )));
 
-    let second_url = fixture.server.session_url(fixture.session.as_ref());
-    assert_eq!(second_url, fixture.url);
+    // Every mint rotates the ticket; only the host and path stay stable.
+    let second_url = fixture.mint(0);
+    assert_ne!(second_url, fixture.url);
+    assert_eq!(
+        second_url.split("?token=").next(),
+        fixture.url.split("?token=").next()
+    );
     fixture.server.shutdown().await.unwrap();
 }
 
@@ -267,7 +326,7 @@ async fn http_gate_rejects_method_origin_path_session_token_and_second_attach() 
     let request = format!(
         "POST {STREAM_PATH_PREFIX}{}?token={} HTTP/1.1\r\nHost: {}\r\nOrigin: wails://wails\r\nConnection: close\r\n\r\n",
         invalid_method.session.id,
-        invalid_method.session.token,
+        ticket_of(&invalid_method.url),
         invalid_method.server.local_addr()
     );
     assert_eq!(raw_status(&invalid_method.server, &request).await, 403);
@@ -297,20 +356,33 @@ async fn http_gate_rejects_method_origin_path_session_token_and_second_attach() 
     missing_token.server.shutdown().await.unwrap();
 
     let wrong_token = fixture(Vec::new()).await;
-    let wrong_url = wrong_token.url.replace(&wrong_token.session.token, "wrong");
+    let wrong_url = wrong_token
+        .url
+        .replace(ticket_of(&wrong_token.url), "wrong");
     assert_dial_status(&wrong_url, "wails://wails", 401).await;
     wrong_token.server.shutdown().await.unwrap();
 
+    let malformed_sequence = fixture(Vec::new()).await;
+    let malformed = malformed_sequence.url.replace("&from=0", "&from=-1");
+    assert_dial_status(&malformed, "wails://wails", 400).await;
+    malformed_sequence.server.shutdown().await.unwrap();
+
     let attached = fixture(Vec::new()).await;
     let connection = dial(&attached.url, "wails://wails").await.unwrap();
-    assert_dial_status(&attached.url, "wails://wails", 409).await;
+    // A second renderer is refused even with a valid fresh ticket, and the
+    // refusal leaves the held lease and the session alive.
+    assert_dial_status(&attached.mint(0), "wails://wails", 409).await;
+    // The spent ticket is dead, so a leaked URL cannot re-claim anything.
+    assert_dial_status(&attached.url, "wails://wails", 401).await;
+    assert_eq!(attached.session.released.load(Ordering::Acquire), 0);
+    assert_eq!(attached.host.sessions.lock().unwrap().len(), 1);
     drop(connection);
-    await_closed(&attached.host).await;
+    await_released(&attached.session).await;
     fixture_shutdown(&attached).await;
 }
 
 #[tokio::test]
-async fn stream_carries_binary_io_and_normal_close_is_single_use() {
+async fn stream_carries_binary_io_and_normal_close_releases_without_terminating() {
     let startup = vec![b's'; OUTPUT_CHUNK_BYTES + 3];
     let mut fixture = fixture(startup.clone()).await;
     let mut connection = dial(&fixture.url, "wails://wails").await.unwrap();
@@ -345,7 +417,7 @@ async fn stream_carries_binary_io_and_normal_close_is_single_use() {
         input
     );
 
-    fixture.output.send(b"live output".to_vec()).await.unwrap();
+    fixture.session.send(b"live output".to_vec()).await;
     assert_eq!(
         timeout_message(&mut connection).await,
         Message::Binary(b"live output".as_slice().into())
@@ -354,7 +426,7 @@ async fn stream_carries_binary_io_and_normal_close_is_single_use() {
         .send(Message::Text(r#"{"type":"ack","bytes":11}"#.into()))
         .await
         .unwrap();
-    drop(fixture.output);
+    fixture.session.end_output();
 
     let Message::Close(frame) = timeout_message(&mut connection).await else {
         panic!("expected normal close frame");
@@ -363,9 +435,39 @@ async fn stream_carries_binary_io_and_normal_close_is_single_use() {
     assert_eq!(frame.code, CloseCode::Normal);
     assert!(frame.reason.is_empty());
     connection.flush().await.unwrap();
-    await_closed(&fixture.host).await;
+    await_released(&fixture.session).await;
+    // The renderer is gone but the session is not: only its ticket is spent.
+    assert_eq!(fixture.host.sessions.lock().unwrap().len(), 1);
     assert!(dial(&fixture.url, "wails://wails").await.is_err());
     fixture.server.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_released_session_is_reclaimed_by_a_fresh_ticket_and_replays() {
+    let fixture = fixture(b"scrollback".to_vec()).await;
+    let mut connection = dial(&fixture.url, "wails://wails").await.unwrap();
+    assert_eq!(
+        timeout_message(&mut connection).await,
+        Message::Binary(b"scrollback".as_slice().into())
+    );
+
+    // Losing the renderer releases the lease; the session keeps running.
+    drop(connection);
+    await_released(&fixture.session).await;
+    assert_eq!(fixture.host.sessions.lock().unwrap().len(), 1);
+
+    let mut reclaimed = dial(&fixture.mint(6), "wails://wails").await.unwrap();
+    assert_eq!(
+        timeout_message(&mut reclaimed).await,
+        Message::Binary(b"back".as_slice().into())
+    );
+    fixture.session.send(b"after".to_vec()).await;
+    assert_eq!(
+        timeout_message(&mut reclaimed).await,
+        Message::Binary(b"after".as_slice().into())
+    );
+    drop(reclaimed);
+    fixture_shutdown(&fixture).await;
 }
 
 #[tokio::test]
@@ -380,7 +482,8 @@ async fn malformed_control_oversized_input_and_disconnect_fail_closed() {
         let mut connection = dial(&fixture.url, "wails://wails").await.unwrap();
         let _ = connection.send(message).await;
         assert_stream_closes(&mut connection).await;
-        await_closed(&fixture.host).await;
+        await_released(&fixture.session).await;
+        assert_eq!(fixture.host.sessions.lock().unwrap().len(), 1);
         assert!(dial(&fixture.url, "wails://wails").await.is_err());
         fixture_shutdown(&fixture).await;
     }
@@ -388,7 +491,7 @@ async fn malformed_control_oversized_input_and_disconnect_fail_closed() {
     let fixture = fixture(Vec::new()).await;
     let connection = dial(&fixture.url, "wails://wails").await.unwrap();
     drop(connection);
-    await_closed(&fixture.host).await;
+    await_released(&fixture.session).await;
     assert!(dial(&fixture.url, "wails://wails").await.is_err());
     fixture_shutdown(&fixture).await;
 }
@@ -414,7 +517,48 @@ async fn shutdown_unblocks_a_stalled_terminal_input_write() {
         .await
         .expect("stream shutdown remained blocked on PTY input")
         .unwrap();
-    assert_eq!(fixture.host.close_count.load(Ordering::Acquire), 1);
+    assert_eq!(fixture.session.released.load(Ordering::Acquire), 1);
+    // Nothing else ever unblocks the PTY write, so let the parked blocking
+    // worker finish before the test runtime is dropped on it.
+    input_block.release();
+}
+
+#[tokio::test]
+async fn a_wrapped_replay_announces_its_gap_before_the_replay() {
+    let fixture = fixture(b"retained".to_vec()).await;
+    fixture.session.gap.store(true, Ordering::Release);
+    let mut connection = dial(&fixture.url, "wails://wails").await.unwrap();
+    assert_eq!(
+        timeout_message(&mut connection).await,
+        Message::Text(STREAM_GAP_CONTROL.into())
+    );
+    assert_eq!(
+        timeout_message(&mut connection).await,
+        Message::Binary(b"retained".as_slice().into())
+    );
+    drop(connection);
+    await_released(&fixture.session).await;
+    fixture_shutdown(&fixture).await;
+}
+
+#[tokio::test]
+async fn a_refused_attachment_leaves_the_ticket_unspent() {
+    let fixture = fixture(Vec::new()).await;
+    let held = dial(&fixture.url, "wails://wails").await.unwrap();
+    let retry = fixture.mint(0);
+    // The lease is held, so this ticket buys nothing — but it must survive the
+    // refusal, or every re-claim race costs a full round trip for a new one.
+    assert_dial_status(&retry, "wails://wails", 409).await;
+    drop(held);
+    await_released(&fixture.session).await;
+    let mut reclaimed = dial(&retry, "wails://wails").await.unwrap();
+    fixture.session.send(b"reclaimed".to_vec()).await;
+    assert_eq!(
+        timeout_message(&mut reclaimed).await,
+        Message::Binary(b"reclaimed".as_slice().into())
+    );
+    drop(reclaimed);
+    fixture_shutdown(&fixture).await;
 }
 
 #[tokio::test]
@@ -423,7 +567,7 @@ async fn output_window_stalls_at_448_kib_and_resumes_by_exact_ack() {
     let mut connection = dial(&fixture.url, "wails://wails").await.unwrap();
     let output = vec![b'o'; OUTPUT_CHUNK_BYTES];
     for _ in 0..10 {
-        fixture.output.send(output.clone()).await.unwrap();
+        fixture.session.send(output.clone()).await;
     }
     let mut received = 0;
     while received < 7 * OUTPUT_CHUNK_BYTES {
@@ -449,7 +593,7 @@ async fn output_window_stalls_at_448_kib_and_resumes_by_exact_ack() {
     };
     assert_eq!(frame.len(), OUTPUT_CHUNK_BYTES);
     drop(connection);
-    await_closed(&fixture.host).await;
+    await_released(&fixture.session).await;
     fixture_shutdown(&fixture).await;
 }
 
@@ -458,14 +602,13 @@ async fn sustained_hundred_mebibyte_stream_is_lossless_with_acknowledgements() {
     const TOTAL: usize = 100 * 1024 * 1024;
     let fixture = fixture(Vec::new()).await;
     let mut connection = dial(&fixture.url, "wails://wails").await.unwrap();
-    let sender = fixture.output.clone();
+    let session = Arc::clone(&fixture.session);
     let producer = tokio::spawn(async move {
         let mut remaining = TOTAL;
         let mut sequence = 0_u8;
         while remaining > 0 {
             let length = remaining.min(OUTPUT_CHUNK_BYTES);
-            let output = vec![sequence; length];
-            sender.send(output).await.unwrap();
+            session.send(vec![sequence; length]).await;
             remaining -= length;
             sequence = sequence.wrapping_add(1);
         }
@@ -491,7 +634,7 @@ async fn sustained_hundred_mebibyte_stream_is_lossless_with_acknowledgements() {
     producer.await.unwrap();
     assert_eq!(received, TOTAL);
     drop(connection);
-    await_closed(&fixture.host).await;
+    await_released(&fixture.session).await;
     fixture_shutdown(&fixture).await;
 }
 
@@ -519,15 +662,15 @@ where
     );
 }
 
-async fn await_closed(host: &TestHost) {
+async fn await_released(session: &TestSession) {
     loop {
-        let notified = host.closed.notified();
-        if host.close_count.load(Ordering::Acquire) > 0 {
+        let notified = session.changed.notified();
+        if session.released.load(Ordering::Acquire) > 0 {
             return;
         }
         tokio::time::timeout(TEST_WAIT, notified)
             .await
-            .expect("timed out waiting for graceful session close");
+            .expect("timed out waiting for the renderer lease release");
     }
 }
 

@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use serde::Serialize;
 use tokio::sync::Notify;
 
 use crate::profile::{
@@ -18,7 +19,7 @@ use crate::session::{
     TerminalAssociationChange, TerminalAssociationPointer,
 };
 use crate::shell_integration::{ShellIntegrationOwner, prepare_shell_integration};
-use crate::stream::{StreamServer, StreamSession, StreamSessionError, StreamSessionHost};
+use crate::stream::{StreamServer, StreamSession, StreamSessionHost};
 
 pub const MAX_SESSION_SNAPSHOT: usize = 64;
 pub const MAX_RUNTIME_SESSION_CANDIDATES: usize = 1_024;
@@ -61,6 +62,18 @@ impl fmt::Display for ManagerError {
 }
 
 impl std::error::Error for ManagerError {}
+
+/// One freshly minted single-use stream ticket and the replay position the
+/// renderer will actually resume from.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamTicket {
+    pub url: String,
+    /// Sequence the replay starts at, clamped to the retained window.
+    pub from_sequence: u64,
+    /// True when output older than `from_sequence` was dropped and is lost.
+    pub gap: bool,
+}
 
 impl From<SessionError> for ManagerError {
     fn from(error: SessionError) -> Self {
@@ -296,7 +309,6 @@ impl Manager {
         let environment = build_environment(&inherited, &overrides)
             .map_err(|error| ManagerError::new(ManagerErrorKind::Launch, error.to_string()))?;
         let id = random_opaque_value("create terminal session ID")?;
-        let stream_token = random_opaque_value("create terminal stream token")?;
         let shell_nonce = random_opaque_value("create shell integration nonce")?;
         let (args, environment, shell_integration) = prepare_shell_integration(
             self.shells
@@ -318,7 +330,6 @@ impl Manager {
             },
             SessionMetadata {
                 id: id.clone(),
-                stream_token,
                 profile_id: profile.id,
                 profile_kind: profile.kind,
                 provider: profile.provider,
@@ -355,12 +366,19 @@ impl Manager {
     pub fn resize_session(
         &self,
         session_id: &str,
+        lease: Option<u64>,
         rows: u16,
         columns: u16,
     ) -> Result<(), ManagerError> {
-        self.get(session_id)?
-            .resize(rows, columns)
-            .map_err(Into::into)
+        let session = self.get(session_id)?;
+        // ponytail: §3's resize fence is only as strong as what the renderer
+        // presents, and the renderer has no lease to present until the pop-out
+        // UI wires one through. Until then a host resize borrows whichever
+        // lease is live, so a released renderer that presents nothing is still
+        // indistinguishable from the host. Drop this fallback — and pass the
+        // presented lease through — the moment the renderer carries one.
+        let lease = lease.or_else(|| session.current_lease());
+        session.resize(lease, rows, columns).map_err(Into::into)
     }
 
     /// Remove a session from lookup before closing it.
@@ -394,12 +412,21 @@ impl Manager {
         result
     }
 
-    /// Return the authority-bearing URL for one live session.
+    /// Mint one single-use stream ticket for a live session and report where
+    /// its replay will resume.
+    ///
+    /// Every mint rotates the ticket: an unused ticket and the ticket a
+    /// released renderer already spent are both dead, so a leaked stream URL
+    /// can never re-claim a session.
     ///
     /// # Errors
     ///
-    /// Returns session-not-found or manager-shutdown errors.
-    pub fn session_url(&self, session_id: &str) -> Result<String, ManagerError> {
+    /// Returns session-not-found, randomness, or manager-shutdown errors.
+    pub fn mint_stream_ticket(
+        &self,
+        session_id: &str,
+        from_sequence: u64,
+    ) -> Result<StreamTicket, ManagerError> {
         let session = self.get(session_id)?;
         let server = self
             .stream_server
@@ -409,7 +436,17 @@ impl Manager {
             .ok_or_else(|| {
                 ManagerError::new(ManagerErrorKind::Shutdown, "terminal manager is shut down")
             })?;
-        Ok(server.session_url(&*session))
+        let ticket = random_opaque_value("create terminal stream ticket")?;
+        let (oldest, newest) = session.replay_bounds();
+        let requested = from_sequence.min(newest);
+        let resume = requested.max(oldest);
+        let url = server.session_url(session.id(), &ticket, resume);
+        session.set_ticket(ticket);
+        Ok(StreamTicket {
+            url,
+            from_sequence: resume,
+            gap: requested < oldest,
+        })
     }
 
     #[must_use]
@@ -773,15 +810,6 @@ impl StreamSessionHost for Manager {
         self.get(session_id)
             .ok()
             .map(|session| -> Arc<dyn StreamSession> { session })
-    }
-
-    fn close_stream_session(
-        &self,
-        session_id: &str,
-        force: bool,
-    ) -> Result<(), StreamSessionError> {
-        self.close_session(session_id, force)
-            .map_err(|error| StreamSessionError(error.to_string()))
     }
 }
 
