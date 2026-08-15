@@ -20,6 +20,7 @@ impl Temp {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&path).unwrap();
+        ptrack_store::protect_private_directory(&path).unwrap();
         Self(std::fs::canonicalize(path).unwrap())
     }
 }
