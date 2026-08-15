@@ -2909,3 +2909,42 @@ async fn workspace_confirmation_owns_and_expires_the_resource_admission_fence() 
     drop(pending_admission);
     drop(runtime);
 }
+
+#[test]
+fn every_allowlisted_capability_method_routes_to_the_broker() {
+    // GetCapabilitiesV2 pluralizes, so a "Capability" stem skipped it and left
+    // its handler unreachable: the Capabilities page could not load, the
+    // diagnostics report always read the counts as absent, and a full reset
+    // reported revoking no grants because it never listed any.
+    let capability: Vec<&str> = allowed_desktop_commands()
+        .iter()
+        .copied()
+        .filter(|method| method.contains("Capabilit"))
+        .collect();
+    assert_eq!(
+        capability,
+        [
+            "DisableCapabilityV2",
+            "EnableCapabilityV2",
+            "ExpireCapabilityV2",
+            "GetCapabilitiesV2",
+            "GetCapabilityAuditsV2",
+            "PreviewCapabilityV2",
+            "RemoveCapabilityV2",
+            "SaveCapabilityV2",
+            "TestCapabilityV2",
+        ]
+    );
+    for method in capability {
+        assert!(
+            crate::desktop_runtime::routes_to_capability(method),
+            "{method}"
+        );
+    }
+    for method in ["GetPreferences", "CreateTerminal", "LaunchLinkedAgentV2"] {
+        assert!(
+            !crate::desktop_runtime::routes_to_capability(method),
+            "{method}"
+        );
+    }
+}
