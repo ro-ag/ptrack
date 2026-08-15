@@ -1174,12 +1174,17 @@ fn blocked_integration_and_concurrent_shutdown_waiters_are_bounded_and_stable() 
                 .to_string()
         }));
     }
-    let began = std::time::Instant::now();
     start.wait();
     let first = waiters.remove(0).join().expect("first shutdown waiter");
     let second = waiters.remove(0).join().expect("second shutdown waiter");
-    assert!(began.elapsed() < Duration::from_secs(1));
     assert_eq!(first, second);
-    assert!(first.contains("integration shutdown timeout"));
+    // The exact message is what proves neither bounded wait was entered: an
+    // operation drain or registry timeout would join its own line onto this
+    // one. That is what the wall clock used to stand in for, without the
+    // clock, which a loaded runner could exceed while nothing was wrong.
+    assert_eq!(
+        first,
+        "AgentRun integration shutdown: injected integration shutdown timeout"
+    );
     assert_eq!(fake.shutdown_calls.load(Ordering::Acquire), 1);
 }

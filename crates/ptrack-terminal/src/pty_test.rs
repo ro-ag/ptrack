@@ -113,15 +113,24 @@ fn windows_force_close_interrupts_wait_and_kills_the_descendant_job() {
             })
             .unwrap(),
     );
+    // Wait for a pid that parses, not merely for the file to exist. Windows
+    // refuses a read while the writer still holds the handle, so the moment
+    // the entry appears the read can fail with a sharing violation, and an
+    // entry that opens can still be a partial line.
     let deadline = Instant::now() + Duration::from_secs(10);
-    while !pid_file.exists() && Instant::now() < deadline {
+    let descendant_pid: u32 = loop {
+        if let Some(pid) = std::fs::read_to_string(&pid_file)
+            .ok()
+            .and_then(|pid| pid.trim().parse().ok())
+        {
+            break pid;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "descendant never published a pid"
+        );
         std::thread::sleep(Duration::from_millis(20));
-    }
-    let descendant_pid: u32 = std::fs::read_to_string(&pid_file)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
+    };
     let (finished_tx, finished_rx) = mpsc::channel();
     let waiter = Arc::clone(&process);
     let wait_thread = std::thread::spawn(move || finished_tx.send(waiter.wait()).unwrap());
