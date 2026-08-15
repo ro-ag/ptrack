@@ -3799,7 +3799,7 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
                     "replayed": result.replayed
                 }))
             }
-            method if method.contains("Capability") => self.invoke_capability(method, arguments),
+            method if routes_to_capability(method) => self.invoke_capability(method, arguments),
             method if method.contains("Agent") => self.invoke_agent(method, arguments),
             _ => Err(unavailable(method)),
         }
@@ -5548,6 +5548,15 @@ fn sanitize_recent_open_error(error: AppError) -> AppError {
         | AppError::Io(_)
         | AppError::Message(_) => AppError::Message("recent-project-open-failed".to_owned()),
     }
+}
+
+/// Whether a workspace method is answered by the capability broker.
+///
+/// The stem is `Capabilit`, not `Capability`: `GetCapabilitiesV2` is the one
+/// method in the allowlist that pluralizes, and the longer stem skipped it into
+/// the unavailable arm, leaving its handler unreachable.
+pub(crate) fn routes_to_capability(method: &str) -> bool {
+    method.contains("Capabilit")
 }
 
 fn unavailable(feature: &str) -> AppError {
