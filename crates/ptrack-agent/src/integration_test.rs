@@ -851,17 +851,22 @@ fn request(
     stream
         .set_write_timeout(Some(Duration::from_secs(6)))
         .unwrap();
+    // One write keeps the body in the same segment as the headers. Split writes let the
+    // server reject and close before it drains the body, and that close arrives as a reset
+    // that discards the response the client already buffered.
+    let mut wire = Vec::new();
     write!(
-        stream,
+        wire,
         "{method} {path} HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {token}\r\nContent-Length: {}\r\nConnection: close\r\n",
         body.len()
     )
     .unwrap();
     for (name, value) in extra_headers {
-        write!(stream, "{name}: {value}\r\n").unwrap();
+        write!(wire, "{name}: {value}\r\n").unwrap();
     }
-    stream.write_all(b"\r\n").unwrap();
-    stream.write_all(body).unwrap();
+    wire.extend_from_slice(b"\r\n");
+    wire.extend_from_slice(body);
+    stream.write_all(&wire).unwrap();
     let mut bytes = Vec::new();
     stream.read_to_end(&mut bytes).unwrap();
     parse_response(&bytes)
