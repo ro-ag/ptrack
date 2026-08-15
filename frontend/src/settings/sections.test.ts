@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   diagnosticsRows,
   nextSettingsSectionIndex,
+  resetApplicationStateConfirmation,
+  resetApplicationStateMessage,
+  resetWindowLayoutConfirmation,
   settingsPanelId,
   settingsSectionIndex,
   settingsSections,
@@ -12,6 +15,7 @@ import {
 describe("settings sections", () => {
   it("pins the contract order", () => {
     expect(settingsSections.map((section) => section.id)).toEqual([
+      "startup",
       "appearance",
       "terminal",
       "updates",
@@ -22,24 +26,67 @@ describe("settings sections", () => {
   });
 
   it("falls back to the first section for an unknown id", () => {
-    expect(settingsSectionIndex("updates")).toBe(2);
+    expect(settingsSectionIndex("updates")).toBe(3);
     expect(settingsSectionIndex("nonsense")).toBe(0);
   });
 
   it("wraps arrow traversal and jumps with Home and End", () => {
-    expect(nextSettingsSectionIndex("ArrowDown", 0, 4)).toBe(1);
-    expect(nextSettingsSectionIndex("ArrowDown", 3, 4)).toBe(0);
-    expect(nextSettingsSectionIndex("ArrowUp", 0, 4)).toBe(3);
-    expect(nextSettingsSectionIndex("ArrowRight", 1, 4)).toBe(2);
-    expect(nextSettingsSectionIndex("ArrowLeft", 1, 4)).toBe(0);
-    expect(nextSettingsSectionIndex("Home", 2, 4)).toBe(0);
-    expect(nextSettingsSectionIndex("End", 0, 4)).toBe(3);
+    expect(nextSettingsSectionIndex("ArrowDown", 0, 5)).toBe(1);
+    expect(nextSettingsSectionIndex("ArrowDown", 4, 5)).toBe(0);
+    expect(nextSettingsSectionIndex("ArrowUp", 0, 5)).toBe(4);
+    expect(nextSettingsSectionIndex("ArrowRight", 1, 5)).toBe(2);
+    expect(nextSettingsSectionIndex("ArrowLeft", 1, 5)).toBe(0);
+    expect(nextSettingsSectionIndex("Home", 2, 5)).toBe(0);
+    expect(nextSettingsSectionIndex("End", 0, 5)).toBe(4);
   });
 
   it("leaves other keys to the dialog", () => {
-    expect(nextSettingsSectionIndex("Escape", 0, 4)).toBe(-1);
-    expect(nextSettingsSectionIndex("Tab", 0, 4)).toBe(-1);
+    expect(nextSettingsSectionIndex("Escape", 0, 5)).toBe(-1);
+    expect(nextSettingsSectionIndex("Tab", 0, 5)).toBe(-1);
     expect(nextSettingsSectionIndex("ArrowDown", 0, 0)).toBe(-1);
+  });
+});
+
+describe("reset confirmations", () => {
+  it("states what each reset spares", () => {
+    expect(resetWindowLayoutConfirmation.detail).toContain(
+      "Settings, plans, tasks, notes, project databases, and Recent projects are not touched.",
+    );
+    expect(resetApplicationStateConfirmation.detail).toContain(
+      "Network capability grants live in the project and are revoked in the open project, and must be granted again",
+    );
+    expect(resetApplicationStateConfirmation.detail).toContain(
+      "Plans, tasks, notes, and Recent projects are not touched.",
+    );
+    expect(resetApplicationStateConfirmation.submit).toBe("Reset Application State");
+  });
+
+  // Revoking a grant writes DisableCapabilityV2 into the open project, so no
+  // reset copy may promise the project database is untouched.
+  it("never claims the project database survives a grant revocation", () => {
+    expect(resetApplicationStateConfirmation.detail).not.toContain("project database");
+    expect(resetApplicationStateMessage({ records: ["preferences"], capabilityGrants: 1 }))
+      .not.toContain("project database");
+  });
+
+  it("reports the records and grants the runtime actually returned", () => {
+    expect(
+      resetApplicationStateMessage({
+        records: ["preferences", "updates.auto-check", "window-state", "layout-state"],
+        capabilityGrants: 2,
+      }),
+    ).toBe(
+      "Cleared preferences, updates.auto-check, window-state, layout-state. 2 network capability grants were revoked and must be granted again. Plans, tasks, notes, and Recent projects were not touched.",
+    );
+    expect(resetApplicationStateMessage({ records: ["preferences"], capabilityGrants: 1 }))
+      .toContain("1 network capability grant was revoked and must be granted again.");
+  });
+
+  it("claims nothing when the reply carries nothing", () => {
+    const message = resetApplicationStateMessage({ records: ["", 7], capabilityGrants: "many" });
+    expect(message).toContain("No stored records were cleared.");
+    expect(message).toContain("No network capability grants were revoked.");
+    expect(resetApplicationStateMessage(null)).toBe(message);
   });
 });
 

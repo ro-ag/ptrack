@@ -267,6 +267,37 @@ describe("production asset layout", () => {
       .toBeGreaterThanOrEqual(3);
     expect(appSource).toContain('lastOpened.dateTime = project.lastOpenedAt');
     expect(appSource).toContain('item.setAttribute("aria-labelledby", name.id)');
+    // The relocated last project is pointed at, never opened: the row is
+    // marked, says so in text, and no focus moves to it.
+    expect(recentProjectsSource).toContain(
+      "export function preselectedRecentProject(",
+    );
+    expect(appSource).toContain(
+      "preselectedRecentProject(projects, preferences.startup)",
+    );
+    expect(appSource).toMatch(
+      /if \(project\.entryId === preselectedEntryId\) \{\n      item\.setAttribute\("aria-current", "true"\);/,
+    );
+    expect(appSource).toContain(
+      'preselect.textContent = "Preselected — last project p-track recorded"',
+    );
+    // The row's own text carries the state, so the description names it too,
+    // and the existing polite status line announces it without taking focus.
+    expect(appSource).toContain("descriptionIDs.push(preselect.id)");
+    expect(appSource).toContain("if (startupChanged) renderRecentProjects();");
+    expect(appSource).toMatch(
+      /elements\.recentStatus\.textContent = recentProjectsState\.announcement \|\|\n {4}\(preselected\n {6}\? `“\$\{preselected\.name\}” is preselected as the last project/,
+    );
+    expect(appSource).not.toMatch(
+      /preselect[^\n]*\.focus\(\)/,
+    );
+    expect(styles).toMatch(
+      /\.recent-project\[aria-current=(?:"true"|true)\]\{[^}]*border-color:var\(--accent\)/,
+    );
+    // Highlight is only legal under forced colors, so the pair pins both.
+    expect(styles).toMatch(
+      /\.recent-project\[aria-current=(?:"true"|true)\]\{[^}]*border-color:Highlight/,
+    );
     expect(appSource).toContain('button.setAttribute("aria-describedby", describedBy)');
     expect(appSource).toContain('status.checkpoint !== "desktop-bound"');
     expect(firstRunJourneySource).toContain(
@@ -549,7 +580,7 @@ describe("production asset layout", () => {
     expect(index).toMatch(
       /id="settings-section-list"[\s\S]*role="tablist"[\s\S]*aria-orientation="vertical"[\s\S]*aria-label="Settings sections"/,
     );
-    for (const section of ["appearance", "terminal", "updates", "data"]) {
+    for (const section of ["startup", "appearance", "terminal", "updates", "data"]) {
       expect(index).toMatch(
         new RegExp(
           `id="settings-tab-${section}"[\\s\\S]*?role="tab"[\\s\\S]*?aria-controls="settings-panel-${section}"`,
@@ -563,8 +594,32 @@ describe("production asset layout", () => {
     }
     // The roving tabindex is an attribute of the tab itself, so the match must
     // not cross the tag boundary onto a panel or a later tab.
-    expect(index).toMatch(/id="settings-tab-appearance"[^>]*\stabindex="0"/);
+    expect(index).toMatch(/id="settings-tab-startup"[^>]*\stabindex="0"/);
+    expect(index).toMatch(/id="settings-tab-appearance"[^>]*\stabindex="-1"/);
     expect(index).toMatch(/id="settings-tab-terminal"[^>]*\stabindex="-1"/);
+    // Startup is an opt-in checkbox whose copy states the "still valid" rule.
+    expect(index).toMatch(
+      /id="settings-startup-restore"[^<>]*type="checkbox"[^<>]*\/>/,
+    );
+    expect(index).toContain("Reopen the last project when p-track starts");
+    expect(index).toContain("The last project reopens only while it is still");
+    // Both resets live in Data & Diagnostics, described by the copy that says
+    // what they spare, and nowhere near the native menu.
+    expect(index).toMatch(
+      /id="settings-panel-data"[\s\S]*id="settings-reset-help"[\s\S]*class="settings-reset-actions"[\s\S]*id="settings-reset-window-layout"[^<>]*aria-describedby="settings-reset-help"[^<>]*>Reset Window Layout<\/button>[\s\S]*id="settings-reset-application-state"[^<>]*aria-describedby="settings-reset-help"[^<>]*>Reset Application State<\/button>/,
+    );
+    // Revoking a grant writes into the open project, so the copy names that
+    // instead of promising the project database is untouched.
+    expect(index).toContain(
+      "Neither reset touches plans, tasks, notes, or Recent projects.",
+    );
+    expect(index).toMatch(
+      /id="settings-reset-help"[^<>]*>[^<]*revokes every network capability grant in the\s+open project/,
+    );
+    expect(styles).toMatch(/\.settings-reset-actions\{[^}]*flex-wrap:wrap/);
+    expect(styles).toMatch(
+      /\.settings-reset-actions button\{border-color:CanvasText\}/,
+    );
     // The save-status live region sits outside the aria-busy wrapper.
     expect(index).toMatch(
       /id="settings-body"[\s\S]*<\/div>\s*<p\s*id="settings-save-status"[\s\S]*role="status"[\s\S]*aria-live="polite"[\s\S]*aria-atomic="true"/,
@@ -592,6 +647,43 @@ describe("production asset layout", () => {
     expect(appSource).toContain("preferencesResponse(await api().ResetPreferences())");
     expect(appSource).toContain("await api().GetDiagnosticsReport()");
     expect(appSource).toContain("applyPreferenceMirrors(localStorage, next)");
+    expect(app).toContain("GetLayoutState");
+    expect(app).toContain("SetLayoutState");
+    expect(app).toContain("ResetWindowLayout");
+    expect(app).toContain("ResetApplicationState");
+    expect(appSource).toContain("normalizeLayoutState(await api().GetLayoutState())");
+    expect(appSource).toContain(
+      'layoutStatePatch(layoutState, workspaceState.project?.root || "")',
+    );
+    expect(appSource).toContain(
+      "applyLayoutState(normalizeLayoutState(await api().ResetWindowLayout()))",
+    );
+    expect(appSource).toContain("await api().ResetApplicationState()");
+    expect(appSource).toContain("resetApplicationStateMessage(result)");
+    // Panel changes are recorded from the user's click, never from the
+    // attribute the dock also writes on its own.
+    expect(appSource).toContain(
+      'elements.panelControls.addEventListener("click", recordPanelLayout)',
+    );
+    expect(appSource).not.toMatch(/MutationObserver\(recordPanelLayout\)/);
+    // The guard covers the synthetic restore clicks and nothing else: it is
+    // cleared once the restore attempt ends, so a dock that refused the
+    // restore still records the user's own later gestures.
+    expect(appSource).toMatch(
+      /if \(\(toggle\.getAttribute\("aria-pressed"\) === "true"\) !== hidden\) toggle\.click\(\);\n  \}\n(?:  \/\/[^\n]*\n)*  panelLayoutRestored = true;/,
+    );
+    expect(appSource).not.toMatch(/panelLayoutRestored = Boolean\(/);
+    // The eviction counter is backend-owned, so no patch can carry it.
+    expect(appSource).not.toContain("usedAt");
+    // Layout writes share the existing scheduler rather than adding a second.
+    expect(appSource).toContain("new WorkspacePersistenceScheduler(");
+    expect(appSource).toContain("layoutStateScheduler.markDirty()");
+    expect(appSource).toContain("layoutStateScheduler.flush()");
+    expect(appSource).toMatch(
+      /savePreferences\(\{\s*startup: \{ restoreLastProject: event\.currentTarget\.checked \}/,
+    );
+    // The window is Rust-owned: the frontend never asks for its geometry.
+    expect(appSource).not.toContain("WindowState");
     // A runtime that never answered is stated plainly instead of looking healthy.
     expect(appSource).toContain('renderSettingsStorageNotice("unavailable")');
     // The terminal dock toggle writes through the stored record, never the mirror.

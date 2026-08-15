@@ -20,6 +20,9 @@ import {
 import {
   diagnosticsRows,
   nextSettingsSectionIndex,
+  resetApplicationStateConfirmation,
+  resetApplicationStateMessage,
+  resetWindowLayoutConfirmation,
   settingsPanelId,
   settingsSectionIndex,
   settingsSections,
@@ -49,13 +52,21 @@ import {
 } from "./capabilities/presentation";
 import {
   clampSidebarWidth,
+  defaultLayoutState,
   defaultSidebarWidth,
+  layoutProjectState,
+  layoutStatePatch,
+  normalizeLayoutState,
   sidebarHiddenStorageKey,
   sidebarMaximumWidth,
   sidebarWidthFromKey,
   sidebarWidthStorageKey,
   storedSidebarWidth,
 } from "./workspace/layout";
+import {
+  terminalWorkspaceStoragePrefix,
+  WorkspacePersistenceScheduler,
+} from "./workspace/persistence";
 import {
   applicationOverlayKeyboardPolicy,
   ApplicationOverlayCoordinator,
@@ -113,6 +124,7 @@ import {
   parseRecentProjectOpenResult,
   parseRecentProjectResolution,
   parseRecentProjects,
+  preselectedRecentProject,
   RECENT_RELOCATION_UNCONFIRMED,
   recentProjectFocusKey,
   recentProjectPrimaryAction,
@@ -173,6 +185,7 @@ const elements = {
   sidebar: document.querySelector("#sidebar"),
   sidebarResize: document.querySelector("#sidebar-resize"),
   sidebarToggle: document.querySelector("#sidebar-toggle"),
+  panelControls: document.querySelector(".panel-controls"),
   boardPanelToggle: document.querySelector("#board-panel-toggle"),
   terminalPanelToggle: document.querySelector("#terminal-panel-toggle"),
   workspace: document.querySelector("#workspace"),
@@ -289,6 +302,11 @@ const elements = {
   settingsStorageNotice: document.querySelector("#settings-storage-notice"),
   settingsSaveStatus: document.querySelector("#settings-save-status"),
   settingsReset: document.querySelector("#settings-reset"),
+  settingsStartupRestore: document.querySelector("#settings-startup-restore"),
+  settingsResetWindowLayout: document.querySelector("#settings-reset-window-layout"),
+  settingsResetApplicationState: document.querySelector(
+    "#settings-reset-application-state",
+  ),
   settingsTheme: document.querySelector("#settings-theme"),
   settingsDensity: document.querySelector("#settings-density"),
   settingsReducedMotion: document.querySelector("#settings-reduced-motion"),
@@ -593,6 +611,8 @@ let dragJustEndedAt = 0;
 let sidebarWidth = defaultSidebarWidth;
 let sidebarHidden = false;
 let sidebarDragCleanup = null;
+let layoutState = defaultLayoutState();
+let panelLayoutRestored = false;
 let paletteItems = [];
 let paletteActive = -1;
 let paletteTimer = null;
@@ -627,13 +647,140 @@ function writeLayoutPreference(key, value) {
   }
 }
 
+// The stored layout record is the authority. The localStorage keys stay
+// mirrors of it, written so the sidebar does not reflow before GetLayoutState
+// answers — the same reason the theme keeps its pre-paint key.
+const layoutStateScheduler = new WorkspacePersistenceScheduler(
+  {
+    setTimeout: (callback, delay) => window.setTimeout(callback, delay),
+    clearTimeout: (handle) => window.clearTimeout(handle),
+  },
+  () => writeLayoutState(),
+);
+
+function writeLayoutState() {
+  try {
+    void api()
+      .SetLayoutState(layoutStatePatch(layoutState, workspaceState.project?.root || ""))
+      .catch(() => {});
+  } catch {
+    // Layout persistence is optional; the live layout is unchanged.
+  }
+}
+
+function recordSidebarLayout() {
+  layoutState.sidebar = { width: sidebarWidth, hidden: sidebarHidden };
+  layoutStateScheduler.markDirty();
+}
+
+// Only what the user did counts, and a click on a toggle is the only signal
+// that means it: the dock also forces the panels open when the last session
+// exits and when it disposes, and that teardown must not erase the record.
+// The listener sits on the group so it runs after the dock's own handler and
+// reads what the dock settled on.
+function recordPanelLayout(event) {
+  if (
+    !panelLayoutRestored ||
+    !event.target.closest("#board-panel-toggle, #terminal-panel-toggle")
+  ) return;
+  const next = {
+    boardHidden: elements.boardPanelToggle.getAttribute("aria-pressed") === "true",
+    terminalHidden: elements.terminalPanelToggle.getAttribute("aria-pressed") === "true",
+  };
+  if (
+    next.boardHidden === layoutState.panels.boardHidden &&
+    next.terminalHidden === layoutState.panels.terminalHidden
+  ) return;
+  layoutState.panels = next;
+  layoutStateScheduler.markDirty();
+}
+
+// The dock owns the panel toggles, so the stored record is applied through
+// them. The dock refuses a board change while no session is live, and a
+// refusal leaves the record alone rather than overwriting the preference this
+// restore exists to honor.
+function restorePanelLayout() {
+  panelLayoutRestored = false;
+  for (const [toggle, hidden] of [
+    [elements.boardPanelToggle, layoutState.panels.boardHidden],
+    [elements.terminalPanelToggle, layoutState.panels.terminalHidden],
+  ]) {
+    if (toggle.disabled) continue;
+    if ((toggle.getAttribute("aria-pressed") === "true") !== hidden) toggle.click();
+  }
+  // The clicks above dispatch synchronously, so the guard has done its whole
+  // job by the time the loop ends: every click after this one is the user's,
+  // and a dock that refused the restore must not silence them for the rest of
+  // its life. The refusal itself is still not adopted — it happened under the
+  // guard — so the stored record stands until a real gesture moves it.
+  panelLayoutRestored = true;
+}
+
+function restoreProjectLayout(projectRoot) {
+  const stored = layoutProjectState(layoutState, projectRoot);
+  view = stored.view;
+  expandedLanes.clear();
+  foldedLanes.clear();
+  for (const lane of stored.foldedLanes) foldedLanes.add(lane);
+}
+
+// Nothing is recorded before the board loads: the restored plan is still only
+// a hint at that point, and writing a zero over it would lose it.
+function recordProjectLayout() {
+  const projectRoot = workspaceState.project?.root;
+  if (!projectRoot || !board) return;
+  const next = {
+    view,
+    planId: Number(board.planId || 0),
+    foldedLanes: [...foldedLanes].sort(),
+  };
+  const current = layoutState.projects[projectRoot];
+  if (current && JSON.stringify(current) === JSON.stringify(next)) return;
+  layoutState.projects[projectRoot] = next;
+  layoutStateScheduler.markDirty();
+}
+
+// The stored plan is a hint. The backend still resolves it, and a plan that no
+// longer resolves silently falls back to the active plan.
+function restoredPlanId(projectRoot) {
+  return layoutProjectState(layoutState, projectRoot || "").planId;
+}
+
+function applyLayoutState(next) {
+  layoutState = next;
+  setSidebarWidth(layoutState.sidebar.width, false);
+  setSidebarHidden(layoutState.sidebar.hidden, false);
+  writeLayoutPreference(sidebarWidthStorageKey, String(sidebarWidth));
+  writeLayoutPreference(sidebarHiddenStorageKey, String(sidebarHidden));
+  restorePanelLayout();
+}
+
+async function loadLayoutState() {
+  let stored;
+  try {
+    stored = normalizeLayoutState(await api().GetLayoutState());
+  } catch {
+    return;
+  }
+  if (stored.storage !== "ok") {
+    // No readable record yet, so the mirror is what this window is already
+    // using; adopting a default width here would move the sidebar for nothing.
+    layoutState = { ...stored, sidebar: { width: sidebarWidth, hidden: sidebarHidden } };
+    return;
+  }
+  applyLayoutState(stored);
+}
+
 function setSidebarWidth(width, persist = true) {
   sidebarWidth = clampSidebarWidth(width, window.innerWidth);
   const maximum = sidebarMaximumWidth(window.innerWidth);
   elements.app.style.setProperty("--sidebar-width", `${sidebarWidth}px`);
   elements.sidebarResize.setAttribute("aria-valuemax", String(maximum));
   elements.sidebarResize.setAttribute("aria-valuenow", String(sidebarWidth));
-  if (persist) writeLayoutPreference(sidebarWidthStorageKey, String(sidebarWidth));
+  if (persist) {
+    writeLayoutPreference(sidebarWidthStorageKey, String(sidebarWidth));
+    recordSidebarLayout();
+  }
 }
 
 function setSidebarHidden(hidden, persist = true) {
@@ -649,6 +796,7 @@ function setSidebarHidden(hidden, persist = true) {
   elements.sidebarToggle.title = label;
   if (persist) {
     writeLayoutPreference(sidebarHiddenStorageKey, String(sidebarHidden));
+    recordSidebarLayout();
   }
 }
 
@@ -680,6 +828,7 @@ function beginSidebarResize(event) {
     ) return;
     cleanup();
     writeLayoutPreference(sidebarWidthStorageKey, String(sidebarWidth));
+    recordSidebarLayout();
   };
   sidebarDragCleanup = cleanup;
   elements.sidebarResize.setPointerCapture(pointerID);
@@ -705,6 +854,7 @@ function initializeSidebarLayout() {
   sidebarHidden = readLayoutPreference(sidebarHiddenStorageKey) === "true";
   setSidebarWidth(sidebarWidth, false);
   setSidebarHidden(sidebarHidden, false);
+  elements.panelControls.addEventListener("click", recordPanelLayout);
 }
 
 const statusTitles = {
@@ -1194,6 +1344,7 @@ function columnElement(column, collapsed = false) {
       foldedLanes.delete(column.status);
       expandedLanes.add(column.status);
       renderBoard();
+      recordProjectLayout();
     };
     lane.addEventListener("click", (event) => {
       if (Date.now() - dragJustEndedAt < 300) return;
@@ -1229,6 +1380,7 @@ function columnElement(column, collapsed = false) {
       expandedLanes.delete(column.status);
       foldedLanes.add(column.status);
       renderBoard();
+      recordProjectLayout();
     });
     header.append(heading, count, fold);
     const cards = document.createElement("div");
@@ -1943,6 +2095,7 @@ async function loadSnapshot(
     board = response.tracking.board;
     elements.workspace.dataset.snapshotState = "ready";
     renderBoard();
+    recordProjectLayout();
     renderIntelligence();
     openPendingTaskDetail();
     if (view === "overview" && heatmapRequested) void loadHeatmap(true);
@@ -2493,6 +2646,12 @@ function openUpdateReleasePage() {
 // ------------------------------------------------------------ settings
 
 function applyPreferences(next) {
+  // The startup opt-in is what decides the Welcome preselect, so turning it
+  // off clears the highlight now rather than at the next list load. Every
+  // other preference leaves the list alone: rebuilding it would drop focus.
+  const startupChanged =
+    preferences.startup.restoreLastProject !== next.startup.restoreLastProject ||
+    preferences.startup.lastProjectRoot !== next.startup.lastProjectRoot;
   preferences = next;
   themeController.setTheme(next.appearance.theme);
   const root = document.documentElement;
@@ -2504,9 +2663,11 @@ function applyPreferences(next) {
   }
   applyPreferenceMirrors(localStorage, next);
   renderPreferences();
+  if (startupChanged) renderRecentProjects();
 }
 
 function renderPreferences() {
+  elements.settingsStartupRestore.checked = preferences.startup.restoreLastProject;
   elements.settingsTheme.value = preferences.appearance.theme;
   elements.settingsDensity.value = preferences.appearance.density;
   elements.settingsReducedMotion.value = preferences.appearance.reducedMotion;
@@ -2560,9 +2721,15 @@ function renderSettingsStorageNotice(status) {
   elements.settingsStorageNotice.hidden = notice === "";
 }
 
+// The dialog's single live region. It sits outside the aria-busy wrapper, so
+// a long reset is still announced.
+function setSettingsStatus(message, failed = false) {
+  elements.settingsSaveStatus.textContent = message;
+  elements.settingsSaveStatus.dataset.tone = failed ? "error" : "";
+}
+
 function setSettingsSaveStatus(phase) {
-  elements.settingsSaveStatus.textContent = phase ? preferenceSaveMessage(phase) : "";
-  elements.settingsSaveStatus.dataset.tone = phase === "failed" ? "error" : "";
+  setSettingsStatus(phase ? preferenceSaveMessage(phase) : "", phase === "failed");
 }
 
 async function loadPreferences() {
@@ -2614,6 +2781,52 @@ async function resetPreferences() {
     if (sequence === settingsSaveSequence) setSettingsSaveStatus("failed");
   } finally {
     elements.settingsReset.disabled = false;
+  }
+}
+
+async function resetWindowLayout(invoker) {
+  if (!(await showConfirmation(resetWindowLayoutConfirmation, invoker))) return;
+  elements.settingsResetWindowLayout.disabled = true;
+  try {
+    applyLayoutState(normalizeLayoutState(await api().ResetWindowLayout()));
+    setSettingsStatus("Window layout reset to defaults.");
+  } catch (error) {
+    setSettingsStatus(messageFrom(error), true);
+  } finally {
+    elements.settingsResetWindowLayout.disabled = false;
+  }
+}
+
+// The runtime cannot reach WebView storage, so the saved terminal workspaces
+// are cleared here. A dock that is still open keeps its live tabs and saves
+// them again on the next change.
+function clearTerminalWorkspaceDescriptors() {
+  try {
+    for (const key of Object.keys(localStorage)) {
+      if (key.startsWith(terminalWorkspaceStoragePrefix)) localStorage.removeItem(key);
+    }
+  } catch {
+    // Persistence is optional.
+  }
+}
+
+async function resetApplicationState(invoker) {
+  if (!(await showConfirmation(resetApplicationStateConfirmation, invoker))) return;
+  elements.settingsResetApplicationState.disabled = true;
+  try {
+    const result = await api().ResetApplicationState();
+    clearTerminalWorkspaceDescriptors();
+    applyLayoutState(defaultLayoutState());
+    await loadPreferences();
+    void refreshUpdateState();
+    if (workspaceState.status === "open" && view === "capabilities") {
+      void loadCapabilities();
+    }
+    setSettingsStatus(resetApplicationStateMessage(result));
+  } catch (error) {
+    setSettingsStatus(messageFrom(error), true);
+  } finally {
+    elements.settingsResetApplicationState.disabled = false;
   }
 }
 
@@ -3799,7 +4012,16 @@ function renderRecentProjects() {
     "aria-busy",
     String(recentProjectsState.listLoading || operationActive),
   );
-  elements.recentStatus.textContent = recentProjectsState.announcement;
+  // The opted-in last project that did not auto-open is pointed at rather than
+  // opened: the row says so, the live region says so, and nothing takes focus.
+  const preselectedEntryId = preselectedRecentProject(projects, preferences.startup);
+  const preselected = projects.find(
+    (project) => project.entryId === preselectedEntryId,
+  );
+  elements.recentStatus.textContent = recentProjectsState.announcement ||
+    (preselected
+      ? `“${preselected.name}” is preselected as the last project p-track recorded. Confirm it to continue.`
+      : "");
   elements.recentError.textContent = recentProjectsState.message ||
     recentProjectsState.listError;
   const active = projects.find(
@@ -3857,6 +4079,15 @@ function renderRecentProjects() {
       state.textContent = stateLabel;
       content.append(state);
       descriptionIDs.push(state.id);
+    }
+    if (project.entryId === preselectedEntryId) {
+      item.setAttribute("aria-current", "true");
+      const preselect = document.createElement("p");
+      preselect.className = "recent-project-preselect";
+      preselect.id = `recent-project-preselect-${index}`;
+      preselect.textContent = "Preselected — last project p-track recorded";
+      content.append(preselect);
+      descriptionIDs.push(preselect.id);
     }
     const actions = document.createElement("div");
     actions.className = "recent-project-actions";
@@ -5547,6 +5778,7 @@ function setView(nextView, focusHeading = false) {
     void loadHeatmap();
   }
   if (view === "capabilities") void loadCapabilities();
+  recordProjectLayout();
   if (focusHeading) {
     const focusedView = view;
     requestAnimationFrame(() => {
@@ -5573,7 +5805,7 @@ function renderWorkspaceState(state, focus = false) {
     );
   }
   const open = state.status === "open";
-  if (open && !wasOpen) view = "board";
+  if (open && !wasOpen) restoreProjectLayout(state.project?.root || "");
   applyView();
   elements.stateScreen.hidden = open;
   elements.navBoard.disabled = !open;
@@ -5601,6 +5833,8 @@ function renderWorkspaceState(state, focus = false) {
     }
     void loadRecentProjects();
     void ensureTerminalDock(state.generation, state.project.root);
+    // The restored view loads its own page the same way a click on it would.
+    if (!wasOpen) setView(view);
     if (firstPlanState.phase !== "idle") {
       renderFirstPlanOnboarding(focus);
       return;
@@ -5681,7 +5915,9 @@ function publishBackendState(state, transition, focus = false, keepInert = false
     elements.capabilitiesPage.inert = true;
     elements.capabilitiesPage.setAttribute("aria-busy", "true");
   }
-  if (state.status === "open" && !keepInert) void loadSnapshot(0);
+  if (state.status === "open" && !keepInert) {
+    void loadSnapshot(restoredPlanId(state.project?.root));
+  }
   return true;
 }
 
@@ -6625,6 +6861,7 @@ async function ensureTerminalDock(generation, projectRoot) {
       }
       return;
     }
+    restorePanelLayout();
   } catch (error) {
     const current = workspaceController.state;
     if (current.status === "open" && current.generation === generation) {
@@ -6640,6 +6877,7 @@ function disposeTerminalDock() {
   applicationOverlayCoordinator.setDock(null);
   terminalHandle?.dispose();
   terminalHandle = null;
+  panelLayoutRestored = false;
   terminalGeneration = 0;
   terminalProjectRoot = "";
 }
@@ -7090,6 +7328,11 @@ elements.settingsSectionList.addEventListener("keydown", (event) => {
   event.preventDefault();
   selectSettingsSection(settingsSections[next].id, true);
 });
+elements.settingsStartupRestore.addEventListener("change", (event) => {
+  void savePreferences({
+    startup: { restoreLastProject: event.currentTarget.checked },
+  });
+});
 elements.settingsTheme.addEventListener("change", (event) => {
   void savePreferences({ appearance: { theme: event.currentTarget.value } });
 });
@@ -7121,6 +7364,12 @@ elements.settingsTerminalRenderer.addEventListener("change", (event) => {
 });
 elements.settingsUpdatesAutomatic.addEventListener("change", (event) => {
   void setAutomaticUpdateChecks(event.currentTarget.checked);
+});
+elements.settingsResetWindowLayout.addEventListener("click", (event) => {
+  void resetWindowLayout(event.currentTarget);
+});
+elements.settingsResetApplicationState.addEventListener("click", (event) => {
+  void resetApplicationState(event.currentTarget);
 });
 elements.settingsOpenUpdates.addEventListener("click", () => {
   const invoker = elements.settingsOpen;
@@ -7344,6 +7593,7 @@ if ("ResizeObserver" in window) {
 
 window.addEventListener("beforeunload", () => {
   sidebarDragCleanup?.();
+  layoutStateScheduler.flush();
   refreshLoop.dispose();
   runtimeRefreshes.cancel();
   disposeTerminalDock();
@@ -7358,6 +7608,7 @@ async function start() {
       // The stored record is the authority, so it lands before the terminal
       // dock or the first paint-sensitive surface reads its cache.
       await loadPreferences();
+      await loadLayoutState();
       const startup = await resolveFirstRunStartupState(
         () => api().GetWorkspaceState(),
         () => api().GetPendingInitializationV1(),
@@ -7376,7 +7627,9 @@ async function start() {
       }
       registerNativeProjectActions();
       refreshLoop.start();
-      if (state.status === "open") await loadSnapshot(0);
+      if (state.status === "open") {
+        await loadSnapshot(restoredPlanId(state.project?.root));
+      }
       return;
     } catch (error) {
       startupError = error;

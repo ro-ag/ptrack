@@ -2610,6 +2610,126 @@ impl DesktopWorkspace for ProductionDesktopWorkspace {
     }
 }
 
+/// What a launch opens before the window is shown.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum StartupProjectV1 {
+    /// Open this root immediately.
+    Open(PathBuf),
+    /// Land on Welcome. A path is the recent entry to preselect, so the user
+    /// confirms its relocation themselves.
+    Welcome(Option<PathBuf>),
+}
+
+/// Decides what a launch opens.
+///
+/// An explicit context always wins. A path named on the command line is an
+/// explicit instruction, and so is a working directory that is itself a bound
+/// project: a terminal launch from inside a project opens that project, which
+/// is both the pre-existing behavior and the only reading a terminal user
+/// expects. Auto-open applies only when neither is present — the Finder and
+/// Dock launch — and then demands proof: the opt-in, a recorded root, and a
+/// `resolve_recent_project` answer that is both `Available` and `Ready`. A
+/// `ConfirmationRequired` answer is the relocated-project case and never
+/// auto-opens; it preselects the entry on Welcome instead, because confirming
+/// a move is the user's call, not the launcher's.
+#[must_use]
+pub fn startup_project(
+    cli_path: Option<PathBuf>,
+    working_directory_project: Option<PathBuf>,
+    restore_last_project: bool,
+    last_project_root: Option<&str>,
+    resolved: Option<(RecentProjectAvailabilityV1, RecentProjectResolutionV1)>,
+) -> StartupProjectV1 {
+    if let Some(path) = cli_path.or(working_directory_project) {
+        return StartupProjectV1::Open(path);
+    }
+    let Some(root) = last_project_root.filter(|_| restore_last_project) else {
+        return StartupProjectV1::Welcome(None);
+    };
+    match resolved {
+        Some((RecentProjectAvailabilityV1::Available, RecentProjectResolutionV1::Ready)) => {
+            StartupProjectV1::Open(PathBuf::from(root))
+        }
+        Some((
+            RecentProjectAvailabilityV1::Available,
+            RecentProjectResolutionV1::ConfirmationRequired,
+        )) => StartupProjectV1::Welcome(Some(PathBuf::from(root))),
+        _ => StartupProjectV1::Welcome(None),
+    }
+}
+
+/// Decides what a launch opens from the working directory and the stored
+/// startup preference.
+///
+/// Resolves the working directory through the same binding machinery the
+/// runtime uses, so a launch from inside a project opens it without ever
+/// reading the opt-in. Only a working directory that is no project reaches the
+/// `startup` section, whose recorded root is then proven through the same
+/// `resolve_recent_project` path the Welcome list uses, so an auto-open is
+/// held to exactly the evidence a manual reopen is. Every failure — no
+/// runtime, no store, no matching recents entry — lands on Welcome, because a
+/// launcher that cannot prove a project has no business opening one.
+#[must_use]
+pub fn resolved_startup_project(
+    global_home: &Path,
+    writer_version: &str,
+    cli_path: Option<PathBuf>,
+    current_dir: &Path,
+) -> StartupProjectV1 {
+    if cli_path.is_some() {
+        return startup_project(cli_path, None, false, None, None);
+    }
+    let Ok(Some(runtime)) = ActiveRuntime::load(global_home, writer_version) else {
+        return StartupProjectV1::Welcome(None);
+    };
+    let working_directory_project = runtime
+        .bindings_for(current_dir)
+        .ok()
+        .and_then(|bindings| bindings.project)
+        .map(|project| project.root);
+    if working_directory_project.is_some() {
+        return startup_project(None, working_directory_project, false, None, None);
+    }
+    let Ok(bindings) = runtime.global_bindings(runtime.global_home()) else {
+        return StartupProjectV1::Welcome(None);
+    };
+    let Ok(store) = GlobalStore::open_existing(&bindings.global_database, &bindings.global_binding)
+    else {
+        return StartupProjectV1::Welcome(None);
+    };
+    let startup = crate::preferences::preferences(&store).preferences.startup;
+    let Some(root) = startup
+        .last_project_root
+        .clone()
+        .filter(|_| startup.restore_last_project)
+    else {
+        return StartupProjectV1::Welcome(None);
+    };
+    let recents = ProductionRecentProjects::new(runtime);
+    let resolved = recents
+        .recent_projects_v1()
+        .ok()
+        .and_then(|listed| {
+            listed
+                .projects
+                .into_iter()
+                .find(|entry| entry.canonical_path == root)
+        })
+        .and_then(|entry| {
+            recents
+                .resolve_recent_project(&entry.entry_id, &entry.base, Path::new(&root))
+                .ok()
+                .map(|resolved| (entry.availability, resolved.resolution))
+        });
+    startup_project(
+        None,
+        None,
+        startup.restore_last_project,
+        Some(&root),
+        resolved,
+    )
+}
+
 /// Resolves the fixed global home without touching it.
 ///
 /// # Errors

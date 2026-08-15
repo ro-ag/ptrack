@@ -35,7 +35,8 @@ use time::{OffsetDateTime, UtcOffset};
 use tokio_util::sync::CancellationToken;
 
 use crate::diagnostics_report::{CapabilityCountsV1, DiagnosticsReportV1};
-use crate::preferences::{preferences, reset_preferences, set_preferences};
+use crate::layout_state::{layout_state, reset_window_layout, set_layout_state};
+use crate::preferences::{PreferencesDocumentV1, preferences, reset_preferences, set_preferences};
 use crate::{
     ActiveRuntime, AgentRuntimeService, AppError, AppResult, ApplicationPort,
     LaunchedEventAuthority, LinkedAgentRuntimeHooks, Mutation, MutationResult, ProjectEndpoint,
@@ -67,7 +68,7 @@ const WORKSPACE_OPERATION_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub const FIRST_RUN_GOAL_MAX_BYTES: usize = 4_096;
 
-const COMMANDS: [&str; 80] = [
+const COMMANDS: [&str; 84] = [
     "AcknowledgeAgentHandoffV2",
     "AddTask",
     "AddTaskNote",
@@ -102,6 +103,7 @@ const COMMANDS: [&str; 80] = [
     "GetCapabilityAuditsV2",
     "GetDiagnosticsReport",
     "GetInitializationStatusV1",
+    "GetLayoutState",
     "GetPendingInitializationV1",
     "GetPreferences",
     "GetRecentProjects",
@@ -131,7 +133,9 @@ const COMMANDS: [&str; 80] = [
     "RemoveCapabilityV2",
     "RenameTask",
     "RenameTaskV2",
+    "ResetApplicationState",
     "ResetPreferences",
+    "ResetWindowLayout",
     "ResizeTerminal",
     "ResizeTerminalV2",
     "ResolveRecentProjectV1",
@@ -142,6 +146,7 @@ const COMMANDS: [&str; 80] = [
     "SetAgentTaskOwnershipV2",
     "SetAgentWorktreeV2",
     "SetAutomaticUpdateChecks",
+    "SetLayoutState",
     "SetPreferences",
     "StartFirstTaskV1",
     "TestCapabilityV2",
@@ -150,7 +155,7 @@ const COMMANDS: [&str; 80] = [
     "WriteTerminalMemoryV2",
 ];
 
-/// Exact current 80-method desktop bridge command allowlist.
+/// Exact current 84-method desktop bridge command allowlist.
 #[must_use]
 pub const fn allowed_desktop_commands() -> &'static [&'static str] {
     &COMMANDS
@@ -456,6 +461,19 @@ pub enum RecentProjectRegistryStatusV1 {
 pub struct RecentProjectRegistryCommitV1 {
     pub base: String,
     pub status: RecentProjectRegistryStatusV1,
+}
+
+/// What a full application-state reset cleared: the exact global config keys
+/// it deleted, and how many capability grants it revoked. The records are
+/// deleted before any grant is revoked, and a failing delete fails the command
+/// with every grant still in place, so a result at all means the grants went
+/// with the records. `records` is the fixed manifest the confirmation dialog
+/// names, not a per-key report.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResetApplicationStateResultV1 {
+    pub records: [&'static str; 4],
+    pub capability_grants: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -913,6 +931,9 @@ impl DesktopRuntime {
     #[allow(clippy::needless_pass_by_value)]
     pub fn invoke(self: &Arc<Self>, request: DesktopCommandRequest) -> AppResult<Value> {
         validate_request(&request)?;
+        if let Some(result) = self.application_state(&request.method, &request.arguments) {
+            return result;
+        }
         match request.method.as_str() {
             "GetWorkspaceState" => value(self.workspace_state()),
             "GetInitializationStatusV1" => self.initialization_status(&request.arguments),
@@ -992,10 +1013,6 @@ impl DesktopRuntime {
                 let _lease = self.begin_native_action()?;
                 value(crate::install_shell_command().message)
             }
-            "GetPreferences" => self.get_preferences(&request.arguments),
-            "SetPreferences" => self.set_preferences(&request.arguments),
-            "ResetPreferences" => self.reset_preferences(&request.arguments),
-            "GetDiagnosticsReport" => self.get_diagnostics_report(&request.arguments),
             "GetRecentProjects" => self.get_recent_projects(),
             "GetRecentProjectsV1" => self.get_recent_projects_v1(&request.arguments),
             "ResolveRecentProjectV1" => self.resolve_recent_project_v1(&request.arguments),
@@ -1012,6 +1029,27 @@ impl DesktopRuntime {
         }
     }
 
+    /// Application-scoped state, answered above any project workspace so it
+    /// stays reachable on Welcome. `None` leaves the method to the workspace
+    /// dispatch.
+    fn application_state(
+        self: &Arc<Self>,
+        method: &str,
+        arguments: &[Value],
+    ) -> Option<AppResult<Value>> {
+        Some(match method {
+            "GetPreferences" => self.get_preferences(arguments),
+            "SetPreferences" => self.set_preferences(arguments),
+            "ResetPreferences" => self.reset_preferences(arguments),
+            "GetDiagnosticsReport" => self.get_diagnostics_report(arguments),
+            "GetLayoutState" => self.get_layout_state(arguments),
+            "SetLayoutState" => self.set_layout_state(arguments),
+            "ResetWindowLayout" => self.reset_window_layout(arguments),
+            "ResetApplicationState" => self.reset_application_state(arguments),
+            _ => return None,
+        })
+    }
+
     fn get_preferences(self: &Arc<Self>, arguments: &[Value]) -> AppResult<Value> {
         require_argument_count("GetPreferences", arguments, 0)?;
         let _lease = self.begin_native_action()?;
@@ -1021,13 +1059,77 @@ impl DesktopRuntime {
     fn set_preferences(self: &Arc<Self>, arguments: &[Value]) -> AppResult<Value> {
         require_argument_count("SetPreferences", arguments, 1)?;
         let _lease = self.begin_native_action()?;
-        value(set_preferences(&self.global_store()?, &arguments[0])?)
+        value(apply_preferences(
+            &self.global_store()?,
+            &arguments[0],
+            self.open_project_root().as_deref(),
+        )?)
     }
 
     fn reset_preferences(self: &Arc<Self>, arguments: &[Value]) -> AppResult<Value> {
         require_argument_count("ResetPreferences", arguments, 0)?;
         let _lease = self.begin_native_action()?;
         value(reset_preferences(&self.global_store()?)?)
+    }
+
+    fn get_layout_state(self: &Arc<Self>, arguments: &[Value]) -> AppResult<Value> {
+        require_argument_count("GetLayoutState", arguments, 0)?;
+        let _lease = self.begin_native_action()?;
+        value(layout_state(&self.global_store()?))
+    }
+
+    fn set_layout_state(self: &Arc<Self>, arguments: &[Value]) -> AppResult<Value> {
+        require_argument_count("SetLayoutState", arguments, 1)?;
+        let _lease = self.begin_native_action()?;
+        value(set_layout_state(&self.global_store()?, &arguments[0])?)
+    }
+
+    fn reset_window_layout(self: &Arc<Self>, arguments: &[Value]) -> AppResult<Value> {
+        require_argument_count("ResetWindowLayout", arguments, 0)?;
+        let _lease = self.begin_native_action()?;
+        value(reset_window_layout(&self.global_store()?)?)
+    }
+
+    /// Clears every app-scoped record and revokes every capability grant, and
+    /// reports what went so the confirmation dialog can be honest. Grants live
+    /// in the project, so revoking them writes to the open project's store;
+    /// plans, tasks, notes, the recents registry, and capability definitions
+    /// are untouched. The store is opened and the records are deleted first: a
+    /// store that cannot be opened must not cost the user their grants for
+    /// nothing.
+    fn reset_application_state(self: &Arc<Self>, arguments: &[Value]) -> AppResult<Value> {
+        require_argument_count("ResetApplicationState", arguments, 0)?;
+        let _lease = self.begin_native_action()?;
+        let records = reset_application_records(&self.global_store()?)?;
+        value(ResetApplicationStateResultV1 {
+            records,
+            capability_grants: self.revoke_capability_grants(),
+        })
+    }
+
+    /// Disables every enabled capability in the open workspace, which revokes
+    /// the grant without deleting the operator's capability definition. There
+    /// is nothing to revoke while no workspace is open.
+    fn revoke_capability_grants(self: &Arc<Self>) -> usize {
+        let generation = self.workspace_state().generation;
+        let Ok(listed) = self.with_workspace("GetCapabilitiesV2", &[json!(generation)]) else {
+            return 0;
+        };
+        let granted: Vec<u64> = listed["capabilities"]
+            .as_array()
+            .map_or_else(Vec::new, |rows| {
+                rows.iter()
+                    .filter(|row| row["state"] == "enabled")
+                    .filter_map(|row| row["capability"]["id"].as_u64())
+                    .collect()
+            });
+        granted
+            .into_iter()
+            .filter(|id| {
+                self.with_workspace("DisableCapabilityV2", &[json!(generation), json!(id)])
+                    .is_ok()
+            })
+            .count()
     }
 
     fn get_diagnostics_report(self: &Arc<Self>, arguments: &[Value]) -> AppResult<Value> {
@@ -1652,6 +1754,7 @@ impl DesktopRuntime {
                 format!("previous project cleanup incomplete: {error}")
             });
         self.emit(DesktopEvent::WorkspaceDataChanged(next_generation));
+        self.record_last_project(&json!(canonical.to_str()));
         Ok(WorkspaceChangeResult {
             state: self.workspace_state(),
             requires_confirmation: false,
@@ -1659,6 +1762,23 @@ impl DesktopRuntime {
             active_resources: ActiveResourceSummary::default(),
             warning,
         })
+    }
+
+    /// Records, or with a null root clears, the project startup may reopen.
+    /// Best effort, because a global store that will not open must never fail
+    /// the project change the user actually asked for.
+    fn record_last_project(&self, root: &Value) {
+        if let Ok(store) = self.global_store() {
+            record_last_project_in(&store, root);
+        }
+    }
+
+    /// The root of the project open right now, if any.
+    fn open_project_root(&self) -> Option<String> {
+        lock(&self.state)
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.project().root)
     }
 
     fn close_project(self: &Arc<Self>, token: &str) -> AppResult<WorkspaceChangeResult> {
@@ -1710,6 +1830,9 @@ impl DesktopRuntime {
             warning,
         };
         lock(&self.state).status = WorkspaceStatus::Welcome;
+        // An explicit close is the user saying they do not want this project
+        // back on the next launch.
+        self.record_last_project(&Value::Null);
         Ok(result)
     }
 
@@ -4920,6 +5043,62 @@ fn run_capability_diagnostic(
         .map_err(AppError::Io)?
         .join()
         .map_err(|_| AppError::Message("capability diagnostic worker failed".to_owned()))?
+}
+
+/// Applies a preferences patch and, when the patch turns the startup opt-in
+/// on while a project is open, records that project as the one to reopen.
+/// Without that the setting does nothing until the user happens to reopen the
+/// same project once, so the next launch lands on Welcome instead. It takes
+/// the store and the open root so the transition is provable against a
+/// temporary store, while the command owns resolving the process-global home.
+///
+/// # Errors
+/// Returns an error when the patch cannot be applied.
+pub(super) fn apply_preferences(
+    store: &GlobalStore,
+    patch: &Value,
+    open_root: Option<&str>,
+) -> AppResult<PreferencesDocumentV1> {
+    let opted_in = preferences(store).preferences.startup.restore_last_project;
+    let document = set_preferences(store, patch)?;
+    if !opted_in
+        && document.preferences.startup.restore_last_project
+        && let Some(root) = open_root
+        && let Some(recorded) = record_last_project_in(store, &json!(root))
+    {
+        return Ok(recorded);
+    }
+    Ok(document)
+}
+
+/// Records, or with a null root clears, the project startup may reopen.
+/// Only the write is gated on the opt-in — a filesystem path nobody asked us
+/// to keep is not ours to persist — while the clear is unconditional, so an
+/// explicit close never leaves behind a root a later opt-in would silently
+/// reopen. Best effort: `None` means nothing was written.
+pub(super) fn record_last_project_in(
+    store: &GlobalStore,
+    root: &Value,
+) -> Option<PreferencesDocumentV1> {
+    if !root.is_null() && !preferences(store).preferences.startup.restore_last_project {
+        return None;
+    }
+    set_preferences(store, &json!({ "startup": { "lastProjectRoot": root } })).ok()
+}
+
+/// Deletes every app-scoped record and returns the manifest of what went. It
+/// takes the store so the delete set is provable against a temporary one,
+/// while the command owns resolving the process-global home.
+pub(super) fn reset_application_records(store: &GlobalStore) -> AppResult<[&'static str; 4]> {
+    reset_preferences(store)?;
+    reset_window_layout(store)?;
+    store.delete_config(crate::update_preference_key())?;
+    Ok([
+        "preferences",
+        "updates.auto-check",
+        "window-state",
+        "layout-state",
+    ])
 }
 
 fn shutdown_terminal(terminal: Arc<TerminalRuntime>) -> AppResult<()> {

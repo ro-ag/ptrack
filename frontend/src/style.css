@@ -1036,6 +1036,12 @@ select option {
   background: var(--fill-hover);
 }
 
+/* The row also carries a text line, so the border is a glance aid, never the
+   only signal that this is the preselected entry. */
+.recent-project[aria-current="true"] {
+  border-color: var(--accent);
+}
+
 .recent-project-name,
 .recent-project-path {
   overflow: hidden;
@@ -1060,6 +1066,13 @@ select option {
 .recent-project-state {
   margin: var(--space-050) 0 0;
   color: var(--text-soft);
+  font-size: 0.6875rem;
+  font-weight: 700;
+}
+
+.recent-project-preselect {
+  margin: var(--space-050) 0 0;
+  color: var(--accent);
   font-size: 0.6875rem;
   font-weight: 700;
 }
@@ -2879,6 +2892,12 @@ button.modal-backdrop:active {
   font-size: 0.6875rem;
 }
 
+.settings-reset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-100);
+}
+
 .settings-save-status {
   min-height: 1.2em;
   margin: var(--space-200) 0 0;
@@ -4286,9 +4305,14 @@ button.modal-backdrop:active {
     border-color: CanvasText;
   }
 
+  .recent-project[aria-current="true"] {
+    border-color: Highlight;
+  }
+
   .settings-check,
   .settings-field select,
-  .settings-field input {
+  .settings-field input,
+  .settings-reset-actions button {
     border-color: CanvasText;
   }
 

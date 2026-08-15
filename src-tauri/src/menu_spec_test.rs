@@ -79,8 +79,17 @@ fn dispatch_and_window_contracts_are_exact() {
             window.width,
             window.height,
             window.min_width,
-            window.min_height
+            window.min_height,
+            window.visible
         ),
-        ("p-track Project Workspace", "#080d12", 1_440, 900, 880, 560)
+        (
+            "p-track Project Workspace",
+            "#080d12",
+            1_440,
+            900,
+            880,
+            560,
+            false
+        )
     );
 }

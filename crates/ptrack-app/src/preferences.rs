@@ -23,6 +23,9 @@ const SCROLLBACK_DEFAULT: u64 = 25_000;
 const SCROLLBACK_MINIMUM: u64 = 1_000;
 const SCROLLBACK_MAXIMUM: u64 = 200_000;
 const TEXT_MAX_BYTES: usize = 128;
+/// A filesystem path is text too, but two orders of magnitude longer than a
+/// profile id. The layout record bounds its project keys by the same limit.
+pub(crate) const PATH_MAX_BYTES: usize = 16 * 1024;
 
 /// Whether the returned document came from storage, from defaults, or from a
 /// record this build cannot read.
@@ -97,6 +100,15 @@ pub struct TerminalPreferencesV1 {
     pub renderer: RendererV1,
 }
 
+/// Startup behavior. Restoring the last project is off by default, so the
+/// first launch after an upgrade never silently changes what opens.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartupPreferencesV1 {
+    pub restore_last_project: bool,
+    pub last_project_root: Option<String>,
+}
+
 /// The exact stored record. `version` is always the supported version because
 /// an older record upgrades in memory and a newer one never decodes.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -105,6 +117,7 @@ pub struct PreferencesV1 {
     pub version: u64,
     pub appearance: AppearancePreferencesV1,
     pub terminal: TerminalPreferencesV1,
+    pub startup: StartupPreferencesV1,
 }
 
 /// The stored record plus how it was obtained.
@@ -193,6 +206,7 @@ fn defaults() -> PreferencesV1 {
         version: PREFERENCES_VERSION,
         appearance: appearance(None),
         terminal: terminal(None),
+        startup: startup(None),
     }
 }
 
@@ -208,6 +222,7 @@ fn normalize(value: &Value) -> Option<PreferencesV1> {
         version: PREFERENCES_VERSION,
         appearance: appearance(record.get("appearance")),
         terminal: terminal(record.get("terminal")),
+        startup: startup(record.get("startup")),
     })
 }
 
@@ -225,8 +240,8 @@ fn terminal(section: Option<&Value>) -> TerminalPreferencesV1 {
     TerminalPreferencesV1 {
         // A stored profile id is never coerced; the UI reports one that no
         // longer resolves as unavailable.
-        default_profile_id: text(field(section, "defaultProfileId")),
-        font_family: text(field(section, "fontFamily"))
+        default_profile_id: text(field(section, "defaultProfileId"), TEXT_MAX_BYTES),
+        font_family: text(field(section, "fontFamily"), TEXT_MAX_BYTES)
             .unwrap_or_else(|| FONT_FAMILY_DEFAULT.to_owned()),
         font_size: clamped(
             field(section, "fontSize"),
@@ -245,11 +260,23 @@ fn terminal(section: Option<&Value>) -> TerminalPreferencesV1 {
     }
 }
 
-fn field<'a>(section: Option<&'a Map<String, Value>>, key: &str) -> Option<&'a Value> {
+fn startup(section: Option<&Value>) -> StartupPreferencesV1 {
+    let section = section.and_then(Value::as_object);
+    StartupPreferencesV1 {
+        restore_last_project: field(section, "restoreLastProject")
+            .and_then(Value::as_bool)
+            .unwrap_or_default(),
+        // A stored root is never coerced; startup re-resolves it and lands on
+        // Welcome when it no longer resolves.
+        last_project_root: text(field(section, "lastProjectRoot"), PATH_MAX_BYTES),
+    }
+}
+
+pub(crate) fn field<'a>(section: Option<&'a Map<String, Value>>, key: &str) -> Option<&'a Value> {
     section.and_then(|section| section.get(key))
 }
 
-fn enumerated<T: Default + for<'de> Deserialize<'de>>(value: Option<&Value>) -> T {
+pub(crate) fn enumerated<T: Default + for<'de> Deserialize<'de>>(value: Option<&Value>) -> T {
     value
         .and_then(|value| serde_json::from_value(value.clone()).ok())
         .unwrap_or_default()
@@ -257,24 +284,27 @@ fn enumerated<T: Default + for<'de> Deserialize<'de>>(value: Option<&Value>) -> 
 
 /// Clamps an integer into its documented range. A non-integer is a wrong type
 /// and falls back to the default; a negative value clamps to the minimum.
-fn clamped(value: Option<&Value>, default: u64, minimum: u64, maximum: u64) -> u64 {
+pub(crate) fn clamped(value: Option<&Value>, default: u64, minimum: u64, maximum: u64) -> u64 {
     value.and_then(Value::as_i64).map_or(default, |number| {
         u64::try_from(number).map_or(minimum, |number| number.clamp(minimum, maximum))
     })
 }
 
-fn text(value: Option<&Value>) -> Option<String> {
+fn text(value: Option<&Value>, max_bytes: usize) -> Option<String> {
     value
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|text| {
-            !text.is_empty() && text.len() <= TEXT_MAX_BYTES && !text.contains(char::is_control)
-        })
+        .filter(|text| valid_text(text, max_bytes))
         .map(ToOwned::to_owned)
 }
 
+/// Trimmed, non-empty, bounded, and free of control characters.
+pub(crate) fn valid_text(text: &str, max_bytes: usize) -> bool {
+    !text.is_empty() && text.len() <= max_bytes && !text.contains(char::is_control)
+}
+
 /// Recursively merges `patch` into `target` object by object.
-fn merge(target: &mut Value, patch: &Value) {
+pub(crate) fn merge(target: &mut Value, patch: &Value) {
     match (target, patch) {
         (Value::Object(target), Value::Object(patch)) => {
             for (key, value) in patch {

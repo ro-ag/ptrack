@@ -32,10 +32,19 @@ export interface TerminalPreferences {
   renderer: RendererPreference;
 }
 
+// Startup is an opt-in: the last project reopens only when the user asked for
+// it and the recorded root still resolves. The root itself is recorded by the
+// runtime, never by the dialog.
+export interface StartupPreferences {
+  restoreLastProject: boolean;
+  lastProjectRoot: string | null;
+}
+
 export interface Preferences {
   version: number;
   appearance: AppearancePreferences;
   terminal: TerminalPreferences;
+  startup: StartupPreferences;
 }
 
 export const preferencesVersion = 1;
@@ -51,6 +60,7 @@ export const defaultPreferences: Preferences = {
     scrollback: 25_000,
     renderer: "auto",
   },
+  startup: { restoreLastProject: false, lastProjectRoot: null },
 };
 
 export const terminalFontSizeRange = { minimum: 10, maximum: 24 } as const;
@@ -97,7 +107,9 @@ export function normalizePreferences(value: unknown): Preferences {
   const document = record(value);
   const appearance = record(document.appearance);
   const terminal = record(document.terminal);
+  const startup = record(document.startup);
   const profileId = terminal.defaultProfileId;
+  const lastProjectRoot = startup.lastProjectRoot;
   return {
     version: preferencesVersion,
     appearance: {
@@ -133,6 +145,13 @@ export function normalizePreferences(value: unknown): Preferences {
         ["auto", "webgl", "canvas", "dom"],
         "auto",
       ),
+    },
+    startup: {
+      restoreLastProject: startup.restoreLastProject === true,
+      lastProjectRoot: typeof lastProjectRoot === "string" &&
+          lastProjectRoot.trim() !== ""
+        ? lastProjectRoot
+        : null,
     },
   };
 }
