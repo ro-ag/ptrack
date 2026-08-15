@@ -90,29 +90,34 @@ describe("reset confirmations", () => {
   });
 });
 
+// Every fixture below is shaped like DiagnosticsReportV1 in
+// crates/ptrack-app/src/diagnostics_report.rs, so a backend field that moves
+// breaks these rather than passing against a shape nothing emits.
 describe("diagnostics rows", () => {
-  it("labels known sections and marks paths copyable", () => {
+  it("labels the scalar sections and names what each copy control copies", () => {
     const rows = diagnosticsRows({
-      globalHome: "/Users/dev/.ptrack",
-      projectDatabase: "/work/app/.ptrack/ptrack.redb",
-      recovery: { required: false },
+      paths: {
+        globalHome: "/Users/dev/.ptrack",
+        globalDatabase: "/Users/dev/.ptrack/global.redb",
+      },
+      runtime: { status: "active", detail: "" },
       capabilities: { granted: 2, total: 5 },
     });
 
     expect(rows).toContainEqual({
-      label: "Global home",
+      label: "Paths · Global home",
       value: "/Users/dev/.ptrack",
-      copyable: true,
+      copy: "Copy Paths · Global home",
     });
     expect(rows).toContainEqual({
-      label: "Recovery · Required",
-      value: "No",
-      copyable: false,
+      label: "Runtime · Status",
+      value: "active",
+      copy: null,
     });
     expect(rows).toContainEqual({
       label: "Capabilities · Granted",
       value: "2",
-      copyable: false,
+      copy: null,
     });
   });
 
@@ -127,8 +132,25 @@ describe("diagnostics rows", () => {
     expect(rows).toContainEqual({
       label: "Paths · Project · Root",
       value: "/work/app",
-      copyable: true,
+      copy: "Copy Paths · Project · Root",
     });
+  });
+
+  // `paths.globalDatabase` is null when the marker cannot be read, `capabilities`
+  // is null whenever the caller has no counts, and `paths.project` is null with
+  // no workspace open. A row that silently disappeared would read as "there is
+  // nothing here" rather than "this could not be reported".
+  it("reports the sections the runtime nulls instead of dropping them", () => {
+    const rows = diagnosticsRows({
+      paths: { globalDatabase: null, project: null },
+      capabilities: null,
+    });
+
+    expect(rows).toEqual([
+      { label: "Paths · Global database", value: "Not available", copy: null },
+      { label: "Paths · Project", value: "No project open", copy: null },
+      { label: "Capabilities", value: "Not available", copy: null },
+    ]);
   });
 
   it("renders the backup ledger entries the report emits", () => {
@@ -137,14 +159,14 @@ describe("diagnostics rows", () => {
         status: "available",
         entries: [
           {
-            recordedAt: "2026-08-13T09:15:00Z",
-            project: "ptrack",
+            recordedAt: "2026-08-13T09:15:00.839591Z",
+            project: "/work/app",
             path: "/Users/dev/.ptrack/backups/ptrack-20260813.redb",
             present: true,
           },
           {
-            recordedAt: "2026-08-14T09:15:00Z",
-            project: "ptrack",
+            recordedAt: "2026-08-14T09:15:00.123Z",
+            project: "/work/app",
             path: "/Users/dev/.ptrack/backups/ptrack-20260814.redb",
             present: false,
           },
@@ -152,22 +174,38 @@ describe("diagnostics rows", () => {
       },
     });
 
-    expect(rows).toContainEqual({
-      label: "Backups · Entries · 2 · Path",
-      value: "/Users/dev/.ptrack/backups/ptrack-20260814.redb",
-      copyable: true,
+    // Both entries still render, and each backup is one row rather than four.
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toEqual({
+      label: "Backup",
+      value: "/Users/dev/.ptrack/backups/ptrack-20260813.redb",
+      detail: "2026-08-13 09:15:00 UTC · /work/app",
+      copy: "Copy backup path ptrack-20260813.redb",
     });
-    expect(rows).toContainEqual({
-      label: "Backups · Entries · 1 · Recorded at",
-      value: "2026-08-13T09:15:00Z",
-      copyable: false,
-    });
-    expect(rows).toContainEqual({
-      label: "Backups · Entries · 2 · Present",
-      value: "No",
-      copyable: false,
-    });
+    expect(rows[1].value).toBe("/Users/dev/.ptrack/backups/ptrack-20260814.redb");
+    // A file the ledger names but that is gone says so, rather than spending a
+    // row of its own on `Present: No`.
+    expect(rows[1].detail).toBe("File missing · 2026-08-14 09:15:00 UTC · /work/app");
     expect(rows.map((row) => row.value)).not.toContain("2 recorded");
+  });
+
+  it("reports an unreadable or empty backup ledger honestly", () => {
+    expect(diagnosticsRows({ backups: { status: "unavailable", entries: [] } }))
+      .toEqual([{ label: "Backups", value: "Not available", copy: null }]);
+    expect(diagnosticsRows({ backups: { status: "available", entries: [] } }))
+      .toEqual([{ label: "Backups", value: "None recorded", copy: null }]);
+  });
+
+  // The runtime writes "" when it cannot format the recorded stamp at all.
+  it("keeps an unformattable backup timestamp honest", () => {
+    const rows = diagnosticsRows({
+      backups: {
+        status: "available",
+        entries: [{ recordedAt: "", project: "", path: "/backups/a.redb", present: true }],
+      },
+    });
+
+    expect(rows[0].detail).toBe("Unknown time");
   });
 
   it("reports quarantine counts instead of the number of databases", () => {
@@ -181,36 +219,123 @@ describe("diagnostics rows", () => {
       },
     });
 
+
     expect(rows).toContainEqual({
-      label: "Migration · Quarantine · 2 · Database",
-      value: "project",
-      copyable: false,
+      label: "Quarantine · Global",
+      value: "0 records",
+      copy: null,
     });
     expect(rows).toContainEqual({
-      label: "Migration · Quarantine · 2 · Count",
-      value: "3",
-      copyable: false,
-    });
-    expect(rows).toContainEqual({
-      label: "Migration · Quarantine · 1 · Count",
-      value: "0",
-      copyable: false,
+      label: "Quarantine · Project",
+      value: "3 records",
+      copy: null,
     });
     expect(rows.map((row) => row.value)).not.toContain("2 recorded");
     expect(rows).toContainEqual({
-      label: "Migration · Receipts",
+      label: "Migration receipt 0001",
       value: "/Users/dev/.ptrack/migrations/0001/receipt.json",
-      copyable: false,
+      copy: "Copy migration receipt path 0001",
     });
   });
 
-  it("summarizes a list it cannot expand instead of dropping it", () => {
-    expect(diagnosticsRows({ backups: { status: "unavailable", entries: [] } }))
-      .toContainEqual({
-        label: "Backups · Entries",
-        value: "0 recorded",
-        copyable: false,
-      });
+  // Every receipt the runtime emits is `<migrations>/<id>/receipt.json`
+  // (RECEIPT_FILENAME in crates/ptrack-app/src/diagnostics_report.rs), so a
+  // name taken from the file names all 25 buttons the same thing and the copy
+  // confirmations that follow are identical too.
+  it("tells one migration receipt apart from the next", () => {
+    const rows = diagnosticsRows({
+      migration: {
+        quarantine: [],
+        receipts: [
+          "/Users/dev/.ptrack/migrations/0001-plans/receipt.json",
+          "/Users/dev/.ptrack/migrations/0002-tasks/receipt.json",
+        ],
+      },
+    });
+
+    expect(rows.map((row) => row.copy)).toEqual([
+      "Copy migration receipt path 0001-plans",
+      "Copy migration receipt path 0002-tasks",
+    ]);
+    // The copy confirmation is announced as `${label} copied.`, so the labels
+    // have to differ as well.
+    expect(rows[0].label).not.toBe(rows[1].label);
+    expect(new Set(rows.map((row) => row.copy)).size).toBe(rows.length);
+  });
+
+  // A store that could not be read has no count, which is not zero records.
+  it("never reads an unreadable quarantine store as empty", () => {
+    expect(diagnosticsRows({
+      migration: {
+        quarantine: [{ database: "project", status: "unavailable", count: null }],
+        receipts: [],
+      },
+    })).toEqual([
+      { label: "Quarantine · Project", value: "Not available", copy: null },
+      { label: "Migration receipts", value: "None recorded", copy: null },
+    ]);
+  });
+
+  it("summarizes a list it has no shape for instead of dropping it", () => {
+    expect(diagnosticsRows({ audits: [{ id: 1 }, { id: 2 }] })).toContainEqual({
+      label: "Audits",
+      value: "2 recorded",
+      copy: null,
+    });
+  });
+
+  // Key order is the serializer's business; reading order is the dialog's.
+  it("orders the report rather than trusting the serializer's key order", () => {
+    const rows = diagnosticsRows({
+      capabilities: { granted: 1, total: 1 },
+      backups: { status: "available", entries: [] },
+      paths: { globalHome: "/Users/dev/.ptrack" },
+    });
+
+    expect(rows.map((row) => row.label)).toEqual([
+      "Paths · Global home",
+      "Capabilities · Granted",
+      "Capabilities · Total",
+      "Backups",
+    ]);
+  });
+
+  // The row cap cuts from the end, so the two unbounded ledgers sit there and
+  // the bounded sections sit above them. The realistic worst case is already
+  // 63 rows, which left the old cap of 64 exactly one backend field of
+  // headroom — and `capabilities`, ordered last, was the section it took.
+  // This fixture is that worst case plus four more path fields.
+  it("keeps every section when the report outgrows the old 64-row cap", () => {
+    const entries = Array.from({ length: 30 }, (_, index) => ({
+      recordedAt: "2026-08-13T09:15:00Z",
+      project: "/work/app",
+      path: `/Users/dev/.ptrack/backups/ptrack-${index}.redb`,
+      present: true,
+    }));
+    const rows = diagnosticsRows({
+      paths: Object.fromEntries(
+        Array.from({ length: 12 }, (_, index) => [`path${index}`, `/p/${index}`]),
+      ),
+      runtime: { status: "active" },
+      backups: { status: "available", entries },
+      migration: {
+        quarantine: [
+          { database: "global", status: "available", count: 0 },
+          { database: "project", status: "available", count: 0 },
+        ],
+        receipts: Array.from(
+          { length: 30 },
+          (_, index) => `/Users/dev/.ptrack/migrations/${index}/receipt.json`,
+        ),
+      },
+      capabilities: { granted: 1, total: 5 },
+    });
+
+    // 12 paths + 1 runtime + 2 capabilities + 25 backups + 2 quarantine + 25
+    // receipts, with both ledgers already capped at 25 by their own slices.
+    expect(rows).toHaveLength(67);
+    expect(rows.map((row) => row.label)).toContain("Capabilities · Total");
+    expect(rows.at(-1)?.label).toBe("Migration receipt 24");
   });
 
   it("ignores empty values and non-object reports", () => {

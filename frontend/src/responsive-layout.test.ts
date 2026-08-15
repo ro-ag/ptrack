@@ -66,6 +66,7 @@ describe("responsive desktop layout contracts", () => {
     expect(focusRule?.[0]).toContain("#palette-input:focus-visible");
     expect(focusRule?.[0]).toContain(".terminal-split-separator:focus-visible");
     expect(focusRule?.[0]).toContain(".terminal-split-leaf-chrome button:focus-visible");
+    expect(focusRule?.[0]).toContain(".settings-diagnostic-copy:focus-visible");
     expect(focusRule?.[1]).toMatch(/outline:\s*2px solid var\(--accent\);/);
     expect(focusRule?.[1]).toMatch(/outline-offset:\s*-2px;/);
   });
@@ -109,6 +110,15 @@ describe("responsive desktop layout contracts", () => {
   it("keeps the automatic-update checkbox from consuming the dialog row", () => {
     expect(styles).toMatch(
       /\.updates-automatic-option input\s*\{[^}]*flex:\s*0 0 auto;[^}]*width:\s*16px;[^}]*min-height:\s*16px;[^}]*height:\s*16px;[^}]*padding:\s*0;/,
+    );
+    // The Startup and Updates opt-ins use the same card. The base
+    // `input { width: 100% }` gave their checkbox the whole row, and
+    // `.dialog label` flattened the card so the label fell underneath it.
+    expect(styles).toMatch(
+      /\.settings-check input\s*\{[^}]*flex:\s*0 0 auto;[^}]*width:\s*16px;[^}]*min-height:\s*16px;[^}]*height:\s*16px;[^}]*padding:\s*0;/,
+    );
+    expect(styles).toMatch(
+      /\.dialog \.settings-check\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*flex-start;[^}]*margin-bottom:\s*0;/,
     );
   });
 
@@ -159,6 +169,84 @@ describe("responsive desktop layout contracts", () => {
       /\.recent-project-path\s*\{[^}]*color:\s*var\(--muted\);/,
     );
     expect(styles).toMatch(/\.dialog-help\s*\{[^}]*color:\s*var\(--muted\);/);
+  });
+
+  // One field pattern for every settings section. The `.dialog ` prefix is
+  // load-bearing: `.dialog label` outranks a bare `.settings-field`, which is
+  // what used to collapse the grid to a block and leave each control starting
+  // at the end of its own label.
+  it("gives every settings field one stacked pattern and one rhythm", () => {
+    expect(styles).toMatch(
+      /\.dialog \.settings-field\s*\{[^}]*display:\s*grid;[^}]*gap:\s*var\(--space-050\);[^}]*margin-bottom:\s*0;/,
+    );
+    expect(styles).toMatch(
+      /\.dialog \.settings-field select,\s*\.dialog \.settings-field input\s*\{[^}]*width:\s*100%;[^}]*max-width:\s*none;[^}]*border:\s*1px solid var\(--control-border\);[^}]*box-shadow:\s*none;/,
+    );
+    expect(styles).toMatch(
+      /\.settings-panel > \.settings-field \+ \.dialog-help\s*\{[^}]*margin-top:\s*calc\(var\(--space-050\) - var\(--space-150\)\);/,
+    );
+    // Quiet at rest is the inset shadow relaxing; the control boundary itself
+    // stays on the 3:1 token and asserts further on hover and focus.
+    expect(styles).toMatch(
+      /\.dialog \.settings-field select:hover,\s*\.dialog \.settings-field input:hover\s*\{[^}]*border-color:\s*var\(--text-soft\);/,
+    );
+    expect(styles).toMatch(
+      /\.dialog \.settings-field select:focus-visible,\s*\.dialog \.settings-field input:focus-visible\s*\{[^}]*border-color:\s*rgba\(var\(--accent-rgb\), 0\.5\);/,
+    );
+    // Pin the literals to the tokens they stand for, so retuning --text-soft
+    // cannot leave this passing against a colour nothing renders.
+    expect(styles).toContain("--text-soft: #b9c2d4");
+    expect(styles).toContain("--text-soft: #3d4757");
+    expect(contrastRatio("#b9c2d4", "#131924")).toBeGreaterThanOrEqual(3);
+    expect(contrastRatio("#3d4757", "#ffffff")).toBeGreaterThanOrEqual(3);
+  });
+
+  it("keeps the diagnostics copy control off the value's shrink track", () => {
+    expect(styles).toMatch(
+      /\.settings-diagnostic dd\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto;/,
+    );
+    // `-1` only reaches the bottom of the cell if both rows are explicit;
+    // against an implicit grid it resolves back to line 1. The 2px row rhythm
+    // rides on the detail so an empty second track costs nothing.
+    expect(styles).toMatch(
+      /\.settings-diagnostic dd\s*\{[^}]*grid-template-rows:\s*auto auto;[^}]*gap:\s*0 var\(--space-100\);/,
+    );
+    expect(styles).toMatch(
+      /\.settings-diagnostic-detail\s*\{[^}]*grid-row:\s*2;[^}]*margin-top:\s*2px;/,
+    );
+    // Only a row with a detail spans both tracks. Spanning unconditionally
+    // gives the second track the control's leftover height on a row without
+    // one, which pushes the value up off the control's centre.
+    expect(styles).toMatch(
+      /\.settings-diagnostic-copy\s*\{[^}]*grid-area:\s*1 \/ 2 \/ 2 \/ 3;/,
+    );
+    expect(styles).toMatch(
+      /\.settings-diagnostic-detail ~ \.settings-diagnostic-copy\s*\{\s*grid-row:\s*1 \/ -1;\s*\}/,
+    );
+    expect(styles).toMatch(
+      /\.settings-diagnostic-copy\s*\{[^}]*width:\s*26px;[^}]*min-width:\s*26px;[^}]*min-height:\s*26px;[^}]*height:\s*26px;/,
+    );
+    // The boundary stays on the contrast-tested token at rest, not only under
+    // the pointer: --line is ~1.2:1 on the dialog background.
+    expect(styles).toMatch(
+      /\.settings-diagnostic-copy\s*\{[^}]*border:\s*1px solid var\(--control-border\);/,
+    );
+    expect(styles).not.toMatch(
+      /\.settings-diagnostic-copy\s*\{[^}]*border:\s*1px solid var\(--line\);/,
+    );
+    expect(styles).toMatch(
+      /@media \(max-width:\s*600px\)[\s\S]*?\.settings-diagnostic\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);/,
+    );
+  });
+
+  it("sizes the sidebar mark to the identity block it marks", () => {
+    expect(styles).toMatch(/\.sidebar-brand\s*\{[^}]*align-items:\s*stretch;/);
+    expect(styles).toMatch(
+      /\.sidebar-brand \.brand-mark\s*\{[^}]*height:\s*auto;[^}]*align-self:\s*stretch;/,
+    );
+    expect(styles).toMatch(
+      /\.sidebar-brand-identity\s*\{[^}]*display:\s*grid;[^}]*gap:\s*2px;/,
+    );
   });
 
   it("keeps post-project onboarding controls bounded in the single state card", () => {

@@ -28,3 +28,6 @@
 .DS_Store
 .idea/
 .vscode/
+
+# Cargo output when the target directory is set inside the crate
+src-tauri/target/

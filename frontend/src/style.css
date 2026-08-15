@@ -650,6 +650,41 @@ button:disabled {
     0 0 42px rgba(var(--accent-rgb), 0.12);
 }
 
+/* The identity block is three lines on one left edge with one rhythm between
+   them, and the mark is sized to the block it marks instead of to a fixed 36px
+   that matched nothing above or below it. The 2px inset is optical, not
+   arithmetic: the eyebrow's line box overshoots its cap height and the project
+   name's overshoots its baseline, so a mark drawn flush to the box reads long
+   at both ends even though the numbers agree. */
+.sidebar-brand {
+  align-items: stretch;
+}
+
+.sidebar-brand .brand-mark {
+  height: auto;
+  align-self: stretch;
+  margin: 2px 0;
+}
+
+.sidebar-brand-identity {
+  min-width: 0;
+  display: grid;
+  align-content: center;
+  gap: 2px;
+}
+
+.sidebar-brand-identity .eyebrow,
+.sidebar-brand-identity .app-version {
+  margin: 0;
+}
+
+/* A button stretched by the grid would centre its own text and break the one
+   left edge the block is built on, and would take a click target as wide as
+   the sidebar with it. */
+.sidebar-brand-identity .app-version {
+  justify-self: start;
+}
+
 .eyebrow,
 .section-label {
   margin: 0 0 var(--space-050);
@@ -2812,34 +2847,95 @@ button.modal-backdrop:active {
   margin-top: 0;
 }
 
-.settings-field {
+/* One field pattern for every section: the label above a full-width control,
+   with its help text under the control in the same single column. Stacked
+   rather than a label column because this dialog has to reflow at 320 CSS
+   pixels and at 400% zoom, where any two-column grid collapses to exactly this
+   anyway, and because a free-text field like the terminal font family wants the
+   whole width. One column also means the label, the control, its native select
+   chevron, and the help text all share a left and a right edge with no width to
+   tune per row.
+
+   The specificity matters: `.dialog label` is more specific than a bare
+   `.settings-field`, so the grid here used to lose to its `display: block` and
+   `margin-bottom: 6px`. That is what left every control starting at the end of
+   its own label, text inputs stacked while selects sat inline, and one extra
+   6px under every field the panel gap knew nothing about. */
+.dialog .settings-field {
   display: grid;
-  gap: 4px;
+  gap: var(--space-050);
   margin-bottom: 0;
 }
 
-.settings-field select,
-.settings-field input {
+/* Help text belongs to the control above it, so it rides the field's own gap
+   instead of sitting equidistant between the field it explains and the next. */
+.settings-panel > .settings-field + .dialog-help {
+  margin-top: calc(var(--space-050) - var(--space-150));
+}
+
+.dialog .settings-field select,
+.dialog .settings-field input {
   width: 100%;
+  max-width: none;
   min-height: 34px;
   border: 1px solid var(--control-border);
   border-radius: 9px;
   color: var(--text);
   background: var(--control-solid-bg);
   padding: 5px var(--space-100);
+  box-shadow: none;
 }
 
-.settings-check {
+/* Quiet at rest, asserting under the pointer and under focus. What relaxes at
+   rest is the inset shadow, which carries no meaning; the boundary itself stays
+   on --control-border, contrast-tested at 3:1, because an edge nobody can find
+   is not a softer control, it is a missing one. */
+.dialog .settings-field select:hover,
+.dialog .settings-field input:hover {
+  border-color: var(--text-soft);
+}
+
+.dialog .settings-field select:focus-visible,
+.dialog .settings-field input:focus-visible {
+  border-color: rgba(var(--accent-rgb), 0.5);
+  box-shadow:
+    0 0 0 1px rgba(var(--accent-rgb), 0.55),
+    0 0 0 4px rgba(var(--accent-rgb), 0.22);
+}
+
+/* The boolean pattern: a checkbox beside its own label in a card. Same
+   `.dialog ` prefix as the value fields and for the same reason — `.dialog
+   label` outranks the bare class and was flattening this row to a block, which
+   is what dropped the label underneath its own checkbox.
+
+   The card groups the control, it is not the control's own boundary, so it can
+   rest quieter than a control edge and still assert on approach. */
+.dialog .settings-check {
   display: flex;
   align-items: flex-start;
   gap: var(--space-100);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-subtle);
   border-radius: 10px;
+  margin-bottom: 0;
   padding: var(--space-150);
+  transition: border-color 150ms var(--ease);
 }
 
+.dialog .settings-check:hover,
+.dialog .settings-check:focus-within {
+  border-color: var(--line-strong);
+}
+
+/* Without this the base `input { width: 100% }` gives the checkbox the whole
+   row and drops its own label underneath it. Same shape the updates opt-in and
+   the capability checks already use. */
 .settings-check input {
+  flex: 0 0 auto;
+  width: 16px;
+  min-height: 16px;
+  height: 16px;
   margin-top: 2px;
+  padding: 0;
   accent-color: var(--accent);
 }
 
@@ -2864,12 +2960,12 @@ button.modal-backdrop:active {
 }
 
 .settings-diagnostic {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 132px) minmax(0, 1fr);
   align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-100);
+  gap: var(--space-050) var(--space-150);
   border-bottom: 1px solid var(--line-subtle);
-  padding-bottom: 6px;
+  padding-bottom: var(--space-100);
 }
 
 .settings-diagnostic dt {
@@ -2878,25 +2974,81 @@ button.modal-backdrop:active {
   font-weight: 650;
 }
 
+/* The value column carries the value, an optional line of context under it, and
+   the copy control in a track of its own — so a long path can shrink to nothing
+   without ever squeezing the control beside it. */
 .settings-diagnostic dd {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  /* Both rows are explicit so the copy control's `-1` row end resolves to the
+     bottom of the cell rather than back to line 1. The row gap moved onto the
+     detail itself: an empty second track must cost a row with no detail
+     nothing at all. */
+  grid-template-rows: auto auto;
   align-items: center;
-  gap: var(--space-100);
+  gap: 0 var(--space-100);
   overflow-wrap: anywhere;
   margin: 0;
   color: var(--text);
   font-size: 0.75rem;
-  text-align: right;
 }
 
-.settings-diagnostic button {
+.settings-diagnostic-detail {
+  grid-column: 1;
+  grid-row: 2;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.6875rem;
+  line-height: 1.4;
+}
+
+/* An icon rather than the word "Copy", which is what used to break to "Cop y"
+   when the value beside it grew. Named by aria-label, titled for the pointer,
+   and 26px square so the target clears the 24px floor. */
+.settings-diagnostic-copy {
+  grid-area: 1 / 2 / 2 / 3;
+  align-self: center;
+  width: 26px;
+  min-width: 26px;
   min-height: 26px;
-  border-color: var(--control-border);
+  height: 26px;
+  display: grid;
+  place-items: center;
+  /* Same rule as every other control boundary in this dialog: --control-border,
+     contrast-tested at 3:1. --line is ~1.2:1 on the dialog, and an edge nobody
+     can find is not a softer control, it is a missing one. */
+  border: 1px solid var(--control-border);
+  border-radius: 7px;
   color: var(--text-soft);
   background: transparent;
+  padding: 0;
   box-shadow: none;
-  padding: 3px var(--space-100);
-  font-size: 0.6875rem;
+}
+
+/* Only a row that carries a detail has a second line to centre against, and it
+   is the one the control used to sit too high on. A row without one is a single
+   line the control already matches, and spanning it there would push the value
+   up off the control's centre. The detail precedes the control in the DOM, so
+   the sibling combinator is what "this row has two lines" looks like in CSS. */
+.settings-diagnostic-detail ~ .settings-diagnostic-copy {
+  grid-row: 1 / -1;
+}
+
+.settings-diagnostic-copy:hover {
+  color: var(--text);
+  background: var(--fill-hover);
+  box-shadow: none;
+  transform: none;
+}
+
+.settings-diagnostic-copy svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.35;
 }
 
 .settings-reset-actions {
@@ -2905,9 +3057,28 @@ button.modal-backdrop:active {
   gap: var(--space-100);
 }
 
+/* The status and the reset are one row, not two fragments pinned to opposite
+   corners: a confirmation belongs beside the action that produced it. */
+.settings-dialog-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-100) var(--space-200);
+  margin-top: var(--space-250);
+}
+
+.settings-dialog-footer .dialog-actions {
+  flex: 0 0 auto;
+  margin-top: 0;
+}
+
+/* The reserved line keeps the footer from shifting when the message clears. */
 .settings-save-status {
+  min-width: 0;
+  flex: 1 1 200px;
   min-height: 1.2em;
-  margin: var(--space-200) 0 0;
+  margin: 0;
   color: var(--text-soft);
   font-size: 0.75rem;
 }
@@ -4233,6 +4404,7 @@ button.modal-backdrop:active {
 .terminal-search .terminal-search-button:focus-visible,
 .terminal-split-separator:focus-visible,
 .terminal-split-leaf-chrome button:focus-visible,
+.settings-diagnostic-copy:focus-visible,
 .terminal-context-menu button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
@@ -4319,6 +4491,7 @@ button.modal-backdrop:active {
   .settings-check,
   .settings-field select,
   .settings-field input,
+  .settings-diagnostic-copy,
   .settings-reset-actions button {
     border-color: CanvasText;
   }
@@ -4329,7 +4502,7 @@ button.modal-backdrop:active {
   }
 
   .settings-section-tab:disabled,
-  .settings-diagnostic button:disabled {
+  .settings-diagnostic-copy:disabled {
     border-color: GrayText;
     color: GrayText;
   }
@@ -4439,12 +4612,8 @@ button.modal-backdrop:active {
   }
 
   .settings-diagnostic {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .settings-diagnostic dd {
-    text-align: left;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
   }
 
   #app,
@@ -4502,6 +4671,12 @@ button.modal-backdrop:active {
   }
 
   .dialog-actions > button {
+    flex: 1 1 100%;
+  }
+
+  /* The footer stacks, so its action takes the row like every other stacked
+     button rather than hugging its own text alone. */
+  .settings-dialog-footer .dialog-actions {
     flex: 1 1 100%;
   }
 
