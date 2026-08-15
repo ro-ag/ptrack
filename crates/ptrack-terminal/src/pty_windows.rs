@@ -14,6 +14,12 @@ pub(super) fn start(request: &StartRequest) -> io::Result<Box<dyn PtyProcess>> {
     command.current_dir(&request.cwd);
     command.env_clear();
     for entry in &request.env {
+        // A cmd.exe ancestor exports per-drive working-directory bookkeeping
+        // (`=C:`, `=ExitCode`). Windows accepts no '=' in an environment name,
+        // so forwarding one fails the whole spawn; drop them instead.
+        if entry.starts_with('=') {
+            continue;
+        }
         let (key, value) = split_windows_environment_entry(entry)?;
         command.env(key, value);
     }

@@ -86,17 +86,10 @@ impl PtyFactory for NativePtyFactory {
 
 #[cfg(any(test, windows))]
 pub(crate) fn split_windows_environment_entry(entry: &str) -> io::Result<(&str, &str)> {
-    let separator = if let Some(rest) = entry.strip_prefix('=') {
-        rest.find('=').map(|offset| offset + 1)
-    } else {
-        entry.find('=')
-    }
-    .ok_or_else(|| invalid_environment_entry(entry))?;
-    let key = &entry[..separator];
-    if key.is_empty() {
-        return Err(invalid_environment_entry(entry));
-    }
-    Ok((key, &entry[separator + 1..]))
+    entry
+        .split_once('=')
+        .filter(|(key, _)| !key.is_empty())
+        .ok_or_else(|| invalid_environment_entry(entry))
 }
 
 #[cfg(any(test, windows))]

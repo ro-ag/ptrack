@@ -276,11 +276,13 @@ fn environment_filters_authority_and_applies_deterministic_terminal_defaults() {
 }
 
 #[test]
-fn windows_environment_normalizes_keys_and_preserves_drive_entries() {
+fn windows_environment_normalizes_keys_and_drops_drive_entries() {
     let base = vec![
         r"=C:=C:\work".to_owned(),
+        "=ExitCode=00000000".to_owned(),
         r"Path=C:\Windows".to_owned(),
         "term=vt100".to_owned(),
+        "PAIR=a=b".to_owned(),
     ];
     let overrides = BTreeMap::from([
         ("PATH".to_owned(), r"C:\Tools".to_owned()),
@@ -290,8 +292,8 @@ fn windows_environment_normalizes_keys_and_preserves_drive_entries() {
     assert_eq!(
         environment,
         [
-            r"=C:=C:\work",
             "COLORTERM=truecolor",
+            "PAIR=a=b",
             r"PATH=C:\Tools",
             "TERM=screen-256color",
             "TERM_PROGRAM=p-track",
