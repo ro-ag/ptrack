@@ -570,7 +570,13 @@ pub(crate) fn build_environment_for_os(
     };
     let mut values = BTreeMap::<String, (String, String)>::new();
     for entry in base {
-        let Some((key, value)) = split_inherited_environment(entry, os) else {
+        // cmd.exe exports per-drive working-directory bookkeeping under names
+        // that start with '=' (`=C:`, `=ExitCode`). Windows rejects any
+        // environment name containing '=', so no child can ever receive them.
+        if entry.starts_with('=') {
+            continue;
+        }
+        let Some((key, value)) = entry.split_once('=') else {
             return Err(ProfileError::new(format!(
                 "invalid inherited environment entry {entry:?}"
             )));
@@ -623,15 +629,6 @@ pub(crate) fn build_environment_for_os(
         .into_values()
         .map(|(key, value)| format!("{key}={value}"))
         .collect())
-}
-
-fn split_inherited_environment<'a>(entry: &'a str, os: &str) -> Option<(&'a str, &'a str)> {
-    if os == "windows" && entry.starts_with('=') {
-        let separator = entry[1..].find('=')? + 1;
-        return Some((&entry[..separator], &entry[separator + 1..]));
-    }
-    let (key, value) = entry.split_once('=')?;
-    (!key.is_empty()).then_some((key, value))
 }
 
 /// Resolves and validates the requested terminal working directory.

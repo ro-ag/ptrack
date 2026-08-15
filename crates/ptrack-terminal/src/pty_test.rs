@@ -62,18 +62,51 @@ fn native_pty_normalizes_eio_as_eof() {
 }
 
 #[test]
-fn windows_pty_environment_parser_preserves_drive_directory_entries() {
-    assert_eq!(
-        super::pty::split_windows_environment_entry("=C:=C:\\work").unwrap(),
-        ("=C:", "C:\\work")
-    );
+fn windows_pty_environment_parser_splits_on_the_first_separator() {
     assert_eq!(
         super::pty::split_windows_environment_entry("Path=C:\\Windows").unwrap(),
         ("Path", "C:\\Windows")
     );
-    for invalid in ["", "NO-SEPARATOR", "=C:"] {
+    // A '=' inside a value is legal and must survive intact.
+    assert_eq!(
+        super::pty::split_windows_environment_entry("FOO=a=b").unwrap(),
+        ("FOO", "a=b")
+    );
+    // Names may not contain '=', so cmd.exe's per-drive entries have no
+    // representation here; the spawn drops them before parsing.
+    for invalid in ["", "NO-SEPARATOR", "=C:", "=C:=C:\\work"] {
         assert!(super::pty::split_windows_environment_entry(invalid).is_err());
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_pty_spawns_under_a_cmd_exe_inherited_environment() {
+    let mut environment: Vec<String> = std::env::vars_os()
+        .filter_map(|(key, value)| {
+            Some(format!(
+                "{}={}",
+                key.into_string().ok()?,
+                value.into_string().ok()?
+            ))
+        })
+        .collect();
+    // Exactly what a cmd.exe ancestor leaks into the inherited block.
+    environment.push("=C:=C:\\work".to_owned());
+    environment.push("=ExitCode=00000000".to_owned());
+    environment.push("PTRACK_PTY_PAIR=a=b".to_owned());
+    let process = NativePtyFactory
+        .start(StartRequest {
+            executable: "cmd.exe".to_owned(),
+            args: vec!["/c".to_owned(), "exit 3".to_owned()],
+            env: environment,
+            cwd: std::env::temp_dir(),
+            rows: 24,
+            columns: 80,
+        })
+        .expect("cmd.exe drive-directory entries must not fail the spawn");
+    assert_eq!(process.wait().unwrap(), 3);
+    process.close().unwrap();
 }
 
 #[cfg(windows)]
