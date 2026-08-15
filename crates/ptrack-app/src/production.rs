@@ -1490,8 +1490,14 @@ impl ProductionDesktopAuthority {
                 guide_choice: None,
             });
         }
-        for ancestor in canonical.ancestors() {
+        let global_homes = global_home_exemptions(&self.global_home);
+        for (depth, ancestor) in canonical.ancestors().enumerate() {
             let storage = ancestor.join(".ptrack");
+            // Depth 0 is the selected root itself, which never gets the exemption:
+            // its own `.ptrack` must not be the global home.
+            if depth > 0 && is_global_home(&storage, &global_homes) {
+                continue;
+            }
             if path_is_present(&storage.join("ptrack.db"))?
                 || path_is_present(&storage.join("ptrack.redb"))?
             {
@@ -1611,7 +1617,7 @@ impl ProductionDesktopAuthority {
         let pinned_root_identity =
             PinnedProjectDirectory::identify_root(&root).map_err(recovery)?;
         if ready.checkpoint == InitializationCheckpointV1::None {
-            require_new_project_storage_absent(&root)?;
+            require_new_project_storage_absent(&root, &self.global_home)?;
         }
         ensure_private_home(&self.global_home)?;
         let home = fs::canonicalize(&self.global_home)?;
@@ -1642,7 +1648,7 @@ impl ProductionDesktopAuthority {
             }) {
                 return Err(recovery("selected project root is already registered"));
             }
-            require_new_project_storage_absent(&root)?;
+            require_new_project_storage_absent(&root, &self.global_home)?;
             if existing.is_none()
                 && (path_is_present(&home.join("global.db"))?
                     || path_is_present(&home.join("global.redb"))?)
@@ -2873,15 +2879,62 @@ fn path_is_present(path: &Path) -> AppResult<bool> {
     }
 }
 
-fn require_new_project_storage_absent(root: &Path) -> AppResult<()> {
-    for ancestor in root.ancestors() {
-        if path_is_present(&ancestor.join(".ptrack"))? {
+fn require_new_project_storage_absent(root: &Path, global_home: &Path) -> AppResult<()> {
+    let global_homes = global_home_exemptions(global_home);
+    for (depth, ancestor) in root.ancestors().enumerate() {
+        let storage = ancestor.join(".ptrack");
+        // Depth 0 is the selected root itself, which never gets the exemption:
+        // its own `.ptrack` must not be the global home.
+        if depth > 0 && is_global_home(&storage, &global_homes) {
+            continue;
+        }
+        if path_is_present(&storage)? {
             return Err(recovery(
                 "selected project storage changed before initialization",
             ));
         }
     }
     Ok(())
+}
+
+/// Global homes an ancestor walk must not mistake for project storage: the home
+/// this authority runs on and the one the environment resolves. Production passes
+/// the resolved home, so the two coincide; tests and embedders supply their own.
+///
+/// The default global home is `<user home>/.ptrack`, an ancestor `.ptrack` of every
+/// project under the user home, so without the exemption the common case classifies
+/// as recovery-required instead of new.
+fn global_home_exemptions(global_home: &Path) -> [PathBuf; 2] {
+    let resolved = resolve_global_home().unwrap_or_else(|_| global_home.to_owned());
+    [
+        comparable_global_home(global_home),
+        comparable_global_home(&resolved),
+    ]
+}
+
+/// Reports whether an ancestor's `.ptrack` names one of the global homes.
+fn is_global_home(storage: &Path, global_homes: &[PathBuf]) -> bool {
+    global_homes.iter().any(|home| same_path(storage, home))
+}
+
+/// Rewrites a global home into the shape an ancestor walk produces, so the two can
+/// be compared without following a symlink at the final component. Falls back to the
+/// path as given when the home or its parent does not exist.
+fn comparable_global_home(global_home: &Path) -> PathBuf {
+    match (global_home.parent(), global_home.file_name()) {
+        (Some(parent), Some(name)) => fs::canonicalize(parent)
+            .map_or_else(|_| global_home.to_owned(), |parent| parent.join(name)),
+        _ => global_home.to_owned(),
+    }
+}
+
+/// Compares two paths case-insensitively where the platform file systems are.
+fn same_path(left: &Path, right: &Path) -> bool {
+    if cfg!(any(windows, target_os = "macos")) {
+        left.as_os_str().eq_ignore_ascii_case(right.as_os_str())
+    } else {
+        left == right
+    }
 }
 
 fn selected_project_storage_present(root: &Path) -> bool {
