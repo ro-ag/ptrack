@@ -176,6 +176,13 @@ impl Drop for TempDirectory {
     }
 }
 
+fn stream_token(url: &str) -> &str {
+    url.split("?token=")
+        .nth(1)
+        .and_then(|query| query.split('&').next())
+        .expect("stream URL carries a ticket")
+}
+
 #[tokio::test]
 async fn manager_owns_listener_sessions_crypto_values_and_shutdown() {
     let root = TempDirectory::new();
@@ -195,7 +202,10 @@ async fn manager_owns_listener_sessions_crypto_values_and_shutdown() {
     let first = manager.create("shell-default", None, 24, 80).unwrap();
     let second = manager.create("shell-default", None, 40, 120).unwrap();
     assert_eq!(first.id().len(), 43);
-    assert_eq!(first.stream_token().len(), 43);
+    let first_ticket = manager.mint_stream_ticket(first.id(), 0).unwrap();
+    let second_ticket = manager.mint_stream_ticket(second.id(), 0).unwrap();
+    let first_token = stream_token(&first_ticket.url);
+    assert_eq!(first_token.len(), 43);
     if cfg!(windows) {
         assert_eq!(
             first.shell_integration().quality,
@@ -204,9 +214,9 @@ async fn manager_owns_listener_sessions_crypto_values_and_shutdown() {
         assert!(first.shell_integration().nonce.is_empty());
         let values = [
             first.id(),
-            first.stream_token(),
+            first_token,
             second.id(),
-            second.stream_token(),
+            stream_token(&second_ticket.url),
         ];
         let unique: std::collections::BTreeSet<_> = values.into_iter().collect();
         assert_eq!(unique.len(), 4);
@@ -218,25 +228,32 @@ async fn manager_owns_listener_sessions_crypto_values_and_shutdown() {
         assert_eq!(first.shell_integration().nonce.len(), 43);
         let values = [
             first.id(),
-            first.stream_token(),
+            first_token,
             &first.shell_integration().nonce,
             second.id(),
-            second.stream_token(),
+            stream_token(&second_ticket.url),
             &second.shell_integration().nonce,
         ];
         let unique: std::collections::BTreeSet<_> = values.into_iter().collect();
         assert_eq!(unique.len(), 6);
     }
 
-    let first_url = manager.session_url(first.id()).unwrap();
-    let second_url = manager.session_url(second.id()).unwrap();
-    assert!(first_url.starts_with("ws://127.0.0.1:"));
-    assert!(first_url.contains(&format!(
-        "/terminal/{}?token={}",
-        first.id(),
-        first.stream_token()
+    assert!(first_ticket.url.starts_with("ws://127.0.0.1:"));
+    assert!(first_ticket.url.contains(&format!(
+        "/terminal/{}?token={first_token}&from=0",
+        first.id()
     )));
-    assert_eq!(first_url.split('/').nth(2), second_url.split('/').nth(2));
+    assert!(!first_ticket.gap);
+    assert_eq!(first_ticket.from_sequence, 0);
+    assert_eq!(
+        first_ticket.url.split('/').nth(2),
+        second_ticket.url.split('/').nth(2)
+    );
+    // Every mint rotates the ticket, so a released renderer's URL is dead.
+    let rotated = manager.mint_stream_ticket(first.id(), 0).unwrap();
+    assert_ne!(stream_token(&rotated.url), first_token);
+    assert!(!first.consume_ticket(first_token));
+    assert!(first.consume_ticket(stream_token(&rotated.url)));
 
     let (snapshot, total) = manager.session_snapshot_bounded(0);
     assert_eq!((snapshot.len(), total), (2, 2));
@@ -246,7 +263,7 @@ async fn manager_owns_listener_sessions_crypto_values_and_shutdown() {
             .all(|info| info.pid == 31337 && info.state == SessionState::Running)
     );
     let json = serde_json::to_string(&snapshot).unwrap();
-    assert!(!json.contains(first.stream_token()));
+    assert!(!json.contains(first_token));
     if !first.shell_integration().nonce.is_empty() {
         assert!(!json.contains(&first.shell_integration().nonce));
     }

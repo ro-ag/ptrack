@@ -3575,6 +3575,10 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
                     .resize(
                         self.generation,
                         string_arg(arguments, offset)?,
+                        // The renderer holds no lease to present until the
+                        // pop-out window work wires one through; the manager
+                        // names that gap and borrows the live lease meanwhile.
+                        None,
                         u16_arg(arguments, offset + 1)?,
                         u16_arg(arguments, offset + 2)?,
                     )?;

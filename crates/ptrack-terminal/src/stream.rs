@@ -15,7 +15,6 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioIo, TokioTimer};
-use subtle::ConstantTimeEq;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
@@ -36,14 +35,33 @@ pub const STREAM_PONG_WAIT: Duration = Duration::from_secs(60);
 pub const STREAM_PING_EVERY: Duration = Duration::from_secs(25);
 pub const STREAM_WRITE_WAIT: Duration = Duration::from_secs(10);
 pub const STREAM_READ_HEADER_WAIT: Duration = Duration::from_secs(5);
+/// Sent once, before the replay, when retained output was dropped (§4).
+pub const STREAM_GAP_CONTROL: &str = r#"{"type":"gap"}"#;
 
 type ResponseBody = Full<Bytes>;
 
-/// The output lease returned by a successful, single-use stream attachment.
+/// The renderer lease returned by a successful stream attachment.
 #[derive(Debug)]
 pub struct StreamAttachment {
-    pub startup: Vec<u8>,
+    /// Monotonic lease generation fencing writes from a released renderer.
+    pub lease: u64,
+    /// True when the buffer wrapped past the requested sequence, so output
+    /// older than the replay is lost. Announced to the renderer before it.
+    pub gap: bool,
+    /// Retained output replayed before live output, from the resumed sequence.
+    pub replay: Vec<u8>,
     pub live: mpsc::Receiver<Vec<u8>>,
+}
+
+/// Why a stream attachment was refused. It picks the HTTP status and nothing
+/// else about the refusal reaches the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamAttachRefusal {
+    /// The presented ticket is not the session's live one.
+    Unauthorized,
+    /// The ticket matched but the session would not hand out its lease. The
+    /// ticket is left unspent, so a retry needs no round trip for a new one.
+    Unavailable,
 }
 
 /// A stream-facing session error. Details are intentionally not sent over HTTP.
@@ -61,31 +79,33 @@ impl std::error::Error for StreamSessionError {}
 /// Narrow adapter implemented by the terminal session.
 pub trait StreamSession: Send + Sync + 'static {
     fn id(&self) -> &str;
-    fn stream_token(&self) -> &str;
-    /// Claim the single stream attachment lease.
+    /// Compare a presented single-use stream ticket in constant time and claim
+    /// the single renderer lease, replaying from `from_sequence`. The ticket is
+    /// burned only once the lease is granted, so a refusal costs no re-mint.
     ///
     /// # Errors
     ///
-    /// Returns an error when the lease has already been claimed or expired.
-    fn attach_output(&self) -> Result<StreamAttachment, StreamSessionError>;
-    /// Write raw client bytes to the owned PTY.
+    /// Returns why the attachment was refused. A refusal must never terminate
+    /// the session.
+    fn attach_with_ticket(
+        &self,
+        presented: &str,
+        from_sequence: u64,
+    ) -> Result<StreamAttachment, StreamAttachRefusal>;
+    /// Release an exact renderer lease. The session and its PTY keep running.
+    fn release_output(&self, lease: u64);
+    /// Write raw client bytes from the exact lease holder to the owned PTY.
     ///
     /// # Errors
     ///
-    /// Returns an error when the session is no longer live or the PTY write fails.
-    fn write_input(&self, input: &[u8]) -> Result<(), StreamSessionError>;
+    /// Returns an error for a stale lease, a session that is no longer live, or
+    /// a PTY write failure.
+    fn write_input(&self, lease: u64, input: &[u8]) -> Result<(), StreamSessionError>;
 }
 
 /// Narrow adapter implemented by the manager that owns the listener.
 pub trait StreamSessionHost: Send + Sync + 'static {
     fn stream_session(&self, session_id: &str) -> Option<Arc<dyn StreamSession>>;
-    /// Remove and gracefully close a claimed stream's session.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when host-owned session teardown fails.
-    fn close_stream_session(&self, session_id: &str, force: bool)
-    -> Result<(), StreamSessionError>;
 }
 
 #[derive(Debug)]
@@ -155,14 +175,12 @@ impl StreamServer {
         self.address
     }
 
-    /// Mint the authority-bearing URL for an already registered session.
+    /// Build the authority-bearing URL for one freshly minted single-use ticket.
     #[must_use]
-    pub fn session_url(&self, session: &dyn StreamSession) -> String {
+    pub fn session_url(&self, session_id: &str, ticket: &str, from_sequence: u64) -> String {
         format!(
-            "ws://{}{STREAM_PATH_PREFIX}{}?token={}",
-            self.address,
-            session.id(),
-            session.stream_token()
+            "ws://{}{STREAM_PATH_PREFIX}{session_id}?token={ticket}&from={from_sequence}",
+            self.address
         )
     }
 
@@ -202,7 +220,7 @@ impl StreamServer {
         let service_server = Arc::clone(&self);
         let service = service_fn(move |request| {
             let server = Arc::clone(&service_server);
-            async move { Ok::<_, Infallible>(server.handle(request).await) }
+            async move { Ok::<_, Infallible>(server.handle(request)) }
         });
         let mut builder = http1::Builder::new();
         builder
@@ -222,7 +240,7 @@ impl StreamServer {
         }
     }
 
-    async fn handle(self: Arc<Self>, mut request: Request<Incoming>) -> Response<ResponseBody> {
+    fn handle(self: Arc<Self>, mut request: Request<Incoming>) -> Response<ResponseBody> {
         if self.stopping.load(Ordering::Acquire) {
             return text_response(
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -236,6 +254,9 @@ impl StreamServer {
         let Some(session_id) = stream_session_id(request.uri().path()).map(str::to_owned) else {
             return text_response(StatusCode::NOT_FOUND, "404 page not found");
         };
+        let Some(from_sequence) = replay_sequence(request.uri().query()) else {
+            return text_response(StatusCode::BAD_REQUEST, "terminal stream rejected");
+        };
         let Some(host) = self.host.upgrade() else {
             return text_response(
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -246,18 +267,17 @@ impl StreamServer {
             return text_response(StatusCode::NOT_FOUND, "404 page not found");
         };
         let token = query_parameter(request.uri().query(), "token").unwrap_or_default();
-        if token.is_empty()
-            || token
-                .as_bytes()
-                .ct_eq(session.stream_token().as_bytes())
-                .unwrap_u8()
-                != 1
-        {
-            return text_response(StatusCode::UNAUTHORIZED, "terminal stream rejected");
-        }
-        let Ok(attachment) = session.attach_output() else {
-            return text_response(StatusCode::CONFLICT, "terminal stream unavailable");
+        // A refused attachment leaves the session, its PTY, and its ticket alone.
+        let attachment = match session.attach_with_ticket(token, from_sequence) {
+            Ok(attachment) => attachment,
+            Err(StreamAttachRefusal::Unauthorized) => {
+                return text_response(StatusCode::UNAUTHORIZED, "terminal stream rejected");
+            }
+            Err(StreamAttachRefusal::Unavailable) => {
+                return text_response(StatusCode::CONFLICT, "terminal stream unavailable");
+            }
         };
+        let lease = attachment.lease;
 
         let Ok(response) =
             tokio_tungstenite::tungstenite::handshake::server::create_response_with_body(
@@ -265,13 +285,11 @@ impl StreamServer {
                 || Full::new(Bytes::new()),
             )
         else {
-            let _ = close_session_blocking(host, session_id, false).await;
+            session.release_output(lease);
             return text_response(StatusCode::BAD_REQUEST, "terminal stream rejected");
         };
         let upgrade = hyper::upgrade::on(&mut request);
         let cancellation = self.cancellation.child_token();
-        let claimed_id = session_id;
-        let host = self.host.clone();
         self.active.fetch_add(1, Ordering::AcqRel);
         let guard = ActiveGuard {
             active: Arc::clone(&self.active),
@@ -289,11 +307,10 @@ impl StreamServer {
                     Some(config),
                 )
                 .await;
-                run_stream(websocket, session, attachment, cancellation).await;
+                run_stream(websocket, Arc::clone(&session), attachment, cancellation).await;
             }
-            if let Some(host) = host.upgrade() {
-                let _ = close_session_blocking(host, claimed_id, false).await;
-            }
+            // The renderer is gone; the session keeps running for a re-claim.
+            session.release_output(lease);
         });
         response
     }
@@ -347,9 +364,16 @@ async fn run_stream<S>(
     let ledger = Arc::new(FlowLedger::new(OUTPUT_WINDOW_BYTES));
     let writer_cancel = cancellation.child_token();
     let reader_cancel = cancellation.child_token();
+    let lease = attachment.lease;
     let writer =
         write_terminal_stream(sink, Arc::clone(&ledger), attachment, writer_cancel.clone());
-    let reader = read_terminal_stream(stream, session, Arc::clone(&ledger), reader_cancel.clone());
+    let reader = read_terminal_stream(
+        stream,
+        session,
+        lease,
+        Arc::clone(&ledger),
+        reader_cancel.clone(),
+    );
     tokio::pin!(writer, reader);
     tokio::select! {
         writer_result = &mut writer => {
@@ -381,7 +405,12 @@ async fn write_terminal_stream<S>(
 where
     S: Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
 {
-    for chunk in split_output(&attachment.startup) {
+    // A wrapped buffer says so before the replay it truncated: silence would be
+    // a lie about what the renderer is about to see.
+    if attachment.gap {
+        send_with_deadline(&mut sink, Message::Text(STREAM_GAP_CONTROL.into())).await?;
+    }
+    for chunk in split_output(&attachment.replay) {
         ledger.reserve_pending(chunk.len(), &cancellation).await?;
         send_output(&mut sink, &ledger, chunk).await?;
     }
@@ -473,6 +502,7 @@ where
 async fn read_terminal_stream<S>(
     mut stream: S,
     session: Arc<dyn StreamSession>,
+    lease: u64,
     ledger: Arc<FlowLedger>,
     cancellation: CancellationToken,
 ) -> Result<(), StreamWireError>
@@ -493,9 +523,20 @@ where
                             return Err(StreamWireError::InvalidInputFrame);
                         }
                         let input_session = Arc::clone(&session);
-                        tokio::task::spawn_blocking(move || input_session.write_input(&input))
-                            .await
-                            .map_err(|_| StreamWireError::BlockingWorkerFailed)??;
+                        let mut write = tokio::task::spawn_blocking(move || {
+                            input_session.write_input(lease, &input)
+                        });
+                        // A PTY write can stall for as long as the shell is not
+                        // reading. Teardown must not wait for it; the lease
+                        // fences whatever the stalled write still had left.
+                        tokio::select! {
+                            written = &mut write => {
+                                written.map_err(|_| StreamWireError::BlockingWorkerFailed)??;
+                            }
+                            () = cancellation.cancelled() => {
+                                return Err(StreamWireError::Cancelled);
+                            }
+                        }
                     }
                     Message::Text(control) => {
                         let acknowledged = parse_ack_control(control.as_bytes())?;
@@ -567,21 +608,17 @@ impl std::fmt::Display for StreamWireError {
     }
 }
 
-async fn close_session_blocking(
-    host: Arc<dyn StreamSessionHost>,
-    session_id: String,
-    force: bool,
-) -> Result<(), StreamSessionError> {
-    tokio::task::spawn_blocking(move || host.close_stream_session(&session_id, force))
-        .await
-        .map_err(|_| StreamSessionError("terminal session close worker failed".to_owned()))?
-}
-
 impl std::error::Error for StreamWireError {}
 
 fn stream_session_id(path: &str) -> Option<&str> {
     let id = path.strip_prefix(STREAM_PATH_PREFIX)?;
     (!id.is_empty() && !id.contains('/')).then_some(id)
+}
+
+/// The last sequence the renderer rendered. Absent means "from the start";
+/// anything unparsable is rejected before any session state is touched.
+fn replay_sequence(query: Option<&str>) -> Option<u64> {
+    query_parameter(query, "from").map_or(Some(0), |value| value.parse().ok())
 }
 
 fn query_parameter<'a>(query: Option<&'a str>, name: &str) -> Option<&'a str> {
