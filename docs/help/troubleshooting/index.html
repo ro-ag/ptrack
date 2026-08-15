@@ -75,6 +75,10 @@ ptrack context</code></pre>
           <p>If <strong>Open Project</strong> or <strong>Switch Project</strong> reports active terminals, agent runs, or resource operations, inspect the confirmation instead of repeating the action. Confirming stops the counted resources and cleans up the current project before switching; canceling keeps the current workspace. If the confirmation expires or resources change, start the switch again so p-track can recount them.</p>
           <p>A task transition confirmation is tied to the exact task, status, linked resources, and association revisions shown. If the board says the task or linked resources changed, the status was not updated. Close the stale prompt, refresh the workspace, inspect the current task and live resources, then request the transition again.</p>
 
+          <h3>Desktop reopened wrong, or the window is misplaced</h3>
+          <p>If p-track reopened a project you did not expect, turn off <strong>Reopen the last project when p-track starts</strong> in <strong>Settings ▸ Startup</strong>; if it landed on the welcome screen instead, look for the recent entry marked <strong>Preselected</strong> — that is the project p-track recorded, and it moved, because p-track never opens a relocated project on its own. Confirm its new location yourself with <strong>Locate…</strong> on it. A window restored onto a display that is no longer connected is recentered on the primary display automatically, so no reset is needed for that case.</p>
+          <p>When the sidebar, panels, or window geometry are unusable, use <strong>Settings ▸ Data &amp; Diagnostics ▸ Reset Window Layout</strong>. It restores the default window and layout immediately and touches nothing else. Reach for <strong>Reset Application State</strong> only when you accept losing every setting, saved terminal workspace, and network capability grant. Grants live in the project, so revoking them writes to the open project's database and each scope must be granted again before any network access works; plans, tasks, notes, and Recent projects are not touched. Stored window and layout records that p-track cannot read are reported and replaced by defaults in memory, not overwritten, so an unreadable record left by a newer version survives a downgrade.</p>
+
           <h2 id="terminal-recovery">Terminal recovery</h2>
           <p>Restored tabs and split descriptors start as stopped panes. Opening one creates a new session. The prior process, terminal contents, output, and scrollback are not restored.</p>
           <div class="table-wrap">
@@ -116,6 +120,8 @@ ptrack context</code></pre>
             <dd>No. It changes the Desktop view only. Use <code>ptrack plan use &lt;id&gt;</code> to change the CLI active plan.</dd>
             <dt>Does p-track check for updates automatically?</dt>
             <dd>Not by default. Automatic checks remain off until you explicitly opt in from <strong>Settings ▸ Updates</strong> or <strong>About &amp; Updates</strong>; a manual check does not silently download or install.</dd>
+            <dt>Does <strong>Reset Application State</strong> delete my plans or tasks?</dt>
+            <dd>No. It clears settings, the startup and update-check opt-ins, window and layout state, and saved terminal workspaces, and it revokes all network capability grants. Grants live in the project, so revoking them writes to the open project's database; with no project open, nothing is revoked. Plans, tasks, notes, and Recent projects are not touched, and your capability definitions stay authored — re-granting each scope is the part you must redo.</dd>
             <dt>Are capabilities an operating-system sandbox?</dt>
             <dd>No. They authorize exact typed broker calls. Ordinary shell processes retain whatever network and filesystem access the operating system gives them.</dd>
             <dt>Does <code>ptrack backup</code> capture everything, and can p-track restore it?</dt>

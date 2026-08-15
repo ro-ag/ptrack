@@ -58,7 +58,8 @@ fn defaults(storage: &str) -> Value {
             "unicodeMode": "modern",
             "scrollback": 25_000,
             "renderer": "auto"
-        }
+        },
+        "startup": { "restoreLastProject": false, "lastProjectRoot": null }
     })
 }
 
@@ -111,6 +112,42 @@ fn normalization_is_total_across_unknown_enums_wrong_types_and_ranges() {
     let clamped = document(&store);
     assert_eq!(clamped["terminal"]["fontSize"], 10);
     assert_eq!(clamped["terminal"]["scrollback"], 200_000);
+}
+
+#[test]
+fn startup_restoration_is_off_by_default_and_the_last_project_root_clears_to_null() {
+    let directory = Temp::new("startup");
+    let store = store(&directory);
+    assert_eq!(document(&store)["startup"], defaults("defaults")["startup"]);
+
+    let opted_in = serde_json::to_value(
+        set_preferences(
+            &store,
+            &json!({ "startup": { "restoreLastProject": true, "lastProjectRoot": "/work/app" } }),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(opted_in["startup"]["restoreLastProject"], true);
+    assert_eq!(opted_in["startup"]["lastProjectRoot"], "/work/app");
+
+    // An explicit project close clears the root without touching the opt-in,
+    // and a wrong type or a control character is not a path.
+    for root in [json!(null), json!(7), json!("  "), json!("/work/\u{7}app")] {
+        let cleared = serde_json::to_value(
+            set_preferences(&store, &json!({ "startup": { "lastProjectRoot": root } })).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(cleared["startup"]["lastProjectRoot"], Value::Null);
+        assert_eq!(cleared["startup"]["restoreLastProject"], true);
+    }
+
+    // A theme change disturbs neither.
+    let themed = serde_json::to_value(
+        set_preferences(&store, &json!({ "appearance": { "theme": "dark" } })).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(themed["startup"]["restoreLastProject"], true);
 }
 
 #[test]

@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use super::{ProjectPickerPurpose, project_picker_result, validate_external_url};
+use super::{
+    ProjectPickerPurpose, WindowStateCapture, project_picker_result, validate_external_url,
+};
 
 #[test]
 fn project_picker_purpose_is_strict_and_owns_native_titles() {
@@ -26,6 +28,23 @@ fn project_picker_cancellation_is_an_exact_no_selection_result() {
         .unwrap(),
         "selected-project"
     );
+}
+
+/// Non-terminal captures run on their own thread, so one can wake up after the
+/// exit flush has already written the rect the window really closed at. That
+/// late write must be dropped, not ordered behind the good one.
+#[test]
+fn a_capture_that_wakes_after_the_exit_flush_never_writes() {
+    let capture = WindowStateCapture::new();
+
+    // Ordinary trailing captures write and leave the gate open.
+    assert!(capture.guarded(false, || {}));
+    assert!(capture.guarded(false, || {}));
+    // The exit flush writes and seals.
+    assert!(capture.guarded(true, || {}));
+    // Anything arriving afterwards, exit flush included, is refused.
+    assert!(!capture.guarded(false, || {}));
+    assert!(!capture.guarded(true, || {}));
 }
 
 #[test]

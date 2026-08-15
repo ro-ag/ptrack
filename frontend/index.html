@@ -1247,13 +1247,22 @@
             aria-label="Settings sections"
           >
             <button
-              id="settings-tab-appearance"
+              id="settings-tab-startup"
               class="settings-section-tab"
               type="button"
               role="tab"
               aria-selected="true"
-              aria-controls="settings-panel-appearance"
+              aria-controls="settings-panel-startup"
               tabindex="0"
+            >Startup</button>
+            <button
+              id="settings-tab-appearance"
+              class="settings-section-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="settings-panel-appearance"
+              tabindex="-1"
             >Appearance</button>
             <button
               id="settings-tab-terminal"
@@ -1286,11 +1295,34 @@
 
           <div class="settings-panels">
             <section
+              id="settings-panel-startup"
+              class="settings-panel"
+              role="tabpanel"
+              aria-labelledby="settings-tab-startup"
+              tabindex="0"
+            >
+              <h3 class="section-label">Startup</h3>
+              <label class="settings-check" for="settings-startup-restore">
+                <input id="settings-startup-restore" type="checkbox" />
+                <span>
+                  Reopen the last project when p-track starts
+                  <small>Off by default. The last project reopens only while it is still
+                  valid; otherwise p-track opens Welcome.</small>
+                </span>
+              </label>
+              <p class="dialog-help">
+                A folder named on the command line always wins. A project that moved is
+                never reopened until you confirm the move yourself.
+              </p>
+            </section>
+
+            <section
               id="settings-panel-appearance"
               class="settings-panel"
               role="tabpanel"
               aria-labelledby="settings-tab-appearance"
               tabindex="0"
+              hidden
             >
               <h3 class="section-label">Appearance</h3>
               <label class="settings-field" for="settings-theme">
@@ -1452,7 +1484,7 @@
             >
               <h3 class="section-label">Data &amp; Diagnostics</h3>
               <p class="dialog-help">
-                Read-only. Nothing here changes stored project data.
+                The report is read-only. Nothing here changes stored project data.
               </p>
               <dl id="settings-diagnostics" class="settings-diagnostics"></dl>
               <button
@@ -1460,6 +1492,26 @@
                 class="button-secondary"
                 type="button"
               >Open Network Capabilities</button>
+              <h4 class="section-label">Reset</h4>
+              <p id="settings-reset-help" class="dialog-help">
+                Neither reset touches plans, tasks, notes, or Recent projects. Reset
+                Application State also revokes every network capability grant in the
+                open project, which you must grant again.
+              </p>
+              <div class="settings-reset-actions">
+                <button
+                  id="settings-reset-window-layout"
+                  class="button-secondary"
+                  type="button"
+                  aria-describedby="settings-reset-help"
+                >Reset Window Layout</button>
+                <button
+                  id="settings-reset-application-state"
+                  class="button-secondary"
+                  type="button"
+                  aria-describedby="settings-reset-help"
+                >Reset Application State</button>
+              </div>
             </section>
           </div>
         </div>

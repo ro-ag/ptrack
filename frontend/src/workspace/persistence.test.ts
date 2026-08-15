@@ -135,6 +135,42 @@ describe("terminal workspace persistence", () => {
     ]) expect(raw).not.toContain(forbidden);
   });
 
+  // Pins the descriptor allowlist: a widening of cloneWorkspaceForPersistence
+  // would carry one of these fields through a save and reload.
+  it("round-trips a leaky workspace without the fields outside the allowlist", () => {
+    const storage = new MemoryStorage();
+    const workspace = createWorkspace(ids(), { profileId: "shell", cwd: "/repo" });
+    Object.assign(workspace as unknown as Record<string, unknown>, {
+      secret: "sk-live-workspace",
+      sessionId: "session-1",
+    });
+    Object.assign(workspace.tabs[0] as unknown as Record<string, unknown>, {
+      token: "gh-token-tab",
+      env: { AWS_SECRET_ACCESS_KEY: "leaked" },
+      buffer: "scrollback bytes the user typed",
+    });
+    Object.assign(workspace.tabs[0].root as unknown as Record<string, unknown>, {
+      sessionId: "session-2",
+      env: { OPENAI_API_KEY: "leaked" },
+      buffer: "pane scrollback",
+    });
+
+    expect(saveTerminalWorkspace(storage, "/repo", workspace, 0.3)).toBe(true);
+    const loaded = loadTerminalWorkspace(storage, "/repo").workspace!;
+    expect(Object.keys(loaded).sort()).toEqual(["activeTabId", "tabs", "version"]);
+    expect(Object.keys(loaded.tabs[0]).sort()).toEqual([
+      "activePaneId", "id", "root", "title",
+    ]);
+    expect(Object.keys(loaded.tabs[0].root).sort()).toEqual([
+      "cwd", "kind", "paneId", "profileId",
+    ]);
+    const raw = storage.getItem(terminalWorkspaceStorageKey("/repo"))!;
+    for (const forbidden of [
+      "secret", "sk-live-workspace", "sessionId", "session-1", "token", "gh-token-tab",
+      "env", "AWS_SECRET_ACCESS_KEY", "OPENAI_API_KEY", "buffer", "scrollback",
+    ]) expect(raw).not.toContain(forbidden);
+  });
+
   it("keeps project roots isolated in storage", () => {
     const storage = new MemoryStorage();
     const first = createWorkspace(ids(), { title: "Alpha", profileId: "shell" });

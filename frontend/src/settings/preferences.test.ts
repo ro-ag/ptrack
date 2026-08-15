@@ -49,6 +49,22 @@ describe("preferences normalization", () => {
     expect(preferences.terminal.fontFamily).toBe("monospace");
   });
 
+  it("keeps the startup opt-in off until it is stored as true", () => {
+    expect(defaultPreferences.startup).toEqual({
+      restoreLastProject: false,
+      lastProjectRoot: null,
+    });
+    expect(
+      normalizePreferences({ startup: { restoreLastProject: "yes", lastProjectRoot: " " } })
+        .startup,
+    ).toEqual({ restoreLastProject: false, lastProjectRoot: null });
+    expect(
+      normalizePreferences({
+        startup: { restoreLastProject: true, lastProjectRoot: "/work/app" },
+      }).startup,
+    ).toEqual({ restoreLastProject: true, lastProjectRoot: "/work/app" });
+  });
+
   it("clamps the documented ranges", () => {
     expect(normalizePreferences({ terminal: { fontSize: 2 } }).terminal.fontSize).toBe(10);
     expect(normalizePreferences({ terminal: { fontSize: 99 } }).terminal.fontSize).toBe(24);

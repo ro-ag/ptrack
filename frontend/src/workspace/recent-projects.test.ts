@@ -7,6 +7,7 @@ import {
   parseRecentProjectOpenResult,
   parseRecentProjectResolution,
   parseRecentProjects,
+  preselectedRecentProject,
   RECENT_RELOCATION_UNCONFIRMED,
   recentProjectFocusKey,
   reduceRecentProjects,
@@ -153,6 +154,24 @@ describe("recent project recovery", () => {
     expect(focusAfterForgottenProject([entry], entry.entryId)).toBe(
       "recent-project-heading",
     );
+  });
+
+  it("preselects the recorded last project only while the opt-in is on", () => {
+    const moved = { ...entry, availability: "changed" as const };
+    const other = {
+      ...entry,
+      entryId: "entry-b",
+      canonicalPath: "/work/alpha-2",
+      availability: "available" as const,
+    };
+    const on = { restoreLastProject: true, lastProjectRoot: "/work/alpha" };
+    expect(preselectedRecentProject([other, moved], on)).toBe("entry-a");
+    expect(preselectedRecentProject([other, moved], { ...on, restoreLastProject: false }))
+      .toBe("");
+    expect(preselectedRecentProject([other, moved], { ...on, lastProjectRoot: null }))
+      .toBe("");
+    expect(preselectedRecentProject([other], on)).toBe("");
+    expect(preselectedRecentProject([], on)).toBe("");
   });
 
   it("treats relocation as unconfirmed after a lost response despite bounded reload", () => {

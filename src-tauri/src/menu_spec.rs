@@ -47,6 +47,9 @@ pub struct WindowSpec {
     pub height: u16,
     pub min_width: u16,
     pub min_height: u16,
+    /// The window is configured hidden and shown by the shell once the stored
+    /// geometry has been replayed, so the restored rect is the first paint.
+    pub visible: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -241,6 +244,7 @@ pub const fn window_spec() -> WindowSpec {
         height: 900,
         min_width: 880,
         min_height: 560,
+        visible: false,
     }
 }
 

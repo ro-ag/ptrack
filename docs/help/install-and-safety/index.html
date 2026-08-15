@@ -110,12 +110,15 @@
                 <tr><td>Runtime state</td><td><code>&lt;global-home&gt;/runtime/&lt;sha256(project-root)&gt;/</code></td><td>Private local service descriptors and bounded agent-run history.</td></tr>
                 <tr><td>Backups</td><td><code>&lt;global-home&gt;/backups/</code></td><td>Project database copies created by <code>ptrack backup</code>.</td></tr>
                 <tr><td>Update staging</td><td><code>&lt;global-home&gt;/updates/</code></td><td>Verified candidate stages and bounded recovery state.</td></tr>
-                <tr><td>Application settings</td><td>Global store, <code>preferences</code> record</td><td>Appearance and terminal defaults chosen in <strong>Settings</strong>, written as one whole record.</td></tr>
-                <tr><td>Desktop view state</td><td>WebView <code>localStorage</code></td><td>Panel layout, terminal layout descriptors, and a cache of theme and terminal display values. The stored settings record wins on load.</td></tr>
+                <tr><td>Application settings</td><td>Global store, <code>preferences</code> record</td><td>Startup, appearance, terminal, and update-check choices made in <strong>Settings</strong>, plus the last project recorded for the startup opt-in. Written as one whole record.</td></tr>
+                <tr><td>Window state</td><td>Global store, <code>window-state</code> record</td><td>Window position, size, and maximized state in logical coordinates, with the display that produced them. Kept apart from preferences so a resize never rewrites your settings.</td></tr>
+                <tr><td>Layout state</td><td>Global store, <code>layout-state</code> record</td><td>Sidebar width and visibility, panel visibility, and per project the selected view, plan, and folded lanes, bounded to 32 projects.</td></tr>
+                <tr><td>Desktop view state</td><td>WebView <code>localStorage</code></td><td>Terminal layout descriptors and a cache of theme, sidebar width, and terminal display values read before first paint. The stored records win on load.</td></tr>
               </tbody>
             </table>
           </div>
           <p>Set <code>PTRACK_HOME</code> to move the global store and its backups, runtime state, and update staging. WebView <code>localStorage</code> remains a separate application-browser store; it is not part of <code>global.redb</code>.</p>
+          <p>All three records use a versioned envelope and are repaired field by field when partly invalid. A record p-track cannot read, or one written by a newer version, is reported and read as defaults rather than overwritten, so downgrading never destroys it. <strong>Settings ▸ Data &amp; Diagnostics ▸ Reset Application State</strong> clears these records and the saved terminal workspaces, and revokes every network capability grant. Grants live in the project, so revoking them writes to the open project's database; with no project open, nothing is revoked. It does not touch plans, tasks, notes, backups, or the known-projects list. See <a href="../desktop/#reset-state">the reset actions</a>.</p>
 
           <h2 id="backup">Back up with the documented limits</h2>
           <pre><code>ptrack backup</code></pre>

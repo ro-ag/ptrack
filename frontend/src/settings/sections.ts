@@ -1,11 +1,19 @@
 // Settings dialog sections: the frozen order of the roving-tabindex tablist,
 // its keyboard traversal, and the read-only Data & Diagnostics rows.
 
-export type SettingsSectionId = "appearance" | "terminal" | "updates" | "data";
+export type SettingsSectionId =
+  | "startup"
+  | "appearance"
+  | "terminal"
+  | "updates"
+  | "data";
 
+// Startup leads: it is what happens before anything else is on screen, and it
+// is neither an appearance choice nor part of the read-only report.
 export const settingsSections: ReadonlyArray<
   { readonly id: SettingsSectionId; readonly label: string }
 > = [
+  { id: "startup", label: "Startup" },
   { id: "appearance", label: "Appearance" },
   { id: "terminal", label: "Terminal" },
   { id: "updates", label: "Updates" },
@@ -40,6 +48,57 @@ export function nextSettingsSectionIndex(
   if (key === "Home") return 0;
   if (key === "End") return count - 1;
   return -1;
+}
+
+export interface ResetConfirmationCopy {
+  readonly eyebrow: string;
+  readonly heading: string;
+  readonly detail: string;
+  readonly cancel: string;
+  readonly submit: string;
+}
+
+// Both resets live only in Data & Diagnostics. Reset Window Layout is
+// non-destructive; Reset Application State names the capability grants because
+// re-granting them is real work, and names what survives because a reset that
+// reads as "erase everything" is one nobody dares run.
+export const resetWindowLayoutConfirmation: ResetConfirmationCopy = {
+  eyebrow: "Window layout",
+  heading: "Reset the window layout?",
+  detail:
+    "The window size and position, the sidebar, and the board and terminal panels return to their defaults. Settings, plans, tasks, notes, project databases, and Recent projects are not touched.",
+  cancel: "Keep Layout",
+  submit: "Reset Layout",
+};
+
+export const resetApplicationStateConfirmation: ResetConfirmationCopy = {
+  eyebrow: "Application state",
+  heading: "Reset all application state?",
+  detail:
+    "This clears your settings, the automatic update-check opt-in, the window and layout state, and every saved terminal workspace. Network capability grants live in the project and are revoked in the open project, and must be granted again before any network access works. Plans, tasks, notes, and Recent projects are not touched.",
+  cancel: "Keep Application State",
+  submit: "Reset Application State",
+};
+
+// resetApplicationStateMessage reports what the runtime actually cleared, so a
+// record it could not reach is never claimed as reset.
+export function resetApplicationStateMessage(result: unknown): string {
+  const response = result && typeof result === "object"
+    ? result as Record<string, unknown>
+    : {};
+  const records = (Array.isArray(response.records) ? response.records : [])
+    .filter((record): record is string => typeof record === "string" && record !== "");
+  const count = Number(response.capabilityGrants);
+  const grants = Number.isFinite(count) && count > 0 ? Math.trunc(count) : 0;
+  const cleared = records.length === 0
+    ? "No stored records were cleared"
+    : `Cleared ${records.join(", ")}`;
+  const revoked = grants === 0
+    ? "No network capability grants were revoked"
+    : `${grants} network capability grant${grants === 1 ? "" : "s"} ${
+      grants === 1 ? "was" : "were"
+    } revoked and must be granted again`;
+  return `${cleared}. ${revoked}. Plans, tasks, notes, and Recent projects were not touched.`;
 }
 
 export interface DiagnosticsRow {

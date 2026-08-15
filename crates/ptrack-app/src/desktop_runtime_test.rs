@@ -21,9 +21,10 @@ use super::desktop_runtime::{
     ActiveResourceSummary, BoundDesktopWorkspace, DesktopCommandRequest, DesktopRuntime,
     DesktopRuntimeConfig, DesktopWorkspace, DesktopWorkspaceFactory,
     RecentProjectOpenAuthorizationV1, RecentProjectRegistryCommitV1, RecentProjectRegistryStatusV1,
-    RecentProjectsProvider, WorkspaceProject, WorkspaceStatus, agent_intelligence_for_task_result,
-    allowed_desktop_commands, capture_git_snapshot_with, confirm_linked_launch, heatmap_at,
-    project_storage, watch_workspace_data,
+    RecentProjectsProvider, ResetApplicationStateResultV1, WorkspaceProject, WorkspaceStatus,
+    agent_intelligence_for_task_result, allowed_desktop_commands, apply_preferences,
+    capture_git_snapshot_with, confirm_linked_launch, heatmap_at, project_storage,
+    record_last_project_in, reset_application_records, watch_workspace_data,
 };
 use crate::{
     AppError, AppResult, DesktopEvent, DesktopEventSink, DesktopInitializationService,
@@ -842,7 +843,7 @@ fn desktop_update_commands_delegate_exact_arguments_and_return_full_state() {
 }
 
 #[test]
-#[allow(clippy::too_many_lines)] // Full 80-command freeze fixture is intentionally explicit.
+#[allow(clippy::too_many_lines)] // Full 84-command freeze fixture is intentionally explicit.
 fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
     let commands = allowed_desktop_commands();
     assert_eq!(
@@ -882,6 +883,7 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "GetCapabilityAuditsV2",
             "GetDiagnosticsReport",
             "GetInitializationStatusV1",
+            "GetLayoutState",
             "GetPendingInitializationV1",
             "GetPreferences",
             "GetRecentProjects",
@@ -911,7 +913,9 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "RemoveCapabilityV2",
             "RenameTask",
             "RenameTaskV2",
+            "ResetApplicationState",
             "ResetPreferences",
+            "ResetWindowLayout",
             "ResizeTerminal",
             "ResizeTerminalV2",
             "ResolveRecentProjectV1",
@@ -922,6 +926,7 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "SetAgentTaskOwnershipV2",
             "SetAgentWorktreeV2",
             "SetAutomaticUpdateChecks",
+            "SetLayoutState",
             "SetPreferences",
             "StartFirstTaskV1",
             "TestCapabilityV2",
@@ -980,13 +985,17 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
 fn preference_and_diagnostics_commands_dispatch_above_the_workspace() {
     let runtime = DesktopRuntime::new(DesktopRuntimeConfig::unavailable("test"));
     // A wrong arity is rejected before any store is opened, which proves the
-    // four commands are answered by the application-level dispatch instead of
-    // falling through to a project workspace.
+    // application-scoped commands are answered by the application-level
+    // dispatch instead of falling through to a project workspace.
     for (method, arguments) in [
         ("GetPreferences", vec![json!({})]),
         ("SetPreferences", Vec::new()),
         ("ResetPreferences", vec![json!({})]),
         ("GetDiagnosticsReport", vec![json!({})]),
+        ("GetLayoutState", vec![json!({})]),
+        ("SetLayoutState", Vec::new()),
+        ("ResetWindowLayout", vec![json!({})]),
+        ("ResetApplicationState", vec![json!({})]),
     ] {
         let error = runtime
             .invoke(request(method, arguments))
@@ -997,6 +1006,159 @@ fn preference_and_diagnostics_commands_dispatch_above_the_workspace() {
             "{error}"
         );
     }
+}
+
+fn global_store(directory: &TestDirectory, database_id: &str) -> GlobalStore {
+    let database = directory.0.join("global.redb");
+    GlobalStore::create_new(
+        &database,
+        ActiveBinding {
+            generation: 1,
+            database_id: database_id.to_owned(),
+            kind: StoreKind::Global,
+            canonical_path: database.clone(),
+        },
+    )
+    .unwrap()
+}
+
+fn recorded_root(store: &GlobalStore) -> Option<String> {
+    crate::preferences::preferences(store)
+        .preferences
+        .startup
+        .last_project_root
+}
+
+/// Ticking the startup opt-in while a project is open must record that project
+/// there and then. Otherwise the setting does nothing until the user happens to
+/// reopen the same project once, and the next launch lands on Welcome with
+/// nothing explaining why.
+#[test]
+fn opting_in_while_a_project_is_open_records_that_project_immediately() {
+    let directory = TestDirectory::new("startup-opt-in");
+    let store = global_store(&directory, "startup-opt-in");
+    let opt_in = json!({ "startup": { "restoreLastProject": true } });
+
+    // While opted out, an open project is nobody's business to persist.
+    apply_preferences(
+        &store,
+        &json!({ "appearance": { "theme": "dark" } }),
+        Some("/work/app"),
+    )
+    .unwrap();
+    assert_eq!(recorded_root(&store), None);
+
+    let document = apply_preferences(&store, &opt_in, Some("/work/app")).unwrap();
+    assert_eq!(
+        document.preferences.startup.last_project_root.as_deref(),
+        Some("/work/app")
+    );
+    assert_eq!(recorded_root(&store).as_deref(), Some("/work/app"));
+
+    // The opt-in is already on, so a later patch never re-records: it must not
+    // resurrect a root an explicit close just cleared.
+    record_last_project_in(&store, &Value::Null);
+    apply_preferences(&store, &opt_in, Some("/work/other")).unwrap();
+    assert_eq!(recorded_root(&store), None);
+}
+
+/// Opting in from Welcome has nothing to record, and must not clear a root the
+/// user never closed.
+#[test]
+fn opting_in_with_no_project_open_leaves_the_stored_root_alone() {
+    let directory = TestDirectory::new("startup-opt-in-welcome");
+    let store = global_store(&directory, "startup-opt-in-welcome");
+    crate::preferences::set_preferences(
+        &store,
+        &json!({ "startup": { "restoreLastProject": true, "lastProjectRoot": "/work/app" } }),
+    )
+    .unwrap();
+    crate::preferences::set_preferences(
+        &store,
+        &json!({ "startup": { "restoreLastProject": false } }),
+    )
+    .unwrap();
+
+    apply_preferences(
+        &store,
+        &json!({ "startup": { "restoreLastProject": true } }),
+        None,
+    )
+    .unwrap();
+    assert_eq!(recorded_root(&store).as_deref(), Some("/work/app"));
+}
+
+/// The clear is unconditional while the write stays gated: opting out and then
+/// closing a project must not strand its root for a later opt-in to reopen.
+#[test]
+fn an_explicit_close_clears_the_recorded_root_even_while_opted_out() {
+    let directory = TestDirectory::new("startup-clear");
+    let store = global_store(&directory, "startup-clear");
+    crate::preferences::set_preferences(
+        &store,
+        &json!({ "startup": { "restoreLastProject": true, "lastProjectRoot": "/work/app" } }),
+    )
+    .unwrap();
+    crate::preferences::set_preferences(
+        &store,
+        &json!({ "startup": { "restoreLastProject": false } }),
+    )
+    .unwrap();
+
+    assert!(record_last_project_in(&store, &Value::Null).is_some());
+    assert_eq!(recorded_root(&store), None);
+
+    // A path is still never persisted without the opt-in.
+    assert!(record_last_project_in(&store, &json!("/work/other")).is_none());
+    assert_eq!(recorded_root(&store), None);
+}
+
+#[test]
+fn a_full_reset_clears_every_app_record_and_leaves_project_data_alone() {
+    let directory = TestDirectory::new("reset-application-state");
+    let database = directory.0.join("global.redb");
+    let store = GlobalStore::create_new(
+        &database,
+        ActiveBinding {
+            generation: 1,
+            database_id: "reset-test".to_owned(),
+            kind: StoreKind::Global,
+            canonical_path: database.clone(),
+        },
+    )
+    .unwrap();
+    let keys: [&[u8]; 4] = [
+        b"preferences",
+        crate::update_preference_key(),
+        b"window-state",
+        b"layout-state",
+    ];
+    for key in keys {
+        store.set_config(key, b"{}").unwrap();
+    }
+    let project = store
+        .register_project("kept", directory.0.join("kept-project"))
+        .unwrap();
+
+    let records = reset_application_records(&store).unwrap();
+
+    for key in keys {
+        assert!(store.config(key).unwrap().is_empty(), "record survived");
+    }
+    // Project data is out of scope: the recents registry row is untouched.
+    assert_eq!(store.project(&project.path).unwrap(), Some(project));
+    // The dialog reports exactly those four keys, in camelCase.
+    assert_eq!(
+        serde_json::to_value(ResetApplicationStateResultV1 {
+            records,
+            capability_grants: 2,
+        })
+        .unwrap(),
+        json!({
+            "records": ["preferences", "updates.auto-check", "window-state", "layout-state"],
+            "capabilityGrants": 2
+        })
+    );
 }
 
 #[test]

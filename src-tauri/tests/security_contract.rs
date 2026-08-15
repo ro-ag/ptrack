@@ -119,6 +119,23 @@ fn tauri_uses_the_existing_frontend_and_exact_window_contract() {
         "p-track Project Workspace"
     );
     assert_eq!(config["app"]["windows"][0]["backgroundColor"], "#080d12");
+    // Hidden at launch so the restored geometry is the first painted rect; the
+    // shell shows the window in its setup once the replay has run.
+    assert_eq!(config["app"]["windows"][0]["visible"], false);
+    let source = fs::read_to_string(manifest_dir.join("src/main.rs"))
+        .expect("desktop shell source should be readable");
+    let restore = source
+        .find("restore_window_state(&window, &capture.version);")
+        .expect("setup must replay the stored window geometry");
+    let show = source
+        .find("let _ = window.show();")
+        .expect("setup must show the hidden window");
+    let runtime = source
+        .find("let runtime = production_desktop_runtime(")
+        .expect("setup must build the desktop runtime");
+    // The show is unconditional: it precedes every fallible step of setup, so no
+    // `?` can leave a permanently invisible window.
+    assert!(restore < show && show < runtime);
     assert_eq!(config["bundle"]["macOS"]["minimumSystemVersion"], "12.0");
     assert_eq!(
         config["bundle"]["macOS"]["entitlements"],
@@ -183,6 +200,7 @@ fn menu_event_and_help_allowlists_are_exact() {
     assert_eq!(window.background, "#080d12");
     assert_eq!((window.width, window.height), (1_440, 900));
     assert_eq!((window.min_width, window.min_height), (880, 560));
+    assert!(!window.visible);
 }
 
 #[test]

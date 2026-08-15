@@ -343,6 +343,19 @@ export function recentProjectPrimaryAction(
   return "locate";
 }
 
+// A last project that did not open on its own — it moved, its folder is gone,
+// or its permission lapsed — lands on Welcome with its own row preselected, so
+// the user confirms which entry it was instead of guessing. Preselecting is
+// all this does: the recorded root is matched, never opened.
+export function preselectedRecentProject(
+  projects: readonly RecentProjectEntry[],
+  startup: { restoreLastProject: boolean; lastProjectRoot: string | null },
+): string {
+  if (!startup.restoreLastProject || !startup.lastProjectRoot) return "";
+  const recorded = startup.lastProjectRoot;
+  return projects.find((project) => project.canonicalPath === recorded)?.entryId ?? "";
+}
+
 export function recentProjectFocusKey(entryId: string, action: string): string {
   return `${entryId}:${action}`;
 }

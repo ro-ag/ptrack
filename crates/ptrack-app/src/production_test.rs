@@ -17,8 +17,9 @@ use crate::{
     InitializeProjectRequestV1, NoRecentProjectsProvider, ProductionDesktopAuthority,
     ProductionDesktopWorkspaceFactory, ProductionRecentProjects, ProjectGuideChoiceV1,
     ProjectGuideFileActionV1, ProjectGuidePreviewRequestV1, ProjectTargetKindV1,
-    RecentProjectAvailabilityV1, RecentProjectsProvider, RoutedApplication,
-    UnavailableUpdateService, WorkspaceStatus, production_desktop_runtime,
+    RecentProjectAvailabilityV1, RecentProjectResolutionV1, RecentProjectsProvider,
+    RoutedApplication, StartupProjectV1, UnavailableUpdateService, WorkspaceStatus,
+    production_desktop_runtime, resolved_startup_project, startup_project,
 };
 
 static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -2723,6 +2724,229 @@ fn desktop_authority_rejects_non_utf8_target_paths() {
             .unwrap_err()
             .to_string()
             .contains("not valid UTF-8")
+    );
+}
+
+#[test]
+fn a_command_line_path_always_wins_over_the_auto_open_opt_in() {
+    // Even a fully proven last project and a project working directory both
+    // lose to an explicit instruction.
+    assert_eq!(
+        startup_project(
+            Some(PathBuf::from("/named")),
+            Some(PathBuf::from("/cwd")),
+            true,
+            Some("/last"),
+            Some((
+                RecentProjectAvailabilityV1::Available,
+                RecentProjectResolutionV1::Ready,
+            )),
+        ),
+        StartupProjectV1::Open(PathBuf::from("/named"))
+    );
+}
+
+#[test]
+fn a_project_working_directory_wins_over_the_auto_open_opt_in() {
+    let ready = Some((
+        RecentProjectAvailabilityV1::Available,
+        RecentProjectResolutionV1::Ready,
+    ));
+    // `cd /cwd && ptrack --gui` opens /cwd, not the recorded last project.
+    assert_eq!(
+        startup_project(
+            None,
+            Some(PathBuf::from("/cwd")),
+            true,
+            Some("/last"),
+            ready
+        ),
+        StartupProjectV1::Open(PathBuf::from("/cwd"))
+    );
+    // A working directory that is no project falls through to the opt-in.
+    assert_eq!(
+        startup_project(None, None, true, Some("/last"), ready),
+        StartupProjectV1::Open(PathBuf::from("/last"))
+    );
+}
+
+#[test]
+fn auto_open_requires_the_opt_in_a_recorded_root_and_an_available_ready_entry() {
+    let ready = Some((
+        RecentProjectAvailabilityV1::Available,
+        RecentProjectResolutionV1::Ready,
+    ));
+    assert_eq!(
+        startup_project(None, None, true, Some("/last"), ready),
+        StartupProjectV1::Open(PathBuf::from("/last"))
+    );
+    // Opt-in off is the default, so an upgrade never changes what opens.
+    assert_eq!(
+        startup_project(None, None, false, Some("/last"), ready),
+        StartupProjectV1::Welcome(None)
+    );
+    assert_eq!(
+        startup_project(None, None, true, None, ready),
+        StartupProjectV1::Welcome(None)
+    );
+    // No proof at all, and proof of a project that is gone or unreadable.
+    assert_eq!(
+        startup_project(None, None, true, Some("/last"), None),
+        StartupProjectV1::Welcome(None)
+    );
+    for availability in [
+        RecentProjectAvailabilityV1::Missing,
+        RecentProjectAvailabilityV1::PermissionRequired,
+        RecentProjectAvailabilityV1::Changed,
+    ] {
+        assert_eq!(
+            startup_project(
+                None,
+                None,
+                true,
+                Some("/last"),
+                Some((availability, RecentProjectResolutionV1::Ready)),
+            ),
+            StartupProjectV1::Welcome(None)
+        );
+    }
+}
+
+#[test]
+fn a_relocated_last_project_preselects_welcome_instead_of_opening() {
+    assert_eq!(
+        startup_project(
+            None,
+            None,
+            true,
+            Some("/last"),
+            Some((
+                RecentProjectAvailabilityV1::Available,
+                RecentProjectResolutionV1::ConfirmationRequired,
+            )),
+        ),
+        StartupProjectV1::Welcome(Some(PathBuf::from("/last")))
+    );
+}
+
+/// The opt-in is inert unless a launch reads it, so this drives the whole path
+/// `run_desktop` takes: the stored preference, the recorded root, and the
+/// recents registry that has to prove it.
+#[test]
+fn a_launch_reopens_the_recorded_project_only_once_the_user_has_opted_in() {
+    let temp = Temp::new();
+    let home = temp.0.join("startup-home");
+    let project = temp.0.join("startup-project");
+    fs::create_dir(&home).unwrap();
+    fs::create_dir(&project).unwrap();
+    private_directory(&home);
+    let mut application = RoutedApplication::new(home.clone(), project.clone(), "test");
+    application
+        .initialize(InitRequest {
+            root: Some(project.clone()),
+            goal: String::new(),
+            force: false,
+            no_guide: true,
+        })
+        .unwrap();
+    let root = project.to_string_lossy().into_owned();
+    let record = |patch: serde_json::Value| {
+        let runtime = ActiveRuntime::load(&home, "test").unwrap().unwrap();
+        let bindings = runtime.global_bindings(runtime.global_home()).unwrap();
+        let store = GlobalStore::open_existing(&bindings.global_database, &bindings.global_binding)
+            .unwrap();
+        crate::preferences::set_preferences(&store, &patch).unwrap();
+    };
+
+    // Nothing recorded, and a recorded root without the opt-in, both leave the
+    // current directory deciding what opens.
+    assert_eq!(
+        resolved_startup_project(&home, "test", None, &temp.0),
+        StartupProjectV1::Welcome(None)
+    );
+    record(serde_json::json!({ "startup": { "lastProjectRoot": root } }));
+    assert_eq!(
+        resolved_startup_project(&home, "test", None, &temp.0),
+        StartupProjectV1::Welcome(None)
+    );
+
+    record(serde_json::json!({ "startup": { "restoreLastProject": true } }));
+    assert_eq!(
+        resolved_startup_project(&home, "test", None, &temp.0),
+        StartupProjectV1::Open(project.clone())
+    );
+    // A named path is an explicit instruction and still wins.
+    assert_eq!(
+        resolved_startup_project(&home, "test", Some(PathBuf::from("/named")), &temp.0),
+        StartupProjectV1::Open(PathBuf::from("/named"))
+    );
+    // A root that is no longer a registered project is never opened blind.
+    record(serde_json::json!({ "startup": { "lastProjectRoot": temp.0.to_string_lossy() } }));
+    assert_eq!(
+        resolved_startup_project(&home, "test", None, &temp.0),
+        StartupProjectV1::Welcome(None)
+    );
+}
+
+/// `cd /work/other && ptrack --gui` must open the working directory's project,
+/// not the recorded one, so the opt-in never regresses a terminal launch.
+#[test]
+fn a_launch_from_inside_a_project_opens_it_instead_of_the_recorded_root() {
+    let temp = Temp::new();
+    let home = temp.0.join("cwd-home");
+    let recorded = temp.0.join("cwd-recorded");
+    let working = temp.0.join("cwd-working");
+    let nested = working.join("nested");
+    for path in [&home, &recorded, &working, &nested] {
+        fs::create_dir(path).unwrap();
+        private_directory(path);
+    }
+    for root in [&recorded, &working] {
+        RoutedApplication::new(home.clone(), root.clone(), "test")
+            .initialize(InitRequest {
+                root: Some(root.clone()),
+                goal: String::new(),
+                force: false,
+                no_guide: true,
+            })
+            .unwrap();
+    }
+    let runtime = ActiveRuntime::load(&home, "test").unwrap().unwrap();
+    let bindings = runtime.global_bindings(runtime.global_home()).unwrap();
+    let store =
+        GlobalStore::open_existing(&bindings.global_database, &bindings.global_binding).unwrap();
+    crate::preferences::set_preferences(
+        &store,
+        &serde_json::json!({
+            "startup": {
+                "restoreLastProject": true,
+                "lastProjectRoot": recorded.to_string_lossy(),
+            }
+        }),
+    )
+    .unwrap();
+    drop(store);
+    drop(runtime);
+
+    // The working directory is a bound project, so it wins over the opt-in,
+    // from the root and from anywhere inside it.
+    assert_eq!(
+        resolved_startup_project(&home, "test", None, &working),
+        StartupProjectV1::Open(working.clone())
+    );
+    assert_eq!(
+        resolved_startup_project(&home, "test", None, &nested),
+        StartupProjectV1::Open(working.clone())
+    );
+    // A working directory that is no project falls through to the proven root.
+    assert_eq!(
+        resolved_startup_project(&home, "test", None, &temp.0),
+        StartupProjectV1::Open(recorded)
+    );
+    // A named path beats both.
+    assert_eq!(
+        resolved_startup_project(&home, "test", Some(PathBuf::from("/named")), &working),
+        StartupProjectV1::Open(PathBuf::from("/named"))
     );
 }
 

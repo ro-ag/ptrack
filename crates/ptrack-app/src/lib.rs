@@ -8,12 +8,14 @@
 mod agent_runtime;
 mod desktop_runtime;
 mod diagnostics_report;
+mod layout_state;
 mod preferences;
 mod production;
 mod service;
 mod shell_command;
 mod terminal_runtime;
 mod update_runtime;
+pub mod window_state;
 
 pub use agent_runtime::{
     AgentAdmissionFence, AgentIntegration, AgentIntegrationFactory, AgentInvalidationV2,
@@ -36,14 +38,15 @@ pub use desktop_runtime::{
     ProjectGuidePreviewV1, ProjectTargetKindV1, ProjectTargetValidationV1,
     RecentProjectAvailabilityV1, RecentProjectOpenAuthorizationV1, RecentProjectRegistryCommitV1,
     RecentProjectRegistryStatusV1, RecentProjectResolutionV1, RecentProjectV1,
-    RecentProjectsProvider, RecentProjectsV1, ResolvedRecentProjectV1, WorkspaceChangeResult,
-    WorkspaceProject, WorkspaceState, WorkspaceStatus, allowed_desktop_commands,
+    RecentProjectsProvider, RecentProjectsV1, ResetApplicationStateResultV1,
+    ResolvedRecentProjectV1, WorkspaceChangeResult, WorkspaceProject, WorkspaceState,
+    WorkspaceStatus, allowed_desktop_commands,
 };
 
 pub use production::{
     ActiveRuntime, ProductionDesktopAuthority, ProductionDesktopWorkspaceFactory,
-    ProductionRecentProjects, RoutedApplication, RuntimeBindingState, production_desktop_runtime,
-    resolve_global_home,
+    ProductionRecentProjects, RoutedApplication, RuntimeBindingState, StartupProjectV1,
+    production_desktop_runtime, resolve_global_home, resolved_startup_project, startup_project,
 };
 pub use service::{
     AppError, AppResult, ApplicationPort, CapabilityCancellation, CapabilityMcpOutcome,
@@ -71,6 +74,8 @@ mod desktop_runtime_test;
 #[cfg(test)]
 mod diagnostics_report_test;
 #[cfg(test)]
+mod layout_state_test;
+#[cfg(test)]
 mod preferences_test;
 #[cfg(test)]
 mod production_test;
@@ -82,3 +87,5 @@ mod shell_command_test;
 mod terminal_runtime_test;
 #[cfg(test)]
 mod update_runtime_test;
+#[cfg(test)]
+mod window_state_test;

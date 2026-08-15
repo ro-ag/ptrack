@@ -12,8 +12,8 @@
     {
       "title": "Desktop",
       "summary": "See durable plan status beside registered agent activity, repository evidence, terminals, and capabilities.",
-      "headings": ["Board", "Task drawer", "Overview", "Project switching", "Settings"],
-      "keywords": ["gui", "workspace", "kanban", "sidebar", "agent activity", "plan status", "repository", "settings", "preferences", "appearance", "density"],
+      "headings": ["Board", "Task drawer", "Overview", "Project switching", "Settings", "Startup and restore", "Reset actions"],
+      "keywords": ["gui", "workspace", "kanban", "sidebar", "agent activity", "plan status", "repository", "settings", "preferences", "appearance", "density", "startup", "restore last project", "window position", "layout", "reset window layout", "reset application state"],
       "url": "desktop/"
     },
     {
@@ -48,7 +48,7 @@
       "title": "Install & Safety",
       "summary": "Install and update p-track, locate local data, and plan backups or migration.",
       "headings": ["Install", "Updates", "Security", "Privacy", "Data paths", "Backup", "Migration"],
-      "keywords": ["download", "release", "storage", "database", "restore", "about", "license", "version"],
+      "keywords": ["download", "release", "storage", "database", "restore", "about", "license", "version", "window state", "layout state"],
       "url": "install-and-safety/"
     },
     {

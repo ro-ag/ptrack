@@ -137,16 +137,39 @@
           </figure>
 
           <h2 id="settings">Open Settings</h2>
-          <p>Settings is an application dialog, not a project view. Open it with <kbd>Cmd+,</kbd> or <kbd>Ctrl+,</kbd>, from <strong>Project ▸ Settings…</strong>, or with the <strong>Settings</strong> button in the workspace toolbar. It opens with or without a project open and holds no project-scoped state. Its four sections are:</p>
+          <p>Settings is an application dialog, not a project view. Open it with <kbd>Cmd+,</kbd> or <kbd>Ctrl+,</kbd>, from <strong>Project ▸ Settings…</strong>, or with the <strong>Settings</strong> button in the workspace toolbar. It opens with or without a project open and holds no project-scoped state. Its five sections are:</p>
           <ul>
+            <li><strong>Startup</strong> — whether p-track reopens the last project on launch. Off by default.</li>
             <li><strong>Appearance</strong> — color theme, density, and reduced motion.</li>
             <li><strong>Terminal</strong> — default profile, font family, font size, Unicode mode, scrollback, and renderer for terminals you open next.</li>
             <li><strong>Updates</strong> — the automatic-check opt-in; check, download, and install stay in <strong>About &amp; Updates</strong>.</li>
-            <li><strong>Data &amp; Diagnostics</strong> — read-only data paths, backup and migration records, recovery status, and a capability summary.</li>
+            <li><strong>Data &amp; Diagnostics</strong> — read-only data paths, backup and migration records, recovery status, a capability summary, and the two <a href="#reset-state">reset actions</a>.</li>
           </ul>
           <p>Changes are saved as you make them and a status line reports each save. <strong>Reset to defaults</strong> discards the stored record; the next read returns the documented defaults. If a stored settings record cannot be read, Settings says so and keeps showing defaults instead of overwriting it.</p>
           <div class="callout">
             <p><strong>Settings and Capabilities are separate surfaces.</strong> Settings holds application preferences that apply to every project; the Capabilities view configures broker grants for the selected project and agent profile. <kbd>Cmd+3</kbd> and <strong>Project ▸ Network Capabilities…</strong> still open Capabilities.</p>
+          </div>
+
+          <h2 id="restore-state">Reopen where you left off</h2>
+          <p>Desktop remembers how its window and workspace were arranged, and can optionally reopen the project you were last working in.</p>
+
+          <h3>Reopen the last project</h3>
+          <p><strong>Settings ▸ Startup</strong> holds one checkbox, <strong>Reopen the last project when p-track starts</strong>, which is off by default. With it on, p-track reopens the last project it recorded, but only when that project is still present and resolves cleanly. A project that has moved is never opened automatically: p-track lands on the welcome screen instead, with that recent entry marked <strong>Preselected</strong> so you can see which project it was, and you confirm the new location yourself with <strong>Locate…</strong> on it. A project path given on the command line always wins over this setting, and closing a project clears the recorded entry.</p>
+
+          <h3>Window position and size</h3>
+          <p>The window's position, size, and maximized state are restored on the next launch. They are stored in logical coordinates, so a display with a different scale factor restores the same window rather than a shrunken or oversized one. If the stored position no longer lands on any connected display, p-track recenters the window on the primary display at its stored size. Fullscreen is deliberately not restored: a window that was quit in fullscreen reopens windowed. The window stays hidden until its restored geometry is applied, so there is no visible jump at launch.</p>
+
+          <h3>Sidebar, panels, and view</h3>
+          <p>Layout is remembered too: sidebar width and whether it is hidden, Board and terminal panel visibility, and—per project—the selected view, the selected plan, and which Board lanes you folded. The per-project part covers your 32 most recently used projects. A remembered plan is a hint only; if it no longer exists or belongs to another project, Desktop falls back to the active plan. The task drawer selection is deliberately not remembered, so reopening a project lands on the Board rather than on a task you may have already finished.</p>
+
+          <h2 id="reset-state">Reset window layout or application state</h2>
+          <p><strong>Settings ▸ Data &amp; Diagnostics</strong> holds two reset actions. Both ask for confirmation first, and neither appears in the native menus.</p>
+          <ul>
+            <li><strong>Reset Window Layout</strong> clears the stored window and layout state and applies the defaults immediately. Nothing else changes.</li>
+            <li><strong>Reset Application State</strong> clears everything the application stores about itself — your settings, the automatic update-check opt-in, the startup opt-in and last project, window and layout state, and saved terminal workspaces — <strong>and revokes every network capability grant in the open project</strong>. The app returns to its default state without a restart.</li>
+          </ul>
+          <div class="callout warning">
+            <p><strong>Reset Application State revokes every capability grant.</strong> Network capability grants live in the project, not in application state, so revoking them writes to the open project's database: each grant you approved and enabled is dropped, and agents lose that access until you grant each scope again in <a href="#capabilities">Capabilities</a>. Your capability definitions stay as you authored them, so you re-grant rather than re-author, and with no project open nothing is revoked. That is still real work to redo, so the confirmation names it explicitly. Plans, tasks, notes, and the list of recent projects are <em>not</em> touched by either reset.</p>
           </div>
 
           <h2 id="navigation-summary">Workspace at a glance</h2>
@@ -162,7 +185,8 @@
                 <tr><td>Task drawer</td><td>Review status, runtime, notes, commits, and issues.</td><td>Memory writeback previews its destination.</td></tr>
                 <tr><td>Overview</td><td>Read project memory, progress, repository, and coordination signals.</td><td>Snapshot bounds remain visible.</td></tr>
                 <tr><td>Capabilities</td><td>Draft and manage scoped broker access.</td><td>Draft save and enablement are separate.</td></tr>
-                <tr><td>Settings dialog</td><td>Set appearance, terminal defaults, update checks, and read diagnostics.</td><td>Application-wide; it stores no project state.</td></tr>
+                <tr><td>Settings dialog</td><td>Set startup, appearance, terminal defaults, update checks, and read diagnostics.</td><td>Application-wide; it stores no project state.</td></tr>
+                <tr><td>Reset actions</td><td>Restore default window layout, or clear all application state.</td><td>Reset Application State also revokes capability grants in the open project; plans, tasks, notes, and Recent projects are not touched.</td></tr>
               </tbody>
             </table>
           </div>
@@ -178,6 +202,8 @@
             <li><a href="#overview">Overview</a></li>
             <li><a href="#capabilities">Capabilities</a></li>
             <li><a href="#settings">Settings</a></li>
+            <li><a href="#restore-state">Reopen where you left off</a></li>
+            <li><a href="#reset-state">Reset actions</a></li>
             <li><a href="#navigation-summary">Workspace at a glance</a></li>
           </ul>
         </aside>
