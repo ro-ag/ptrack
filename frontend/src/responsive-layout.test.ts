@@ -70,9 +70,9 @@ describe("responsive desktop layout contracts", () => {
     expect(focusRule?.[1]).toMatch(/outline-offset:\s*-2px;/);
   });
 
-  it("retains the overview and settings single-column compact layout", () => {
+  it("retains the overview and capabilities single-column compact layout", () => {
     expect(styles).toMatch(
-      /@media \(max-width:\s*960px\)[\s\S]*?\.overview-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);[^}]*\}[\s\S]*?\.settings-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);/,
+      /@media \(max-width:\s*960px\)[\s\S]*?\.overview-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);[^}]*\}[\s\S]*?\.capabilities-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);/,
     );
   });
 

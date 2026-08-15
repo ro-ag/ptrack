@@ -7,6 +7,8 @@
 
 mod agent_runtime;
 mod desktop_runtime;
+mod diagnostics_report;
+mod preferences;
 mod production;
 mod service;
 mod shell_command;
@@ -66,6 +68,10 @@ pub use update_runtime::{
 mod agent_runtime_test;
 #[cfg(test)]
 mod desktop_runtime_test;
+#[cfg(test)]
+mod diagnostics_report_test;
+#[cfg(test)]
+mod preferences_test;
 #[cfg(test)]
 mod production_test;
 #[cfg(test)]

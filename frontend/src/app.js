@@ -10,6 +10,22 @@ import {
 } from "./terminal/writeback";
 import { initTheme } from "./theme";
 import {
+  applyPreferenceMirrors,
+  defaultPreferences,
+  preferenceSaveMessage,
+  preferencesFromMirrors,
+  preferencesResponse,
+  storageStatusNotice,
+} from "./settings/preferences";
+import {
+  diagnosticsRows,
+  nextSettingsSectionIndex,
+  settingsPanelId,
+  settingsSectionIndex,
+  settingsSections,
+  settingsTabId,
+} from "./settings/sections";
+import {
   formatUpdateBytes,
   updateModalOpenTransition,
   updatePresentation,
@@ -161,12 +177,12 @@ const elements = {
   terminalPanelToggle: document.querySelector("#terminal-panel-toggle"),
   workspace: document.querySelector("#workspace"),
   overviewPage: document.querySelector("#overview-page"),
-  settingsPage: document.querySelector("#settings-page"),
+  capabilitiesPage: document.querySelector("#capabilities-page"),
   overviewHeading: document.querySelector("#overview-heading"),
   capabilitiesHeading: document.querySelector("#capabilities-heading"),
   navBoard: document.querySelector("#nav-board"),
   navOverview: document.querySelector("#nav-overview"),
-  navSettings: document.querySelector("#nav-settings"),
+  navCapabilities: document.querySelector("#nav-capabilities"),
   stateScreen: document.querySelector("#workspace-state-screen"),
   stateCard: document.querySelector("#project-state-card"),
   welcomePanel: document.querySelector("#welcome-panel"),
@@ -265,6 +281,33 @@ const elements = {
   onboardingError: document.querySelector("#onboarding-error"),
   board: document.querySelector("#board"),
   appVersion: document.querySelector("#app-version"),
+  settingsOpen: document.querySelector("#settings-open"),
+  settingsModal: document.querySelector("#settings-modal"),
+  settingsClose: document.querySelector("#settings-close"),
+  settingsBody: document.querySelector("#settings-body"),
+  settingsSectionList: document.querySelector("#settings-section-list"),
+  settingsStorageNotice: document.querySelector("#settings-storage-notice"),
+  settingsSaveStatus: document.querySelector("#settings-save-status"),
+  settingsReset: document.querySelector("#settings-reset"),
+  settingsTheme: document.querySelector("#settings-theme"),
+  settingsDensity: document.querySelector("#settings-density"),
+  settingsReducedMotion: document.querySelector("#settings-reduced-motion"),
+  settingsTerminalProfile: document.querySelector("#settings-terminal-profile"),
+  settingsTerminalFontFamily: document.querySelector("#settings-terminal-font-family"),
+  settingsTerminalFontSize: document.querySelector("#settings-terminal-font-size"),
+  settingsTerminalUnicode: document.querySelector("#settings-terminal-unicode"),
+  settingsTerminalScrollback: document.querySelector("#settings-terminal-scrollback"),
+  settingsTerminalRenderer: document.querySelector("#settings-terminal-renderer"),
+  settingsUpdatesAutomatic: document.querySelector("#settings-updates-automatic"),
+  settingsOpenUpdates: document.querySelector("#settings-open-updates"),
+  settingsDiagnostics: document.querySelector("#settings-diagnostics"),
+  settingsOpenCapabilities: document.querySelector("#settings-open-capabilities"),
+  aboutVersion: document.querySelector("#about-version"),
+  aboutBuild: document.querySelector("#about-build"),
+  aboutProject: document.querySelector("#about-project"),
+  aboutLicenseLink: document.querySelector("#about-license-link"),
+  aboutHelp: document.querySelector("#about-help"),
+  aboutReport: document.querySelector("#about-report"),
   updatesModal: document.querySelector("#updates-modal"),
   updatesClose: document.querySelector("#updates-close"),
   updatesCurrentVersion: document.querySelector("#updates-current-version"),
@@ -506,6 +549,11 @@ let dialogMode = "rename";
 let dialogReturnFocus = null;
 let toastTimer = null;
 let memoryModalReturnFocus = null;
+let settingsModalReturnFocus = null;
+let settingsSection = settingsSections[0].id;
+let settingsSaveSequence = 0;
+let settingsDiagnosticsRequest = 0;
+let preferences = defaultPreferences;
 let updatesModalReturnFocus = null;
 let updateState = { revision: 0, phase: "idle", currentVersion: "dev" };
 let updateActionBusy = false;
@@ -2278,7 +2326,10 @@ function renderUpdateState(nextState) {
   const currentVersion = appVersionLabel(nextState.currentVersion || "dev");
 
   setUpdateText(elements.updatesCurrentVersion, `Current version: ${currentVersion}`);
+  setUpdateText(elements.aboutVersion, currentVersion);
+  setUpdateText(elements.aboutBuild, aboutBuildLabel(nextState.phase));
   elements.updatesAutomatic.checked = Boolean(nextState.automaticChecks);
+  elements.settingsUpdatesAutomatic.checked = Boolean(nextState.automaticChecks);
   elements.updatesStatus.dataset.tone = presentation.tone;
   setAriaBoolean(elements.updatesStatus, "aria-busy", presentation.busy);
   setUpdateText(elements.updatesStatusTitle, presentation.title);
@@ -2305,6 +2356,14 @@ function renderUpdateState(nextState) {
 
 function setUpdateText(element, value) {
   if (element.textContent !== value) element.textContent = value;
+}
+
+// The build line states the platform this window runs on and whether the
+// build can receive packaged updates at all.
+function aboutBuildLabel(phase) {
+  const platform = navigator.userAgentData?.platform || navigator.platform ||
+    "desktop";
+  return `${platform} · ${phase === "unavailable" ? "unpackaged build" : "packaged release"}`;
 }
 
 function setAriaBoolean(element, attribute, value) {
@@ -2399,6 +2458,7 @@ async function runUpdateAction(action) {
 
 async function setAutomaticUpdateChecks(enabled) {
   elements.updatesAutomatic.disabled = true;
+  elements.settingsUpdatesAutomatic.disabled = true;
   try {
     renderUpdateState(await api().SetAutomaticUpdateChecks(Boolean(enabled)));
   } catch {
@@ -2406,17 +2466,259 @@ async function setAutomaticUpdateChecks(enabled) {
     showError(new Error("Could not save the automatic update preference."));
   } finally {
     elements.updatesAutomatic.disabled = false;
+    elements.settingsUpdatesAutomatic.disabled = false;
   }
+}
+
+const projectRepositoryURL = "https://github.com/ro-ag/ptrack";
+const projectLicenseURL = `${projectRepositoryURL}/blob/main/LICENSE`;
+
+// External links always travel through the validated native opener; the
+// browser fallback only matters in a plain dev server.
+function openProjectURL(url) {
+  if (!url.startsWith(projectRepositoryURL)) return;
+  if (typeof window.runtime?.BrowserOpenURL === "function") {
+    window.runtime.BrowserOpenURL(url);
+    return;
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
 }
 
 function openUpdateReleasePage() {
   const page = updateState.release?.pageUrl || "";
-  if (!page.startsWith("https://github.com/ro-ag/ptrack/releases/")) return;
-  if (typeof window.runtime?.BrowserOpenURL === "function") {
-    window.runtime.BrowserOpenURL(page);
+  if (!page.startsWith(`${projectRepositoryURL}/releases/`)) return;
+  openProjectURL(page);
+}
+
+// ------------------------------------------------------------ settings
+
+function applyPreferences(next) {
+  preferences = next;
+  themeController.setTheme(next.appearance.theme);
+  const root = document.documentElement;
+  root.dataset.density = next.appearance.density;
+  if (next.appearance.reducedMotion === "system") {
+    delete root.dataset.reducedMotion;
+  } else {
+    root.dataset.reducedMotion = next.appearance.reducedMotion;
+  }
+  applyPreferenceMirrors(localStorage, next);
+  renderPreferences();
+}
+
+function renderPreferences() {
+  elements.settingsTheme.value = preferences.appearance.theme;
+  elements.settingsDensity.value = preferences.appearance.density;
+  elements.settingsReducedMotion.value = preferences.appearance.reducedMotion;
+  renderTerminalProfilePreference();
+  elements.settingsTerminalFontFamily.value = preferences.terminal.fontFamily;
+  elements.settingsTerminalFontSize.value = String(preferences.terminal.fontSize);
+  elements.settingsTerminalUnicode.value = preferences.terminal.unicodeMode;
+  elements.settingsTerminalScrollback.value = String(preferences.terminal.scrollback);
+  elements.settingsTerminalRenderer.value = preferences.terminal.renderer;
+}
+
+// A stored default profile that no longer resolves is reported as
+// unavailable instead of being coerced onto an installed profile.
+function renderTerminalProfilePreference() {
+  const stored = preferences.terminal.defaultProfileId || "";
+  const select = elements.settingsTerminalProfile;
+  const missing = select.querySelector("[data-unavailable-profile]");
+  if (missing) missing.remove();
+  if (stored && !select.querySelector(`option[value="${CSS.escape(stored)}"]`)) {
+    const option = document.createElement("option");
+    option.value = stored;
+    option.textContent = `${stored} · unavailable`;
+    option.dataset.unavailableProfile = "true";
+    select.append(option);
+  }
+  select.value = stored;
+}
+
+async function loadTerminalProfileOptions() {
+  let profiles = [];
+  try {
+    profiles = await api().GetTerminalProfiles();
+  } catch {
+    profiles = [];
+  }
+  const select = elements.settingsTerminalProfile;
+  const installed = select.querySelectorAll("option:not([value=''])");
+  installed.forEach((option) => option.remove());
+  for (const profile of profiles) {
+    const option = document.createElement("option");
+    option.value = profile.id;
+    option.textContent = `${profile.name}${profile.kind === "agent" ? " · agent" : ""}`;
+    select.append(option);
+  }
+  renderTerminalProfilePreference();
+}
+
+function renderSettingsStorageNotice(status) {
+  const notice = storageStatusNotice(status);
+  elements.settingsStorageNotice.textContent = notice;
+  elements.settingsStorageNotice.hidden = notice === "";
+}
+
+function setSettingsSaveStatus(phase) {
+  elements.settingsSaveStatus.textContent = phase ? preferenceSaveMessage(phase) : "";
+  elements.settingsSaveStatus.dataset.tone = phase === "failed" ? "error" : "";
+}
+
+async function loadPreferences() {
+  try {
+    const response = preferencesResponse(await api().GetPreferences());
+    applyPreferences(response.preferences);
+    renderSettingsStorageNotice(response.storage);
+  } catch {
+    // The cached values are what this window is already using, so they are
+    // shown as-is rather than being replaced with defaults.
+    preferences = preferencesFromMirrors(localStorage);
+    renderPreferences();
+    renderSettingsStorageNotice("unavailable");
+  }
+}
+
+async function savePreferences(patch) {
+  const sequence = ++settingsSaveSequence;
+  setSettingsSaveStatus("saving");
+  elements.settingsBody.setAttribute("aria-busy", "true");
+  try {
+    const response = preferencesResponse(await api().SetPreferences(patch));
+    if (sequence !== settingsSaveSequence) return;
+    applyPreferences(response.preferences);
+    renderSettingsStorageNotice(response.storage);
+    setSettingsSaveStatus("saved");
+  } catch {
+    if (sequence !== settingsSaveSequence) return;
+    renderPreferences();
+    setSettingsSaveStatus("failed");
+  } finally {
+    if (sequence === settingsSaveSequence) {
+      elements.settingsBody.removeAttribute("aria-busy");
+    }
+  }
+}
+
+async function resetPreferences() {
+  const sequence = ++settingsSaveSequence;
+  setSettingsSaveStatus("saving");
+  elements.settingsReset.disabled = true;
+  try {
+    const response = preferencesResponse(await api().ResetPreferences());
+    if (sequence !== settingsSaveSequence) return;
+    applyPreferences(response.preferences);
+    renderSettingsStorageNotice(response.storage);
+    setSettingsSaveStatus("reset");
+  } catch {
+    if (sequence === settingsSaveSequence) setSettingsSaveStatus("failed");
+  } finally {
+    elements.settingsReset.disabled = false;
+  }
+}
+
+async function loadDiagnosticsReport() {
+  const request = ++settingsDiagnosticsRequest;
+  try {
+    const report = await api().GetDiagnosticsReport();
+    if (request === settingsDiagnosticsRequest) renderDiagnosticsReport(report);
+  } catch {
+    if (request === settingsDiagnosticsRequest) renderDiagnosticsReport(null);
+  }
+}
+
+function renderDiagnosticsReport(report) {
+  const rows = diagnosticsRows(report);
+  elements.settingsDiagnostics.replaceChildren();
+  if (rows.length === 0) {
+    const empty = document.createElement("dt");
+    empty.className = "dialog-help";
+    empty.textContent = "No diagnostics are available yet.";
+    elements.settingsDiagnostics.append(empty, document.createElement("dd"));
     return;
   }
-  window.open(page, "_blank", "noopener,noreferrer");
+  for (const row of rows) {
+    const group = document.createElement("div");
+    group.className = "settings-diagnostic";
+    const term = document.createElement("dt");
+    term.textContent = row.label;
+    const detail = document.createElement("dd");
+    const value = document.createElement("span");
+    value.textContent = row.value;
+    detail.append(value);
+    if (row.copyable) {
+      const copy = document.createElement("button");
+      copy.type = "button";
+      copy.className = "button-secondary";
+      copy.textContent = "Copy";
+      copy.setAttribute("aria-label", `Copy ${row.label}`);
+      copy.addEventListener("click", () => void copyDiagnosticValue(row));
+      detail.append(copy);
+    }
+    group.append(term, detail);
+    elements.settingsDiagnostics.append(group);
+  }
+}
+
+async function copyDiagnosticValue(row) {
+  try {
+    if ((await window.runtime?.ClipboardSetText?.(row.value)) !== true) {
+      throw new Error("clipboard unavailable");
+    }
+    elements.settingsSaveStatus.dataset.tone = "";
+    elements.settingsSaveStatus.textContent = `${row.label} copied.`;
+  } catch {
+    showError(new Error(`Could not copy ${row.label}.`));
+  }
+}
+
+function settingsAvailable() {
+  return firstRunState.phase === "idle" &&
+    firstPlanState.phase === "idle" &&
+    !recentProjectOperationActive();
+}
+
+function openSettings(invoker = document.activeElement) {
+  if (!settingsAvailable()) return false;
+  const competingOverlayOpen = nativeMenuOpenOverlayIDs().some(
+    (overlayID) => overlayID !== "settings-modal",
+  );
+  if (competingOverlayOpen) return false;
+  const wasHidden = elements.settingsModal.hidden;
+  if (wasHidden) {
+    settingsModalReturnFocus = invoker instanceof HTMLElement ? invoker : null;
+    elements.settingsModal.hidden = false;
+    setSettingsSaveStatus("");
+  }
+  void loadPreferences();
+  void loadTerminalProfileOptions();
+  void loadDiagnosticsReport();
+  void refreshUpdateState();
+  if (wasHidden) {
+    requestAnimationFrame(() => selectSettingsSection(settingsSection, true));
+  }
+  return true;
+}
+
+function closeSettings() {
+  if (elements.settingsModal.hidden) return;
+  hideApplicationOverlay(elements.settingsModal);
+  settingsModalReturnFocus?.focus?.();
+  settingsModalReturnFocus = null;
+}
+
+function selectSettingsSection(section, focus = false) {
+  settingsSection = section;
+  for (const entry of settingsSections) {
+    const tab = document.getElementById(settingsTabId(entry.id));
+    const panel = document.getElementById(settingsPanelId(entry.id));
+    const active = entry.id === section;
+    tab.setAttribute("aria-selected", String(active));
+    tab.tabIndex = active ? 0 : -1;
+    panel.hidden = !active;
+  }
+  if (focus) document.getElementById(settingsTabId(section)).focus();
+  if (section === "data") void loadDiagnosticsReport();
 }
 
 const paletteKindLabels = {
@@ -3464,6 +3766,7 @@ function updateAboutUpdatesAvailability() {
   elements.appVersion.disabled = firstRunState.phase !== "idle" ||
     firstPlanState.phase !== "idle" ||
     recentProjectOperationActive();
+  elements.settingsOpen.disabled = elements.appVersion.disabled;
 }
 
 function recentProjectActionButton(entry, action, label, describedBy, handler) {
@@ -4306,14 +4609,14 @@ function renderFirstPlanOnboarding(focus = false) {
   elements.stateScreen.hidden = false;
   elements.workspace.hidden = true;
   elements.overviewPage.hidden = true;
-  elements.settingsPage.hidden = true;
+  elements.capabilitiesPage.hidden = true;
   elements.welcomePanel.hidden = true;
   elements.welcomePanel.inert = true;
   elements.setupPanel.hidden = true;
   elements.setupPanel.inert = true;
   elements.navBoard.disabled = true;
   elements.navOverview.disabled = true;
-  elements.navSettings.disabled = true;
+  elements.navCapabilities.disabled = true;
   elements.switchProject.disabled = true;
   elements.closeProject.disabled = true;
 
@@ -4423,11 +4726,11 @@ async function finishFirstPlanOnboarding(planId = firstPlanState.planId) {
   elements.workspace.removeAttribute("aria-busy");
   elements.overviewPage.inert = false;
   elements.overviewPage.removeAttribute("aria-busy");
-  elements.settingsPage.inert = false;
-  elements.settingsPage.removeAttribute("aria-busy");
+  elements.capabilitiesPage.inert = false;
+  elements.capabilitiesPage.removeAttribute("aria-busy");
   elements.navBoard.disabled = false;
   elements.navOverview.disabled = false;
-  elements.navSettings.disabled = false;
+  elements.navCapabilities.disabled = false;
   elements.switchProject.disabled = false;
   elements.closeProject.disabled = false;
   view = "board";
@@ -5077,7 +5380,7 @@ function renderCapabilities() {
     scope.textContent = view.effective_scope || view.error || "Invalid scope";
     const grants = capabilityRiskGrants(capability);
     const risk = document.createElement("p");
-    risk.className = grants.length ? "settings-warning" : "intelligence-meta";
+    risk.className = grants.length ? "capabilities-warning" : "intelligence-meta";
     risk.textContent = grants.length
       ? `High-risk grants: ${grants.join(", ")}`
       : "Read-only or connection-only scope";
@@ -5222,28 +5525,28 @@ function applyView() {
   const open = workspaceState.status === "open";
   elements.workspace.hidden = !open || view !== "board";
   elements.overviewPage.hidden = !open || view !== "overview";
-  elements.settingsPage.hidden = !open || view !== "settings";
+  elements.capabilitiesPage.hidden = !open || view !== "capabilities";
   elements.navBoard.classList.toggle("active", view === "board");
   elements.navOverview.classList.toggle("active", view === "overview");
-  elements.navSettings.classList.toggle("active", view === "settings");
+  elements.navCapabilities.classList.toggle("active", view === "capabilities");
   if (view === "board") elements.navBoard.setAttribute("aria-current", "page");
   else elements.navBoard.removeAttribute("aria-current");
   if (view === "overview") elements.navOverview.setAttribute("aria-current", "page");
   else elements.navOverview.removeAttribute("aria-current");
-  if (view === "settings") elements.navSettings.setAttribute("aria-current", "page");
-  else elements.navSettings.removeAttribute("aria-current");
+  if (view === "capabilities") elements.navCapabilities.setAttribute("aria-current", "page");
+  else elements.navCapabilities.removeAttribute("aria-current");
   terminalHandle?.setVisible(open && view === "board");
 }
 
 function setView(nextView, focusHeading = false) {
   if (firstPlanState.phase !== "idle") return;
-  view = ["overview", "settings"].includes(nextView) ? nextView : "board";
+  view = ["overview", "capabilities"].includes(nextView) ? nextView : "board";
   applyView();
   if (view === "overview") {
     requestAnimationFrame(fitRecentMemory);
     void loadHeatmap();
   }
-  if (view === "settings") void loadCapabilities();
+  if (view === "capabilities") void loadCapabilities();
   if (focusHeading) {
     const focusedView = view;
     requestAnimationFrame(() => {
@@ -5251,7 +5554,7 @@ function setView(nextView, focusHeading = false) {
       const heading = {
         board: elements.planTitle,
         overview: elements.overviewHeading,
-        settings: elements.capabilitiesHeading,
+        capabilities: elements.capabilitiesHeading,
       }[focusedView];
       heading?.focus();
     });
@@ -5275,7 +5578,7 @@ function renderWorkspaceState(state, focus = false) {
   elements.stateScreen.hidden = open;
   elements.navBoard.disabled = !open;
   elements.navOverview.disabled = !open;
-  elements.navSettings.disabled = !open;
+  elements.navCapabilities.disabled = !open;
   elements.switchProject.hidden = !open;
   elements.closeProject.hidden = !open;
   elements.openProject.hidden = true;
@@ -5283,8 +5586,8 @@ function renderWorkspaceState(state, focus = false) {
   elements.workspace.inert = false;
   elements.overviewPage.removeAttribute("aria-busy");
   elements.overviewPage.inert = false;
-  elements.settingsPage.removeAttribute("aria-busy");
-  elements.settingsPage.inert = false;
+  elements.capabilitiesPage.removeAttribute("aria-busy");
+  elements.capabilitiesPage.inert = false;
   elements.switchProject.disabled = false;
   elements.closeProject.disabled = false;
 
@@ -5375,8 +5678,8 @@ function publishBackendState(state, transition, focus = false, keepInert = false
     elements.workspace.setAttribute("aria-busy", "true");
     elements.overviewPage.inert = true;
     elements.overviewPage.setAttribute("aria-busy", "true");
-    elements.settingsPage.inert = true;
-    elements.settingsPage.setAttribute("aria-busy", "true");
+    elements.capabilitiesPage.inert = true;
+    elements.capabilitiesPage.setAttribute("aria-busy", "true");
   }
   if (state.status === "open" && !keepInert) void loadSnapshot(0);
   return true;
@@ -5392,8 +5695,8 @@ function beginWorkspaceTransition() {
     elements.workspace.setAttribute("aria-busy", "true");
     elements.overviewPage.inert = true;
     elements.overviewPage.setAttribute("aria-busy", "true");
-    elements.settingsPage.inert = true;
-    elements.settingsPage.setAttribute("aria-busy", "true");
+    elements.capabilitiesPage.inert = true;
+    elements.capabilitiesPage.setAttribute("aria-busy", "true");
     elements.switchProject.disabled = true;
     elements.closeProject.disabled = true;
     setStatus("Preparing project transition…");
@@ -6302,6 +6605,7 @@ async function ensureTerminalDock(generation, projectRoot) {
       workspaceGeneration: generation,
       projectRoot,
       showError,
+      saveUnicodeMode: (unicodeMode) => void savePreferences({ terminal: { unicodeMode } }),
     });
     terminalHandle = handle;
     handle.setLayoutLocked(firstPlanState.phase !== "idle");
@@ -6443,6 +6747,7 @@ function closeActiveApplicationOverlay(event) {
   event.stopImmediatePropagation();
   if (escapeAction === "dialog") closeDialog();
   else if (escapeAction === "memory") closeMemoryHistory();
+  else if (escapeAction === "settings") closeSettings();
   else if (escapeAction === "updates") closeAboutUpdates();
   else if (escapeAction === "drawer") closeTaskDetail();
   else if (escapeAction === "agent-launch") closeAgentLaunchPicker();
@@ -6489,7 +6794,7 @@ function registerNativeProjectActions() {
         ) void requestCloseProject();
       },
       showSettings: () => {
-        showNativeView("showSettings");
+        if (nativeCommandAllowed("showSettings")) openSettings(elements.settingsOpen);
       },
       showCapabilities: () => {
         showNativeView("showCapabilities");
@@ -6601,11 +6906,11 @@ elements.agentWorkflowForm.addEventListener("submit", (event) => {
 		"Could not prepare workflow proposal",
 	);
 });
-elements.navSettings.addEventListener("click", () => setView("settings"));
+elements.navCapabilities.addEventListener("click", () => setView("capabilities"));
 
 window.addEventListener("focus", () => {
   if (workspaceController.state.status !== "open") return;
-  if (view === "settings") void loadCapabilities();
+  if (view === "capabilities") void loadCapabilities();
   else void loadSnapshot(board?.planId || 0, true);
 });
 
@@ -6656,7 +6961,11 @@ const themeController = initTheme({
       theme === "dark" ? "Switch to light theme" : "Switch to dark theme";
   },
 });
-elements.themeToggle.addEventListener("click", () => themeController.toggle());
+elements.themeToggle.addEventListener("click", () => {
+  // The topbar toggle is the same setting as Appearance ▸ Color theme, so it
+  // writes through to the stored record instead of only the cache.
+  void savePreferences({ appearance: { theme: themeController.toggle() } });
+});
 
 elements.openProject.addEventListener("click", (event) =>
   void requestOpenProject("", event.currentTarget),
@@ -6751,6 +7060,78 @@ elements.updatesCancel.addEventListener("click", async () => {
   if (!updateActionBusy) updateCancelRequested = false;
 });
 elements.updatesReleasePage.addEventListener("click", openUpdateReleasePage);
+elements.aboutProject.addEventListener("click", () => {
+  openProjectURL(projectRepositoryURL);
+});
+elements.aboutLicenseLink.addEventListener("click", () => {
+  openProjectURL(projectLicenseURL);
+});
+elements.aboutHelp.addEventListener("click", () => openHelpDestination("help-center"));
+elements.aboutReport.addEventListener("click", () => openHelpDestination("report-issue"));
+
+elements.settingsOpen.addEventListener("click", (event) => {
+  openSettings(event.currentTarget);
+});
+elements.settingsClose.addEventListener("click", closeSettings);
+document.querySelectorAll("[data-close-settings]").forEach((element) => {
+  element.addEventListener("click", closeSettings);
+});
+elements.settingsSectionList.addEventListener("click", (event) => {
+  const tab = event.target.closest('[role="tab"]');
+  if (tab) selectSettingsSection(tab.id.replace("settings-tab-", ""));
+});
+elements.settingsSectionList.addEventListener("keydown", (event) => {
+  const next = nextSettingsSectionIndex(
+    event.key,
+    settingsSectionIndex(settingsSection),
+    settingsSections.length,
+  );
+  if (next < 0) return;
+  event.preventDefault();
+  selectSettingsSection(settingsSections[next].id, true);
+});
+elements.settingsTheme.addEventListener("change", (event) => {
+  void savePreferences({ appearance: { theme: event.currentTarget.value } });
+});
+elements.settingsDensity.addEventListener("change", (event) => {
+  void savePreferences({ appearance: { density: event.currentTarget.value } });
+});
+elements.settingsReducedMotion.addEventListener("change", (event) => {
+  void savePreferences({ appearance: { reducedMotion: event.currentTarget.value } });
+});
+elements.settingsTerminalProfile.addEventListener("change", (event) => {
+  void savePreferences({
+    terminal: { defaultProfileId: event.currentTarget.value || null },
+  });
+});
+elements.settingsTerminalFontFamily.addEventListener("change", (event) => {
+  void savePreferences({ terminal: { fontFamily: event.currentTarget.value } });
+});
+elements.settingsTerminalFontSize.addEventListener("change", (event) => {
+  void savePreferences({ terminal: { fontSize: Number(event.currentTarget.value) } });
+});
+elements.settingsTerminalUnicode.addEventListener("change", (event) => {
+  void savePreferences({ terminal: { unicodeMode: event.currentTarget.value } });
+});
+elements.settingsTerminalScrollback.addEventListener("change", (event) => {
+  void savePreferences({ terminal: { scrollback: Number(event.currentTarget.value) } });
+});
+elements.settingsTerminalRenderer.addEventListener("change", (event) => {
+  void savePreferences({ terminal: { renderer: event.currentTarget.value } });
+});
+elements.settingsUpdatesAutomatic.addEventListener("change", (event) => {
+  void setAutomaticUpdateChecks(event.currentTarget.checked);
+});
+elements.settingsOpenUpdates.addEventListener("click", () => {
+  const invoker = elements.settingsOpen;
+  closeSettings();
+  openAboutUpdates(invoker);
+});
+elements.settingsOpenCapabilities.addEventListener("click", () => {
+  closeSettings();
+  setView("capabilities", true);
+});
+elements.settingsReset.addEventListener("click", () => void resetPreferences());
 elements.planLaunchAgent.addEventListener("click", (event) => {
   if (!board?.planId) return;
   void openAgentLaunchPicker(
@@ -6918,11 +7299,18 @@ document.addEventListener("keydown", (event) => {
     else closePalette();
     return;
   }
+  if (command === "settings") {
+    // ⌘, opens the application dialog, including with no project open.
+    event.preventDefault();
+    if (elements.settingsModal.hidden) openSettings(document.activeElement);
+    else closeSettings();
+    return;
+  }
   if (command && !boardShortcutIsBlocked(event)) {
     event.preventDefault();
     if (command === "board") setView("board", true);
     if (command === "overview") setView("overview", true);
-    if (command === "settings") setView("settings", true);
+    if (command === "capabilities") setView("capabilities", true);
     if (command === "addTask") {
       setView("board");
       elements.taskTitle.focus();
@@ -6967,6 +7355,9 @@ async function start() {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     try {
       api();
+      // The stored record is the authority, so it lands before the terminal
+      // dock or the first paint-sensitive surface reads its cache.
+      await loadPreferences();
       const startup = await resolveFirstRunStartupState(
         () => api().GetWorkspaceState(),
         () => api().GetPendingInitializationV1(),

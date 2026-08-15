@@ -23,7 +23,8 @@ use ptrack_core::{
     Plan, ProjectSnapshot, Task, TaskStatus, Timestamp,
 };
 use ptrack_store::{
-    FIRST_RUN_TITLE_MAX_BYTES, MemoryWriteRequest, ProjectStore, StoreError, find_project_database,
+    FIRST_RUN_TITLE_MAX_BYTES, GlobalStore, MemoryWriteRequest, ProjectStore, StoreError,
+    find_project_database,
 };
 use ptrack_terminal::{SessionInfo, SessionState};
 use ptrack_terminal::{TerminalAssociation, TerminalAssociationPointer};
@@ -33,10 +34,12 @@ use time::format_description::well_known::Rfc3339;
 use time::{OffsetDateTime, UtcOffset};
 use tokio_util::sync::CancellationToken;
 
+use crate::diagnostics_report::{CapabilityCountsV1, DiagnosticsReportV1};
+use crate::preferences::{preferences, reset_preferences, set_preferences};
 use crate::{
-    AgentRuntimeService, AppError, AppResult, ApplicationPort, LaunchedEventAuthority,
-    LinkedAgentRuntimeHooks, Mutation, MutationResult, ProjectEndpoint, TerminalRuntime,
-    WorkspaceBindings,
+    ActiveRuntime, AgentRuntimeService, AppError, AppResult, ApplicationPort,
+    LaunchedEventAuthority, LinkedAgentRuntimeHooks, Mutation, MutationResult, ProjectEndpoint,
+    TerminalRuntime, WorkspaceBindings,
 };
 
 const MAX_COMMAND_BYTES: usize = 1024 * 1024;
@@ -64,7 +67,7 @@ const WORKSPACE_OPERATION_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub const FIRST_RUN_GOAL_MAX_BYTES: usize = 4_096;
 
-const COMMANDS: [&str; 76] = [
+const COMMANDS: [&str; 80] = [
     "AcknowledgeAgentHandoffV2",
     "AddTask",
     "AddTaskNote",
@@ -97,8 +100,10 @@ const COMMANDS: [&str; 76] = [
     "GetBoardV2",
     "GetCapabilitiesV2",
     "GetCapabilityAuditsV2",
+    "GetDiagnosticsReport",
     "GetInitializationStatusV1",
     "GetPendingInitializationV1",
+    "GetPreferences",
     "GetRecentProjects",
     "GetRecentProjectsV1",
     "GetTaskDetailV2",
@@ -126,6 +131,7 @@ const COMMANDS: [&str; 76] = [
     "RemoveCapabilityV2",
     "RenameTask",
     "RenameTaskV2",
+    "ResetPreferences",
     "ResizeTerminal",
     "ResizeTerminalV2",
     "ResolveRecentProjectV1",
@@ -136,6 +142,7 @@ const COMMANDS: [&str; 76] = [
     "SetAgentTaskOwnershipV2",
     "SetAgentWorktreeV2",
     "SetAutomaticUpdateChecks",
+    "SetPreferences",
     "StartFirstTaskV1",
     "TestCapabilityV2",
     "ValidateProjectTargetV1",
@@ -143,7 +150,7 @@ const COMMANDS: [&str; 76] = [
     "WriteTerminalMemoryV2",
 ];
 
-/// Exact current 76-method desktop bridge command allowlist.
+/// Exact current 80-method desktop bridge command allowlist.
 #[must_use]
 pub const fn allowed_desktop_commands() -> &'static [&'static str] {
     &COMMANDS
@@ -985,6 +992,10 @@ impl DesktopRuntime {
                 let _lease = self.begin_native_action()?;
                 value(crate::install_shell_command().message)
             }
+            "GetPreferences" => self.get_preferences(&request.arguments),
+            "SetPreferences" => self.set_preferences(&request.arguments),
+            "ResetPreferences" => self.reset_preferences(&request.arguments),
+            "GetDiagnosticsReport" => self.get_diagnostics_report(&request.arguments),
             "GetRecentProjects" => self.get_recent_projects(),
             "GetRecentProjectsV1" => self.get_recent_projects_v1(&request.arguments),
             "ResolveRecentProjectV1" => self.resolve_recent_project_v1(&request.arguments),
@@ -999,6 +1010,68 @@ impl DesktopRuntime {
             }
             method => self.with_workspace(method, &request.arguments),
         }
+    }
+
+    fn get_preferences(self: &Arc<Self>, arguments: &[Value]) -> AppResult<Value> {
+        require_argument_count("GetPreferences", arguments, 0)?;
+        let _lease = self.begin_native_action()?;
+        value(preferences(&self.global_store()?))
+    }
+
+    fn set_preferences(self: &Arc<Self>, arguments: &[Value]) -> AppResult<Value> {
+        require_argument_count("SetPreferences", arguments, 1)?;
+        let _lease = self.begin_native_action()?;
+        value(set_preferences(&self.global_store()?, &arguments[0])?)
+    }
+
+    fn reset_preferences(self: &Arc<Self>, arguments: &[Value]) -> AppResult<Value> {
+        require_argument_count("ResetPreferences", arguments, 0)?;
+        let _lease = self.begin_native_action()?;
+        value(reset_preferences(&self.global_store()?)?)
+    }
+
+    fn get_diagnostics_report(self: &Arc<Self>, arguments: &[Value]) -> AppResult<Value> {
+        require_argument_count("GetDiagnosticsReport", arguments, 0)?;
+        let _lease = self.begin_native_action()?;
+        value(self.diagnostics_report()?)
+    }
+
+    /// Opens the global store for project-independent application state. The
+    /// home is the same fixed platform home the host resolved at startup.
+    fn global_store(&self) -> AppResult<GlobalStore> {
+        let home = crate::resolve_global_home()?;
+        let runtime = ActiveRuntime::load(&home, &self.version)?.ok_or_else(|| {
+            AppError::Message("p-track runtime is not initialized (run 'ptrack init')".to_owned())
+        })?;
+        let bindings = runtime.global_bindings(runtime.global_home())?;
+        Ok(GlobalStore::open_existing(
+            &bindings.global_database,
+            &bindings.global_binding,
+        )?)
+    }
+
+    fn diagnostics_report(&self) -> AppResult<DiagnosticsReportV1> {
+        let home = crate::resolve_global_home()?;
+        let state = self.workspace_state();
+        Ok(crate::diagnostics_report::report(
+            &home,
+            &self.version,
+            state.project.as_ref(),
+            self.capability_counts(state.generation),
+        ))
+    }
+
+    /// Counts capability grants through the open workspace. Absent while no
+    /// project workspace can answer for them.
+    fn capability_counts(&self, generation: u64) -> Option<CapabilityCountsV1> {
+        let capabilities = self
+            .with_workspace("GetCapabilitiesV2", &[json!(generation)])
+            .ok()?;
+        let rows = capabilities.get("capabilities")?.as_array()?;
+        Some(CapabilityCountsV1 {
+            granted: rows.iter().filter(|row| row["state"] == "enabled").count(),
+            total: rows.len(),
+        })
     }
 
     fn get_recent_projects(self: &Arc<Self>) -> AppResult<Value> {

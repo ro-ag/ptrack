@@ -136,6 +136,19 @@
             <figcaption>A new project has no enabled broker capabilities; drafts, approval, and enablement remain separate.</figcaption>
           </figure>
 
+          <h2 id="settings">Open Settings</h2>
+          <p>Settings is an application dialog, not a project view. Open it with <kbd>Cmd+,</kbd> or <kbd>Ctrl+,</kbd>, from <strong>Project ▸ Settings…</strong>, or with the <strong>Settings</strong> button in the workspace toolbar. It opens with or without a project open and holds no project-scoped state. Its four sections are:</p>
+          <ul>
+            <li><strong>Appearance</strong> — color theme, density, and reduced motion.</li>
+            <li><strong>Terminal</strong> — default profile, font family, font size, Unicode mode, scrollback, and renderer for terminals you open next.</li>
+            <li><strong>Updates</strong> — the automatic-check opt-in; check, download, and install stay in <strong>About &amp; Updates</strong>.</li>
+            <li><strong>Data &amp; Diagnostics</strong> — read-only data paths, backup and migration records, recovery status, and a capability summary.</li>
+          </ul>
+          <p>Changes are saved as you make them and a status line reports each save. <strong>Reset to defaults</strong> discards the stored record; the next read returns the documented defaults. If a stored settings record cannot be read, Settings says so and keeps showing defaults instead of overwriting it.</p>
+          <div class="callout">
+            <p><strong>Settings and Capabilities are separate surfaces.</strong> Settings holds application preferences that apply to every project; the Capabilities view configures broker grants for the selected project and agent profile. <kbd>Cmd+3</kbd> and <strong>Project ▸ Network Capabilities…</strong> still open Capabilities.</p>
+          </div>
+
           <h2 id="navigation-summary">Workspace at a glance</h2>
           <div class="table-wrap">
             <table>
@@ -149,6 +162,7 @@
                 <tr><td>Task drawer</td><td>Review status, runtime, notes, commits, and issues.</td><td>Memory writeback previews its destination.</td></tr>
                 <tr><td>Overview</td><td>Read project memory, progress, repository, and coordination signals.</td><td>Snapshot bounds remain visible.</td></tr>
                 <tr><td>Capabilities</td><td>Draft and manage scoped broker access.</td><td>Draft save and enablement are separate.</td></tr>
+                <tr><td>Settings dialog</td><td>Set appearance, terminal defaults, update checks, and read diagnostics.</td><td>Application-wide; it stores no project state.</td></tr>
               </tbody>
             </table>
           </div>
@@ -163,6 +177,7 @@
             <li><a href="#task-drawer">Task drawer</a></li>
             <li><a href="#overview">Overview</a></li>
             <li><a href="#capabilities">Capabilities</a></li>
+            <li><a href="#settings">Settings</a></li>
             <li><a href="#navigation-summary">Workspace at a glance</a></li>
           </ul>
         </aside>

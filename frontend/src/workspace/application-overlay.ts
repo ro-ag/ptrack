@@ -37,6 +37,7 @@ interface OverlayState extends AccessibilityState {
 export type ApplicationOverlayEscapeAction =
   | "dialog"
   | "memory"
+  | "settings"
   | "updates"
   | "drawer"
   | "agent-launch"
@@ -51,6 +52,7 @@ const escapeActionByOverlayID: Readonly<
 > = {
   modal: "dialog",
   "memory-modal": "memory",
+  "settings-modal": "settings",
   "updates-modal": "updates",
   "task-drawer": "drawer",
   "agent-launch-modal": "agent-launch",

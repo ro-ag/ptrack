@@ -21,16 +21,16 @@ export interface NativeMenuActions {
 
 export type NativeMenuCommand = keyof NativeMenuActions;
 
-export type NativeMenuView = "board" | "overview" | "settings";
+export type NativeMenuView = "board" | "overview" | "capabilities";
 
+// Settings is an application dialog, not a view, so showSettings has no view
+// target. The Capabilities page keeps its own route.
 export function nativeMenuViewTarget(
   command: NativeMenuCommand,
 ): NativeMenuView | null {
   if (command === "showBoard") return "board";
   if (command === "showIntelligence") return "overview";
-  if (command === "showSettings" || command === "showCapabilities") {
-    return "settings";
-  }
+  if (command === "showCapabilities") return "capabilities";
   return null;
 }
 
@@ -54,7 +54,8 @@ export function nativeMenuCommandAllowed(
   if (
     command === "openProject" ||
     command === "installShellCommand" ||
-    command === "checkForUpdates"
+    command === "checkForUpdates" ||
+    command === "showSettings"
   ) {
     return ["welcome", "open", "error", "closed"].includes(state.workspaceStatus);
   }

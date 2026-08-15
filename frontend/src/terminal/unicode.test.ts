@@ -4,7 +4,6 @@ import {
   modernUnicodeEnabled,
   modernUnicodeStorageKey,
   readModernUnicodeSetting,
-  writeModernUnicodeSetting,
 } from "./unicode";
 
 describe("modern Unicode terminal setting", () => {
@@ -15,17 +14,13 @@ describe("modern Unicode terminal setting", () => {
     expect(modernUnicodeEnabled("false")).toBe(false);
   });
 
-  it("reads and writes the persisted setting", () => {
-    const entries = new Map<string, string>();
-    const storage = {
-      getItem: (key: string) => entries.get(key) ?? null,
-      setItem: (key: string, value: string) => entries.set(key, value),
-    };
+  it("reads the mirror the stored preferences record writes", () => {
+    const entries = new Map<string, string>([[modernUnicodeStorageKey, "false"]]);
+    const storage = { getItem: (key: string) => entries.get(key) ?? null };
 
-    expect(readModernUnicodeSetting(storage)).toBe(true);
-    writeModernUnicodeSetting(storage, false);
-    expect(entries.get(modernUnicodeStorageKey)).toBe("false");
     expect(readModernUnicodeSetting(storage)).toBe(false);
+    entries.set(modernUnicodeStorageKey, "true");
+    expect(readModernUnicodeSetting(storage)).toBe(true);
   });
 
   it("keeps the default when storage is unavailable", () => {
@@ -33,12 +28,8 @@ describe("modern Unicode terminal setting", () => {
       getItem: () => {
         throw new Error("blocked");
       },
-      setItem: () => {
-        throw new Error("blocked");
-      },
     };
 
     expect(readModernUnicodeSetting(storage)).toBe(true);
-    expect(() => writeModernUnicodeSetting(storage, false)).not.toThrow();
   });
 });

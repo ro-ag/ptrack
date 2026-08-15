@@ -14,8 +14,9 @@ export function nextTheme(theme) {
 
 // initTheme applies the resolved theme to root.dataset.theme, follows OS
 // changes while no explicit choice is stored, and reports every applied
-// theme through onChange. Returns a controller whose toggle() switches to
-// the opposite of the currently resolved theme and persists it.
+// theme through onChange. Returns a controller whose setTheme() applies a
+// stored preference ("system" clears the explicit choice) and whose toggle()
+// switches to the opposite of the currently resolved theme.
 export function initTheme({ root, storage, media, onChange }) {
   let explicit = storage.getItem(THEME_STORAGE_KEY);
 
@@ -32,11 +33,15 @@ export function initTheme({ root, storage, media, onChange }) {
     get theme() {
       return resolveTheme(explicit, media.matches);
     },
-    toggle() {
-      explicit = nextTheme(resolveTheme(explicit, media.matches));
-      storage.setItem(THEME_STORAGE_KEY, explicit);
+    setTheme(preference) {
+      explicit = preference === "light" || preference === "dark" ? preference : null;
+      if (explicit) storage.setItem(THEME_STORAGE_KEY, explicit);
+      else storage.removeItem?.(THEME_STORAGE_KEY);
       apply();
-      return explicit;
+      return resolveTheme(explicit, media.matches);
+    },
+    toggle() {
+      return this.setTheme(nextTheme(resolveTheme(explicit, media.matches)));
     },
   };
 }

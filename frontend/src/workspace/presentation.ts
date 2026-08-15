@@ -925,12 +925,13 @@ export function driftPresentation(section: unknown): {
   };
 }
 
-// commandShortcut routes primary-modifier (⌘/Ctrl) chords. "palette" is
-// global; the caller decides whether the view shortcuts are blocked by an
-// input, a modal, or the terminal.
+// commandShortcut routes primary-modifier (⌘/Ctrl) chords. "palette" and
+// "settings" are global — Settings is an application dialog that opens with
+// no project open; the caller decides whether the view shortcuts are blocked
+// by an input, a modal, or the terminal.
 export function commandShortcut(
   input: ShortcutInput,
-): "palette" | "board" | "overview" | "settings" | "addTask" | null {
+): "palette" | "settings" | "board" | "overview" | "capabilities" | "addTask" | null {
   if (
     input.composing ||
     input.repeat ||
@@ -941,9 +942,10 @@ export function commandShortcut(
   const key = input.key.toLowerCase();
   if (key === "k") return "palette";
   if (input.shift) return null;
+  if (key === ",") return "settings";
   if (key === "1") return "board";
   if (key === "2") return "overview";
-  if (key === "3") return "settings";
+  if (key === "3") return "capabilities";
   if (key === "n") return "addTask";
   return null;
 }
