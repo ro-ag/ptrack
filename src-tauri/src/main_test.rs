@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 
+use serde_json::json;
+
 use super::{
-    ProjectPickerPurpose, WindowStateCapture, project_picker_result, validate_external_url,
+    ProjectPickerPurpose, WindowStateCapture, preferred_theme, project_picker_result,
+    validate_external_url,
 };
 
 #[test]
@@ -45,6 +48,31 @@ fn a_capture_that_wakes_after_the_exit_flush_never_writes() {
     // Anything arriving afterwards, exit flush included, is refused.
     assert!(!capture.guarded(false, || {}));
     assert!(!capture.guarded(true, || {}));
+}
+
+/// `"system"`, an absent record, and anything unreadable all resolve to no
+/// pinned appearance, which is the only value that keeps the native chrome
+/// following the OS after the process has started.
+#[test]
+fn the_native_chrome_is_pinned_only_by_an_explicit_theme() {
+    assert_eq!(
+        preferred_theme(&json!({ "appearance": { "theme": "dark" } })),
+        Some(tauri::Theme::Dark)
+    );
+    assert_eq!(
+        preferred_theme(&json!({ "appearance": { "theme": "light" } })),
+        Some(tauri::Theme::Light)
+    );
+    assert_eq!(
+        preferred_theme(&json!({ "appearance": { "theme": "system" } })),
+        None
+    );
+    assert_eq!(preferred_theme(&json!({ "appearance": {} })), None);
+    assert_eq!(preferred_theme(&serde_json::Value::Null), None);
+    assert_eq!(
+        preferred_theme(&json!({ "appearance": { "theme": "Dark" } })),
+        None
+    );
 }
 
 #[test]
