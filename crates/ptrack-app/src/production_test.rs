@@ -1948,6 +1948,112 @@ fn desktop_authority_classifies_existing_descendant_and_recovery_targets() {
 }
 
 #[test]
+fn desktop_authority_accepts_a_new_project_beside_the_global_home() {
+    let temp = Temp::new();
+    let user_home = temp.0.join("user");
+    let home = user_home.join(".ptrack");
+    let project = user_home.join("project");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir(&project).unwrap();
+    private_directory(&user_home);
+    private_directory(&home);
+    private_directory(&project);
+
+    let authority = ProductionDesktopAuthority::load(home.clone(), "test", None, None, 0).unwrap();
+    let validation = authority.validate_target(&project).unwrap();
+    assert_eq!(validation.kind, ProjectTargetKindV1::New);
+    assert!(validation.reason.is_empty());
+
+    let own_root = authority.validate_target(&user_home).unwrap();
+    assert_eq!(own_root.kind, ProjectTargetKindV1::RecoveryRequired);
+    assert!(own_root.reason.contains("preexisting project storage"));
+
+    authority
+        .initialize(&InitializeProjectRequestV1 {
+            operation_id: validation.operation_id,
+            root: validation.canonical_root,
+            goal: "ship beside the global home".to_owned(),
+            guide_choice: ProjectGuideChoiceV1::Skip,
+            guide_preview_token: String::new(),
+        })
+        .unwrap();
+    assert!(project.join(".ptrack/ptrack.redb").exists());
+}
+
+#[test]
+fn desktop_authority_still_rejects_ancestor_storage_under_the_global_home() {
+    let temp = Temp::new();
+    let user_home = temp.0.join("user");
+    let home = user_home.join(".ptrack");
+    let workspace = user_home.join("workspace");
+    let project = workspace.join("project");
+    let storage = workspace.join(".ptrack");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&project).unwrap();
+    private_directory(&user_home);
+    private_directory(&home);
+    private_directory(&workspace);
+    private_directory(&project);
+    let authority = ProductionDesktopAuthority::load(home, "test", None, None, 0).unwrap();
+
+    fs::create_dir(&storage).unwrap();
+    private_directory(&storage);
+    let preexisting = authority.validate_target(&project).unwrap();
+    assert_eq!(preexisting.kind, ProjectTargetKindV1::RecoveryRequired);
+    assert!(preexisting.reason.contains("preexisting project storage"));
+
+    fs::write(storage.join("ptrack.redb"), b"unregistered").unwrap();
+    let unregistered = authority.validate_target(&project).unwrap();
+    assert_eq!(unregistered.kind, ProjectTargetKindV1::RecoveryRequired);
+    assert!(unregistered.reason.contains("unregistered project store"));
+}
+
+#[cfg(unix)]
+#[test]
+fn desktop_authority_still_rejects_unsafe_ancestor_storage_under_the_global_home() {
+    use std::os::unix::fs::symlink;
+
+    let temp = Temp::new();
+    let user_home = temp.0.join("user");
+    let home = user_home.join(".ptrack");
+    let workspace = user_home.join("workspace");
+    let project = workspace.join("project");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&project).unwrap();
+    private_directory(&user_home);
+    private_directory(&home);
+    private_directory(&workspace);
+    private_directory(&project);
+    symlink(temp.0.join("missing"), workspace.join(".ptrack")).unwrap();
+
+    let authority = ProductionDesktopAuthority::load(home, "test", None, None, 0).unwrap();
+    let validation = authority.validate_target(&project).unwrap();
+
+    assert_eq!(validation.kind, ProjectTargetKindV1::RecoveryRequired);
+    assert!(validation.reason.contains("project storage is unsafe"));
+}
+
+#[test]
+fn desktop_authority_keeps_ancestor_storage_when_the_global_home_is_elsewhere() {
+    let temp = Temp::new();
+    let user_home = temp.0.join("user");
+    let storage = user_home.join(".ptrack");
+    let project = user_home.join("project");
+    fs::create_dir_all(&storage).unwrap();
+    fs::create_dir(&project).unwrap();
+    private_directory(&user_home);
+    private_directory(&storage);
+    private_directory(&project);
+
+    let authority =
+        ProductionDesktopAuthority::load(temp.0.join("elsewhere"), "test", None, None, 0).unwrap();
+    let validation = authority.validate_target(&project).unwrap();
+
+    assert_eq!(validation.kind, ProjectTargetKindV1::RecoveryRequired);
+    assert!(validation.reason.contains("preexisting project storage"));
+}
+
+#[test]
 #[allow(clippy::too_many_lines)] // One lifecycle proves commit, exact resume, and final binding.
 fn desktop_authority_true_first_run_initializes_replays_and_opens_without_guide() {
     let temp = Temp::new();
