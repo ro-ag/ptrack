@@ -1624,8 +1624,7 @@ select option {
   gap: var(--space-150);
 }
 
-.capability-form > label,
-.capability-scope-fields label {
+.capability-form label {
   display: grid;
   gap: var(--space-050);
   color: var(--muted);
@@ -1639,16 +1638,18 @@ select option {
 .capability-form textarea {
   width: 100%;
   min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  min-height: 34px;
+  border: 1px solid var(--control-border);
+  border-radius: 9px;
   color: var(--text);
-  background: var(--input-bg);
-  padding: var(--space-100);
-  box-shadow: var(--input-inset);
+  background: var(--control-solid-bg);
+  padding: 5px var(--space-100);
+  box-shadow: none;
 }
 
-.capability-form textarea {
-  resize: vertical;
+/* Numeric fields hold a handful of digits; a full grid column is wasted width. */
+.capability-form input[type="number"] {
+  max-width: 12ch;
 }
 
 .capability-row {
@@ -1659,17 +1660,18 @@ select option {
 
 .capability-scope-fields {
   min-width: 0;
-  margin: var(--space-050) 0 0;
-  border: 1px solid var(--line-subtle);
-  border-radius: 10px;
-  padding: var(--space-150);
+  margin: var(--space-100) 0 0;
+  border: 0;
+  padding: var(--space-100) 0 0;
 }
 
 .capability-scope-fields legend {
-  color: var(--text-soft);
-  padding: 0 var(--space-050);
-  font-size: 0.75rem;
-  font-weight: 750;
+  padding: 0;
+  color: var(--accent);
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
 }
 
 .capability-checks,
@@ -1681,17 +1683,22 @@ select option {
   gap: var(--space-100);
 }
 
-.capability-check,
-.capability-checks label {
-  display: flex !important;
-  grid-template-columns: none;
+/* Outranks `.capability-form label` on specificity, so no !important is needed. */
+.capability-form .capability-check,
+.capability-form .capability-checks label {
+  display: flex;
   align-items: center;
   gap: var(--space-050);
 }
 
-.capability-check input,
-.capability-checks input {
-  width: auto;
+.capability-form .capability-check input,
+.capability-form .capability-checks input {
+  flex: 0 0 auto;
+  width: 16px;
+  min-height: 16px;
+  height: 16px;
+  padding: 0;
+  accent-color: var(--accent);
 }
 
 .capability-editor-actions {

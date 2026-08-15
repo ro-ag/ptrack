@@ -76,6 +76,36 @@ describe("responsive desktop layout contracts", () => {
     );
   });
 
+  it("styles every capability field with the shared house control box", () => {
+    // A child combinator here skips the labels nested in `.capability-row`.
+    expect(styles).not.toMatch(/\.capability-form > label/);
+    expect(styles).toMatch(
+      /\.capability-form label\s*\{[^}]*color:\s*var\(--muted\);[^}]*font-size:\s*0\.6875rem;/,
+    );
+    expect(styles).toMatch(
+      /\.capability-form input,\s*\.capability-form select,\s*\.capability-form textarea\s*\{[^}]*min-height:\s*34px;[^}]*border:\s*1px solid var\(--control-border\);[^}]*background:\s*var\(--control-solid-bg\);[^}]*box-shadow:\s*none;/,
+    );
+    expect(styles).toMatch(
+      /\.capability-form input\[type="number"\]\s*\{[^}]*max-width:\s*12ch;/,
+    );
+    expect(styles).toMatch(
+      /\.capability-scope-fields\s*\{[^}]*border:\s*0;[^}]*padding:\s*var\(--space-100\) 0 0;/,
+    );
+    expect(styles).toMatch(
+      /\.capability-scope-fields legend\s*\{[^}]*font-size:\s*0\.6875rem;[^}]*text-transform:\s*uppercase;/,
+    );
+  });
+
+  it("keeps capability checkboxes on the row target without an !important escape", () => {
+    expect(styles).toMatch(
+      /\.capability-form \.capability-check,\s*\.capability-form \.capability-checks label\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;/,
+    );
+    expect(styles).not.toMatch(/display:\s*flex\s*!important/);
+    expect(styles).toMatch(
+      /\.capability-form \.capability-check input,\s*\.capability-form \.capability-checks input\s*\{[^}]*width:\s*16px;[^}]*min-height:\s*16px;[^}]*height:\s*16px;/,
+    );
+  });
+
   it("keeps the automatic-update checkbox from consuming the dialog row", () => {
     expect(styles).toMatch(
       /\.updates-automatic-option input\s*\{[^}]*flex:\s*0 0 auto;[^}]*width:\s*16px;[^}]*min-height:\s*16px;[^}]*height:\s*16px;[^}]*padding:\s*0;/,

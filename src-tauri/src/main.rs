@@ -53,6 +53,14 @@ async fn gui_invoke(
 ) -> Result<serde_json::Value, String> {
     let runtime = Arc::clone(runtime.inner());
     let shell_command = request.method == "InstallShellCommand";
+    // Every command that answers with the whole normalized preference document
+    // resyncs the native chrome. The read is in the set because
+    // `ResetApplicationState` clears the record behind its own result shape and
+    // the client reloads afterwards, so one resync point covers every writer.
+    let appearance = matches!(
+        request.method.as_str(),
+        "GetPreferences" | "SetPreferences" | "ResetPreferences"
+    );
     tauri::async_runtime::spawn_blocking(move || {
         let _dialog_lease = if shell_command {
             Some(
@@ -64,6 +72,9 @@ async fn gui_invoke(
             None
         };
         let result = runtime.invoke(request).map_err(|error| error.to_string())?;
+        if appearance {
+            apply_theme(&app, &result);
+        }
         if shell_command {
             let message = result.as_str().ok_or_else(|| {
                 "shell command installation returned an invalid result".to_owned()
@@ -79,6 +90,32 @@ async fn gui_invoke(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+/// Maps the stored appearance preference onto the native window theme. `None`
+/// is "follow the OS": an unset preferred appearance is how every platform
+/// spells that, and it is what keeps `"system"` tracking later OS flips without
+/// the shell hearing about them.
+fn preferred_theme(preferences: &serde_json::Value) -> Option<tauri::Theme> {
+    match preferences["appearance"]["theme"].as_str() {
+        Some("dark") => Some(tauri::Theme::Dark),
+        Some("light") => Some(tauri::Theme::Light),
+        _ => None,
+    }
+}
+
+/// Repaints the native chrome to match the app theme. macOS paints its own
+/// titlebar out of `NSApp.effectiveAppearance`, which follows the *system*
+/// Dark/Light setting and not the app's theme, so a dark app on a light system
+/// gets a light titlebar around a dark window. `set_theme` routes to
+/// `NSApplication setAppearance:`, which covers the titlebar, the menu bar, and
+/// the native dialogs at once; on Windows it repaints the frame and on Linux it
+/// sets the GTK preference. Best effort: chrome that stays a shade off is never
+/// worth failing a preference write over.
+fn apply_theme<R: Runtime>(app: &AppHandle<R>, preferences: &serde_json::Value) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_theme(preferred_theme(preferences));
+    }
 }
 
 #[tauri::command]
@@ -435,6 +472,19 @@ fn run_desktop(initial_path: Option<PathBuf>, initial_plan: u64) {
                 initial_plan,
             )
             .map_err(std::io::Error::other)?;
+            // The stored preference is only reachable once the runtime is bound,
+            // and the window contract fixes that after the show. The webview has
+            // not painted yet either way, so the first frame the user reads
+            // already carries the right chrome.
+            apply_theme(
+                app.handle(),
+                &runtime
+                    .invoke(DesktopCommandRequest {
+                        method: "GetPreferences".to_owned(),
+                        arguments: Vec::new(),
+                    })
+                    .unwrap_or_default(),
+            );
             app.manage(runtime);
             Ok(())
         })
