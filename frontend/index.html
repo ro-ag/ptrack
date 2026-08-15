@@ -27,7 +27,7 @@
 
         <div class="brand sidebar-brand">
           <span class="brand-mark" aria-hidden="true"></span>
-          <div>
+          <div class="sidebar-brand-identity">
             <p class="eyebrow">p-track</p>
             <button
               id="app-version"
@@ -1515,17 +1515,21 @@
             </section>
           </div>
         </div>
-        <p
-          id="settings-save-status"
-          class="settings-save-status"
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-        ></p>
-        <div class="dialog-actions">
-          <button id="settings-reset" class="button-secondary" type="button">
-            Reset to defaults
-          </button>
+        <!-- One footer row. The live region stays a sibling of the aria-busy
+             body so a long reset is still announced. -->
+        <div class="settings-dialog-footer">
+          <p
+            id="settings-save-status"
+            class="settings-save-status"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          ></p>
+          <div class="dialog-actions">
+            <button id="settings-reset" class="button-secondary" type="button">
+              Reset to defaults
+            </button>
+          </div>
         </div>
       </section>
     </div>

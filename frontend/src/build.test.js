@@ -6,6 +6,20 @@ import { build } from "vite";
 const frontendRoot = resolve(import.meta.dirname, "..");
 const distRoot = resolve(frontendRoot, "dist");
 
+// Index of the `</tag>` that closes the element opened at `start`, or -1 when
+// the markup never closes it. Depth counting is what makes a nesting claim a
+// nesting claim: every `</tag>` closes the nearest open one.
+function closingIndex(html, start, tag) {
+  const tags = new RegExp(`<${tag}\\b|</${tag}>`, "g");
+  tags.lastIndex = start;
+  let depth = 0;
+  for (let match = tags.exec(html); match; match = tags.exec(html)) {
+    depth += match[0].startsWith("</") ? -1 : 1;
+    if (depth === 0) return match.index;
+  }
+  return -1;
+}
+
 describe("production asset layout", () => {
   beforeAll(async () => {
     await build({
@@ -620,9 +634,64 @@ describe("production asset layout", () => {
     expect(styles).toMatch(
       /\.settings-reset-actions button\{border-color:CanvasText\}/,
     );
-    // The save-status live region sits outside the aria-busy wrapper.
+    // The save-status live region sits outside the aria-busy wrapper, and
+    // shares one footer row with the reset instead of being pinned to the
+    // opposite corner from it.
     expect(index).toMatch(
-      /id="settings-body"[\s\S]*<\/div>\s*<p\s*id="settings-save-status"[\s\S]*role="status"[\s\S]*aria-live="polite"[\s\S]*aria-atomic="true"/,
+      /<div class="settings-dialog-footer">\s*<p\s*id="settings-save-status"[\s\S]*?role="status"[\s\S]*?aria-live="polite"[\s\S]*?aria-atomic="true"[\s\S]*?<div class="dialog-actions">\s*<button id="settings-reset"/,
+    );
+    // Source order proves nothing about nesting: `[\s\S]*` runs straight
+    // through an unclosed element. Count the div depth instead, so the footer
+    // has to start after the one that closes #settings-body.
+    const settingsBodyEnd = closingIndex(
+      index,
+      index.lastIndexOf("<div", index.indexOf('id="settings-body"')),
+      "div",
+    );
+    expect(settingsBodyEnd).toBeGreaterThan(0);
+    expect(index.indexOf('class="settings-dialog-footer"')).toBeGreaterThan(
+      settingsBodyEnd,
+    );
+    expect(styles).toMatch(
+      /\.settings-dialog-footer\{[^}]*justify-content:space-between/,
+    );
+    // The status text is transient: it announces, then clears, while the live
+    // region element itself stays in the DOM because removing it is what
+    // breaks announcements. Nothing animates, so reduced motion has no say.
+    expect(appSource).toMatch(/const settingsStatusClearDelay = \d+;/);
+    expect(appSource).toMatch(/clearTimeout\(settingsStatusTimer\);/);
+    expect(appSource).toMatch(
+      /settingsStatusTimer = setTimeout\(\(\) => \{\s*elements\.settingsSaveStatus\.textContent = "";/,
+    );
+    expect(appSource).not.toMatch(/settingsSaveStatus\.remove\(\)/);
+    // Both reset outcomes are sticky. They report an explicit destructive
+    // action, and the application-state message runs to three clauses that
+    // wrap to about four lines — clearing it collapses the footer and jumps
+    // "Reset to defaults" upward six seconds after the last interaction.
+    expect(appSource).toMatch(
+      /setSettingsStatus\("Window layout reset to defaults\.", false, true\)/,
+    );
+    expect(appSource).toMatch(
+      /setSettingsStatus\(resetApplicationStateMessage\(result\), false, true\)/,
+    );
+
+    // The diagnostics copy control is an icon, because a "Copy" label is what
+    // broke to "Cop y" when the path beside it grew. An unlabelled icon button
+    // is a dead end for a screen reader, so the accessible name says what is
+    // copied and the title repeats it for pointer users.
+    expect(appSource).toContain('copy.setAttribute("aria-label", row.copy)');
+    expect(appSource).toContain("copy.title = row.copy;");
+    expect(appSource).not.toMatch(/copy\.textContent = "Copy"/);
+    expect(appSource).toMatch(/setSettingsStatus\(`\$\{row\.label\} copied\.`\)/);
+    expect(styles).toMatch(
+      /\.settings-diagnostic-copy\{[^}]*width:26px[^}]*min-height:26px[^}]*height:26px/,
+    );
+    expect(styles).toMatch(/\.settings-diagnostic-copy svg\{[^}]*stroke:currentColor/);
+    expect(styles).toMatch(
+      /\.settings-diagnostic-copy:focus-visible[^{]*\{[^}]*outline:2px solid var\(--accent\)/,
+    );
+    expect(styles).toMatch(
+      /\.settings-diagnostic-copy,[^{]*\{border-color:CanvasText\}/,
     );
     expect(index).toMatch(
       /id="settings-terminal-font-size"[\s\S]*min="10"[\s\S]*max="24"[\s\S]*aria-describedby="settings-terminal-font-size-help"/,

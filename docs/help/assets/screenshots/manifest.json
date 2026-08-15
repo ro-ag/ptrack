@@ -16,7 +16,7 @@
     "frontend/src/workspace/model.ts",
     "frontend/src/workspace/presentation.ts"
   ],
-  "uiSourceSha256": "5f9ee0b717c5fad7c80693747c674678bf7ddba3eab82508a0ef82575b118c63",
+  "uiSourceSha256": "2d154e4cc35b1b58865b2ed72d236f3911baa0828bfb796465f2e05c3559e666",
   "requiredWorkflows": [
     "board",
     "capabilities",

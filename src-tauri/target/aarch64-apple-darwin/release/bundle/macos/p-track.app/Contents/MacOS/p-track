@@ -1,0 +1,6 @@
+#!/bin/sh
+# macOS app bundle entry point. Double-clicking p-track.app must open the
+# desktop workspace, never the TUI: launchd attaches /dev/null to stdio, so a
+# terminal UI has nowhere to render. The `gui` subcommand is explicit; running
+# the ptrack binary directly with no subcommand stays the terminal CLI.
+exec "$(dirname "$0")/ptrack" gui "$@"

@@ -1,0 +1,17 @@
+/Users/rodox/dev/go/ptrack/src-tauri/target/aarch64-apple-darwin/release/deps/ptrack-2fa14aa334ea04f3.d: src-tauri/src/main.rs /Users/rodox/dev/go/ptrack/src-tauri/target/aarch64-apple-darwin/release/build/ptrack-desktop-104656265e3f7315/out/d0c13f071c5619febeef7ffb6e47871d3074927ee0ee76da4c4face9e80c445f /Users/rodox/dev/go/ptrack/src-tauri/../frontend/dist/app.js /Users/rodox/dev/go/ptrack/src-tauri/target/aarch64-apple-darwin/release/build/ptrack-desktop-104656265e3f7315/out/tauri-codegen-assets/8e1b7196381e03665fe9454edba85c4f43d2a6bd9c04b28f8420ec244076d5ab.js /Users/rodox/dev/go/ptrack/src-tauri/../frontend/dist/index.html /Users/rodox/dev/go/ptrack/src-tauri/target/aarch64-apple-darwin/release/build/ptrack-desktop-104656265e3f7315/out/tauri-codegen-assets/0d4e3e83c356d1588f6a2fbbe99f0c898a2a9bf443b35edbb9620a71dc1bb267.html /Users/rodox/dev/go/ptrack/src-tauri/../frontend/dist/style.css /Users/rodox/dev/go/ptrack/src-tauri/target/aarch64-apple-darwin/release/build/ptrack-desktop-104656265e3f7315/out/tauri-codegen-assets/5a651f92d1f06d503b87c4fa5670b43a97f9390f1b4a2cb1b99430a43a2ae944.css
+
+/Users/rodox/dev/go/ptrack/src-tauri/target/aarch64-apple-darwin/release/deps/ptrack-2fa14aa334ea04f3: src-tauri/src/main.rs /Users/rodox/dev/go/ptrack/src-tauri/target/aarch64-apple-darwin/release/build/ptrack-desktop-104656265e3f7315/out/d0c13f071c5619febeef7ffb6e47871d3074927ee0ee76da4c4face9e80c445f /Users/rodox/dev/go/ptrack/src-tauri/../frontend/dist/app.js /Users/rodox/dev/go/ptrack/src-tauri/target/aarch64-apple-darwin/release/build/ptrack-desktop-104656265e3f7315/out/tauri-codegen-assets/8e1b7196381e03665fe9454edba85c4f43d2a6bd9c04b28f8420ec244076d5ab.js /Users/rodox/dev/go/ptrack/src-tauri/../frontend/dist/index.html /Users/rodox/dev/go/ptrack/src-tauri/target/aarch64-apple-darwin/release/build/ptrack-desktop-104656265e3f7315/out/tauri-codegen-assets/0d4e3e83c356d1588f6a2fbbe99f0c898a2a9bf443b35edbb9620a71dc1bb267.html /Users/rodox/dev/go/ptrack/src-tauri/../frontend/dist/style.css /Users/rodox/dev/go/ptrack/src-tauri/target/aarch64-apple-darwin/release/build/ptrack-desktop-104656265e3f7315/out/tauri-codegen-assets/5a651f92d1f06d503b87c4fa5670b43a97f9390f1b4a2cb1b99430a43a2ae944.css
+
+src-tauri/src/main.rs:
+/Users/rodox/dev/go/ptrack/src-tauri/target/aarch64-apple-darwin/release/build/ptrack-desktop-104656265e3f7315/out/d0c13f071c5619febeef7ffb6e47871d3074927ee0ee76da4c4face9e80c445f:
+/Users/rodox/dev/go/ptrack/src-tauri/../frontend/dist/app.js:
+/Users/rodox/dev/go/ptrack/src-tauri/target/aarch64-apple-darwin/release/build/ptrack-desktop-104656265e3f7315/out/tauri-codegen-assets/8e1b7196381e03665fe9454edba85c4f43d2a6bd9c04b28f8420ec244076d5ab.js:
+/Users/rodox/dev/go/ptrack/src-tauri/../frontend/dist/index.html:
+/Users/rodox/dev/go/ptrack/src-tauri/target/aarch64-apple-darwin/release/build/ptrack-desktop-104656265e3f7315/out/tauri-codegen-assets/0d4e3e83c356d1588f6a2fbbe99f0c898a2a9bf443b35edbb9620a71dc1bb267.html:
+/Users/rodox/dev/go/ptrack/src-tauri/../frontend/dist/style.css:
+/Users/rodox/dev/go/ptrack/src-tauri/target/aarch64-apple-darwin/release/build/ptrack-desktop-104656265e3f7315/out/tauri-codegen-assets/5a651f92d1f06d503b87c4fa5670b43a97f9390f1b4a2cb1b99430a43a2ae944.css:
+
+# env-dep:CARGO_PKG_AUTHORS=
+# env-dep:CARGO_PKG_DESCRIPTION=
+# env-dep:CARGO_PKG_NAME=ptrack-desktop
+# env-dep:OUT_DIR=/Users/rodox/dev/go/ptrack/src-tauri/target/aarch64-apple-darwin/release/build/ptrack-desktop-104656265e3f7315/out

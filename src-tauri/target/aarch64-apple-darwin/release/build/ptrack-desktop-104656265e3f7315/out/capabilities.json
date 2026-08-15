@@ -1,0 +1,1 @@
+{"main-window":{"identifier":"main-window","description":"Allow the main application window to subscribe to app-owned events only.","local":true,"windows":["main"],"permissions":["core:event:allow-listen","core:event:allow-unlisten"]}}

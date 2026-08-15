@@ -104,23 +104,13 @@ export function resetApplicationStateMessage(result: unknown): string {
 export interface DiagnosticsRow {
   label: string;
   value: string;
-  copyable: boolean;
+  /** Secondary text under the value: when and where, never the value again. */
+  detail?: string;
+  /** Accessible name for the copy control, or null when there is nothing to copy. */
+  copy: string | null;
 }
 
-const diagnosticsLabels: Readonly<Record<string, string>> = {
-  globalHome: "Global home",
-  projectDatabase: "Project database",
-  runtimeDirectory: "Runtime directory",
-  updatesDirectory: "Updates directory",
-  backups: "Backups",
-  migration: "Migration",
-  recovery: "Recovery",
-  capabilities: "Capabilities",
-};
-
 function humanize(key: string): string {
-  const labeled = diagnosticsLabels[key];
-  if (labeled) return labeled;
   const spaced = key.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " ");
   return spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase();
 }
@@ -136,44 +126,166 @@ function leafValue(value: unknown): string | null {
   return null;
 }
 
-// diagnosticsRows flattens the read-only report into labelled rows without
-// assuming a field list, so a runtime that reports more detail still renders.
-// Nesting deeper than a section and its members is summarized, never dropped.
-export function diagnosticsRows(
-  report: unknown,
-  prefix = "",
-  depth = 0,
-): DiagnosticsRow[] {
-  if (!report || typeof report !== "object") return [];
+function fields(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? value as Record<string, unknown> : {};
+}
+
+function text(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+// The whole path is too long to hear read out on every copy control, so one
+// segment of it distinguishes one otherwise identical button from the next.
+function segment(path: string, fromEnd: number): string {
+  const parts = path.split(/[\\/]/).filter((part) => part !== "");
+  return parts[parts.length - 1 - fromEnd] ?? parts[parts.length - 1] ?? path;
+}
+
+// A null section is never dropped. Only `paths.project` states a reason, because
+// it is the one field the report derives directly from the open workspace.
+// `capabilities` is also documented as "no project open" but is observed null
+// with one open, so it gets the claim the data actually supports.
+function absentValue(key: string): string {
+  return key === "project" ? "No project open" : "Not available";
+}
+
+// The ledger carries RFC3339 with microsecond precision, which nobody reads as
+// a date. Trimmed to the second in UTC — never rounded up to a precision the
+// record does not have. An unparsable stamp is reported as unknown, not guessed.
+function readableTime(value: string): string {
+  if (value === "") return "Unknown time";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  const iso = parsed.toISOString();
+  return `${iso.slice(0, 10)} ${iso.slice(11, 19)} UTC`;
+}
+
+// A backup is one thing, so it is one row: the path is what anyone would act
+// on, and when it was taken and which project it came from are context under
+// it. A file the ledger names but that is gone says so before its own path.
+function backupRows(value: unknown): DiagnosticsRow[] {
+  const ledger = fields(value);
+  if (ledger.status === "unavailable") {
+    return [{ label: "Backups", value: "Not available", copy: null }];
+  }
+  const entries = Array.isArray(ledger.entries) ? ledger.entries : [];
+  if (entries.length === 0) {
+    return [{ label: "Backups", value: "None recorded", copy: null }];
+  }
+  return entries.slice(0, 25).map((entry) => {
+    const backup = fields(entry);
+    const path = text(backup.path);
+    return {
+      label: "Backup",
+      value: path === "" ? "Not available" : path,
+      detail: [
+        backup.present === false ? "File missing" : "",
+        readableTime(text(backup.recordedAt)),
+        text(backup.project),
+      ].filter((part) => part !== "").join(" · "),
+      copy: path === "" ? null : `Copy backup path ${segment(path, 0)}`,
+    };
+  });
+}
+
+// One row per database reporting its count, not one row per field of it. A
+// store that could not be read has no count, which is not the same as zero.
+function quarantineRows(value: unknown): DiagnosticsRow[] {
+  return (Array.isArray(value) ? value : []).map((entry) => {
+    const row = fields(entry);
+    const count = row.count;
+    const counted = row.status !== "unavailable" && typeof count === "number";
+    return {
+      label: `Quarantine · ${humanize(text(row.database) || "unknown")}`,
+      value: counted
+        ? `${count} record${count === 1 ? "" : "s"}`
+        : "Not available",
+      copy: null,
+    };
+  });
+}
+
+function receiptRows(value: unknown): DiagnosticsRow[] {
+  const receipts = (Array.isArray(value) ? value : []).map(text)
+    .filter((path) => path !== "");
+  if (receipts.length === 0) {
+    return [{ label: "Migration receipts", value: "None recorded", copy: null }];
+  }
+  // Every receipt is `<migrations>/<id>/receipt.json`, so the file name names
+  // all 25 of them the same thing. The migration id — the parent directory —
+  // is the only part that tells one row, one button, and one copy
+  // confirmation apart from the next.
+  return receipts.slice(0, 25).map((path) => {
+    const id = segment(path, 1);
+    return {
+      label: `Migration receipt ${id}`,
+      value: path,
+      copy: `Copy migration receipt path ${id}`,
+    };
+  });
+}
+
+// flatten handles the sections that really are scalars — paths, runtime,
+// capabilities — without assuming a field list, so a runtime that reports more
+// detail still renders. A list it has no shape for is summarized, never dropped.
+function flatten(report: unknown, prefix = "", depth = 0): DiagnosticsRow[] {
   const rows: DiagnosticsRow[] = [];
-  for (const [key, value] of Object.entries(report as Record<string, unknown>)) {
+  for (const [key, value] of Object.entries(fields(report))) {
     const label = prefix ? `${prefix} · ${humanize(key)}` : humanize(key);
+    if (value === null) {
+      rows.push({ label, value: absentValue(key), copy: null });
+      continue;
+    }
     const leaf = leafValue(value);
     if (leaf !== null) {
-      rows.push({ label, value: leaf, copyable: looksLikePath(leaf) });
+      rows.push({
+        label,
+        value: leaf,
+        copy: looksLikePath(leaf) ? `Copy ${label}` : null,
+      });
       continue;
     }
     if (Array.isArray(value)) {
-      const entries = value.map(leafValue).filter((entry): entry is string => entry !== null);
-      if (entries.length === value.length && entries.length > 0) {
-        rows.push({ label, value: entries.slice(0, 8).join(", "), copyable: false });
-        continue;
-      }
-      // Element objects carry the real fields — backup paths and timestamps,
-      // quarantine counts — so each one gets its own indexed rows instead of
-      // a length that reads like a total.
-      if (value.length > 0 && depth < 2) {
-        value.slice(0, 8).forEach((entry, index) => {
-          rows.push(...diagnosticsRows(entry, `${label} · ${index + 1}`, depth + 1));
-        });
-        continue;
-      }
-      rows.push({ label, value: `${value.length} recorded`, copyable: false });
+      rows.push({ label, value: `${value.length} recorded`, copy: null });
       continue;
     }
-    if (value && typeof value === "object" && depth < 2) {
-      rows.push(...diagnosticsRows(value, label, depth + 1));
+    if (typeof value === "object" && depth < 2) {
+      rows.push(...flatten(value, label, depth + 1));
     }
   }
-  return rows.slice(0, 64);
+  return rows;
+}
+
+// The report is read top to bottom, so where things are is a decision rather
+// than whatever order the serializer happened to emit. A section the runtime
+// adds later still renders, after the ones this dialog was designed around.
+//
+// The bounded sections come first and the two ledgers last, because the cap
+// below cuts from the end: the only thing it may ever drop is the 26th backup,
+// never a whole section nobody will notice is missing.
+const reportOrder = ["paths", "runtime", "capabilities", "backups", "migration"];
+
+// The realistic worst case is 63 rows — 8 paths, 1 runtime, 2 capabilities,
+// 25 backups, 2 quarantine stores, 25 receipts — which left the old cap of 64
+// one backend field of headroom. The cap is a runaway guard, not a budget.
+const maxDiagnosticsRows = 128;
+
+export function diagnosticsRows(report: unknown): DiagnosticsRow[] {
+  if (!report || typeof report !== "object") return [];
+  const sections = report as Record<string, unknown>;
+  const keys = [
+    ...reportOrder.filter((key) => key in sections),
+    ...Object.keys(sections).filter((key) => !reportOrder.includes(key)),
+  ];
+  const rows: DiagnosticsRow[] = [];
+  for (const key of keys) {
+    const value = sections[key];
+    if (key === "backups") rows.push(...backupRows(value));
+    else if (key === "migration") {
+      const migration = fields(value);
+      rows.push(...quarantineRows(migration.quarantine));
+      rows.push(...receiptRows(migration.receipts));
+    } else rows.push(...flatten({ [key]: value }));
+  }
+  return rows.slice(0, maxDiagnosticsRows);
 }

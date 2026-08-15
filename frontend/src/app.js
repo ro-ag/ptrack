@@ -571,6 +571,10 @@ let settingsModalReturnFocus = null;
 let settingsSection = settingsSections[0].id;
 let settingsSaveSequence = 0;
 let settingsDiagnosticsRequest = 0;
+let settingsStatusTimer = 0;
+// Long enough to read the longest status the dialog writes, short enough that
+// it never becomes part of the furniture.
+const settingsStatusClearDelay = 6000;
 let preferences = defaultPreferences;
 let updatesModalReturnFocus = null;
 let updateState = { revision: 0, phase: "idle", currentVersion: "dev" };
@@ -2723,13 +2727,31 @@ function renderSettingsStorageNotice(status) {
 
 // The dialog's single live region. It sits outside the aria-busy wrapper, so
 // a long reset is still announced.
-function setSettingsStatus(message, failed = false) {
+//
+// The element never leaves the DOM — removing it is what breaks announcements —
+// but its text is transient: a confirmation that stays on screen stops reading
+// as "that just happened" and starts reading as a permanent label. Clearing the
+// text does not retract what was already announced. Nothing moves or fades, so
+// there is no motion for a reduced-motion preference to have an opinion about.
+// A failure stays until the next action: it is the one thing left to act on.
+function setSettingsStatus(message, failed = false, sticky = false) {
+  clearTimeout(settingsStatusTimer);
   elements.settingsSaveStatus.textContent = message;
   elements.settingsSaveStatus.dataset.tone = failed ? "error" : "";
+  if (message === "" || failed || sticky) return;
+  settingsStatusTimer = setTimeout(() => {
+    elements.settingsSaveStatus.textContent = "";
+  }, settingsStatusClearDelay);
 }
 
 function setSettingsSaveStatus(phase) {
-  setSettingsStatus(phase ? preferenceSaveMessage(phase) : "", phase === "failed");
+  setSettingsStatus(
+    phase ? preferenceSaveMessage(phase) : "",
+    phase === "failed",
+    // "Saving…" is superseded by its own outcome, so it must not time out and
+    // leave a slow save looking like nothing was ever asked for.
+    phase === "saving",
+  );
 }
 
 async function loadPreferences() {
@@ -2789,7 +2811,11 @@ async function resetWindowLayout(invoker) {
   elements.settingsResetWindowLayout.disabled = true;
   try {
     applyLayoutState(normalizeLayoutState(await api().ResetWindowLayout()));
-    setSettingsStatus("Window layout reset to defaults.");
+    // Sticky: a reset outcome is the result of an explicit destructive action
+    // and the one thing left to read. Clearing it also collapses several
+    // wrapped lines out of the footer, which moves the button underneath it
+    // six seconds after anyone last touched anything.
+    setSettingsStatus("Window layout reset to defaults.", false, true);
   } catch (error) {
     setSettingsStatus(messageFrom(error), true);
   } finally {
@@ -2822,7 +2848,9 @@ async function resetApplicationState(invoker) {
     if (workspaceState.status === "open" && view === "capabilities") {
       void loadCapabilities();
     }
-    setSettingsStatus(resetApplicationStateMessage(result));
+    // Sticky for the same reason as the layout reset, and more so: this
+    // message is three clauses long and wraps to about four lines.
+    setSettingsStatus(resetApplicationStateMessage(result), false, true);
   } catch (error) {
     setSettingsStatus(messageFrom(error), true);
   } finally {
@@ -2855,31 +2883,48 @@ function renderDiagnosticsReport(report) {
     group.className = "settings-diagnostic";
     const term = document.createElement("dt");
     term.textContent = row.label;
-    const detail = document.createElement("dd");
+    const description = document.createElement("dd");
     const value = document.createElement("span");
+    value.className = "settings-diagnostic-value";
     value.textContent = row.value;
-    detail.append(value);
-    if (row.copyable) {
+    description.append(value);
+    if (row.detail) {
+      const detail = document.createElement("span");
+      detail.className = "settings-diagnostic-detail";
+      detail.textContent = row.detail;
+      description.append(detail);
+    }
+    // A word-wrapping "Copy" label is what broke this column, so the control is
+    // an icon that cannot break. Its accessible name says what it copies, and
+    // the title repeats it for pointer users who get no label at all.
+    if (row.copy) {
       const copy = document.createElement("button");
       copy.type = "button";
-      copy.className = "button-secondary";
-      copy.textContent = "Copy";
-      copy.setAttribute("aria-label", `Copy ${row.label}`);
+      copy.className = "settings-diagnostic-copy";
+      copy.setAttribute("aria-label", row.copy);
+      copy.title = row.copy;
+      const icon = svgElement("svg", { viewBox: "0 0 16 16", "aria-hidden": "true" });
+      icon.append(
+        svgElement("rect", { x: "5.5", y: "5.5", width: "8.5", height: "8.5", rx: "2" }),
+        svgElement("path", { d: "M10.5 5.5V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v4.5a2 2 0 0 0 2 2h1.5" }),
+      );
+      copy.append(icon);
       copy.addEventListener("click", () => void copyDiagnosticValue(row));
-      detail.append(copy);
+      description.append(copy);
     }
-    group.append(term, detail);
+    group.append(term, description);
     elements.settingsDiagnostics.append(group);
   }
 }
 
+// Copy confirmations go through the one live region the dialog has, so they are
+// announced and then clear on the same terms as every other status.
 async function copyDiagnosticValue(row) {
   try {
     if ((await window.runtime?.ClipboardSetText?.(row.value)) !== true) {
       throw new Error("clipboard unavailable");
     }
-    elements.settingsSaveStatus.dataset.tone = "";
-    elements.settingsSaveStatus.textContent = `${row.label} copied.`;
+    setSettingsStatus(`${row.label} copied.`);
   } catch {
     showError(new Error(`Could not copy ${row.label}.`));
   }

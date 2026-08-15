@@ -1,0 +1,14 @@
+/Users/rodox/dev/go/ptrack/src-tauri/target/aarch64-apple-darwin/release/deps/serde-499eeb5c7220f26a.d: /Users/rodox/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /Users/rodox/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /Users/rodox/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /Users/rodox/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /Users/rodox/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /Users/rodox/dev/go/ptrack/src-tauri/target/aarch64-apple-darwin/release/build/serde-24bfd08feebc936e/out/private.rs
+
+/Users/rodox/dev/go/ptrack/src-tauri/target/aarch64-apple-darwin/release/deps/libserde-499eeb5c7220f26a.rlib: /Users/rodox/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /Users/rodox/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /Users/rodox/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /Users/rodox/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /Users/rodox/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /Users/rodox/dev/go/ptrack/src-tauri/target/aarch64-apple-darwin/release/build/serde-24bfd08feebc936e/out/private.rs
+
+/Users/rodox/dev/go/ptrack/src-tauri/target/aarch64-apple-darwin/release/deps/libserde-499eeb5c7220f26a.rmeta: /Users/rodox/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /Users/rodox/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /Users/rodox/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /Users/rodox/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /Users/rodox/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /Users/rodox/dev/go/ptrack/src-tauri/target/aarch64-apple-darwin/release/build/serde-24bfd08feebc936e/out/private.rs
+
+/Users/rodox/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs:
+/Users/rodox/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs:
+/Users/rodox/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs:
+/Users/rodox/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs:
+/Users/rodox/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs:
+/Users/rodox/dev/go/ptrack/src-tauri/target/aarch64-apple-darwin/release/build/serde-24bfd08feebc936e/out/private.rs:
+
+# env-dep:OUT_DIR=/Users/rodox/dev/go/ptrack/src-tauri/target/aarch64-apple-darwin/release/build/serde-24bfd08feebc936e/out

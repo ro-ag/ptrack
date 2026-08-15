@@ -1,0 +1,1206 @@
+<!DOCTYPE html><html lang="en"><head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="dark light">
+    <title>p-track Project Workspace</title>
+    <script>
+      // Apply the stored or OS theme before first paint to avoid a flash.
+      (() => {
+        const stored = localStorage.getItem("ptrack-theme");
+        const theme =
+          stored === "light" || stored === "dark"
+            ? stored
+            : matchMedia("(prefers-color-scheme: light)").matches
+              ? "light"
+              : "dark";
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
+    <script type="module" crossorigin="" src="/app.js"></script>
+    <link rel="stylesheet" crossorigin="" href="/style.css">
+  </head>
+  <body>
+    <div id="app">
+      <aside id="sidebar" class="sidebar" aria-label="Workspace navigation">
+        <div class="sidebar-top" aria-hidden="true"></div>
+
+        <div class="brand sidebar-brand">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <div class="sidebar-brand-identity">
+            <p class="eyebrow">p-track</p>
+            <button id="app-version" class="app-version" type="button" tabindex="0" aria-label="About p-track and check for updates" aria-haspopup="dialog" aria-controls="updates-modal">dev</button>
+            <h1 id="project-name" tabindex="-1">Project workspace</h1>
+          </div>
+        </div>
+
+        <nav class="sidebar-nav" aria-label="Project views">
+          <button id="nav-board" class="sidebar-nav-item" type="button" title="Board — ⌘1" aria-current="page" disabled="">Board</button>
+          <button id="nav-overview" class="sidebar-nav-item" type="button" title="Overview — ⌘2" disabled="">Overview</button>
+          <button id="nav-capabilities" class="sidebar-nav-item" type="button" title="Capabilities — ⌘3" disabled="">Capabilities</button>
+        </nav>
+
+        <div class="sidebar-plans">
+          <div class="section-heading">
+            <p class="section-label">Plans</p>
+            <span id="plan-total" class="section-count">0</span>
+          </div>
+          <div id="sidebar-plan-list" class="sidebar-plan-list"></div>
+        </div>
+      </aside>
+
+      <div id="sidebar-resize" class="sidebar-resize" role="separator" tabindex="0" aria-label="Resize project sidebar" aria-orientation="vertical" aria-valuemin="180" aria-valuemax="420" aria-valuenow="248"></div>
+
+      <div class="canvas">
+        <header class="topbar">
+          <div class="toolbar">
+            <button id="open-project-button" type="button">Open Project…</button>
+            <button id="switch-project-button" class="button-secondary" type="button" hidden="">Switch Project…</button>
+            <button id="theme-toggle" class="button-secondary" type="button" aria-label="Toggle color theme">☾</button>
+            <button id="settings-open" class="button-secondary" type="button" title="Settings — ⌘," aria-label="Open Settings" aria-haspopup="dialog" aria-controls="settings-modal">Settings</button>
+            <button id="close-project-button" class="button-secondary" type="button" hidden="">Close Project</button>
+          </div>
+          <div class="panel-controls" role="group" aria-label="Panel visibility">
+            <button id="sidebar-toggle" class="panel-toggle" type="button" aria-controls="sidebar" aria-expanded="true" aria-label="Hide project sidebar" title="Hide project sidebar">
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <rect x="1.5" y="2" width="13" height="12" rx="2"></rect>
+                <path d="M5.5 2v12"></path>
+              </svg>
+            </button>
+            <button id="board-panel-toggle" class="panel-toggle" type="button" aria-controls="board" aria-pressed="false" aria-label="Hide board panel" title="Hide board panel" disabled="">
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <rect x="1.5" y="2" width="13" height="12" rx="2"></rect>
+                <path d="M1.5 7h13"></path>
+              </svg>
+            </button>
+            <button id="terminal-panel-toggle" class="panel-toggle" type="button" aria-controls="terminal-dock" aria-pressed="false" aria-label="Hide terminal panel" title="Hide terminal panel" disabled="">
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <rect x="1.5" y="2" width="13" height="12" rx="2"></rect>
+                <path d="M1.5 9h13"></path>
+              </svg>
+            </button>
+          </div>
+        </header>
+
+        <main id="main-content" class="canvas-main" aria-label="Workspace content">
+        <section id="workspace-state-screen" class="workspace-state-screen">
+          <div id="project-state-card" class="state-card">
+            <div id="welcome-panel">
+              <p id="workspace-state-eyebrow" class="eyebrow">p-track projects</p>
+              <h2 id="workspace-state-heading" tabindex="-1">Start with a project</h2>
+              <p id="workspace-state-detail" class="state-detail">
+                Initialize p-track in a folder, or open a project you already use.
+              </p>
+              <div class="welcome-actions">
+                <button id="state-initialize-project-button" type="button">Initialize Project</button>
+                <button id="state-open-project-button" class="button-secondary" type="button">Open Project…</button>
+              </div>
+              <div class="recent-projects-section">
+                <div class="section-heading">
+                  <p id="recent-project-heading" class="section-label" tabindex="-1">Recent projects</p>
+                </div>
+                <div id="recent-project-list" class="recent-project-list" role="list" aria-labelledby="recent-project-heading" aria-busy="false"></div>
+                <p id="recent-project-status" class="recent-project-feedback" role="status" aria-live="polite" aria-atomic="true"></p>
+                <p id="recent-project-error" class="recent-project-feedback setup-error" role="alert" aria-atomic="true"></p>
+              </div>
+            </div>
+
+            <section id="setup-panel" class="setup-panel" aria-labelledby="setup-heading" hidden="">
+              <p id="setup-progress" class="setup-progress">Step 1 of 4</p>
+              <p id="setup-eyebrow" class="eyebrow">Initialize project</p>
+              <h2 id="setup-heading" tabindex="-1">Choose a project folder</h2>
+              <p id="setup-detail" class="state-detail"></p>
+
+              <div id="setup-operation" role="group" aria-labelledby="setup-heading" aria-busy="false">
+              <div id="setup-target-summary" class="setup-target-summary" hidden="">
+                <p class="section-label">Canonical project folder</p>
+                <p id="setup-target" class="setup-target"></p>
+              </div>
+
+              <form id="setup-goal-form" class="setup-form" novalidate="" hidden="">
+                <label for="setup-goal">North-star goal</label>
+                <textarea id="setup-goal" rows="5" aria-describedby="setup-goal-help setup-goal-error" required=""></textarea>
+                <p id="setup-goal-help" class="setup-help">
+                  Required · 4,096 UTF-8 bytes maximum
+                </p>
+                <p id="setup-goal-error" class="setup-field-error" role="alert" aria-atomic="true"></p>
+                <div class="setup-actions">
+                  <button id="setup-goal-back" class="button-secondary" type="button">Back</button>
+                  <button id="setup-goal-continue" type="submit">Choose Guide</button>
+                  <button id="setup-goal-cancel" class="button-secondary" type="button">Cancel Setup</button>
+                </div>
+              </form>
+
+              <section id="setup-guide" class="setup-guide" aria-label="Project guide choice" hidden="">
+                <div id="setup-guide-default-choice" class="setup-change-summary">
+                  <p class="section-label">Default choice</p>
+                  <p><strong>Skip Guide</strong> — no guide files will change unless you preview and explicitly install them.</p>
+                </div>
+                <div id="setup-guide-preview" class="setup-guide-preview" aria-label="Exact guide file preview" hidden="">
+                  <div class="section-heading">
+                    <p class="section-label">Exact guide file changes</p>
+                  </div>
+                  <div id="setup-guide-files" class="setup-guide-files"></div>
+                </div>
+                <div id="setup-guide-default-actions" class="setup-actions">
+                  <button id="setup-guide-skip" type="button">Continue with Skip Guide</button>
+                  <button id="setup-guide-preview-button" class="button-secondary" type="button">Preview Guide Changes</button>
+                  <button id="setup-guide-back" class="button-secondary" type="button">Back</button>
+                  <button id="setup-guide-cancel" class="button-secondary" type="button">Cancel Setup</button>
+                </div>
+                <div id="setup-guide-install-actions" class="setup-actions" hidden="">
+                  <button id="setup-guide-install" type="button">Install These Guide Changes</button>
+                  <button id="setup-guide-preview-skip" class="button-secondary" type="button">Skip Guide</button>
+                  <button id="setup-guide-preview-back" class="button-secondary" type="button">Back</button>
+                  <button id="setup-guide-preview-cancel" class="button-secondary" type="button">Cancel Setup</button>
+                </div>
+                <div id="setup-guide-stale-actions" class="setup-actions" hidden="">
+                  <button id="setup-guide-review-again" type="button">Review Again</button>
+                  <button id="setup-guide-stale-skip" class="button-secondary" type="button">Skip Guide</button>
+                  <button id="setup-guide-stale-back" class="button-secondary" type="button">Back</button>
+                  <button id="setup-guide-stale-cancel" class="button-secondary" type="button">Cancel Setup</button>
+                </div>
+              </section>
+
+              <section id="setup-review" class="setup-review" aria-label="Initialization review" hidden="">
+                <div class="setup-change-summary">
+                  <p class="section-label">Private p-track project storage</p>
+                  <p id="setup-storage-summary">
+                    p-track will create the project database shown here.
+                  </p>
+                </div>
+                <div class="setup-change-summary">
+                  <p class="section-label">North-star goal</p>
+                  <p id="setup-review-goal" class="setup-review-goal"></p>
+                </div>
+                <div class="setup-change-summary">
+                  <p class="section-label">Project guide choice</p>
+                  <p id="setup-review-guide-choice"></p>
+                  <p id="setup-review-guide-detail"></p>
+                  <ul id="setup-review-guide-changes" class="setup-change-list"></ul>
+                </div>
+                <div class="setup-change-summary">
+                  <p class="section-label">Complete file changes</p>
+                  <ul id="setup-complete-changes" class="setup-change-list"></ul>
+                </div>
+                <p id="setup-untouched-root" class="setup-untouched"></p>
+                <div class="setup-actions">
+                  <button id="setup-review-back" class="button-secondary" type="button">Back</button>
+                  <button id="setup-commit" type="button">Initialize Project</button>
+                  <button id="setup-review-cancel" class="button-secondary" type="button">Cancel Setup</button>
+                </div>
+              </section>
+
+              <div id="setup-existing-actions" class="setup-actions" hidden="">
+                <button id="setup-open-existing" type="button">Open Existing Project</button>
+                <button id="setup-existing-choose" class="button-secondary" type="button">Choose Another Folder</button>
+                <button id="setup-existing-cancel" class="button-secondary" type="button">Cancel Setup</button>
+              </div>
+
+              <div id="setup-new-target-actions" class="setup-actions" hidden="">
+                <button id="setup-new-target-continue" type="button">Continue to Goal</button>
+                <button id="setup-new-target-choose" class="button-secondary" type="button">Choose Another Folder</button>
+                <button id="setup-new-target-cancel" class="button-secondary" type="button">Cancel Setup</button>
+              </div>
+
+              <div id="setup-recovery-actions" class="setup-actions" hidden="">
+                <button id="setup-retry" type="button" hidden="">Try Again</button>
+                <button id="setup-resume" type="button" hidden="">Resume Setup</button>
+                <button id="setup-open-recovery" class="button-secondary" type="button" hidden="">Open Project</button>
+                <button id="setup-recovery-help" class="button-secondary" type="button" hidden="">Open Recovery Help</button>
+                <button id="setup-recovery-choose" class="button-secondary" type="button">Choose Another Folder</button>
+                <button id="setup-return-welcome" class="button-secondary" type="button">Return to Welcome</button>
+              </div>
+
+              <div id="setup-uncertain-actions" class="setup-actions" hidden="">
+                <button id="setup-check-status" type="button">Check Status Again</button>
+              </div>
+              </div>
+
+              <p id="setup-status" class="setup-status" role="status" aria-live="polite" aria-atomic="true"></p>
+              <p id="setup-error" class="setup-error" role="alert" aria-atomic="true"></p>
+            </section>
+
+            <section id="post-project-onboarding" class="post-project-onboarding" aria-labelledby="onboarding-heading" hidden="">
+              <p id="onboarding-progress" class="setup-progress">Next step · Plan</p>
+              <p class="eyebrow">Project initialized</p>
+              <h2 id="onboarding-heading" tabindex="-1">Create the first plan</h2>
+              <p id="onboarding-detail" class="state-detail"></p>
+
+              <div id="onboarding-operation" role="group" aria-labelledby="onboarding-heading" aria-busy="false">
+              <form id="onboarding-plan-form" class="setup-form" novalidate="">
+                <label for="onboarding-plan-title">Plan title</label>
+                <input id="onboarding-plan-title" type="text" maxlength="240" autocomplete="off" aria-describedby="onboarding-plan-help onboarding-plan-error" required="">
+                <p id="onboarding-plan-help" class="setup-help">
+                  Required · 240 UTF-8 bytes maximum
+                </p>
+                <p id="onboarding-plan-error" class="setup-field-error" role="alert" aria-atomic="true"></p>
+                <div class="setup-actions">
+                  <button id="onboarding-create-plan" type="submit">Create Plan</button>
+                  <button id="onboarding-skip-plan" class="button-secondary" type="button">Skip for Now</button>
+                </div>
+              </form>
+
+              <form id="onboarding-task-form" class="setup-form" novalidate="" hidden="">
+                <div class="setup-change-summary">
+                  <p class="section-label">Active plan</p>
+                  <p id="onboarding-active-plan"></p>
+                </div>
+                <label for="onboarding-task-title">First task title</label>
+                <input id="onboarding-task-title" type="text" maxlength="240" autocomplete="off" aria-describedby="onboarding-task-help onboarding-task-error" required="">
+                <p id="onboarding-task-help" class="setup-help">
+                  Required · 240 UTF-8 bytes maximum
+                </p>
+                <p id="onboarding-task-error" class="setup-field-error" role="alert" aria-atomic="true"></p>
+                <label class="onboarding-start-option" for="onboarding-start-now">
+                  <input id="onboarding-start-now" type="checkbox">
+                  <span>Start this task now</span>
+                </label>
+                <div class="setup-actions">
+                  <button id="onboarding-create-task" type="submit">Create Task</button>
+                  <button id="onboarding-finish-with-plan" class="button-secondary" type="button">Finish with Plan</button>
+                </div>
+              </form>
+
+              <div id="onboarding-start-failed-actions" class="setup-actions" hidden="">
+                <button id="onboarding-retry-start" type="button">Try Starting Again</button>
+                <button id="onboarding-finish-setup" class="button-secondary" type="button">Finish Setup</button>
+              </div>
+              </div>
+
+              <p id="onboarding-status" class="setup-status" role="status" aria-live="polite" aria-atomic="true"></p>
+              <p id="onboarding-error" class="setup-error" role="alert" aria-atomic="true"></p>
+            </section>
+          </div>
+        </section>
+
+        <section id="workspace" class="workspace" hidden="">
+          <div class="work-area">
+            <section class="board-shell">
+              <header class="board-heading">
+                <div class="plan-context">
+                  <p class="eyebrow">Current plan</p>
+                  <div class="title-row">
+                    <h2 id="plan-title" tabindex="-1">Loading board…</h2>
+                    <span id="plan-progress-label" class="progress-label"></span>
+                  </div>
+                  <div class="progress-track" aria-hidden="true">
+                    <span id="plan-progress" class="progress-value"></span>
+                  </div>
+                </div>
+
+                <div class="board-actions">
+                  <span id="status" class="board-status" aria-live="polite">
+                    Connecting…
+                  </span>
+                  <button id="plan-launch-agent" class="button-secondary" type="button" aria-label="Launch an installed agent for the selected plan" disabled="">Launch agent</button>
+                  <form id="add-form" class="add-form">
+                    <input id="task-title" type="text" maxlength="240" autocomplete="off" placeholder="Task title…" aria-label="Task title">
+                    <button type="submit">Add task</button>
+                  </form>
+                </div>
+              </header>
+
+              <section id="board" class="board" aria-label="Kanban board"></section>
+            </section>
+
+            <section id="terminal-dock" class="terminal-dock" data-state="closed" aria-label="Embedded terminal">
+              <div id="terminal-resize" class="terminal-resize" role="separator" tabindex="0" aria-label="Resize terminal dock" aria-orientation="horizontal" aria-valuemin="180" aria-valuemax="600" aria-valuenow="300"></div>
+              <div id="terminal-tab-row" class="terminal-tab-row">
+                <div id="terminal-tabs" class="terminal-tabs" role="tablist" aria-label="Terminal tabs"></div>
+                <div id="terminal-tab-actions" class="terminal-tab-actions" role="toolbar" aria-label="Active terminal tab actions"></div>
+                <button id="terminal-new-tab" class="terminal-new-tab" type="button" aria-label="New terminal tab" title="New terminal tab">+</button>
+                <button id="terminal-reset-workspace" class="terminal-reset-workspace" type="button" aria-label="Reset terminal workspace for this project" title="Reset terminal workspace for this project">↺</button>
+              </div>
+              <header class="terminal-toolbar">
+                <div class="terminal-identity">
+                  <span class="terminal-mark" aria-hidden="true">&gt;_</span>
+                  <div>
+                    <p class="eyebrow">Terminal</p>
+                    <p id="terminal-title" class="terminal-title">Stopped</p>
+                  </div>
+                </div>
+                <span id="terminal-status" class="terminal-status" aria-live="polite">Closed</span>
+                <label class="terminal-profile-picker">
+                  <span>Profile</span>
+                  <select id="terminal-profile" aria-label="Terminal profile"></select>
+                </label>
+                <label class="terminal-cwd-picker">
+                  <span>Working directory</span>
+                  <input id="terminal-cwd" type="text" aria-label="Terminal working directory" placeholder="Project root" spellcheck="false">
+                </label>
+                <label class="terminal-unicode-setting" title="Use experimental Unicode 15 grapheme and emoji cell widths">
+                  <input id="terminal-modern-unicode" type="checkbox" aria-label="Modern Unicode support" checked="">
+                  <span>Modern Unicode</span>
+                </label>
+                <div class="terminal-tools" role="group" aria-label="Terminal tools">
+                  <button id="terminal-search-open" class="terminal-tool-button" type="button" aria-label="Search terminal output" title="Search terminal output" disabled="">
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <circle cx="6.75" cy="6.75" r="4.25"></circle>
+                      <path d="m10 10 3.5 3.5"></path>
+                    </svg>
+                  </button>
+                  <button id="terminal-zoom-out" class="terminal-tool-button" type="button" aria-label="Decrease terminal font size" title="Decrease terminal font size" disabled="">−</button>
+                  <button id="terminal-zoom-reset" class="terminal-zoom-reset" type="button" aria-label="Reset terminal font size" title="Reset terminal font size" disabled="">100%</button>
+                  <button id="terminal-zoom-in" class="terminal-tool-button" type="button" aria-label="Increase terminal font size" title="Increase terminal font size" disabled="">+</button>
+                  <button id="terminal-clear" class="terminal-tool-button" type="button" aria-label="Clear terminal buffer" title="Clear terminal buffer" disabled="">
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="M3 4.5h10"></path>
+                      <path d="M6 2.5h4"></path>
+                      <path d="m4.5 4.5.5 9h6l.5-9"></path>
+                      <path d="M7 7v4M9 7v4"></path>
+                    </svg>
+                  </button>
+                  <button id="terminal-help" class="terminal-tool-button" type="button" aria-label="Open terminal guide" title="Open terminal guide">?</button>
+                </div>
+                <div class="terminal-actions" role="group" aria-label="Terminal actions">
+                  <button id="terminal-link-context" class="terminal-action-button" type="button" aria-label="Link terminal context" title="Link terminal context" disabled="">
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="M6.25 10.25 4.9 11.6a2.45 2.45 0 0 1-3.5-3.45l2.05-2.1A2.45 2.45 0 0 1 6.9 6"></path>
+                      <path d="m9.75 5.75 1.35-1.35a2.45 2.45 0 0 1 3.5 3.45l-2.05 2.1A2.45 2.45 0 0 1 9.1 10"></path>
+                      <path d="m5.75 10.25 4.5-4.5"></path>
+                    </svg>
+                  </button>
+                  <button id="terminal-writeback" class="terminal-action-button" type="button" aria-label="Write terminal memory back to project" title="Write memory back" disabled="">
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="M3 2.5h7l3 3v8H3z"></path>
+                      <path d="M10 2.5v3h3M8 8v4M6.25 10.25 8 12l1.75-1.75"></path>
+                    </svg>
+                  </button>
+                  <button id="terminal-diagnostics-toggle" class="terminal-action-button" type="button" aria-label="Show terminal diagnostics" title="Show terminal diagnostics" aria-controls="terminal-diagnostics" aria-expanded="false">
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <circle cx="8" cy="8" r="5.75"></circle>
+                      <path d="M8 7v4M8 4.5v.25"></path>
+                    </svg>
+                  </button>
+                  <button id="terminal-renderer-retry" class="terminal-action-button" type="button" aria-label="Retry terminal renderer" title="Retry terminal renderer" hidden="">
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="M13 5.25V2.5l-1.35 1.35A5.25 5.25 0 1 0 13 9"></path>
+                      <path d="M5.25 6.25h5.5v4.5h-5.5z"></path>
+                    </svg>
+                  </button>
+                  <button id="terminal-open" class="terminal-action-button" type="button" aria-label="Open terminal" title="Open terminal">
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="m5.25 3.5 6 4.5-6 4.5z"></path>
+                    </svg>
+                  </button>
+                  <button id="terminal-restart" class="terminal-action-button" type="button" aria-label="Restart terminal" title="Restart terminal" hidden="">
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="M13 5.25V2.5l-1.35 1.35A5.25 5.25 0 1 0 13 9"></path>
+                    </svg>
+                  </button>
+                  <button id="terminal-close" class="terminal-action-button terminal-action-stop" type="button" aria-label="Close terminal" title="Close terminal" hidden="">
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <rect x="4" y="4" width="8" height="8" rx="1"></rect>
+                    </svg>
+                  </button>
+                  <button id="terminal-force-stop" class="terminal-action-button terminal-action-stop" type="button" aria-label="Force stop terminal" title="Force stop terminal" hidden="">
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="M6.5 1.75 3.75 8h3l-1 6.25L12.25 7h-3l1-5.25z"></path>
+                    </svg>
+                  </button>
+                </div>
+              </header>
+              <section id="terminal-diagnostics" class="terminal-diagnostics" aria-label="Terminal diagnostics" aria-live="polite" aria-atomic="true" tabindex="-1" hidden="">
+                <p class="eyebrow">Diagnostics</p>
+                <dl>
+                  <div><dt>Process</dt><dd id="terminal-diagnostic-process">Stopped</dd></div>
+                  <div><dt>Stream</dt><dd id="terminal-diagnostic-stream">Idle</dd></div>
+                  <div><dt>Renderer</dt><dd id="terminal-diagnostic-renderer">Not created</dd></div>
+                  <div><dt>Layout</dt><dd id="terminal-diagnostic-layout">Default</dd></div>
+                  <div><dt>Updated</dt><dd id="terminal-diagnostic-updated">Not recorded</dd></div>
+                </dl>
+                <p class="terminal-diagnostics-help">
+                  Content-free state only. Restart creates a fresh session; streams are never reconnected.
+                </p>
+              </section>
+              <div id="terminal-body" class="terminal-body" hidden="">
+                <form id="terminal-search" class="terminal-search" role="search" data-terminal-overlay="" hidden="">
+                  <input id="terminal-search-input" type="search" autocomplete="off" spellcheck="false" placeholder="Search terminal output" aria-label="Search terminal output">
+                  <span id="terminal-search-results" class="terminal-search-results" aria-live="polite"></span>
+                  <button id="terminal-search-previous" class="terminal-search-button" type="button" aria-label="Previous terminal search result" title="Previous result · Shift+Enter">↑</button>
+                  <button id="terminal-search-next" class="terminal-search-button" type="submit" aria-label="Next terminal search result" title="Next result · Enter">↓</button>
+                  <button id="terminal-search-close" class="terminal-search-button" type="button" aria-label="Close terminal search" title="Close terminal search · Escape">×</button>
+                </form>
+                <div id="terminal-host" class="terminal-host" aria-label="Terminal session"></div>
+                <div id="terminal-message" class="terminal-message" data-terminal-overlay="" hidden=""></div>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section id="overview-page" class="overview-page" aria-label="Project overview" hidden="">
+          <header class="overview-heading">
+            <p class="eyebrow">Project memory</p>
+            <h2 id="overview-heading" tabindex="-1">Overview</h2>
+          </header>
+
+          <div class="overview-grid">
+            <section class="memory-section north-star">
+              <p class="section-label">North star</p>
+              <p id="goal" class="goal">Loading project goal…</p>
+            </section>
+
+            <section class="memory-section">
+              <p class="section-label">Rolling project summary</p>
+              <p id="summary" class="summary">No rolling summary yet.</p>
+            </section>
+
+            <section class="memory-section overview-wide">
+              <p class="section-label">Project status</p>
+              <div class="status-layout">
+                <div id="plan-ring" class="plan-ring" role="img" hidden=""></div>
+                <div id="project-stats" class="stats-grid"></div>
+              </div>
+              <div id="snapshot-bounds" class="intelligence-summary"></div>
+            </section>
+
+            <section class="memory-section overview-wide">
+              <div class="section-heading">
+                <p class="section-label">Activity</p>
+                <span class="section-caption">Notes + commits · 16 weeks</span>
+              </div>
+              <div id="activity-heatmap" class="heatmap"></div>
+            </section>
+
+            <section class="memory-section">
+              <div class="section-heading">
+                <p class="section-label">Open issues</p>
+                <span id="issue-total" class="section-count">0</span>
+              </div>
+              <div id="issue-list" class="issue-list"></div>
+            </section>
+
+            <section class="memory-section activity-section">
+              <div class="section-heading">
+                <p class="section-label">Recent memory</p>
+                <span class="section-caption">Notes + commits</span>
+              </div>
+              <div id="activity-list" class="activity-list"></div>
+              <button id="activity-more" class="activity-more" type="button" aria-label="Show all recent memory" hidden="">
+                Show more…
+              </button>
+            </section>
+
+            <section class="memory-section intelligence-section">
+              <div class="section-heading">
+                <p class="section-label">Repository</p>
+                <span id="git-state" class="section-count">Loading</span>
+              </div>
+              <p id="project-root" class="intelligence-path"></p>
+              <p id="storage-status" class="intelligence-meta"></p>
+              <div id="git-summary" class="intelligence-summary"></div>
+            </section>
+
+            <section class="memory-section intelligence-section">
+              <div class="section-heading">
+                <p class="section-label">Agent activity</p>
+                <span id="agent-activity-total" class="section-count">0</span>
+              </div>
+              <div id="agent-activity-summary" class="intelligence-summary"></div>
+              <form id="agent-handoff-form" class="agent-handoff-form">
+                <label>From <select id="agent-handoff-source" aria-label="Handoff source agent"></select></label>
+                <label>To <select id="agent-handoff-target" aria-label="Handoff target agent"></select></label>
+                <button id="agent-handoff-send" type="submit">Send handoff</button>
+              </form>
+              <p class="intelligence-meta">Handoffs are bounded proposals only; they grant no authority and change no task.</p>
+              <div id="agent-handoff-inbox" class="intelligence-list" aria-label="Agent handoff inbox"></div>
+				<form id="agent-workflow-form" class="agent-handoff-form">
+					<label>Agent <select id="agent-workflow-run" aria-label="Workflow agent"></select></label>
+					<label>Workflow
+						<select id="agent-workflow-kind" aria-label="Workflow kind">
+							<option value="validation">Validation</option>
+							<option value="commit">Commit</option>
+							<option value="pullRequest">Pull request</option>
+							<option value="merge">Merge</option>
+						</select>
+					</label>
+					<label>Target <select id="agent-workflow-target" aria-label="Workflow target branch"></select></label>
+					<button id="agent-workflow-prepare" type="submit">Prepare</button>
+				</form>
+				<p class="intelligence-meta">Workflow proposals and approvals execute nothing and grant no capability.</p>
+				<div id="agent-workflow-inbox" class="intelligence-list" aria-label="Agent workflow proposals"></div>
+              <div id="agent-drift" class="intelligence-list" aria-label="Observable work comparison"></div>
+              <p id="agent-activity-live" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></p>
+              <div id="agent-activity" class="intelligence-list" aria-label="Agent activity and notifications"></div>
+            </section>
+
+            <details class="memory-section intelligence-section">
+              <summary>Remotes and branches</summary>
+              <div id="git-remotes" class="intelligence-list"></div>
+              <div id="git-branches" class="intelligence-list"></div>
+            </details>
+
+            <details class="memory-section intelligence-section">
+              <summary>Recent Git commits</summary>
+              <div id="git-commits" class="intelligence-list"></div>
+            </details>
+
+            <details class="memory-section intelligence-section overview-wide">
+              <summary>Project blockers and notes</summary>
+              <div id="overview-blockers" class="intelligence-list"></div>
+              <div id="overview-notes" class="intelligence-list"></div>
+            </details>
+          </div>
+        </section>
+
+        <section id="capabilities-page" class="capabilities-page" aria-labelledby="capabilities-heading" hidden="">
+          <header class="overview-heading capabilities-page-heading">
+            <div>
+              <p class="eyebrow">Deny by default</p>
+              <h2 id="capabilities-heading" tabindex="-1">Network capabilities</h2>
+              <p class="capabilities-intro">
+                Grants apply only to p-track broker tools for one project and agent profile.
+                Normal terminal processes are not an OS-level network sandbox.
+              </p>
+              <p id="capability-status" class="capability-status" role="status" aria-live="polite" aria-atomic="true">Capability settings ready.</p>
+            </div>
+            <div class="capabilities-heading-actions">
+              <button id="capability-help" class="button-secondary" type="button">Capability guide</button>
+              <button id="capability-new" type="button">Add capability</button>
+            </div>
+          </header>
+
+          <div class="capabilities-grid">
+            <section class="memory-section capability-editor" aria-labelledby="capability-editor-title">
+              <div class="section-heading">
+                <h3 id="capability-editor-title" class="section-label">New capability</h3>
+                <button id="capability-clear" class="button-secondary" type="button">Clear</button>
+              </div>
+              <form id="capability-form" class="capability-form" aria-labelledby="capability-editor-title">
+                <input id="capability-id" type="hidden" value="0">
+                <label>Name <input id="capability-name" required="" maxlength="128"></label>
+                <label>Agent profile <input id="capability-profile" required="" value="agent-codex"></label>
+                <label>Kind
+                  <select id="capability-kind" aria-describedby="capability-kind-help">
+                    <option value="http">HTTP</option>
+                    <option value="git">Git</option>
+                    <option value="ssh">SSH</option>
+                  </select>
+                </label>
+                <p id="capability-kind-help" class="intelligence-meta">
+                  Only the selected kind's scope fields are active and included in the draft.
+                </p>
+                <div class="capability-row">
+                  <label>Approval minutes <input id="capability-duration" type="number" min="1" max="43200" value="60"></label>
+                  <label>Timeout seconds <input id="capability-timeout" type="number" min="1" max="300" value="30"></label>
+                  <label>Max response bytes <input id="capability-response-limit" type="number" min="1" value="4194304"></label>
+                </div>
+                <div class="capability-row">
+                  <label>Max request bytes <input id="capability-request-limit" type="number" min="1" value="1048576"></label>
+                  <label>Max output bytes <input id="capability-output-limit" type="number" min="1" value="1048576"></label>
+                  <label>Concurrency <input id="capability-concurrency" type="number" min="1" max="8" value="1"></label>
+                </div>
+                <div class="capability-row">
+                  <label>Redirects <input id="capability-redirects" type="number" min="0" max="10" value="3"></label>
+                  <label>Audit records <input id="capability-audit-retain" type="number" min="0" max="1000" value="100"></label>
+                  <label class="capability-check"><input id="capability-audit" type="checkbox" checked=""> Audit metadata</label>
+                </div>
+
+                <fieldset id="capability-http-fields" class="capability-scope-fields">
+                  <legend>HTTP scope</legend>
+                  <label>Base URL <input id="capability-http-url" placeholder="https://api.example.com/v1"></label>
+                  <label>Allowed methods <input id="capability-http-methods" value="GET" placeholder="GET, POST"></label>
+                  <label>Path prefixes <textarea id="capability-http-paths" rows="2" placeholder="/v1"></textarea></label>
+                </fieldset>
+
+                <fieldset id="capability-git-fields" class="capability-scope-fields" hidden="" disabled="">
+                  <legend>Git scope</legend>
+                  <div class="capability-row">
+                    <label>Remote name <input id="capability-git-name" value="origin"></label>
+                    <label>Remote URL <input id="capability-git-url" placeholder="https://example.com/org/repo.git"></label>
+                    <label>SSH capability ID <input id="capability-git-ssh-id" type="number" min="0" value="0"></label>
+                  </div>
+                  <label>Operations <input id="capability-git-operations" value="status, fetch" placeholder="status, fetch, pull, push"></label>
+                  <label>Branches <input id="capability-git-branches" value="main"></label>
+                  <label>Exact refspecs <textarea id="capability-git-refspecs" rows="2"></textarea></label>
+                  <div class="capability-checks">
+                    <label><input id="capability-git-tags" type="checkbox"> Tag writes</label>
+                    <label><input id="capability-git-force" type="checkbox"> Force-with-lease</label>
+                    <label><input id="capability-git-delete" type="checkbox"> Ref deletion</label>
+                  </div>
+                </fieldset>
+
+                <fieldset id="capability-ssh-fields" class="capability-scope-fields" hidden="" disabled="">
+                  <legend>SSH scope</legend>
+                  <div class="capability-row">
+                    <label>Alias <input id="capability-ssh-alias"></label>
+                    <label>Host <input id="capability-ssh-host" placeholder="host.example.com"></label>
+                    <label>Port <input id="capability-ssh-port" type="number" min="1" max="65535" value="22"></label>
+                    <label>User <input id="capability-ssh-user"></label>
+                  </div>
+                  <label>Pinned host public key <textarea id="capability-ssh-key" rows="2" placeholder="ssh-ed25519 AAAA…"></textarea></label>
+                  <label>Exact remote commands <textarea id="capability-ssh-commands" rows="2"></textarea></label>
+                  <div class="capability-checks">
+                    <label><input id="capability-ssh-git" type="checkbox"> Git-over-SSH</label>
+                    <label><input id="capability-ssh-upload" type="checkbox"> Upload</label>
+                    <label><input id="capability-ssh-download" type="checkbox"> Download</label>
+                    <label title="Interactive shells cannot be transported safely through the broker"><input id="capability-ssh-shell" type="checkbox" disabled=""> Interactive shell unavailable</label>
+                  </div>
+                  <div class="capability-row">
+                    <label>Upload local roots <input id="capability-ssh-upload-local" placeholder="dist"></label>
+                    <label>Upload remote roots <input id="capability-ssh-upload-remote" placeholder="/srv/app"></label>
+                    <label>Download local roots <input id="capability-ssh-download-local" placeholder="artifacts"></label>
+                    <label>Download remote roots <input id="capability-ssh-download-remote" placeholder="/srv/artifacts"></label>
+                  </div>
+                  <label>Local forward targets <input id="capability-ssh-local-forward" placeholder="db.internal:5432"></label>
+                  <label>Remote forward targets <input id="capability-ssh-remote-forward" placeholder="localhost:8080"></label>
+                </fieldset>
+
+                <div class="capability-editor-actions">
+                  <button id="capability-preview" class="button-secondary" type="button">Preview scope</button>
+                  <button id="capability-test" class="button-secondary" type="button">Test connection</button>
+                  <button id="capability-save" type="submit">Save draft</button>
+                </div>
+              </form>
+              <section id="capability-preview-result" class="capability-preview" aria-labelledby="capability-preview-heading" hidden="">
+                <h3 id="capability-preview-heading" class="section-label">Effective approved scope</h3>
+                <code id="capability-effective-scope"></code>
+                <p id="capability-risk-summary" class="capabilities-warning" role="note"></p>
+                <p id="capability-diagnostic" class="intelligence-meta"></p>
+              </section>
+            </section>
+
+            <section class="memory-section capability-list-section" aria-labelledby="capability-list-heading">
+              <div class="section-heading">
+                <h3 id="capability-list-heading" class="section-label" tabindex="-1" data-capability-focus-key="capability:list">Project capabilities</h3>
+                <span id="capability-total" class="section-count">0</span>
+              </div>
+              <div id="capability-list" class="capability-list" role="list" aria-labelledby="capability-list-heading"></div>
+              <section id="capability-audit-list" class="capability-audit-list" aria-labelledby="capability-audit-heading" hidden="">
+                <h3 id="capability-audit-heading" class="section-label">Recent audit metadata</h3>
+                <div id="capability-audit-items"></div>
+              </section>
+            </section>
+          </div>
+        </section>
+        </main>
+      </div>
+    </div>
+
+    <div id="modal" class="modal" hidden="">
+      <div class="modal-backdrop" data-close-modal=""></div>
+      <form id="dialog-form" class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-heading">
+        <p id="dialog-eyebrow" class="eyebrow">Edit card</p>
+        <h2 id="dialog-heading">Rename task</h2>
+        <label id="dialog-label" for="dialog-input">Task title</label>
+        <input id="dialog-input" type="text" maxlength="240" autocomplete="off">
+        <textarea id="dialog-note" maxlength="1000" rows="5" placeholder="Record a decision, constraint, or useful observation…" hidden=""></textarea>
+        <p id="dialog-help" class="dialog-help"></p>
+        <div class="dialog-actions">
+          <button class="button-secondary" type="button" data-close-modal="">
+            Cancel
+          </button>
+          <button id="dialog-submit" type="submit">Save changes</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="memory-modal" class="modal" hidden="">
+      <div class="modal-backdrop" data-close-memory-modal=""></div>
+      <section class="dialog memory-dialog" role="dialog" aria-modal="true" aria-labelledby="memory-dialog-heading">
+        <div class="memory-dialog-heading">
+          <div>
+            <p class="eyebrow">Project memory</p>
+            <h2 id="memory-dialog-heading">Recent notes and commits</h2>
+          </div>
+          <button id="memory-dialog-close" class="dialog-close" type="button" aria-label="Close recent memory">
+            Close
+          </button>
+        </div>
+        <div id="memory-dialog-list" class="memory-dialog-list"></div>
+      </section>
+    </div>
+
+    <div id="settings-modal" class="modal" hidden="">
+      <button class="modal-backdrop" type="button" data-close-settings="" tabindex="-1" aria-label="Close Settings"></button>
+      <section class="dialog settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-dialog-heading">
+        <header class="settings-dialog-heading">
+          <div>
+            <p class="eyebrow">p-track</p>
+            <h2 id="settings-dialog-heading">Settings</h2>
+          </div>
+          <button id="settings-close" class="dialog-close" type="button" aria-label="Close Settings">Close</button>
+        </header>
+        <p id="settings-storage-notice" class="dialog-help settings-storage-notice" hidden=""></p>
+        <div id="settings-body" class="settings-dialog-body">
+          <div id="settings-section-list" class="settings-section-list" role="tablist" aria-orientation="vertical" aria-label="Settings sections">
+            <button id="settings-tab-startup" class="settings-section-tab" type="button" role="tab" aria-selected="true" aria-controls="settings-panel-startup" tabindex="0">Startup</button>
+            <button id="settings-tab-appearance" class="settings-section-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-appearance" tabindex="-1">Appearance</button>
+            <button id="settings-tab-terminal" class="settings-section-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-terminal" tabindex="-1">Terminal</button>
+            <button id="settings-tab-updates" class="settings-section-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-updates" tabindex="-1">Updates</button>
+            <button id="settings-tab-data" class="settings-section-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-data" tabindex="-1">Data &amp; Diagnostics</button>
+          </div>
+
+          <div class="settings-panels">
+            <section id="settings-panel-startup" class="settings-panel" role="tabpanel" aria-labelledby="settings-tab-startup" tabindex="0">
+              <h3 class="section-label">Startup</h3>
+              <label class="settings-check" for="settings-startup-restore">
+                <input id="settings-startup-restore" type="checkbox">
+                <span>
+                  Reopen the last project when p-track starts
+                  <small>Off by default. The last project reopens only while it is still
+                  valid; otherwise p-track opens Welcome.</small>
+                </span>
+              </label>
+              <p class="dialog-help">
+                A folder named on the command line always wins. A project that moved is
+                never reopened until you confirm the move yourself.
+              </p>
+            </section>
+
+            <section id="settings-panel-appearance" class="settings-panel" role="tabpanel" aria-labelledby="settings-tab-appearance" tabindex="0" hidden="">
+              <h3 class="section-label">Appearance</h3>
+              <label class="settings-field" for="settings-theme">
+                <span>Color theme</span>
+                <select id="settings-theme">
+                  <option value="system">Follow system</option>
+                  <option value="dark">Dark</option>
+                  <option value="light">Light</option>
+                </select>
+              </label>
+              <label class="settings-field" for="settings-density">
+                <span>Density</span>
+                <select id="settings-density" aria-describedby="settings-density-help">
+                  <option value="comfortable">Comfortable</option>
+                  <option value="compact">Compact</option>
+                </select>
+              </label>
+              <p id="settings-density-help" class="dialog-help">
+                Compact tightens the spacing scale across the whole window.
+              </p>
+              <label class="settings-field" for="settings-reduced-motion">
+                <span>Reduced motion</span>
+                <select id="settings-reduced-motion" aria-describedby="settings-reduced-motion-help">
+                  <option value="system">Follow system</option>
+                  <option value="always">Always reduce</option>
+                  <option value="never">Never reduce</option>
+                </select>
+              </label>
+              <p id="settings-reduced-motion-help" class="dialog-help">
+                Follow system uses the operating system reduced-motion setting.
+              </p>
+            </section>
+
+            <section id="settings-panel-terminal" class="settings-panel" role="tabpanel" aria-labelledby="settings-tab-terminal" tabindex="0" hidden="">
+              <h3 class="section-label">Terminal</h3>
+              <p class="dialog-help">
+                Changes apply to terminals you open next. Running sessions and their
+                per-pane zoom stay exactly as they are.
+              </p>
+              <label class="settings-field" for="settings-terminal-profile">
+                <span>Default profile</span>
+                <select id="settings-terminal-profile" aria-describedby="settings-terminal-profile-help">
+                  <option value="">First installed profile</option>
+                </select>
+              </label>
+              <p id="settings-terminal-profile-help" class="dialog-help">
+                A preference only. Sessions already bound to a profile are untouched.
+              </p>
+              <label class="settings-field" for="settings-terminal-font-family">
+                <span>Font family</span>
+                <input id="settings-terminal-font-family" type="text" maxlength="128" spellcheck="false" aria-describedby="settings-terminal-font-family-help">
+              </label>
+              <p id="settings-terminal-font-family-help" class="dialog-help">
+                Use monospace for the built-in stack.
+              </p>
+              <label class="settings-field" for="settings-terminal-font-size">
+                <span>Font size</span>
+                <input id="settings-terminal-font-size" type="number" min="10" max="24" step="1" aria-describedby="settings-terminal-font-size-help">
+              </label>
+              <p id="settings-terminal-font-size-help" class="dialog-help">
+                10 to 24 pixels.
+              </p>
+              <label class="settings-field" for="settings-terminal-unicode">
+                <span>Unicode mode</span>
+                <select id="settings-terminal-unicode">
+                  <option value="modern">Modern graphemes</option>
+                  <option value="legacy">Legacy widths</option>
+                </select>
+              </label>
+              <label class="settings-field" for="settings-terminal-scrollback">
+                <span>Scrollback</span>
+                <input id="settings-terminal-scrollback" type="number" min="1000" max="200000" step="1000" aria-describedby="settings-terminal-scrollback-help">
+              </label>
+              <p id="settings-terminal-scrollback-help" class="dialog-help">
+                1,000 to 200,000 lines.
+              </p>
+              <label class="settings-field" for="settings-terminal-renderer">
+                <span>Renderer</span>
+                <select id="settings-terminal-renderer" aria-describedby="settings-terminal-renderer-help">
+                  <option value="auto">Automatic</option>
+                  <option value="webgl">Accelerated (WebGL)</option>
+                  <option value="canvas">Canvas</option>
+                  <option value="dom">DOM</option>
+                </select>
+              </label>
+              <p id="settings-terminal-renderer-help" class="dialog-help">
+                Automatic uses WebGL when the platform allows it and falls back on its
+                own. Canvas and DOM both draw without acceleration.
+              </p>
+            </section>
+
+            <section id="settings-panel-updates" class="settings-panel" role="tabpanel" aria-labelledby="settings-tab-updates" tabindex="0" hidden="">
+              <h3 class="section-label">Updates</h3>
+              <label class="settings-check" for="settings-updates-automatic">
+                <input id="settings-updates-automatic" type="checkbox">
+                <span>
+                  Check automatically when p-track starts
+                  <small>Contacts GitHub Releases only after you opt in.</small>
+                </span>
+              </label>
+              <p class="dialog-help">
+                Checks are opt-in. Downloads and installations always stay manual.
+              </p>
+              <button id="settings-open-updates" class="button-secondary" type="button">
+                Open About &amp; Updates
+              </button>
+            </section>
+
+            <section id="settings-panel-data" class="settings-panel" role="tabpanel" aria-labelledby="settings-tab-data" tabindex="0" hidden="">
+              <h3 class="section-label">Data &amp; Diagnostics</h3>
+              <p class="dialog-help">
+                The report is read-only. Nothing here changes stored project data.
+              </p>
+              <dl id="settings-diagnostics" class="settings-diagnostics"></dl>
+              <button id="settings-open-capabilities" class="button-secondary" type="button">Open Network Capabilities</button>
+              <h4 class="section-label">Reset</h4>
+              <p id="settings-reset-help" class="dialog-help">
+                Neither reset touches plans, tasks, notes, or Recent projects. Reset
+                Application State also revokes every network capability grant in the
+                open project, which you must grant again.
+              </p>
+              <div class="settings-reset-actions">
+                <button id="settings-reset-window-layout" class="button-secondary" type="button" aria-describedby="settings-reset-help">Reset Window Layout</button>
+                <button id="settings-reset-application-state" class="button-secondary" type="button" aria-describedby="settings-reset-help">Reset Application State</button>
+              </div>
+            </section>
+          </div>
+        </div>
+        <!-- One footer row. The live region stays a sibling of the aria-busy
+             body so a long reset is still announced. -->
+        <div class="settings-dialog-footer">
+          <p id="settings-save-status" class="settings-save-status" role="status" aria-live="polite" aria-atomic="true"></p>
+          <div class="dialog-actions">
+            <button id="settings-reset" class="button-secondary" type="button">
+              Reset to defaults
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div id="updates-modal" class="modal" hidden="">
+      <button class="modal-backdrop" type="button" data-close-updates="" tabindex="-1" aria-label="Close About and Updates"></button>
+      <section class="dialog updates-dialog" role="dialog" aria-modal="true" aria-labelledby="updates-heading" aria-describedby="updates-privacy updates-status-detail">
+        <header class="updates-heading">
+          <div>
+            <p class="eyebrow">p-track</p>
+            <h2 id="updates-heading">About &amp; Updates</h2>
+          </div>
+          <button id="updates-close" class="dialog-close" type="button" aria-label="Close About and Updates">Close</button>
+        </header>
+        <section class="about-identity" aria-labelledby="about-identity-heading">
+          <h3 id="about-identity-heading" class="section-label">p-track</h3>
+          <p class="about-tagline">
+            A local-first project workspace for agent-assisted development.
+          </p>
+          <dl class="about-facts">
+            <div>
+              <dt>Version</dt>
+              <dd id="about-version">dev</dd>
+            </div>
+            <div>
+              <dt>Build</dt>
+              <dd id="about-build">Desktop build</dd>
+            </div>
+            <div>
+              <dt>License</dt>
+              <dd id="about-license">Apache-2.0</dd>
+            </div>
+          </dl>
+          <div class="about-links" role="group" aria-label="p-track links">
+            <button id="about-project" class="button-secondary" type="button">
+              Project on GitHub
+            </button>
+            <button id="about-license-link" class="button-secondary" type="button">
+              Apache-2.0 license
+            </button>
+            <button id="about-help" class="button-secondary" type="button">
+              Help Center
+            </button>
+            <button id="about-report" class="button-secondary" type="button">
+              Report an issue
+            </button>
+          </div>
+        </section>
+        <p id="updates-current-version" class="updates-current-version">Current version: dev</p>
+        <label class="updates-automatic-option" for="updates-automatic">
+          <input id="updates-automatic" type="checkbox">
+          <span>
+            Check automatically when p-track starts
+            <small>Contacts GitHub Releases only after you opt in.</small>
+          </span>
+        </label>
+        <p id="updates-privacy" class="dialog-help updates-privacy">
+          Automatic checks never download or install anything. Download and installation always require your action.
+        </p>
+        <section id="updates-status" class="updates-status" role="status" aria-live="polite" aria-atomic="true">
+          <h3 id="updates-status-title">Updates are ready</h3>
+          <p id="updates-status-detail">Check GitHub Releases when you choose.</p>
+        </section>
+        <div id="updates-progress-wrap" class="updates-progress" hidden="">
+          <progress id="updates-progress" max="100" value="0" aria-label="Update download progress"></progress>
+          <span id="updates-progress-label">0%</span>
+        </div>
+        <section id="updates-release" class="updates-release" hidden="">
+          <div class="updates-release-heading">
+            <strong id="updates-release-version"></strong>
+            <span id="updates-release-meta"></span>
+          </div>
+          <p id="updates-release-notes" class="updates-release-notes"></p>
+          <button id="updates-release-page" class="button-secondary" type="button" hidden="">View release on GitHub</button>
+        </section>
+        <p id="updates-verified" class="updates-verified" hidden="">
+          Checksum and platform verified
+        </p>
+        <div class="dialog-actions">
+          <button id="updates-cancel" class="button-secondary" type="button" hidden="">Cancel</button>
+          <button id="updates-primary" type="button">Check for updates</button>
+        </div>
+      </section>
+    </div>
+
+    <div id="task-drawer" class="modal" hidden="">
+      <div class="modal-backdrop" data-close-drawer=""></div>
+      <aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
+        <header class="drawer-header">
+          <div class="drawer-heading">
+            <p id="drawer-eyebrow" class="eyebrow">Task</p>
+            <h2 id="drawer-title">Task detail</h2>
+            <div class="drawer-meta">
+              <span id="drawer-status" class="drawer-status-badge" data-status="todo">
+                Todo
+              </span>
+              <span id="drawer-updated" class="drawer-updated"></span>
+            </div>
+          </div>
+          <button id="drawer-close" class="dialog-close" type="button" aria-label="Close task detail">
+            Close
+          </button>
+        </header>
+        <div class="drawer-actions">
+          <select id="drawer-status-select" aria-label="Task status"></select>
+          <button id="drawer-rename" class="button-secondary" type="button">
+            Rename
+          </button>
+          <button id="drawer-memory" class="button-secondary" type="button">
+            Record memory
+          </button>
+          <button id="drawer-launch-agent" class="button-secondary" type="button">
+            Launch agent
+          </button>
+        </div>
+        <div id="drawer-body" class="drawer-body">
+          <section class="drawer-section">
+            <div class="section-heading">
+              <p class="section-label">Linked runtime</p>
+              <span id="drawer-runtime-count" class="section-count">0</span>
+            </div>
+            <div id="drawer-runtime" class="drawer-list"></div>
+          </section>
+          <section class="drawer-section">
+            <div class="section-heading">
+              <p class="section-label">Notes</p>
+              <span id="drawer-notes-count" class="section-count">0</span>
+            </div>
+            <div id="drawer-notes" class="drawer-list"></div>
+          </section>
+          <section class="drawer-section">
+            <div class="section-heading">
+              <p class="section-label">Commits</p>
+              <span id="drawer-commits-count" class="section-count">0</span>
+            </div>
+            <div id="drawer-commits" class="drawer-list"></div>
+          </section>
+          <section class="drawer-section">
+            <div class="section-heading">
+              <p class="section-label">Issues</p>
+              <span id="drawer-issues-count" class="section-count">0</span>
+            </div>
+            <div id="drawer-issues" class="drawer-list"></div>
+          </section>
+        </div>
+      </aside>
+    </div>
+
+    <div id="agent-launch-modal" class="modal" hidden="">
+      <button class="modal-backdrop" type="button" data-close-agent-launch="" tabindex="-1" aria-label="Cancel agent launch"></button>
+      <form id="agent-launch-form" class="dialog agent-launch-dialog" role="dialog" aria-modal="true" aria-labelledby="agent-launch-heading" aria-describedby="agent-launch-detail agent-launch-message">
+        <p class="eyebrow">Linked terminal</p>
+        <h2 id="agent-launch-heading">Launch installed agent</h2>
+        <p id="agent-launch-detail" class="agent-launch-detail"></p>
+        <label for="agent-launch-profile">Installed agent profile</label>
+        <select id="agent-launch-profile" disabled=""></select>
+        <p id="agent-launch-message" class="dialog-help" aria-live="polite">
+          Discovering installed agent profiles…
+        </p>
+        <div class="dialog-actions">
+          <button id="agent-launch-cancel" class="button-secondary" type="button">Cancel</button>
+          <button id="agent-launch-submit" type="submit" disabled="">
+            Launch in new tab
+          </button>
+        </div>
+      </form>
+    </div>
+
+    <div id="terminal-association-modal" class="modal" hidden="">
+      <button class="modal-backdrop" type="button" data-close-terminal-association="" tabindex="-1" aria-label="Cancel terminal context change"></button>
+      <form id="terminal-association-form" class="dialog agent-launch-dialog" role="dialog" aria-modal="true" aria-labelledby="terminal-association-heading" aria-describedby="terminal-association-detail terminal-association-message">
+        <p class="eyebrow">Active terminal tab</p>
+        <h2 id="terminal-association-heading">Link terminal context</h2>
+        <p id="terminal-association-detail" class="agent-launch-detail"></p>
+        <label for="terminal-association-target">Plan or task</label>
+        <select id="terminal-association-target" disabled=""></select>
+        <p id="terminal-association-message" class="dialog-help" aria-live="polite">Choose the selected plan or one of its tasks.</p>
+        <div class="dialog-actions">
+          <button id="terminal-association-detach" class="button-secondary" type="button" disabled="">Detach</button>
+          <button id="terminal-association-cancel" class="button-secondary" type="button">Cancel</button>
+          <button id="terminal-association-submit" type="submit" disabled="">
+            Save link
+          </button>
+        </div>
+      </form>
+    </div>
+
+    <div id="terminal-writeback-modal" class="modal" hidden="">
+      <button class="modal-backdrop" type="button" data-close-terminal-writeback="" tabindex="-1" aria-label="Cancel terminal memory write-back"></button>
+      <form id="terminal-writeback-form" class="dialog terminal-writeback-dialog" role="dialog" aria-modal="true" aria-labelledby="terminal-writeback-heading" aria-describedby="terminal-writeback-target terminal-writeback-message">
+        <p class="eyebrow">Active terminal tab</p>
+        <h2 id="terminal-writeback-heading">Write memory back</h2>
+        <p id="terminal-writeback-target" class="agent-launch-detail"></p>
+        <label for="terminal-writeback-kind">Memory type</label>
+        <select id="terminal-writeback-kind">
+          <option value="decision">Decision</option>
+          <option value="blocker">Blocker</option>
+          <option value="handoff">Handoff</option>
+          <option value="summary">Project rolling summary</option>
+        </select>
+        <label for="terminal-writeback-content">Memory written by you</label>
+        <textarea id="terminal-writeback-content" rows="8" maxlength="4000" autocomplete="off" spellcheck="true" placeholder="Enter a bounded summary, decision, blocker, or handoff…"></textarea>
+        <p id="terminal-writeback-message" class="dialog-help" aria-live="polite">Enter memory, then preview its authoritative destination.</p>
+        <section id="terminal-writeback-preview" class="writeback-preview" hidden="">
+          <strong id="terminal-writeback-preview-target"></strong>
+          <p id="terminal-writeback-preview-content"></p>
+        </section>
+        <label id="terminal-writeback-summary-warning" class="writeback-summary-warning" hidden="">
+          <input id="terminal-writeback-summary-confirm" type="checkbox">
+          Replace the entire project rolling summary with this preview.
+        </label>
+        <div class="dialog-actions">
+          <button id="terminal-writeback-cancel" class="button-secondary" type="button">Cancel</button>
+          <button id="terminal-writeback-preview-button" type="submit">
+            Preview
+          </button>
+          <button id="terminal-writeback-save" type="button" disabled="">
+            Write memory
+          </button>
+        </div>
+      </form>
+    </div>
+
+    <div id="task-transition-modal" class="modal" hidden="">
+      <button class="modal-backdrop" type="button" data-close-task-transition="" tabindex="-1" aria-label="Cancel task status change"></button>
+      <form id="task-transition-form" class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="task-transition-heading" aria-describedby="task-transition-detail task-transition-message">
+        <p class="eyebrow">Active linked resources</p>
+        <h2 id="task-transition-heading">Confirm task status change</h2>
+        <p id="task-transition-detail" class="dialog-help"></p>
+        <p id="task-transition-message" class="dialog-help" aria-live="polite">Confirm to change only this task's status.</p>
+        <div class="dialog-actions">
+          <button id="task-transition-cancel" class="button-secondary" type="button">Cancel</button>
+          <button id="task-transition-submit" type="submit">
+            Confirm status change
+          </button>
+        </div>
+      </form>
+    </div>
+
+    <div id="workspace-confirm-modal" class="modal" hidden="">
+      <div class="modal-backdrop"></div>
+      <section class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="workspace-confirm-heading" aria-describedby="workspace-confirm-detail">
+        <p id="workspace-confirm-eyebrow" class="eyebrow">Active project resources</p>
+        <h2 id="workspace-confirm-heading">Leave this project?</h2>
+        <p id="workspace-confirm-detail" class="dialog-help"></p>
+        <div class="dialog-actions">
+          <button id="workspace-confirm-cancel" class="button-secondary" type="button">Stay here</button>
+          <button id="workspace-confirm-submit" type="button">Continue</button>
+        </div>
+      </section>
+    </div>
+
+    <div id="terminal-paste-modal" class="modal" data-terminal-overlay="" hidden="">
+      <button id="terminal-paste-backdrop" class="modal-backdrop" type="button" tabindex="-1" aria-label="Cancel paste"></button>
+      <form id="terminal-paste-form" class="dialog terminal-paste-dialog" role="dialog" aria-modal="true" aria-labelledby="terminal-paste-heading" aria-describedby="terminal-paste-detail">
+        <p class="eyebrow">Terminal safety</p>
+        <h2 id="terminal-paste-heading">Paste multiple lines?</h2>
+        <p id="terminal-paste-detail" class="dialog-help"></p>
+        <pre id="terminal-paste-preview" class="terminal-paste-preview" tabindex="0"></pre>
+        <div class="dialog-actions">
+          <button id="terminal-paste-cancel" class="button-secondary" type="button">Cancel</button>
+          <button id="terminal-paste-confirm" type="submit">Paste text</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="terminal-termination-modal" class="modal" data-terminal-overlay="" hidden="">
+      <button id="terminal-termination-backdrop" class="modal-backdrop" type="button" tabindex="-1" aria-label="Cancel terminal close"></button>
+      <section class="dialog terminal-termination-dialog" role="dialog" aria-modal="true" aria-labelledby="terminal-termination-heading" aria-describedby="terminal-termination-detail">
+        <p class="eyebrow">Terminal safety</p>
+        <h2 id="terminal-termination-heading">Terminate live terminals?</h2>
+        <p id="terminal-termination-detail" class="dialog-help"></p>
+        <div class="dialog-actions">
+          <button id="terminal-termination-cancel" class="button-secondary" type="button">Cancel</button>
+          <button id="terminal-termination-confirm" type="button">Terminate</button>
+        </div>
+      </section>
+    </div>
+
+    <div id="terminal-context-menu" class="terminal-context-menu" role="menu" aria-label="Terminal actions" data-terminal-overlay="" hidden="">
+      <button id="terminal-menu-copy" type="button" role="menuitem">
+        <span>Copy</span>
+        <kbd id="terminal-menu-copy-shortcut"></kbd>
+      </button>
+      <button id="terminal-menu-paste" type="button" role="menuitem">
+        <span>Paste</span>
+        <kbd id="terminal-menu-paste-shortcut"></kbd>
+      </button>
+      <button id="terminal-menu-select-all" type="button" role="menuitem">
+        <span>Select all</span>
+        <kbd id="terminal-menu-select-all-shortcut"></kbd>
+      </button>
+      <div class="terminal-context-separator" role="separator"></div>
+      <button id="terminal-menu-search" type="button" role="menuitem">
+        <span>Search output</span>
+        <kbd id="terminal-menu-search-shortcut"></kbd>
+      </button>
+      <button id="terminal-menu-clear" type="button" role="menuitem">
+        <span>Clear buffer</span>
+        <kbd id="terminal-menu-clear-shortcut"></kbd>
+      </button>
+      <button id="terminal-menu-reset" type="button" role="menuitem">
+        <span>Reset terminal state</span>
+        <kbd></kbd>
+      </button>
+    </div>
+
+    <div id="palette" class="modal palette-modal" hidden="">
+      <div class="modal-backdrop" data-close-palette=""></div>
+      <section class="palette" role="dialog" aria-modal="true" aria-label="Search the project">
+        <input id="palette-input" type="text" autocomplete="off" placeholder="Search plans, tasks, notes…" aria-label="Search plans, tasks, and notes" aria-controls="palette-results">
+        <div id="palette-results" class="palette-results" role="listbox" aria-label="Search results"></div>
+      </section>
+    </div>
+
+    <div id="toast" class="toast" role="alert" aria-live="assertive" hidden=""></div>
+  
+
+</body></html>
