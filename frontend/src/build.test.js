@@ -374,7 +374,7 @@ describe("production asset layout", () => {
       /id="terminal-help"[\s\S]*aria-label="Open terminal guide"/,
     );
     expect(index).toMatch(
-      /class="settings-heading-actions"[\s\S]*id="capability-help"[\s\S]*>Capability guide<\/button>/,
+      /class="capabilities-heading-actions"[\s\S]*id="capability-help"[\s\S]*>Capability guide<\/button>/,
     );
     expect(app).toContain("OpenHelpDestination");
     expect(appSource).toContain('openHelpDestination("terminals")');
@@ -497,7 +497,7 @@ describe("production asset layout", () => {
     expect(styles).toMatch(/data-application-overlay-layer=(?:active|"active")/);
     expect(styles).toMatch(/data-application-overlay-layer=(?:underlay|"underlay")/);
     expect(index).toMatch(
-      /<main[^>]*id="main-content"[^>]*class="canvas-main"[^>]*aria-label="Workspace content"[\s\S]*id="settings-page"[^>]*aria-labelledby="capabilities-heading"[\s\S]*id="capabilities-heading"[^>]*tabindex="-1"/,
+      /<main[^>]*id="main-content"[^>]*class="canvas-main"[^>]*aria-label="Workspace content"[\s\S]*id="capabilities-page"[^>]*aria-labelledby="capabilities-heading"[\s\S]*id="capabilities-heading"[^>]*tabindex="-1"/,
     );
     expect(index).toMatch(
       /<main[^>]*id="main-content"[^>]*class="canvas-main"[\s\S]*id="overview-page"[^>]*aria-label="Project overview"/,
@@ -537,7 +537,97 @@ describe("production asset layout", () => {
     expect(appSource).toContain("fieldset.disabled = !active");
     expect(appSource).toContain('EnableCapabilityV2(generation, Number(view.capability.id), digest)');
     expect(appSource).toContain("canEnableCapability(view, digest)");
-    expect(appSource).toContain('setView("settings", true)');
+    expect(appSource).toContain('setView("capabilities", true)');
     expect(appSource).not.toContain('setStatus("Testing connection');
+    expect(appSource).not.toContain('setView("settings"');
+    expect(index).toMatch(
+      /id="settings-open"[^>]*aria-label="Open Settings"[\s\S]*aria-haspopup="dialog"[\s\S]*aria-controls="settings-modal"/,
+    );
+    expect(index).toMatch(
+      /id="settings-modal"[\s\S]*role="dialog"[\s\S]*aria-modal="true"[\s\S]*aria-labelledby="settings-dialog-heading"[\s\S]*id="settings-dialog-heading"[^>]*>Settings<\/h2>/,
+    );
+    expect(index).toMatch(
+      /id="settings-section-list"[\s\S]*role="tablist"[\s\S]*aria-orientation="vertical"[\s\S]*aria-label="Settings sections"/,
+    );
+    for (const section of ["appearance", "terminal", "updates", "data"]) {
+      expect(index).toMatch(
+        new RegExp(
+          `id="settings-tab-${section}"[\\s\\S]*?role="tab"[\\s\\S]*?aria-controls="settings-panel-${section}"`,
+        ),
+      );
+      expect(index).toMatch(
+        new RegExp(
+          `id="settings-panel-${section}"[\\s\\S]*?role="tabpanel"[\\s\\S]*?aria-labelledby="settings-tab-${section}"[\\s\\S]*?tabindex="0"`,
+        ),
+      );
+    }
+    // The roving tabindex is an attribute of the tab itself, so the match must
+    // not cross the tag boundary onto a panel or a later tab.
+    expect(index).toMatch(/id="settings-tab-appearance"[^>]*\stabindex="0"/);
+    expect(index).toMatch(/id="settings-tab-terminal"[^>]*\stabindex="-1"/);
+    // The save-status live region sits outside the aria-busy wrapper.
+    expect(index).toMatch(
+      /id="settings-body"[\s\S]*<\/div>\s*<p\s*id="settings-save-status"[\s\S]*role="status"[\s\S]*aria-live="polite"[\s\S]*aria-atomic="true"/,
+    );
+    expect(index).toMatch(
+      /id="settings-terminal-font-size"[\s\S]*min="10"[\s\S]*max="24"[\s\S]*aria-describedby="settings-terminal-font-size-help"/,
+    );
+    expect(index).toMatch(
+      /id="settings-terminal-scrollback"[\s\S]*min="1000"[\s\S]*max="200000"[\s\S]*aria-describedby="settings-terminal-scrollback-help"/,
+    );
+    expect(index).toContain("Checks are opt-in. Downloads and installations always stay manual.");
+    expect(index).toMatch(
+      /id="about-identity-heading"[\s\S]*id="about-version"[\s\S]*id="about-build"[\s\S]*id="about-license"[^>]*>Apache-2\.0<\/dd>/,
+    );
+    expect(index).toMatch(
+      /id="about-project"[\s\S]*id="about-license-link"[\s\S]*id="about-help"[\s\S]*id="about-report"/,
+    );
+    expect(index.match(/id="updates-primary"/g)).toHaveLength(1);
+    expect(app).toContain("GetPreferences");
+    expect(app).toContain("SetPreferences");
+    expect(app).toContain("ResetPreferences");
+    expect(app).toContain("GetDiagnosticsReport");
+    expect(appSource).toContain("preferencesResponse(await api().GetPreferences())");
+    expect(appSource).toContain("preferencesResponse(await api().SetPreferences(patch))");
+    expect(appSource).toContain("preferencesResponse(await api().ResetPreferences())");
+    expect(appSource).toContain("await api().GetDiagnosticsReport()");
+    expect(appSource).toContain("applyPreferenceMirrors(localStorage, next)");
+    // A runtime that never answered is stated plainly instead of looking healthy.
+    expect(appSource).toContain('renderSettingsStorageNotice("unavailable")');
+    // The terminal dock toggle writes through the stored record, never the mirror.
+    expect(appSource).toContain(
+      "saveUnicodeMode: (unicodeMode) => void savePreferences({ terminal: { unicodeMode } })",
+    );
+    expect(paneSource).toContain(
+      'this.#saveUnicodeMode(enabled ? "modern" : "legacy")',
+    );
+    expect(paneSource).not.toContain("writeModernUnicodeSetting");
+    expect(appSource).toContain("themeController.setTheme(next.appearance.theme)");
+    expect(appSource).toContain("root.dataset.density = next.appearance.density");
+    expect(appSource).toContain(
+      "void savePreferences({ appearance: { theme: themeController.toggle() } })",
+    );
+    // Updates stay a single source of truth on the existing command.
+    expect(appSource.match(/api\(\)\.SetAutomaticUpdateChecks\(/g)).toHaveLength(1);
+    expect(appSource).toContain("await loadPreferences();");
+    expect(appSource).toContain('escapeAction === "settings"');
+    expect(appSource).toContain("nextSettingsSectionIndex(");
+    expect(appSource).toContain('openSettings(elements.settingsOpen)');
+    expect(appSource).toContain('openHelpDestination("help-center")');
+    expect(appSource).toContain('openHelpDestination("report-issue")');
+    expect(paneSource).toContain("readTerminalPreferenceOverrides(localStorage)");
+    expect(paneSource).toContain("webglPreferredByPreference(");
+    expect(styles).toMatch(
+      /:root\[data-density=(?:"compact"|compact)\]\{[^}]*--space-100:\s*6px/,
+    );
+    expect(styles).toMatch(
+      /:root\[data-reduced-motion=(?:"always"|always)\][^{]*\{[^}]*animation-duration:\.01ms!important/,
+    );
+    expect(styles).toMatch(
+      /prefers-reduced-motion:reduce\)\{:root:not\(\[data-reduced-motion=(?:"never"|never)\]\)/,
+    );
+    expect(styles).toMatch(
+      /\.settings-section-tab\[aria-selected=(?:"true"|true)\]\{[^}]*border-color:var\(--control-border\)/,
+    );
   });
 });

@@ -94,6 +94,18 @@
   --space-400: 32px;
 }
 
+/* The density preference switches the whole spacing scale, so every surface
+   built on the tokens tightens together. */
+:root[data-density="compact"] {
+  --space-050: 3px;
+  --space-100: 6px;
+  --space-150: 9px;
+  --space-200: 12px;
+  --space-250: 14px;
+  --space-300: 17px;
+  --space-400: 22px;
+}
+
 [data-theme="light"] {
   color-scheme: light;
 
@@ -1541,7 +1553,7 @@ select option {
 
 /* -------------------------------------------------- capability settings */
 
-.settings-page {
+.capabilities-page {
   min-width: 0;
   min-height: 0;
   flex: 1 1 auto;
@@ -1549,7 +1561,7 @@ select option {
   padding: var(--space-250) var(--space-300) var(--space-300);
 }
 
-.settings-heading {
+.capabilities-page-heading {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
@@ -1557,13 +1569,13 @@ select option {
   gap: var(--space-250);
 }
 
-.settings-heading-actions {
+.capabilities-heading-actions {
   display: flex;
   flex: 0 0 auto;
   gap: var(--space-100);
 }
 
-.settings-intro {
+.capabilities-intro {
   max-width: 760px;
   margin: var(--space-100) 0 0;
   color: var(--text-soft);
@@ -1578,14 +1590,14 @@ select option {
   font-weight: 650;
 }
 
-.settings-grid {
+.capabilities-grid {
   display: grid;
   grid-template-columns: minmax(360px, 1.15fr) minmax(320px, 0.85fr);
   gap: var(--space-200);
   align-items: start;
 }
 
-.settings-page .memory-section {
+.capabilities-page .memory-section {
   border: 1px solid var(--line-subtle);
   border-radius: 12px;
   background: var(--fill-subtle);
@@ -1691,7 +1703,7 @@ select option {
   white-space: pre-wrap;
 }
 
-.settings-warning {
+.capabilities-warning {
   margin: var(--space-100) 0 0;
   color: var(--doing);
   font-size: 0.6875rem;
@@ -2655,6 +2667,227 @@ button.modal-backdrop:active {
   color: var(--done);
   font-size: 0.75rem;
   font-weight: 700;
+}
+
+/* ------------------------------------------------------ about and settings */
+
+.about-identity {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--fill-subtle);
+  padding: var(--space-200);
+}
+
+.about-tagline {
+  margin: 6px 0 var(--space-150);
+  color: var(--text-soft);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+.about-facts {
+  display: grid;
+  gap: 6px var(--space-200);
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  margin: 0;
+}
+
+.about-facts dt {
+  color: var(--muted);
+  font-size: 0.6875rem;
+  font-weight: 650;
+}
+
+.about-facts dd {
+  overflow-wrap: anywhere;
+  margin: 0;
+  color: var(--text);
+  font-size: 0.8125rem;
+}
+
+.about-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-100);
+  margin-top: var(--space-200);
+}
+
+.settings-dialog {
+  width: min(680px, calc(100% - 40px));
+  max-height: min(760px, calc(100% - 48px));
+  overflow-y: auto;
+}
+
+.settings-dialog-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-200);
+}
+
+.settings-dialog-heading h2 {
+  margin-bottom: 0;
+}
+
+.settings-storage-notice {
+  border: 1px solid var(--blocked);
+  border-radius: 10px;
+  color: var(--text);
+  padding: var(--space-100) var(--space-150);
+}
+
+.settings-dialog-body {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-250);
+  margin-top: var(--space-250);
+}
+
+.settings-section-list {
+  display: flex;
+  flex: 0 0 172px;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-section-tab {
+  min-height: 34px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: var(--text-soft);
+  background: transparent;
+  box-shadow: none;
+  padding: 6px var(--space-150);
+  font-size: 0.8125rem;
+  text-align: left;
+}
+
+.settings-section-tab:hover {
+  border-color: var(--line);
+  color: var(--text);
+  background: var(--fill-hover);
+  box-shadow: none;
+  transform: none;
+}
+
+.settings-section-tab[aria-selected="true"] {
+  border-color: var(--control-border);
+  color: var(--nav-active-text);
+  background: var(--nav-active-bg);
+  font-weight: 650;
+}
+
+.settings-panels {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.settings-panel {
+  display: grid;
+  gap: var(--space-150);
+}
+
+.settings-panel > .dialog-help {
+  margin-top: 0;
+}
+
+.settings-field {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 0;
+}
+
+.settings-field select,
+.settings-field input {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid var(--control-border);
+  border-radius: 9px;
+  color: var(--text);
+  background: var(--control-solid-bg);
+  padding: 5px var(--space-100);
+}
+
+.settings-check {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-100);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: var(--space-150);
+}
+
+.settings-check input {
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+
+.settings-check span {
+  display: grid;
+  gap: 2px;
+  color: var(--text);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.settings-check small {
+  color: var(--muted);
+  font-size: 0.6875rem;
+  font-weight: 400;
+}
+
+.settings-diagnostics {
+  display: grid;
+  gap: var(--space-100);
+  margin: 0;
+}
+
+.settings-diagnostic {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-100);
+  border-bottom: 1px solid var(--line-subtle);
+  padding-bottom: 6px;
+}
+
+.settings-diagnostic dt {
+  color: var(--muted);
+  font-size: 0.6875rem;
+  font-weight: 650;
+}
+
+.settings-diagnostic dd {
+  display: flex;
+  align-items: center;
+  gap: var(--space-100);
+  overflow-wrap: anywhere;
+  margin: 0;
+  color: var(--text);
+  font-size: 0.75rem;
+  text-align: right;
+}
+
+.settings-diagnostic button {
+  min-height: 26px;
+  border-color: var(--control-border);
+  color: var(--text-soft);
+  background: transparent;
+  box-shadow: none;
+  padding: 3px var(--space-100);
+  font-size: 0.6875rem;
+}
+
+.settings-save-status {
+  min-height: 1.2em;
+  margin: var(--space-200) 0 0;
+  color: var(--text-soft);
+  font-size: 0.75rem;
+}
+
+.settings-save-status[data-tone="error"] {
+  color: var(--blocked);
 }
 
 .activity-expanded {
@@ -4008,10 +4241,21 @@ button.modal-backdrop:active {
   }
 }
 
+/* "always" forces reduced motion; "never" opts out of the media query. The
+   default "system" state sets no attribute and follows the OS. */
+:root[data-reduced-motion="always"] *,
+:root[data-reduced-motion="always"] *::before,
+:root[data-reduced-motion="always"] *::after {
+  scroll-behavior: auto !important;
+  transition-duration: 0.01ms !important;
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  :root:not([data-reduced-motion="never"]) *,
+  :root:not([data-reduced-motion="never"]) *::before,
+  :root:not([data-reduced-motion="never"]) *::after {
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
@@ -4040,6 +4284,23 @@ button.modal-backdrop:active {
   .setup-guide-diff,
   .recent-project {
     border-color: CanvasText;
+  }
+
+  .settings-check,
+  .settings-field select,
+  .settings-field input {
+    border-color: CanvasText;
+  }
+
+  .settings-section-tab[aria-selected="true"] {
+    border-color: Highlight;
+    color: Highlight;
+  }
+
+  .settings-section-tab:disabled,
+  .settings-diagnostic button:disabled {
+    border-color: GrayText;
+    color: GrayText;
   }
 }
 
@@ -4098,7 +4359,7 @@ button.modal-backdrop:active {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .settings-grid {
+  .capabilities-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -4126,6 +4387,33 @@ button.modal-backdrop:active {
     height: auto;
     min-height: 100%;
     overflow: auto;
+  }
+
+  /* The settings tablist stacks above its panels so the dialog reflows at
+     320 CSS pixels and at 400% zoom without a horizontal scrollbar. */
+  .settings-dialog-body {
+    flex-direction: column;
+    gap: var(--space-150);
+  }
+
+  .settings-section-list {
+    flex: 0 0 auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .settings-panels {
+    width: 100%;
+  }
+
+  .settings-diagnostic {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .settings-diagnostic dd {
+    text-align: left;
   }
 
   #app,

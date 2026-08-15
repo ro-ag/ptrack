@@ -88,6 +88,7 @@ describe("application overlay coordinator", () => {
   it.each([
     ["modal", "dialog"],
     ["memory-modal", "memory"],
+    ["settings-modal", "settings"],
     ["updates-modal", "updates"],
     ["task-drawer", "drawer"],
     ["agent-launch-modal", "agent-launch"],

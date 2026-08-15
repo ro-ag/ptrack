@@ -59,7 +59,7 @@
             disabled
           >Overview</button>
           <button
-            id="nav-settings"
+            id="nav-capabilities"
             class="sidebar-nav-item"
             type="button"
             title="Capabilities — ⌘3"
@@ -104,6 +104,15 @@
               type="button"
               aria-label="Toggle color theme"
             >☾</button>
+            <button
+              id="settings-open"
+              class="button-secondary"
+              type="button"
+              title="Settings — ⌘,"
+              aria-label="Open Settings"
+              aria-haspopup="dialog"
+              aria-controls="settings-modal"
+            >Settings</button>
             <button
               id="close-project-button"
               class="button-secondary"
@@ -967,16 +976,16 @@
         </section>
 
         <section
-          id="settings-page"
-          class="settings-page"
+          id="capabilities-page"
+          class="capabilities-page"
           aria-labelledby="capabilities-heading"
           hidden
         >
-          <header class="overview-heading settings-heading">
+          <header class="overview-heading capabilities-page-heading">
             <div>
               <p class="eyebrow">Deny by default</p>
               <h2 id="capabilities-heading" tabindex="-1">Network capabilities</h2>
-              <p class="settings-intro">
+              <p class="capabilities-intro">
                 Grants apply only to p-track broker tools for one project and agent profile.
                 Normal terminal processes are not an OS-level network sandbox.
               </p>
@@ -988,13 +997,13 @@
                 aria-atomic="true"
               >Capability settings ready.</p>
             </div>
-            <div class="settings-heading-actions">
+            <div class="capabilities-heading-actions">
               <button id="capability-help" class="button-secondary" type="button">Capability guide</button>
               <button id="capability-new" type="button">Add capability</button>
             </div>
           </header>
 
-          <div class="settings-grid">
+          <div class="capabilities-grid">
             <section
               class="memory-section capability-editor"
               aria-labelledby="capability-editor-title"
@@ -1101,7 +1110,7 @@
               >
                 <h3 id="capability-preview-heading" class="section-label">Effective approved scope</h3>
                 <code id="capability-effective-scope"></code>
-                <p id="capability-risk-summary" class="settings-warning" role="note"></p>
+                <p id="capability-risk-summary" class="capabilities-warning" role="note"></p>
                 <p id="capability-diagnostic" class="intelligence-meta"></p>
               </section>
             </section>
@@ -1202,6 +1211,273 @@
       </section>
     </div>
 
+    <div id="settings-modal" class="modal" hidden>
+      <button
+        class="modal-backdrop"
+        type="button"
+        data-close-settings
+        tabindex="-1"
+        aria-label="Close Settings"
+      ></button>
+      <section
+        class="dialog settings-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-dialog-heading"
+      >
+        <header class="settings-dialog-heading">
+          <div>
+            <p class="eyebrow">p-track</p>
+            <h2 id="settings-dialog-heading">Settings</h2>
+          </div>
+          <button
+            id="settings-close"
+            class="dialog-close"
+            type="button"
+            aria-label="Close Settings"
+          >Close</button>
+        </header>
+        <p id="settings-storage-notice" class="dialog-help settings-storage-notice" hidden></p>
+        <div id="settings-body" class="settings-dialog-body">
+          <div
+            id="settings-section-list"
+            class="settings-section-list"
+            role="tablist"
+            aria-orientation="vertical"
+            aria-label="Settings sections"
+          >
+            <button
+              id="settings-tab-appearance"
+              class="settings-section-tab"
+              type="button"
+              role="tab"
+              aria-selected="true"
+              aria-controls="settings-panel-appearance"
+              tabindex="0"
+            >Appearance</button>
+            <button
+              id="settings-tab-terminal"
+              class="settings-section-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="settings-panel-terminal"
+              tabindex="-1"
+            >Terminal</button>
+            <button
+              id="settings-tab-updates"
+              class="settings-section-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="settings-panel-updates"
+              tabindex="-1"
+            >Updates</button>
+            <button
+              id="settings-tab-data"
+              class="settings-section-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="settings-panel-data"
+              tabindex="-1"
+            >Data &amp; Diagnostics</button>
+          </div>
+
+          <div class="settings-panels">
+            <section
+              id="settings-panel-appearance"
+              class="settings-panel"
+              role="tabpanel"
+              aria-labelledby="settings-tab-appearance"
+              tabindex="0"
+            >
+              <h3 class="section-label">Appearance</h3>
+              <label class="settings-field" for="settings-theme">
+                <span>Color theme</span>
+                <select id="settings-theme">
+                  <option value="system">Follow system</option>
+                  <option value="dark">Dark</option>
+                  <option value="light">Light</option>
+                </select>
+              </label>
+              <label class="settings-field" for="settings-density">
+                <span>Density</span>
+                <select id="settings-density" aria-describedby="settings-density-help">
+                  <option value="comfortable">Comfortable</option>
+                  <option value="compact">Compact</option>
+                </select>
+              </label>
+              <p id="settings-density-help" class="dialog-help">
+                Compact tightens the spacing scale across the whole window.
+              </p>
+              <label class="settings-field" for="settings-reduced-motion">
+                <span>Reduced motion</span>
+                <select
+                  id="settings-reduced-motion"
+                  aria-describedby="settings-reduced-motion-help"
+                >
+                  <option value="system">Follow system</option>
+                  <option value="always">Always reduce</option>
+                  <option value="never">Never reduce</option>
+                </select>
+              </label>
+              <p id="settings-reduced-motion-help" class="dialog-help">
+                Follow system uses the operating system reduced-motion setting.
+              </p>
+            </section>
+
+            <section
+              id="settings-panel-terminal"
+              class="settings-panel"
+              role="tabpanel"
+              aria-labelledby="settings-tab-terminal"
+              tabindex="0"
+              hidden
+            >
+              <h3 class="section-label">Terminal</h3>
+              <p class="dialog-help">
+                Changes apply to terminals you open next. Running sessions and their
+                per-pane zoom stay exactly as they are.
+              </p>
+              <label class="settings-field" for="settings-terminal-profile">
+                <span>Default profile</span>
+                <select
+                  id="settings-terminal-profile"
+                  aria-describedby="settings-terminal-profile-help"
+                >
+                  <option value="">First installed profile</option>
+                </select>
+              </label>
+              <p id="settings-terminal-profile-help" class="dialog-help">
+                A preference only. Sessions already bound to a profile are untouched.
+              </p>
+              <label class="settings-field" for="settings-terminal-font-family">
+                <span>Font family</span>
+                <input
+                  id="settings-terminal-font-family"
+                  type="text"
+                  maxlength="128"
+                  spellcheck="false"
+                  aria-describedby="settings-terminal-font-family-help"
+                />
+              </label>
+              <p id="settings-terminal-font-family-help" class="dialog-help">
+                Use monospace for the built-in stack.
+              </p>
+              <label class="settings-field" for="settings-terminal-font-size">
+                <span>Font size</span>
+                <input
+                  id="settings-terminal-font-size"
+                  type="number"
+                  min="10"
+                  max="24"
+                  step="1"
+                  aria-describedby="settings-terminal-font-size-help"
+                />
+              </label>
+              <p id="settings-terminal-font-size-help" class="dialog-help">
+                10 to 24 pixels.
+              </p>
+              <label class="settings-field" for="settings-terminal-unicode">
+                <span>Unicode mode</span>
+                <select id="settings-terminal-unicode">
+                  <option value="modern">Modern graphemes</option>
+                  <option value="legacy">Legacy widths</option>
+                </select>
+              </label>
+              <label class="settings-field" for="settings-terminal-scrollback">
+                <span>Scrollback</span>
+                <input
+                  id="settings-terminal-scrollback"
+                  type="number"
+                  min="1000"
+                  max="200000"
+                  step="1000"
+                  aria-describedby="settings-terminal-scrollback-help"
+                />
+              </label>
+              <p id="settings-terminal-scrollback-help" class="dialog-help">
+                1,000 to 200,000 lines.
+              </p>
+              <label class="settings-field" for="settings-terminal-renderer">
+                <span>Renderer</span>
+                <select
+                  id="settings-terminal-renderer"
+                  aria-describedby="settings-terminal-renderer-help"
+                >
+                  <option value="auto">Automatic</option>
+                  <option value="webgl">Accelerated (WebGL)</option>
+                  <option value="canvas">Canvas</option>
+                  <option value="dom">DOM</option>
+                </select>
+              </label>
+              <p id="settings-terminal-renderer-help" class="dialog-help">
+                Automatic uses WebGL when the platform allows it and falls back on its
+                own. Canvas and DOM both draw without acceleration.
+              </p>
+            </section>
+
+            <section
+              id="settings-panel-updates"
+              class="settings-panel"
+              role="tabpanel"
+              aria-labelledby="settings-tab-updates"
+              tabindex="0"
+              hidden
+            >
+              <h3 class="section-label">Updates</h3>
+              <label class="settings-check" for="settings-updates-automatic">
+                <input id="settings-updates-automatic" type="checkbox" />
+                <span>
+                  Check automatically when p-track starts
+                  <small>Contacts GitHub Releases only after you opt in.</small>
+                </span>
+              </label>
+              <p class="dialog-help">
+                Checks are opt-in. Downloads and installations always stay manual.
+              </p>
+              <button id="settings-open-updates" class="button-secondary" type="button">
+                Open About &amp; Updates
+              </button>
+            </section>
+
+            <section
+              id="settings-panel-data"
+              class="settings-panel"
+              role="tabpanel"
+              aria-labelledby="settings-tab-data"
+              tabindex="0"
+              hidden
+            >
+              <h3 class="section-label">Data &amp; Diagnostics</h3>
+              <p class="dialog-help">
+                Read-only. Nothing here changes stored project data.
+              </p>
+              <dl id="settings-diagnostics" class="settings-diagnostics"></dl>
+              <button
+                id="settings-open-capabilities"
+                class="button-secondary"
+                type="button"
+              >Open Network Capabilities</button>
+            </section>
+          </div>
+        </div>
+        <p
+          id="settings-save-status"
+          class="settings-save-status"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        ></p>
+        <div class="dialog-actions">
+          <button id="settings-reset" class="button-secondary" type="button">
+            Reset to defaults
+          </button>
+        </div>
+      </section>
+    </div>
+
     <div id="updates-modal" class="modal" hidden>
       <button
         class="modal-backdrop"
@@ -1219,8 +1495,8 @@
       >
         <header class="updates-heading">
           <div>
-            <p class="eyebrow">About p-track</p>
-            <h2 id="updates-heading">Updates</h2>
+            <p class="eyebrow">p-track</p>
+            <h2 id="updates-heading">About &amp; Updates</h2>
           </div>
           <button
             id="updates-close"
@@ -1229,6 +1505,40 @@
             aria-label="Close About and Updates"
           >Close</button>
         </header>
+        <section class="about-identity" aria-labelledby="about-identity-heading">
+          <h3 id="about-identity-heading" class="section-label">p-track</h3>
+          <p class="about-tagline">
+            A local-first project workspace for agent-assisted development.
+          </p>
+          <dl class="about-facts">
+            <div>
+              <dt>Version</dt>
+              <dd id="about-version">dev</dd>
+            </div>
+            <div>
+              <dt>Build</dt>
+              <dd id="about-build">Desktop build</dd>
+            </div>
+            <div>
+              <dt>License</dt>
+              <dd id="about-license">Apache-2.0</dd>
+            </div>
+          </dl>
+          <div class="about-links" role="group" aria-label="p-track links">
+            <button id="about-project" class="button-secondary" type="button">
+              Project on GitHub
+            </button>
+            <button id="about-license-link" class="button-secondary" type="button">
+              Apache-2.0 license
+            </button>
+            <button id="about-help" class="button-secondary" type="button">
+              Help Center
+            </button>
+            <button id="about-report" class="button-secondary" type="button">
+              Report an issue
+            </button>
+          </div>
+        </section>
         <p id="updates-current-version" class="updates-current-version">Current version: dev</p>
         <label class="updates-automatic-option" for="updates-automatic">
           <input id="updates-automatic" type="checkbox" />

@@ -116,6 +116,7 @@
             <li><code>keep</code> leaves an exited pane visible; <code>close-on-success</code> closes only after a successful exit; <code>close</code> closes after any exit.</li>
             <li>Automatic process restart is not an exit policy. Starting again always creates fresh runtime authority.</li>
           </ul>
+          <p><strong>Settings ▸ Terminal</strong> holds the application-wide defaults used when you open a new pane: default profile, font family, font size (10–24 pixels), Unicode mode, scrollback (1,000–200,000 lines), and renderer. Changes apply to panes opened afterward; running sessions and their per-pane zoom keep their current values, and a session already bound to a profile is untouched. A stored default profile that no longer resolves is reported as unavailable rather than silently replaced.</p>
           <p>Profile files must not be used as credential stores. p-track rejects credential-like and reserved environment names; keep credentials in the launched tool's native credential store.</p>
 
           <h2 id="associations-and-writeback">Associations and write-back</h2>

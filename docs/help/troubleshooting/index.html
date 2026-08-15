@@ -107,7 +107,7 @@ ptrack context</code></pre>
           <p><strong>Test connection</strong> is a separate, explicit, non-mutating diagnostic for the draft. Use its normalized error class to check reachability or configuration before enabling a grant. A successful test does not enable the capability, approve a scope, or prove that a later broker call is authorized. See <a href="../agents-and-capabilities/#grant-lifecycle">grant lifecycle</a>.</p>
 
           <h2 id="updater-recovery">Updater recovery</h2>
-          <p>If the updater enters recovery-required state, close p-track and preserve the update state under <code>$PTRACK_HOME/updates</code> or <code>~/.ptrack/updates</code>. On Linux, keep every <code>.pending-apply-*.json</code> journal with its sibling <code>.ptrack-backup-*</code> executable until the installed target is identified.</p>
+          <p>If the updater enters recovery-required state, close p-track and preserve the update state under <code>$PTRACK_HOME/updates</code> or <code>~/.ptrack/updates</code>. On Linux, keep every <code>.pending-apply-*.json</code> journal with its sibling <code>.ptrack-backup-*</code> executable until the installed target is identified. <strong>Settings ▸ Data &amp; Diagnostics</strong> reports those paths and the recovery-required status read-only, so you can confirm the state before closing the app.</p>
           <p>Do not delete a journal or backup, and do not copy a staged payload into place. Reinstall the same or a newer package from the <a href="https://github.com/ro-ag/ptrack/releases">official GitHub Releases page</a> as the conservative fallback. The <a href="../install-and-safety/#update-recovery">update recovery guide</a> describes the artifacts and platform-specific boundary.</p>
 
           <h2 id="faq">Frequently asked corrections</h2>
@@ -115,7 +115,7 @@ ptrack context</code></pre>
             <dt>Does selecting a plan in the Desktop sidebar change the CLI active plan?</dt>
             <dd>No. It changes the Desktop view only. Use <code>ptrack plan use &lt;id&gt;</code> to change the CLI active plan.</dd>
             <dt>Does p-track check for updates automatically?</dt>
-            <dd>Not by default. Automatic checks remain off until you explicitly opt in; a manual check does not silently download or install.</dd>
+            <dd>Not by default. Automatic checks remain off until you explicitly opt in from <strong>Settings ▸ Updates</strong> or <strong>About &amp; Updates</strong>; a manual check does not silently download or install.</dd>
             <dt>Are capabilities an operating-system sandbox?</dt>
             <dd>No. They authorize exact typed broker calls. Ordinary shell processes retain whatever network and filesystem access the operating system gives them.</dd>
             <dt>Does <code>ptrack backup</code> capture everything, and can p-track restore it?</dt>

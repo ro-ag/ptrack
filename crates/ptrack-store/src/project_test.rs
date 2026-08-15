@@ -982,6 +982,42 @@ fn global_bytes_and_transaction_consistent_backup_are_create_only() {
 }
 
 #[test]
+fn global_config_updates_read_and_write_in_one_transaction() {
+    let temp = Temp::new();
+    let path = temp.path("update-config.redb");
+    let global = GlobalStore::create_new_with_clock(
+        &path,
+        binding(&path, StoreKind::Global, "update-config"),
+        clock(),
+    )
+    .unwrap();
+
+    // An absent record reads as empty bytes, and the update sees every write
+    // already committed for that key.
+    let seen = global
+        .update_config(b"counter", |stored| Ok((b"one".to_vec(), stored.to_vec())))
+        .unwrap();
+    assert!(seen.is_empty());
+    let seen = global
+        .update_config(b"counter", |stored| Ok((b"two".to_vec(), stored.to_vec())))
+        .unwrap();
+    assert_eq!(seen, b"one");
+    assert_eq!(global.config(b"counter").unwrap(), b"two");
+
+    // A failing update propagates and never degrades the stored record.
+    assert!(matches!(
+        global.update_config::<()>(b"counter", |_| Err(StoreError::NotFound)),
+        Err(StoreError::NotFound)
+    ));
+    assert_eq!(global.config(b"counter").unwrap(), b"two");
+    assert!(
+        global
+            .update_config(b"", |stored| Ok((stored.to_vec(), ())))
+            .is_err()
+    );
+}
+
+#[test]
 fn project_registry_normalizes_lexical_aliases() {
     let temp = Temp::new();
     let global_path = temp.path("registry.redb");

@@ -66,6 +66,7 @@
 
           <h2 id="update-consent">Choose when to check, download, and install</h2>
           <p>Manual update checks occur only when you select <strong>Check for updates</strong>. Automatic checks are off by default and persist only after explicit opt-in. They contact the stable releases for the fixed <code>ro-ag/ptrack</code> GitHub repository.</p>
+          <p>The <strong>About &amp; Updates</strong> dialog carries both surfaces: it identifies p-track, its version, its build, and its Apache-2.0 license, links to the project, license, Help Center, and issue tracker, and holds the check, download, and install actions. Open it from the version chip, <strong>Help ▸ Check for Updates…</strong>, or the native About item. The automatic-check opt-in is the same setting in that dialog and in <strong>Settings ▸ Updates</strong>.</p>
           <p>Consent is separated into three steps:</p>
           <ol>
             <li>A check discovers one newer stable release and the exact package for the running OS and CPU.</li>
@@ -109,7 +110,8 @@
                 <tr><td>Runtime state</td><td><code>&lt;global-home&gt;/runtime/&lt;sha256(project-root)&gt;/</code></td><td>Private local service descriptors and bounded agent-run history.</td></tr>
                 <tr><td>Backups</td><td><code>&lt;global-home&gt;/backups/</code></td><td>Project database copies created by <code>ptrack backup</code>.</td></tr>
                 <tr><td>Update staging</td><td><code>&lt;global-home&gt;/updates/</code></td><td>Verified candidate stages and bounded recovery state.</td></tr>
-                <tr><td>Desktop preferences</td><td>WebView <code>localStorage</code></td><td>Theme, panel layout, terminal layout descriptors, and terminal display preferences.</td></tr>
+                <tr><td>Application settings</td><td>Global store, <code>preferences</code> record</td><td>Appearance and terminal defaults chosen in <strong>Settings</strong>, written as one whole record.</td></tr>
+                <tr><td>Desktop view state</td><td>WebView <code>localStorage</code></td><td>Panel layout, terminal layout descriptors, and a cache of theme and terminal display values. The stored settings record wins on load.</td></tr>
               </tbody>
             </table>
           </div>

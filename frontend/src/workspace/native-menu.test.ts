@@ -73,8 +73,8 @@ describe("native menu event routing", () => {
   });
 
   it("maps native view commands to headings that should receive focus", () => {
-    expect(nativeMenuViewTarget("showCapabilities")).toBe("settings");
-    expect(nativeMenuViewTarget("showSettings")).toBe("settings");
+    expect(nativeMenuViewTarget("showCapabilities")).toBe("capabilities");
+    expect(nativeMenuViewTarget("showSettings")).toBeNull();
     expect(nativeMenuViewTarget("showBoard")).toBe("board");
     expect(nativeMenuViewTarget("showIntelligence")).toBe("overview");
     expect(nativeMenuViewTarget("toggleTerminalPanel")).toBeNull();
@@ -109,6 +109,7 @@ describe("native menu event routing", () => {
     expect(nativeMenuCommandAllowed("openProject", state)).toBe(true);
     expect(nativeMenuCommandAllowed("installShellCommand", state)).toBe(true);
     expect(nativeMenuCommandAllowed("checkForUpdates", state)).toBe(true);
+    expect(nativeMenuCommandAllowed("showSettings", state)).toBe(true);
     expect(nativeMenuCommandAllowed("switchProject", state)).toBe(false);
     expect(nativeMenuCommandAllowed("closeProject", state)).toBe(false);
     expect(nativeMenuCommandAllowed("showBoard", state)).toBe(false);

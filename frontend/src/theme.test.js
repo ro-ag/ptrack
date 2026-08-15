@@ -7,6 +7,7 @@ function stubStorage(initial = null) {
   return {
     getItem: (key) => (entries.has(key) ? entries.get(key) : null),
     setItem: (key, value) => entries.set(key, value),
+    removeItem: (key) => entries.delete(key),
   };
 }
 
@@ -64,6 +65,20 @@ describe("theme controller", () => {
     expect(root.dataset.theme).toBe("light");
     expect(storage.getItem(THEME_STORAGE_KEY)).toBe("light");
 
+    media.emit();
+    expect(root.dataset.theme).toBe("light");
+  });
+
+  it("clears the explicit choice when the stored preference is system", () => {
+    const root = { dataset: {} };
+    const storage = stubStorage("light");
+    const media = stubMedia(false);
+    const controller = initTheme({ root, storage, media });
+
+    expect(controller.setTheme("system")).toBe("dark");
+    expect(storage.getItem(THEME_STORAGE_KEY)).toBeNull();
+
+    media.matches = true;
     media.emit();
     expect(root.dataset.theme).toBe("light");
   });

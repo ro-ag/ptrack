@@ -842,7 +842,7 @@ fn desktop_update_commands_delegate_exact_arguments_and_return_full_state() {
 }
 
 #[test]
-#[allow(clippy::too_many_lines)] // Full 76-command freeze fixture is intentionally explicit.
+#[allow(clippy::too_many_lines)] // Full 80-command freeze fixture is intentionally explicit.
 fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
     let commands = allowed_desktop_commands();
     assert_eq!(
@@ -880,8 +880,10 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "GetBoardV2",
             "GetCapabilitiesV2",
             "GetCapabilityAuditsV2",
+            "GetDiagnosticsReport",
             "GetInitializationStatusV1",
             "GetPendingInitializationV1",
+            "GetPreferences",
             "GetRecentProjects",
             "GetRecentProjectsV1",
             "GetTaskDetailV2",
@@ -909,6 +911,7 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "RemoveCapabilityV2",
             "RenameTask",
             "RenameTaskV2",
+            "ResetPreferences",
             "ResizeTerminal",
             "ResizeTerminalV2",
             "ResolveRecentProjectV1",
@@ -919,6 +922,7 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "SetAgentTaskOwnershipV2",
             "SetAgentWorktreeV2",
             "SetAutomaticUpdateChecks",
+            "SetPreferences",
             "StartFirstTaskV1",
             "TestCapabilityV2",
             "ValidateProjectTargetV1",
@@ -970,6 +974,29 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             .to_string(),
         "unknown Help destination"
     );
+}
+
+#[test]
+fn preference_and_diagnostics_commands_dispatch_above_the_workspace() {
+    let runtime = DesktopRuntime::new(DesktopRuntimeConfig::unavailable("test"));
+    // A wrong arity is rejected before any store is opened, which proves the
+    // four commands are answered by the application-level dispatch instead of
+    // falling through to a project workspace.
+    for (method, arguments) in [
+        ("GetPreferences", vec![json!({})]),
+        ("SetPreferences", Vec::new()),
+        ("ResetPreferences", vec![json!({})]),
+        ("GetDiagnosticsReport", vec![json!({})]),
+    ] {
+        let error = runtime
+            .invoke(request(method, arguments))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.starts_with(&format!("{method} requires exactly")),
+            "{error}"
+        );
+    }
 }
 
 #[test]

@@ -108,10 +108,12 @@ import {
   resetPaneActivity,
   type TerminalProfileKind,
 } from "./activity";
+import { readModernUnicodeSetting } from "./unicode";
 import {
-  readModernUnicodeSetting,
-  writeModernUnicodeSetting,
-} from "./unicode";
+  readTerminalPreferenceOverrides,
+  webglPreferredByPreference,
+  type UnicodeModePreference,
+} from "../settings/preferences";
 import {
   activeTerminalDescriptor,
   earlyExitCacheLimit,
@@ -242,6 +244,9 @@ interface MountOptions {
   projectRoot: string;
   workspaceGeneration?: number;
   showError(error: unknown): void;
+  // The stored preferences record is the authority for the Unicode mode, so
+  // the dock toggle writes through it instead of the localStorage mirror.
+  saveUnicodeMode(mode: UnicodeModePreference): void;
 }
 
 export interface TerminalDockHandle {
@@ -364,6 +369,7 @@ function nativeClipboard(): {
 class TerminalDock {
   readonly #backend: TerminalBackend;
   readonly #showError: (error: unknown) => void;
+  readonly #saveUnicodeMode: (mode: UnicodeModePreference) => void;
   readonly #workspaceGeneration: number;
   readonly #dock = requiredElement<HTMLElement>("#terminal-dock");
   readonly #workArea = requiredElement<HTMLElement>(".work-area");
@@ -513,6 +519,7 @@ class TerminalDock {
   constructor(options: MountOptions) {
     this.#backend = options.backend;
     this.#showError = options.showError;
+    this.#saveUnicodeMode = options.saveUnicodeMode;
     this.#projectRoot = options.projectRoot;
     this.#workspaceGeneration = options.workspaceGeneration ?? 0;
     const restored = loadTerminalWorkspace(
@@ -771,9 +778,16 @@ class TerminalDock {
       this.#profileKinds.clear();
       this.#profileSettings.clear();
       this.#profileFontSizes.clear();
+      // The stored Settings record overrides the profile's own defaults for
+      // terminals opened from here on; running sessions are untouched.
+      const overrides = readTerminalPreferenceOverrides(localStorage);
       for (const profile of profiles) {
         this.#profileKinds.set(profile.id, profile.kind);
-        const settings = normalizeTerminalProfileSettings(profile);
+        const settings = normalizeTerminalProfileSettings({
+          ...profile,
+          fontFamily: overrides.fontFamily || profile.fontFamily,
+          scrollback: overrides.scrollback || profile.scrollback,
+        });
         this.#profileSettings.set(profile.id, settings);
         this.#profileFontSizes.set(
           profile.id,
@@ -787,7 +801,11 @@ class TerminalDock {
       if (profiles.length === 0) {
         throw new Error("No installed terminal profiles were discovered");
       }
-      this.#defaultProfileId = profiles[0].id;
+      this.#defaultProfileId = profiles.some(
+          (profile) => profile.id === overrides.defaultProfileId,
+        )
+        ? overrides.defaultProfileId
+        : profiles[0].id;
       this.#syncActiveProfileFontSize();
       const savedCwds = savedWorkspaceCwds(this.#tabController.workspace);
       let cwdValidations: TerminalCWDValidation[] | null = [];
@@ -2403,6 +2421,13 @@ class TerminalDock {
   }
 
   #shouldUseWebgl(paneId: string): boolean {
+    // "canvas" has no installed addon, so both it and "dom" mean the
+    // unaccelerated renderer.
+    if (
+      !webglPreferredByPreference(
+        readTerminalPreferenceOverrides(localStorage).renderer,
+      )
+    ) return false;
     return this.#preferredWebglPaneIds().includes(paneId);
   }
 
@@ -2793,7 +2818,7 @@ class TerminalDock {
 
     this.#modernUnicodeEnabled = enabled;
     this.#modernUnicode.checked = enabled;
-    writeModernUnicodeSetting(localStorage, enabled);
+    this.#saveUnicodeMode(enabled ? "modern" : "legacy");
     for (const runtime of this.#runtimes.values()) {
       const resources = runtime.resources;
       if (resources && !resources.disposed) {

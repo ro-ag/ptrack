@@ -6,8 +6,9 @@ use ptrack_core::{ProjectRef, Timestamp};
 use crate::paths::lexical_absolute;
 use crate::typed;
 use crate::{
-    ActivatedStore, ActiveBinding, Clock, Collection, LEGACY_CODEC_RAW, RecordEnvelope, RecordKey,
-    StagedStore, Store, StoreError, StoreKind, StoreResult, SystemClock,
+    ActivatedStore, ActiveBinding, Clock, Collection, JsonStageProvenance, LEGACY_CODEC_RAW,
+    OwnedRecordKey, RecordEnvelope, RecordKey, StagedStore, Store, StoreError, StoreKind,
+    StoreResult, SystemClock,
 };
 
 pub struct GlobalStore {
@@ -108,6 +109,65 @@ impl GlobalStore {
                 .get(Collection::GlobalConfig, RecordKey::Bytes(key))?
                 .map_or_else(Vec::new, |v| v.payload().to_vec()))
         })
+    }
+
+    /// Reads, transforms, and rewrites one config record inside a single write
+    /// transaction, so two concurrent updates cannot lose each other's changes.
+    /// The update sees the exact stored bytes, empty when the record is absent,
+    /// and returns the bytes to store together with its own result. A failing
+    /// update aborts the transaction and leaves the record untouched.
+    pub fn update_config<T>(
+        &self,
+        key: &[u8],
+        update: impl FnOnce(&[u8]) -> StoreResult<(Vec<u8>, T)>,
+    ) -> StoreResult<T> {
+        if key.is_empty() {
+            return Err(StoreError::InvalidManifest(
+                "global config key must be nonempty".to_owned(),
+            ));
+        }
+        self.active.write(|tx| {
+            let stored = tx
+                .get(Collection::GlobalConfig, RecordKey::Bytes(key))?
+                .map_or_else(Vec::new, |v| v.payload().to_vec());
+            let (value, result) = update(&stored)?;
+            tx.put(
+                Collection::GlobalConfig,
+                RecordKey::Bytes(key),
+                &RecordEnvelope::new(LEGACY_CODEC_RAW, 0, value),
+            )?;
+            Ok(result)
+        })
+    }
+
+    pub fn delete_config(&self, key: &[u8]) -> StoreResult<()> {
+        if key.is_empty() {
+            return Err(StoreError::InvalidManifest(
+                "global config key must be nonempty".to_owned(),
+            ));
+        }
+        self.active.write(|tx| {
+            tx.delete(Collection::GlobalConfig, RecordKey::Bytes(key))?;
+            Ok(())
+        })
+    }
+
+    /// Returns the newest ledger rows as (recorded-at nanoseconds, project
+    /// path, backup path). A row that is not exactly one recorded backup is
+    /// skipped rather than failing the read.
+    pub fn backups(&self, limit: usize) -> StoreResult<Vec<(i64, String, String)>> {
+        self.active.store().read(|tx| {
+            Ok(tx
+                .scan_limited(Collection::GlobalBackups, limit, true)?
+                .iter()
+                .filter_map(|(key, envelope)| decode_backup(key, envelope))
+                .collect())
+        })
+    }
+
+    /// Returns the global store's JSON-stage import provenance, if any.
+    pub fn json_stage_provenance(&self) -> StoreResult<Option<JsonStageProvenance>> {
+        self.active.store().json_stage_provenance()
     }
 
     pub fn register_project(
@@ -229,6 +289,17 @@ impl GlobalStore {
             Ok(())
         })
     }
+}
+
+fn decode_backup(key: &OwnedRecordKey, envelope: &RecordEnvelope) -> Option<(i64, String, String)> {
+    let OwnedRecordKey::Bytes(key) = key else {
+        return None;
+    };
+    let recorded_at = std::str::from_utf8(key).ok()?.parse().ok()?;
+    let (project, backup) = std::str::from_utf8(envelope.payload())
+        .ok()?
+        .split_once('\t')?;
+    Some((recorded_at, project.to_owned(), backup.to_owned()))
 }
 
 fn timestamp_key(value: Timestamp) -> i128 {
