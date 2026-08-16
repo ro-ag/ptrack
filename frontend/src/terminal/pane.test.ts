@@ -253,6 +253,27 @@ describe("TerminalStreamClient", () => {
     expect(states).toEqual(["connecting", "open", "error"]);
   });
 
+  it("accepts the one gap control frame and still fails on any other text", () => {
+    const socket = new FakeWebSocket();
+    const onGap = vi.fn();
+    const client = new TerminalStreamClient({
+      createWebSocket: () => socket,
+      writeOutput: vi.fn(),
+      onStateChange: vi.fn(),
+      onGap,
+    });
+    client.connect("ws://127.0.0.1/terminal/session");
+    socket.open();
+
+    socket.receive(`{"type":"gap"}`);
+    expect(onGap).toHaveBeenCalledOnce();
+    expect(client.state).toBe("open");
+
+    socket.receive(`{"type":"gap","extra":1}`);
+    expect(onGap).toHaveBeenCalledOnce();
+    expect(client.state).toBe("error");
+  });
+
   it("caps queued plus in-progress output at the protocol window", () => {
     const socket = new FakeWebSocket();
     const writes: Array<{ bytes: Uint8Array; done: () => void }> = [];

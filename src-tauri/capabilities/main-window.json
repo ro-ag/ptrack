@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-window",
-  "description": "Allow the main application window to subscribe to app-owned events only.",
-  "windows": ["main"],
+  "description": "Allow the main application window and its terminal windows to subscribe to app-owned events only.",
+  "windows": ["main", "terminal-*"],
   "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
 }

@@ -16,6 +16,11 @@
               ? "light"
               : "dark";
         document.documentElement.dataset.theme = theme;
+        // A terminal window loads this same document; the marker lands before
+        // first paint so the main workspace never flashes in it.
+        if (/^#terminal-window=terminal-\d+$/.test(location.hash)) {
+          document.documentElement.dataset.windowMode = "terminal";
+        }
       })();
     </script>
     <link rel="stylesheet" href="/src/style.css" />
@@ -717,6 +722,19 @@
                     </svg>
                   </button>
                   <button
+                    id="terminal-pop-out"
+                    class="terminal-action-button"
+                    type="button"
+                    aria-label="Pop out terminal into its own window"
+                    title="Pop out terminal"
+                    hidden
+                  >
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="M8.5 3H3v10h10V7.5"></path>
+                      <path d="M9.5 2.5h4v4M13.5 2.5 8 8"></path>
+                    </svg>
+                  </button>
+                  <button
                     id="terminal-open"
                     class="terminal-action-button"
                     type="button"
@@ -783,7 +801,8 @@
                   <div><dt>Updated</dt><dd id="terminal-diagnostic-updated">Not recorded</dd></div>
                 </dl>
                 <p class="terminal-diagnostics-help">
-                  Content-free state only. Restart creates a fresh session; streams are never reconnected.
+                  Content-free state only. Restart creates a fresh session; a stream lost
+                  on its own is claimed back for the same session.
                 </p>
               </section>
               <div
@@ -1149,6 +1168,42 @@
         </main>
       </div>
     </div>
+
+    <!-- Terminal window mode. The same document, loaded with
+         #terminal-window=<label>: the terminal surface and nothing else. -->
+    <section
+      id="terminal-window"
+      class="terminal-window"
+      aria-labelledby="terminal-window-heading"
+      hidden
+    >
+      <header class="terminal-window-bar">
+        <div class="terminal-window-identity">
+          <p class="eyebrow">p-track</p>
+          <h1 id="terminal-window-heading" tabindex="-1">Terminal</h1>
+        </div>
+        <p
+          id="terminal-window-status"
+          class="terminal-window-status"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >Connecting…</p>
+        <p id="terminal-window-return" class="terminal-window-return">
+          Closing this window returns the terminal to the p-track window. The
+          shell keeps running either way.
+        </p>
+      </header>
+      <p id="terminal-window-gap" class="terminal-window-gap" role="note" hidden>
+        <strong>Scrollback gap.</strong>
+        <span id="terminal-window-gap-detail"></span>
+      </p>
+      <div
+        id="terminal-window-host"
+        class="terminal-window-host"
+        aria-label="Terminal session"
+      ></div>
+    </section>
 
     <div id="modal" class="modal" hidden>
       <div class="modal-backdrop" data-close-modal></div>

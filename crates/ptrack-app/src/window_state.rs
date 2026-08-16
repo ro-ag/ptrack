@@ -1,9 +1,15 @@
-//! Durable main-window geometry in the global store.
+//! Durable per-window geometry in the global store.
 //!
 //! One versioned JSON record lives under the `window-state` global config key,
 //! with the same discipline as the `preferences` record: total normalization,
 //! one transaction per write, and a malformed or newer record that reads as
 //! defaults instead of being destroyed.
+//!
+//! The main window's rect stays at the root of the record, exactly where plan
+//! #14 put it, so an existing record keeps working. Terminal windows share one
+//! `terminal` entry: they are interchangeable, minted fresh every run, and none
+//! of them can be matched to the window that wrote a per-label entry last run.
+//! A capture therefore only ever rewrites the one of the two it came from.
 //!
 //! The window is owned entirely by Rust. Nothing here is reachable from the
 //! frontend: the desktop shell reads the record in its setup and writes it from
@@ -21,6 +27,12 @@ use crate::{ActiveRuntime, AppError, AppResult};
 
 const WINDOW_STATE_KEY: &[u8] = b"window-state";
 const WINDOW_STATE_VERSION: u64 = 1;
+/// The main window's label. Its rect is the root of the record; every other
+/// window shares the `terminal` entry.
+pub const MAIN_WINDOW_LABEL: &str = "main";
+/// Where every terminal window's geometry is kept. One entry, so the record is
+/// bounded by construction however many windows a run pops out.
+const TERMINAL_ENTRY: &str = "terminal";
 /// The configured window size in `src-tauri/tauri.conf.json`.
 const DEFAULT_WIDTH: f64 = 1_440.0;
 const DEFAULT_HEIGHT: f64 = 900.0;
@@ -201,47 +213,51 @@ pub fn restore_placement(
     })
 }
 
-/// Reads the stored record and decides the startup placement. A missing,
-/// unreadable, or unopenable record leaves the configured window untouched.
+/// Reads one window's stored record and decides its startup placement. A
+/// missing, unreadable, or unopenable record leaves the configured window
+/// untouched.
 #[must_use]
 pub fn saved_placement(
     version: &str,
+    label: &str,
     monitors: &[DisplayV1],
     primary: Option<DisplayV1>,
 ) -> Option<PlacementV1> {
     let store = global_store(version).ok()?;
-    restore_placement(&window_state(&store), monitors, primary)
+    restore_placement(&window_state(&store, label), monitors, primary)
 }
 
-/// Stores one captured geometry, best effort. A window drag is never worth
-/// failing over, and the next capture writes the same information again.
-pub fn save_window_state(version: &str, state: &WindowStateV1) {
+/// Stores one window's captured geometry, best effort. A window drag is never
+/// worth failing over, and the next capture writes the same information again.
+pub fn save_window_state(version: &str, label: &str, state: &WindowStateV1) {
     if let Ok(store) = global_store(version) {
-        drop(set_window_state(&store, state));
+        drop(set_window_state(&store, label, state));
     }
 }
 
-/// Reads and totally normalizes the stored window-state record.
+/// Reads and totally normalizes one window's entry in the stored record.
 #[must_use]
-pub fn window_state(store: &GlobalStore) -> WindowStateDocumentV1 {
+pub fn window_state(store: &GlobalStore, label: &str) -> WindowStateDocumentV1 {
     store.config(WINDOW_STATE_KEY).map_or_else(
         |_| document(WindowStateStorageV1::Unreadable, defaults()),
-        |stored| decode(&stored),
+        |stored| decode(&stored, label),
     )
 }
 
-/// Stores one captured geometry as the whole record. The read, the merge, and
-/// the write share one transaction, so a torn write is impossible.
+/// Stores one window's captured geometry into the record, leaving every other
+/// window's entry alone. The read, the merge, and the write share one
+/// transaction, so a torn write is impossible.
 ///
 /// # Errors
 /// Returns an error when the record cannot be written.
 pub fn set_window_state(
     store: &GlobalStore,
+    label: &str,
     state: &WindowStateV1,
 ) -> AppResult<WindowStateDocumentV1> {
     store
         .update_config(WINDOW_STATE_KEY, |stored| {
-            let current = decode(stored);
+            let current = decode(stored, label);
             // Captures fire on the first drag of the first window, so a record
             // this build cannot read is kept byte for byte: running an older
             // build must not destroy a newer one's geometry. Restoring already
@@ -251,14 +267,39 @@ pub fn set_window_state(
                 return Ok((stored.to_vec(), current));
             }
             let merged = retained(&current, state);
-            let record = serde_json::to_value(merged)
-                .map_err(|error| StoreError::InvalidManifest(error.to_string()))?;
-            let window = normalize(&record).unwrap_or_else(defaults);
-            let encoded = serde_json::to_vec(&window)
+            let record = merged_record(parse(stored).unwrap_or_default(), label, &merged)
+                .ok_or_else(|| {
+                    StoreError::InvalidManifest("window state is not encodable".to_owned())
+                })?;
+            let window = entry(&record, label).unwrap_or_else(defaults);
+            let encoded = serde_json::to_vec(&Value::Object(record))
                 .map_err(|error| StoreError::InvalidManifest(error.to_string()))?;
             Ok((encoded, document(WindowStateStorageV1::Ok, window)))
         })
         .map_err(AppError::from)
+}
+
+/// Writes one window's rect into the record and leaves the other entry byte for
+/// byte where it was.
+fn merged_record(
+    mut record: Map<String, Value>,
+    label: &str,
+    state: &WindowStateV1,
+) -> Option<Map<String, Value>> {
+    let mut written = encode(state)?;
+    if label == MAIN_WINDOW_LABEL {
+        if let Some(terminal) = record.remove(TERMINAL_ENTRY) {
+            written.insert(TERMINAL_ENTRY.to_owned(), terminal);
+        }
+        return normalize(&Value::Object(written));
+    }
+    // One version for the whole record, so the terminal entry never carries one.
+    written.remove("version");
+    record.insert(TERMINAL_ENTRY.to_owned(), Value::Object(written));
+    record
+        .entry("version".to_owned())
+        .or_insert_with(|| Value::from(WINDOW_STATE_VERSION));
+    normalize(&Value::Object(record))
 }
 
 /// A maximized or fullscreen window reports the rect it fills, not the rect it
@@ -276,38 +317,86 @@ fn retained(current: &WindowStateDocumentV1, state: &WindowStateV1) -> WindowSta
     *state
 }
 
-/// Totally normalizes the exact stored bytes. Empty bytes mean no record yet.
-fn decode(stored: &[u8]) -> WindowStateDocumentV1 {
+/// Totally normalizes the exact stored bytes and picks out one window. Empty
+/// bytes mean no record yet, and a window with no entry reads as defaults.
+fn decode(stored: &[u8], label: &str) -> WindowStateDocumentV1 {
     if stored.is_empty() {
         return document(WindowStateStorageV1::Defaults, defaults());
     }
+    let Some(record) = parse(stored) else {
+        return document(WindowStateStorageV1::Unreadable, defaults());
+    };
+    entry(&record, label).map_or_else(
+        || document(WindowStateStorageV1::Defaults, defaults()),
+        |window| document(WindowStateStorageV1::Ok, window),
+    )
+}
+
+/// Reads the exact stored bytes as one totally normalized record, or `None`
+/// when this build cannot read them.
+fn parse(stored: &[u8]) -> Option<Map<String, Value>> {
     serde_json::from_slice::<Value>(stored)
         .ok()
         .as_ref()
         .and_then(normalize)
-        .map_or_else(
-            || document(WindowStateStorageV1::Unreadable, defaults()),
-            |window| document(WindowStateStorageV1::Ok, window),
-        )
 }
 
-/// Returns the normalized record, or `None` when this build cannot read it.
-fn normalize(value: &Value) -> Option<WindowStateV1> {
+/// One window's rect out of a normalized record, or `None` when that window
+/// has no entry. A record written by a terminal window before the main window
+/// was ever captured has no main rect, and reading defaults out of it as though
+/// they had been stored would replay the configured geometry as a placement.
+fn entry(record: &Map<String, Value>, label: &str) -> Option<WindowStateV1> {
+    if label == MAIN_WINDOW_LABEL {
+        return record.contains_key("logical").then(|| window_of(record));
+    }
+    record
+        .get(TERMINAL_ENTRY)
+        .and_then(Value::as_object)
+        .map(window_of)
+}
+
+/// Totally normalizes the whole record: the main window at the root and the
+/// terminal windows under `terminal`. Returns `None` when this build cannot
+/// read it.
+fn normalize(value: &Value) -> Option<Map<String, Value>> {
     let record = value.as_object()?;
     // A record without a readable version, or from a newer version, is
     // unreadable. An older version upgrades in memory and persists on write.
     if record.get("version").and_then(Value::as_u64)? > WINDOW_STATE_VERSION {
         return None;
     }
+    let mut normalized = if record.contains_key("logical") {
+        encode(&window_of(record))?
+    } else {
+        Map::new()
+    };
+    normalized.insert("version".to_owned(), Value::from(WINDOW_STATE_VERSION));
+    if let Some(terminal) = record.get(TERMINAL_ENTRY).and_then(Value::as_object) {
+        let mut terminal = encode(&window_of(terminal))?;
+        terminal.remove("version");
+        normalized.insert(TERMINAL_ENTRY.to_owned(), Value::Object(terminal));
+    }
+    Some(normalized)
+}
+
+/// One window's rect out of the object that holds it, totally normalized.
+fn window_of(record: &Map<String, Value>) -> WindowStateV1 {
     let fallback = defaults();
-    Some(WindowStateV1 {
+    WindowStateV1 {
         version: WINDOW_STATE_VERSION,
         logical: rect(record.get("logical"), fallback.logical),
         scale_factor: scale(record.get("scaleFactor")),
         maximized: flag(record.get("maximized")),
         fullscreen: flag(record.get("fullscreen")),
         display: display_of(record.get("display"), fallback.display),
-    })
+    }
+}
+
+fn encode(state: &WindowStateV1) -> Option<Map<String, Value>> {
+    match serde_json::to_value(state).ok()? {
+        Value::Object(record) => Some(record),
+        _ => None,
+    }
 }
 
 const fn document(storage: WindowStateStorageV1, window: WindowStateV1) -> WindowStateDocumentV1 {

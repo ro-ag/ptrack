@@ -1060,8 +1060,47 @@ fn copy_candidate(source: &Path, destination: &Path, expected_sha256: &str) -> I
     if hash_private_file(destination)? != expected_sha256 {
         return invalid("candidate changed while it was copied");
     }
-    File::open(parent)?.sync_all()?;
+    sync_directory(parent)?;
     Ok(())
+}
+
+/// Durably flushes a directory after a namespace mutation within it.
+#[cfg(unix)]
+fn sync_directory(path: &Path) -> std::io::Result<()> {
+    File::open(path)?.sync_all()
+}
+
+/// Durably flushes a directory after a namespace mutation within it.
+///
+/// `std::fs::File::open` cannot open a directory handle on Windows, so the
+/// directory is opened explicitly with `FILE_FLAG_BACKUP_SEMANTICS`.
+#[cfg(windows)]
+fn sync_directory(path: &Path) -> std::io::Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    /// Lets `CreateFileW` open a directory handle.
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+
+    let writable = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path);
+    match writable {
+        Ok(directory) => directory.sync_all(),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            // FlushFileBuffers needs a writable handle, which some directories
+            // refuse. Directory-metadata durability is handled by NTFS
+            // journaling, and a read-only handle cannot FlushFileBuffers, so
+            // verify the directory is reachable read-only and skip the flush.
+            OpenOptions::new()
+                .read(true)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(path)
+                .map(|_| ())
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn canonical_bytes<T: Serialize>(value: &T) -> ImportResult<Vec<u8>> {

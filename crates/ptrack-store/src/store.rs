@@ -1541,7 +1541,7 @@ fn open_conflicts_with_writer(error: &io::Error) -> bool {
     {
         use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
 
-        return error.raw_os_error() == Some(ERROR_SHARING_VIOLATION as i32);
+        error.raw_os_error() == Some(ERROR_SHARING_VIOLATION as i32)
     }
     #[cfg(not(windows))]
     false

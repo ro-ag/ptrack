@@ -357,6 +357,18 @@ fn canonicalize_path(value: &Path, must_exist: bool) -> std::io::Result<PathBuf>
             .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
         match fs::canonicalize(cursor) {
             Ok(mut existing) => {
+                // The missing suffix can only be re-joined onto a directory.
+                // On Windows, canonicalizing a path whose ancestor is a FILE
+                // fails with ERROR_PATH_NOT_FOUND, which std maps to
+                // `NotFound`, so the loop lands on the file itself here; treat
+                // that as an escape. On Unix this check is inert: the loop is
+                // only reached when every missing ancestor truly does not
+                // exist, so the first existing ancestor is a directory, or
+                // canonicalize already failed with ENOTDIR (not `NotFound`).
+                // Symlinks are already resolved by `fs::canonicalize`.
+                if !fs::metadata(&existing).is_ok_and(|metadata| metadata.is_dir()) {
+                    return Err(std::io::Error::from(std::io::ErrorKind::NotFound));
+                }
                 for component in missing.iter().rev() {
                     existing.push(component);
                 }

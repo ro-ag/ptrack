@@ -17,9 +17,12 @@ interface TerminalStreamClientOptions {
   writeOutput(bytes: Uint8Array, done: () => void): void;
   onStateChange(state: StreamState): void;
   onOutput?(byteLength: number): void;
+  onGap?(): void;
 }
 
 const outputWindowBytes = 512 * 1024;
+// The one control frame the server sends, once, before a truncated replay.
+const gapControl = `{"type":"gap"}`;
 
 export class TerminalStreamClient {
   readonly #options: TerminalStreamClientOptions;
@@ -48,6 +51,10 @@ export class TerminalStreamClient {
   };
 
   readonly #onMessage: SocketListener = (event) => {
+    if (this.#state === "open" && event.data === gapControl) {
+      this.#options.onGap?.();
+      return;
+    }
     if (this.#state !== "open" || !(event.data instanceof ArrayBuffer)) {
       this.#fail();
       return;
