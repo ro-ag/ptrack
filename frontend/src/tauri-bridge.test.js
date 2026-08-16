@@ -8,7 +8,8 @@ describe("Tauri compatibility bridge", () => {
       "AcknowledgeAgentHandoffV2", "AddTask", "AddTaskNote", "AddTaskNoteV2",
       "AddTaskV2", "ApplyUpdate", "ApproveAgentWorkflowV2", "AssociateAgentRunV2",
       "AssociateTerminalV2", "CancelUpdateOperation", "CancelWorkspaceChange",
-      "CheckForUpdates", "CloseProject", "CloseTerminal", "CloseTerminalV2",
+      "CheckForUpdates", "ClaimTerminalStream", "CloseProject", "CloseTerminal",
+      "CloseTerminalV2",
       "CreateFirstPlanV1", "CreateFirstTaskV1", "CreateTerminal", "CreateTerminalV2", "DisableCapabilityV2",
       "DismissAgentWorkflowV2", "DownloadUpdate", "EnableCapabilityV2",
       "ExpireCapabilityV2", "ForgetRecentProjectV1", "GetActivityHeatmapV2", "GetAgentIntelligenceV2",
@@ -16,10 +17,12 @@ describe("Tauri compatibility bridge", () => {
       "GetCapabilityAuditsV2", "GetDiagnosticsReport", "GetInitializationStatusV1",
       "GetLayoutState", "GetPendingInitializationV1",
       "GetPreferences", "GetRecentProjects", "GetRecentProjectsV1", "GetTaskDetailV2",
-      "GetTerminalProfiles", "GetTerminalProfilesV2", "GetUpdateState",
+      "GetTerminalProfiles", "GetTerminalProfilesV2", "GetTerminalWindowSession",
+      "GetUpdateState",
       "GetWorkspaceSnapshot", "GetWorkspaceState", "InitializeProjectV1", "InstallShellCommand",
       "LaunchLinkedAgentV2", "MoveTask", "MoveTaskV2", "MoveTaskV3",
       "MutateTerminalAssociationV2", "OpenHelpDestination", "OpenProject", "OpenRecentProjectV1",
+      "OpenTerminalWindow",
       "PickProjectDirectory", "PrepareAgentWorkflowV2", "PreviewAgentHandoffV2",
       "PreviewCapabilityV2", "PreviewProjectGuideV1", "PreviewTerminalWritebackV2", "RemoveCapabilityV2",
       "RenameTask", "RenameTaskV2", "ResetApplicationState", "ResetPreferences", "ResetWindowLayout",
@@ -168,19 +171,72 @@ describe("Tauri compatibility bridge", () => {
     ]);
   });
 
+  it("routes the terminal window commands with their contract shapes", async () => {
+    const calls = [];
+    const results = {
+      OpenTerminalWindow: { label: "terminal-1" },
+      GetTerminalWindowSession: { sessionId: "session-a" },
+      ClaimTerminalStream: { url: "ws://127.0.0.1:1/s", fromSequence: 42, gap: true },
+    };
+    const target = { __TAURI_INTERNALS__: {}, navigator: { clipboard: {} } };
+    installTauriBridge(target, {
+      invoke: async (command, payload) => {
+        calls.push([command, payload]);
+        return results[payload.request.method];
+      },
+      listen: vi.fn(),
+      clipboard: { readText: vi.fn(), writeText: vi.fn() },
+    });
+
+    expect(await target.go.gui.App.OpenTerminalWindow("session-a")).toEqual({
+      label: "terminal-1",
+    });
+    expect(await target.go.gui.App.GetTerminalWindowSession("terminal-1")).toEqual({
+      sessionId: "session-a",
+    });
+    expect(await target.go.gui.App.ClaimTerminalStream("session-a", 40)).toEqual({
+      url: "ws://127.0.0.1:1/s",
+      fromSequence: 42,
+      gap: true,
+    });
+    // Pop-in is the window closing: there is no command for it, so nothing in
+    // the bridge can leave a terminal window on screen with its session gone.
+    expect(target.go.gui.App.CloseTerminalWindow).toBeUndefined();
+    expect(calls).toEqual([
+      ["gui_invoke", { request: { method: "OpenTerminalWindow", arguments: ["session-a"] } }],
+      ["gui_invoke", {
+        request: { method: "GetTerminalWindowSession", arguments: ["terminal-1"] },
+      }],
+      ["gui_invoke", {
+        request: { method: "ClaimTerminalStream", arguments: ["session-a", 40] },
+      }],
+    ]);
+  });
+
   it("unwraps event payloads and closes a late listener exactly once", async () => {
     let listener;
+    let options;
     let resolveListen;
     const dispose = vi.fn();
     const listenPromise = new Promise((resolve) => { resolveListen = resolve; });
-    const target = { __TAURI_INTERNALS__: {}, navigator: { clipboard: {} } };
+    const target = {
+      __TAURI_INTERNALS__: { metadata: { currentWindow: { label: "terminal-1" } } },
+      navigator: { clipboard: {} },
+    };
     installTauriBridge(target, {
       invoke: vi.fn(),
-      listen: (_name, callback) => { listener = callback; return listenPromise; },
+      listen: (_name, callback, listenOptions) => {
+        listener = callback;
+        options = listenOptions;
+        return listenPromise;
+      },
       clipboard: { readText: vi.fn(), writeText: vi.fn() },
     });
     const callback = vi.fn();
     const unlisten = target.runtime.EventsOnMultiple("terminal:exit", callback, -1);
+    // Scoped to this window's label, so a command targeted at the main window
+    // does not also fire here. A default `Any` target would match every emit.
+    expect(options).toEqual({ target: { kind: "AnyLabel", label: "terminal-1" } });
     listener({ payload: { sessionId: "s1" } });
     expect(callback).toHaveBeenCalledWith({ sessionId: "s1" });
     unlisten();
@@ -190,6 +246,35 @@ describe("Tauri compatibility bridge", () => {
     await Promise.resolve();
     expect(callback).toHaveBeenCalledTimes(1);
     expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  /// Without metadata the label comes from the fragment the window was opened
+  /// with. Defaulting to "main" subscribes a terminal window to the main
+  /// window's events and to none of its own — its shell could exit and it would
+  /// never hear about it.
+  it("falls back to the window label in the fragment, never to main", () => {
+    for (const [hash, label] of [
+      ["#terminal-window=terminal-2", "terminal-2"],
+      ["", "main"],
+      ["#terminal-window=terminal-x", "main"],
+    ]) {
+      let options;
+      const target = {
+        __TAURI_INTERNALS__: {},
+        location: { hash },
+        navigator: { clipboard: {} },
+      };
+      installTauriBridge(target, {
+        invoke: vi.fn(),
+        listen: (_name, _callback, listenOptions) => {
+          options = listenOptions;
+          return new Promise(() => {});
+        },
+        clipboard: { readText: vi.fn(), writeText: vi.fn() },
+      });
+      target.runtime.EventsOnMultiple("terminal:exit", vi.fn(), -1);
+      expect(options).toEqual({ target: { kind: "AnyLabel", label } });
+    }
   });
 
   it("routes browser and clipboard helpers with truthy write success", async () => {

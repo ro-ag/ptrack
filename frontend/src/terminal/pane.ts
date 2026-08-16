@@ -86,6 +86,18 @@ import {
   restartTerminalRecovery,
   retryTerminalRendererRecovery,
 } from "./recovery-actions";
+import {
+  panesHoldPoppedOutTerminal,
+  popOutTerminal,
+  poppedOutCloseRefusedNotice,
+  poppedOutPaneNotice,
+  reclaimStream,
+  reclaimingStreamNotice,
+  streamLossIsRecoverable,
+  streamReclaimFailedNotice,
+  terminalGapNotice,
+  terminalPopOutControl,
+} from "./pop-out";
 import { TerminalResizeDispatcher } from "./resize-dispatch";
 import { terminalSearchResultLabel } from "./search";
 import {
@@ -191,6 +203,19 @@ interface TerminalSession {
   shellIntegration?: ShellIntegrationDescriptor;
 }
 
+interface TerminalStreamClaim {
+  url: string;
+  fromSequence: number;
+  gap: boolean;
+}
+
+/** Payload of the event a closing terminal window frees its session with. */
+interface TerminalWindowClosed {
+  generation?: number;
+  label?: string;
+  sessionId?: string;
+}
+
 interface TerminalExit {
   generation?: number;
   sessionId: string;
@@ -237,6 +262,11 @@ interface TerminalBackend {
   ): Promise<TerminalWritebackResult>;
   ResizeTerminal(sessionID: string, rows: number, columns: number): Promise<void>;
   CloseTerminal(sessionID: string, force: boolean): Promise<void>;
+  OpenTerminalWindow(sessionID: string): Promise<{ label: string }>;
+  ClaimTerminalStream(
+    sessionID: string,
+    fromSequence: number,
+  ): Promise<TerminalStreamClaim>;
 }
 
 interface MountOptions {
@@ -293,6 +323,10 @@ interface PaneResources {
   webgl: WebglAddon | null;
   webglContextLoss: IDisposable | null;
   client: TerminalStreamClient | null;
+  /** Bytes rendered so far: the sequence a re-claim resumes from. */
+  sequence: number;
+  reclaiming: boolean;
+  reclaimAttempts: number;
   observer: ResizeObserver | null;
   subscriptions: IDisposable[];
   eventDisposers: Array<() => void>;
@@ -384,6 +418,7 @@ class TerminalDock {
     "#terminal-modern-unicode",
   );
   readonly #open = requiredElement<HTMLButtonElement>("#terminal-open");
+  readonly #popOut = requiredElement<HTMLButtonElement>("#terminal-pop-out");
   readonly #restart = requiredElement<HTMLButtonElement>("#terminal-restart");
   readonly #close = requiredElement<HTMLButtonElement>("#terminal-close");
   readonly #forceStop = requiredElement<HTMLButtonElement>("#terminal-force-stop");
@@ -513,6 +548,8 @@ class TerminalDock {
   #layoutDiagnosticChangedAt = Date.now();
   readonly #linkedPersistenceStage = new LinkedLaunchPersistenceStage();
   #linkedLaunchPaneIds = new Set<string>();
+  /** Session id → the pane holding its place while it lives in a window. */
+  #poppedOut = new Map<string, string>();
   #authorizedRuntimeRemoval = new Set<string>();
   #dockDisposers: Array<() => void> = [];
 
@@ -610,6 +647,12 @@ class TerminalDock {
       eventsOn("terminal:exit", (payload: TerminalExit) =>
         this.#routeTerminalExit(payload),
       ),
+      eventsOn("terminal:window-closed", (payload: TerminalWindowClosed) =>
+        this.#popTerminalBackIn(payload),
+      ),
+    );
+    this.#listen(this.#popOut, "click", () =>
+      void this.#runOperation((runtime) => this.#popOutPane(runtime)),
     );
     this.#listen(this.#open, "click", () =>
       void this.#runOperation((runtime) => this.#openTerminal(runtime)),
@@ -974,23 +1017,7 @@ class TerminalDock {
       paneId: runtime.paneId,
       changes: { profileId: session.profileId, cwd: session.cwd },
     });
-    resources.client = new TerminalStreamClient({
-      createWebSocket: (url) => new WebSocket(url) as any,
-      writeOutput: (output, done) => resources.terminal.write(output, done),
-      onStateChange: (state) => this.#streamStateChanged(
-        runtime,
-        ticket,
-        session.sessionId,
-        state,
-      ),
-      onOutput: (byteLength) => this.#recordPaneOutput(
-        runtime,
-        ticket,
-        session.sessionId,
-        byteLength,
-      ),
-    });
-    resources.client.connect(session.streamUrl);
+    this.#connectStream(runtime, ticket, resources, session.sessionId, session.streamUrl);
 
     const earlyExit = this.#earlyExit.get(session.sessionId);
     if (earlyExit) {
@@ -1013,6 +1040,198 @@ class TerminalDock {
         runtime.busy = true;
         await this.#openTerminal(runtime);
       },
+    });
+  }
+
+  /**
+   * Move the pane's session into its own window (§4). The renderer is released
+   * first so the window can claim the lease; if anything fails the session is
+   * claimed back here, because a failed pop-out must never leave it unowned.
+   */
+  async #popOutPane(runtime: DockPaneRuntime): Promise<void> {
+    const sessionId = runtime.session?.sessionId;
+    if (this.#disposed || !sessionId || !this.#descriptorFor(runtime.paneId)) return;
+    const result = await popOutTerminal({
+      release: () => this.#teardownRuntime(runtime),
+      open: () => this.#backend.OpenTerminalWindow(sessionId),
+      reclaim: () => this.#claimSessionIntoPane(runtime, sessionId),
+    });
+    if (this.#disposed) return;
+    if (result.outcome === "popped-out") {
+      this.#poppedOut.set(sessionId, runtime.paneId);
+      this.#setState(runtime, "closed", poppedOutPaneNotice);
+      // The control that was just pressed is now hidden, so focus lands on the
+      // pane's tab rather than falling back to the document.
+      this.#focusWorkspaceSurvivor();
+      return;
+    }
+    this.#showError(result.error);
+    if (result.outcome === "unowned") {
+      this.#setState(runtime, "failed", messageFrom(result.error));
+    }
+  }
+
+  /**
+   * Attach a running session to a pane with a freshly minted ticket. The
+   * sequence asked for is 0: a new renderer has no scrollback, so the server
+   * replays everything it still retains and reports a gap when it kept less.
+   */
+  async #claimSessionIntoPane(
+    runtime: DockPaneRuntime,
+    sessionId: string,
+  ): Promise<void> {
+    const descriptor = this.#descriptorFor(runtime.paneId);
+    if (this.#disposed || !descriptor) throw new Error("The terminal pane is gone");
+    this.#teardownRuntime(runtime);
+    this.#lifecycle.prepareOpen(runtime.paneId);
+    const ticket = this.#runtimes.begin(runtime.paneId);
+    this.#body.hidden = false;
+    this.#message.hidden = true;
+    this.#setState(runtime, "opening");
+    const resources = this.#createRenderer(runtime, ticket);
+    runtime.resources = resources;
+    this.#updateWebglPolicy();
+    this.#fit(runtime, resources, false);
+    let claim: TerminalStreamClaim;
+    try {
+      claim = await this.#backend.ClaimTerminalStream(sessionId, 0);
+    } catch (error) {
+      if (this.#accepts(runtime, ticket)) this.#teardownRuntime(runtime);
+      else this.#disposeResources(resources);
+      throw error;
+    }
+    if (!this.#accepts(runtime, ticket)) {
+      this.#disposeResources(resources);
+      return;
+    }
+    runtime.session = {
+      sessionId,
+      profileId: descriptor.pane.profileId,
+      cwd: descriptor.pane.cwd,
+      state: "running",
+      streamUrl: claim.url,
+    };
+    this.#connectStream(runtime, ticket, resources, sessionId, claim.url, claim);
+    if (this.#isActive(runtime)) resources.terminal.focus();
+  }
+
+  /**
+   * One stream client per attach. The client's single-use rule and its write
+   * generation are what stop input from a released renderer reaching a
+   * re-claimed PTY, so a re-attach mints a fresh ticket and a fresh client
+   * rather than reopening the old one.
+   */
+  #connectStream(
+    runtime: DockPaneRuntime,
+    ticket: PaneRuntimeTicket,
+    resources: PaneResources,
+    sessionId: string,
+    url: string,
+    claim?: TerminalStreamClaim,
+  ): void {
+    resources.sequence = claim?.fromSequence ?? 0;
+    const client: TerminalStreamClient = new TerminalStreamClient({
+      createWebSocket: (streamUrl) => new WebSocket(streamUrl) as any,
+      // The rendered byte count is the sequence: a re-claim resumes exactly
+      // where the renderer stopped drawing, never where the socket stopped.
+      writeOutput: (output, done) => resources.terminal.write(output, () => {
+        resources.sequence += output.byteLength;
+        done();
+      }),
+      // A superseded client says nothing: only the pane's current stream
+      // drives its state.
+      onStateChange: (state) => {
+        if (resources.client === client) {
+          this.#streamStateChanged(runtime, ticket, sessionId, state);
+        }
+      },
+      onOutput: (byteLength) => {
+        if (resources.client === client) {
+          this.#recordPaneOutput(runtime, ticket, sessionId, byteLength);
+        }
+      },
+    });
+    resources.client = client;
+    client.connect(url);
+    if (claim?.gap) resources.terminal.writeln(`\r\n[p-track] ${terminalGapNotice}\r\n`);
+  }
+
+  /**
+   * Claim the session back after the stream ended without anyone asking it to
+   * — a reload, a missed pong, a write stall. Bounded retries inside the
+   * re-claim grace window; after that the session is gone and the pane says so.
+   */
+  #scheduleStreamReclaim(
+    runtime: DockPaneRuntime,
+    ticket: PaneRuntimeTicket,
+    resources: PaneResources,
+    sessionId: string,
+  ): void {
+    if (resources.reclaiming) return;
+    resources.reclaiming = true;
+    void reclaimStream({
+      recoverable: () => this.#reclaimAccepted(runtime, ticket, resources, sessionId),
+      sequence: () => resources.sequence,
+      wait: (delay) => new Promise((resolve) => window.setTimeout(resolve, delay)),
+      claim: (fromSequence) => this.#backend.ClaimTerminalStream(sessionId, fromSequence),
+      attach: (claim) => {
+        const superseded = resources.client;
+        resources.client = null;
+        superseded?.close();
+        this.#connectStream(runtime, ticket, resources, sessionId, claim.url, claim);
+        this.#setState(runtime, "running", "");
+      },
+      reclaiming: () => {
+        resources.reclaimAttempts += 1;
+        this.#setState(runtime, "running", reclaimingStreamNotice);
+      },
+      exhausted: () => this.#setState(runtime, "failed", streamReclaimFailedNotice),
+    }, resources.reclaimAttempts).finally(() => {
+      resources.reclaiming = false;
+    });
+  }
+
+  #reclaimAccepted(
+    runtime: DockPaneRuntime,
+    ticket: PaneRuntimeTicket,
+    resources: PaneResources,
+    sessionId: string,
+  ): boolean {
+    return !this.#disposed &&
+      this.#accepts(runtime, ticket) &&
+      !resources.disposed &&
+      runtime.session?.sessionId === sessionId &&
+      streamLossIsRecoverable({
+        state: runtime.state,
+        closing: runtime.closing,
+        hasSession: runtime.session !== null,
+        hasRenderer: runtime.resources === resources,
+      });
+  }
+
+  /**
+   * A terminal window closed and handed its session back (§6). The pane that
+   * held its place takes it; if that pane is gone or already busy, the session
+   * is closed cleanly rather than orphaned.
+   */
+  #popTerminalBackIn(payload: TerminalWindowClosed): void {
+    const sessionId = payload?.sessionId;
+    if (!sessionId || this.#disposed) return;
+    if (
+      this.#workspaceGeneration !== 0 &&
+      payload.generation !== undefined &&
+      payload.generation !== this.#workspaceGeneration
+    ) return;
+    const paneId = this.#poppedOut.get(sessionId);
+    if (paneId === undefined) return;
+    this.#poppedOut.delete(sessionId);
+    const runtime = this.#runtimes.get(paneId);
+    if (!runtime || runtime.session || runtime.state !== "closed" || runtime.busy) {
+      void this.#backend.CloseTerminal(sessionId, false).catch(() => {});
+      return;
+    }
+    void this.#claimSessionIntoPane(runtime, sessionId).catch((error) => {
+      if (!this.#disposed) this.#showError(error);
     });
   }
 
@@ -1642,6 +1861,9 @@ class TerminalDock {
       webgl: null,
       webglContextLoss: null,
       client: null,
+      sequence: 0,
+      reclaiming: false,
+      reclaimAttempts: 0,
       observer: null,
       subscriptions: [],
       eventDisposers: [],
@@ -2011,8 +2233,27 @@ class TerminalDock {
       eventSessionId: sessionId,
     })) return;
     if (runtime.resources) runtime.resources.diagnosticChangedAt = Date.now();
+    // Only a stream that opened earns a fresh re-claim budget.
+    if (state === "open" && runtime.resources) runtime.resources.reclaimAttempts = 0;
     if (state === "connecting") {
       if (this.#isActive(runtime)) this.#renderState();
+      return;
+    }
+    // A stream that ended without anyone asking for it is not the end of the
+    // session: the PTY is still running and the lease can be claimed back.
+    const resources = runtime.resources;
+    if (
+      state !== "open" &&
+      resources &&
+      !resources.disposed &&
+      streamLossIsRecoverable({
+        state: runtime.state,
+        closing: runtime.closing,
+        hasSession: runtime.session !== null,
+        hasRenderer: true,
+      })
+    ) {
+      this.#scheduleStreamReclaim(runtime, ticket, resources, sessionId);
       return;
     }
     const transition = paneRuntimeTransition(runtime.state, {
@@ -2245,7 +2486,12 @@ class TerminalDock {
     }
     this.#dock.dataset.state = runtime.state;
     this.#dock.dataset.layoutInteractive = String(dockInteractionEligible);
-    this.#body.hidden = runtime.state === "closed" &&
+    // The pane holds the popped-out session's place, so it must not be reused
+    // for a new terminal: that would leave the returning session nowhere to go.
+    const poppedOut = this.#paneIsPoppedOut(runtime.paneId);
+    // An empty pane that is waiting for a window keeps its body, so the notice
+    // saying where its terminal went is actually visible.
+    this.#body.hidden = runtime.state === "closed" && !poppedOut &&
       (!activeTab || paneIds(activeTab.root).length === 1);
     this.#message.textContent = runtime.detail;
     this.#message.hidden = runtime.detail === "";
@@ -2254,6 +2500,8 @@ class TerminalDock {
       : null;
     this.#status.textContent = runtime.closing
       ? "Closing…"
+      : poppedOut
+        ? "In its own window"
       : runtime.activity.signal === "failed"
         ? "Failed"
         : runtime.activity.signal === "completed"
@@ -2284,7 +2532,16 @@ class TerminalDock {
       (tab) => tab.id === workspace.activeTabId,
     )?.association;
     const linked = this.#paneIsLinked(runtime, activeAssociation);
-    this.#open.disabled = runtime.busy || runtime.closing || linked ||
+    const popOut = terminalPopOutControl({
+      paneCount: this.#activeTabPaneIds().length,
+      state: runtime.state,
+      hasSession: runtime.session !== null,
+      busy: runtime.busy,
+      closing: runtime.closing,
+    });
+    this.#popOut.hidden = !popOut.present;
+    this.#popOut.disabled = popOut.disabled;
+    this.#open.disabled = runtime.busy || runtime.closing || linked || poppedOut ||
       !descriptor?.pane.profileId;
     this.#restart.disabled = !diagnosticView.canRestart;
     this.#close.disabled = runtime.busy || runtime.closing;
@@ -2352,6 +2609,24 @@ class TerminalDock {
       runtime.session?.linkedLaunch === true,
       this.#linkedLaunchPaneIds.has(runtime.paneId),
     );
+  }
+
+  #paneIsPoppedOut(paneId: string): boolean {
+    return panesHoldPoppedOutTerminal([paneId], this.#poppedOut.values());
+  }
+
+  /**
+   * Refuse a close that would remove a pane holding a popped-out terminal. The
+   * pane has no session, so the close intent never asks about it, and the
+   * window that has the shell would find its place gone and close the session
+   * instead. Both structural closes and the workspace reset come through here.
+   */
+  #poppedOutCloseRefused(closingPaneIds: readonly string[]): boolean {
+    if (!panesHoldPoppedOutTerminal(closingPaneIds, this.#poppedOut.values())) {
+      return false;
+    }
+    this.#showError(new Error(poppedOutCloseRefusedNotice));
+    return true;
   }
 
   #isActive(runtime: DockPaneRuntime): boolean {
@@ -2543,6 +2818,7 @@ class TerminalDock {
       closingPaneIds = [action.paneId];
     }
     if (closingPaneIds.length === 0) return;
+    if (this.#poppedOutCloseRefused(closingPaneIds)) return;
     try {
       const result = await runDescriptorCloseIntent({
         paneIds: closingPaneIds,
@@ -2606,6 +2882,7 @@ class TerminalDock {
     const paneIdList = workspaceAtStart.tabs.flatMap((tab) =>
       paneIds(tab.root)
     );
+    if (this.#poppedOutCloseRefused(paneIdList)) return;
     const runtimes = paneIdList.map((paneId) => this.#runtimes.ensure(paneId));
     try {
       const result = await resetTerminalWorkspaceRecovery({

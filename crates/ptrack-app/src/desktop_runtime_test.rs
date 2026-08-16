@@ -843,7 +843,7 @@ fn desktop_update_commands_delegate_exact_arguments_and_return_full_state() {
 }
 
 #[test]
-#[allow(clippy::too_many_lines)] // Full 84-command freeze fixture is intentionally explicit.
+#[allow(clippy::too_many_lines)] // Full 87-command freeze fixture is intentionally explicit.
 fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
     let commands = allowed_desktop_commands();
     assert_eq!(
@@ -861,6 +861,7 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "CancelUpdateOperation",
             "CancelWorkspaceChange",
             "CheckForUpdates",
+            "ClaimTerminalStream",
             "CloseProject",
             "CloseTerminal",
             "CloseTerminalV2",
@@ -891,6 +892,7 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "GetTaskDetailV2",
             "GetTerminalProfiles",
             "GetTerminalProfilesV2",
+            "GetTerminalWindowSession",
             "GetUpdateState",
             "GetWorkspaceSnapshot",
             "GetWorkspaceState",
@@ -904,6 +906,7 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "OpenHelpDestination",
             "OpenProject",
             "OpenRecentProjectV1",
+            "OpenTerminalWindow",
             "PickProjectDirectory",
             "PrepareAgentWorkflowV2",
             "PreviewAgentHandoffV2",
@@ -1382,6 +1385,99 @@ fn shutdown_is_idempotent_and_fences_future_calls() {
             .to_string(),
         "terminal lifecycle is shutting down"
     );
+}
+
+/// Contract section 2: the window assignment map is reachable through the
+/// bridge with its exact response shapes, and closing the project takes every
+/// terminal window with it.
+#[test]
+fn terminal_window_assignments_answer_the_bridge_and_expire_with_the_project() {
+    let welcome = DesktopRuntime::new(DesktopRuntimeConfig::unavailable("test"));
+    assert_eq!(
+        welcome
+            .invoke(request("OpenTerminalWindow", vec![json!("session-a")]))
+            .unwrap_err()
+            .to_string(),
+        "no project workspace is open"
+    );
+
+    let root = TestDirectory::new("terminal-windows");
+    let workspace = FakeWorkspace::new(&root.0, 1);
+    let runtime = DesktopRuntime::new(DesktopRuntimeConfig {
+        version: "test".to_owned(),
+        factory: Arc::new(FakeFactory::default()),
+        event_sink: None,
+        initial_workspace: Some(workspace),
+        recent_projects: Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+        initialization: Arc::new(super::desktop_runtime::NoDesktopInitializationService),
+        update_service: super::update_runtime::UnavailableUpdateService::new("test"),
+        confirmation_ttl: Duration::from_secs(60),
+    });
+    assert_eq!(
+        runtime
+            .invoke(request("OpenTerminalWindow", vec![json!("session-a")]))
+            .unwrap(),
+        json!({ "label": "terminal-1" })
+    );
+    assert_eq!(
+        runtime
+            .invoke(request(
+                "GetTerminalWindowSession",
+                vec![json!("terminal-1")]
+            ))
+            .unwrap(),
+        json!({ "sessionId": "session-a" })
+    );
+    // An unknown label is null, not an error, so a stale window closes cleanly.
+    assert_eq!(
+        runtime
+            .invoke(request(
+                "GetTerminalWindowSession",
+                vec![json!("terminal-9")]
+            ))
+            .unwrap(),
+        json!({ "sessionId": null })
+    );
+    // The assignment is the token the shell pops a session back in on: the
+    // window's destruction clears it and reports the session exactly once, so a
+    // second destruction — or a drain that already took it — reports nothing
+    // and cannot hand the same session to the main window twice.
+    assert_eq!(
+        runtime.close_terminal_window("terminal-1"),
+        Some("session-a".to_owned())
+    );
+    assert_eq!(runtime.close_terminal_window("terminal-1"), None);
+    assert_eq!(runtime.close_terminal_window("terminal-9"), None);
+    assert_eq!(
+        runtime
+            .invoke(request("OpenTerminalWindow", Vec::new()))
+            .unwrap_err()
+            .to_string(),
+        "OpenTerminalWindow requires exactly 1 arguments"
+    );
+
+    // A live assignment survives every other command and dies with the project.
+    runtime
+        .invoke(request("OpenTerminalWindow", vec![json!("session-b")]))
+        .unwrap();
+    assert!(runtime.expire_terminal_windows().is_empty());
+    runtime
+        .invoke(request("CloseProject", vec![json!("")]))
+        .unwrap();
+    assert_eq!(runtime.expire_terminal_windows(), ["terminal-2"]);
+    assert_eq!(
+        runtime
+            .invoke(request(
+                "GetTerminalWindowSession",
+                vec![json!("terminal-2")]
+            ))
+            .unwrap(),
+        json!({ "sessionId": null })
+    );
+    // The project switch already took the assignment, so the destruction of the
+    // window it closed pops nothing back into a workspace that is gone.
+    assert_eq!(runtime.close_terminal_window("terminal-2"), None);
+    assert_eq!(runtime.drain_terminal_windows(), Vec::<String>::new());
 }
 
 #[test]

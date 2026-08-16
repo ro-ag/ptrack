@@ -1,5 +1,25 @@
 import "./tauri-bridge";
+import { FitAddon } from "@xterm/addon-fit";
+import { Terminal } from "@xterm/xterm";
 import { mountTerminalDock } from "./terminal/pane";
+import { TerminalStreamClient } from "./terminal/client";
+import {
+  binaryStringToBytes,
+  splitTerminalInput,
+  terminalTextToBytes,
+} from "./terminal/paste";
+import {
+  normalizeTerminalProfileSettings,
+  terminalRendererOptions,
+} from "./terminal/profile-settings";
+import {
+  reclaimStream,
+  reclaimingStreamNotice,
+  streamReclaimFailedNotice,
+  terminalGapNotice,
+  terminalWindowLabel,
+  terminalWindowStatusLabel,
+} from "./terminal/pop-out";
 import {
   linkedAssociationPointer,
   selectedInstalledAgentProfile,
@@ -6809,6 +6829,14 @@ function generationTerminalBackend(generation) {
     RollbackLinkedAgent(sessionID) {
       return api().RollbackLinkedAgentLaunchV2(generation, sessionID);
     },
+    // Both are fenced by the workspace generation inside the runtime, so their
+    // responses carry no generation of their own to assert here.
+    OpenTerminalWindow(sessionID) {
+      return api().OpenTerminalWindow(sessionID);
+    },
+    ClaimTerminalStream(sessionID, fromSequence) {
+      return api().ClaimTerminalStream(sessionID, fromSequence);
+    },
     async MutateTerminalAssociation(sessionID, expectedRevision, association) {
       return assertGeneration(
         await api().MutateTerminalAssociationV2(
@@ -7692,4 +7720,153 @@ async function start() {
   );
 }
 
-void start();
+// ------------------------------------------------------ terminal window mode
+
+async function waitForBridge() {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      return api();
+    } catch {
+      await new Promise((resolve) => window.setTimeout(resolve, 100));
+    }
+  }
+  throw new Error("The desktop runtime is not ready");
+}
+
+/**
+ * A terminal window renders the terminal surface and nothing else: it asks
+ * which session it owns, claims the renderer lease, and attaches. Closing the
+ * window returns the session to the main window, so the pop-in control is just
+ * a window close the user can reach from the keyboard.
+ */
+async function startTerminalWindow(label) {
+  const section = document.getElementById("terminal-window");
+  const status = document.getElementById("terminal-window-status");
+  const gap = document.getElementById("terminal-window-gap");
+  const gapDetail = document.getElementById("terminal-window-gap-detail");
+  const host = document.getElementById("terminal-window-host");
+  section.hidden = false;
+  gapDetail.textContent = terminalGapNotice;
+  const showGap = () => {
+    gap.hidden = false;
+  };
+
+  try {
+    await waitForBridge();
+    const assignment = await api().GetTerminalWindowSession(label);
+    const sessionId = assignment?.sessionId;
+    if (!sessionId) {
+      status.textContent = "This window no longer shows a terminal. Close it.";
+      return;
+    }
+    const workspace = await api().GetWorkspaceState();
+    const generation = Number(workspace?.generation || 0);
+    const claim = await api().ClaimTerminalStream(sessionId, 0);
+
+    const settings = normalizeTerminalProfileSettings({});
+    const terminal = new Terminal({
+      allowProposedApi: true,
+      cursorBlink: true,
+      rescaleOverlappingGlyphs: true,
+      ...terminalRendererOptions(settings, settings.fontSize),
+    });
+    const fit = new FitAddon();
+    terminal.loadAddon(fit);
+    terminal.open(host);
+    terminal.textarea?.setAttribute("aria-label", "Terminal session");
+    fit.fit();
+
+    let sequence = 0;
+    let attempts = 0;
+    let reclaiming = false;
+    let ended = false;
+    let client = null;
+
+    // One client per attach: the stream ticket is single-use and the client's
+    // write generation is what stops input from a released renderer reaching a
+    // re-claimed PTY, so a re-attach builds a new one instead of reopening it.
+    const attach = (url, from) => {
+      sequence = Number(from || 0);
+      const next = new TerminalStreamClient({
+        createWebSocket: (streamUrl) => new WebSocket(streamUrl),
+        // The rendered byte count is the sequence: a re-claim resumes exactly
+        // where the renderer stopped drawing, not where the socket stopped.
+        writeOutput: (output, done) => terminal.write(output, () => {
+          sequence += output.byteLength;
+          done();
+        }),
+        onStateChange: (state) => {
+          if (client !== next) return;
+          status.textContent = terminalWindowStatusLabel(state);
+          // Only a stream that opened earns a fresh re-claim budget.
+          if (state === "open") attempts = 0;
+          if (state === "closed" || state === "error") scheduleReclaim();
+        },
+        onGap: showGap,
+      });
+      client = next;
+      next.connect(url);
+    };
+
+    // A stream that ended without the shell ending is recoverable: claim the
+    // lease back from the last rendered sequence, bounded so it cannot spin.
+    const scheduleReclaim = () => {
+      if (reclaiming) return;
+      reclaiming = true;
+      void reclaimStream({
+        recoverable: () => !ended,
+        sequence: () => sequence,
+        wait: (delay) => new Promise((resolve) => window.setTimeout(resolve, delay)),
+        claim: (fromSequence) => api().ClaimTerminalStream(sessionId, fromSequence),
+        attach: (claim) => {
+          if (claim.gap) showGap();
+          attach(claim.url, claim.fromSequence);
+        },
+        reclaiming: () => {
+          attempts += 1;
+          status.textContent = reclaimingStreamNotice;
+        },
+        exhausted: () => {
+          status.textContent = streamReclaimFailedNotice;
+        },
+      }, attempts).finally(() => {
+        reclaiming = false;
+      });
+    };
+
+    terminal.onData((data) => {
+      for (const chunk of splitTerminalInput(terminalTextToBytes(data))) {
+        client?.sendInput(chunk);
+      }
+    });
+    terminal.onBinary((data) => {
+      for (const chunk of splitTerminalInput(binaryStringToBytes(data))) {
+        client?.sendInput(chunk);
+      }
+    });
+    window.runtime?.EventsOnMultiple?.("terminal:exit", (payload) => {
+      if (payload?.sessionId !== sessionId) return;
+      ended = true;
+      status.textContent = payload.error || `Exited (${payload.exitCode})`;
+    }, -1);
+
+    if (claim.gap) showGap();
+    attach(claim.url, claim.fromSequence);
+
+    const fitToWindow = () => {
+      fit.fit();
+      void api()
+        .ResizeTerminalV2(generation, sessionId, terminal.rows, terminal.cols)
+        .catch(() => {});
+    };
+    window.addEventListener("resize", () => requestAnimationFrame(fitToWindow));
+    fitToWindow();
+    terminal.focus();
+  } catch (error) {
+    status.textContent = messageFrom(error);
+  }
+}
+
+const terminalWindow = terminalWindowLabel(window.location.hash);
+if (terminalWindow) void startTerminalWindow(terminalWindow);
+else void start();

@@ -72,7 +72,7 @@ fn external() -> DisplayV1 {
 }
 
 fn stored(document: &GlobalStore) -> Value {
-    serde_json::to_value(window_state(document)).unwrap()
+    serde_json::to_value(window_state(document, "main")).unwrap()
 }
 
 fn record(state: WindowStateV1, storage: WindowStateStorageV1) -> WindowStateDocumentV1 {
@@ -108,7 +108,11 @@ fn absent_record_reads_as_defaults_and_restores_nothing() {
     assert_eq!(stored(&store), defaults("defaults"));
     assert!(store.config(WINDOW_STATE_KEY).unwrap().is_empty());
     assert_eq!(
-        restore_placement(&window_state(&store), &[built_in()], Some(built_in())),
+        restore_placement(
+            &window_state(&store, "main"),
+            &[built_in()],
+            Some(built_in())
+        ),
         None
     );
 }
@@ -124,7 +128,7 @@ fn a_capture_stores_the_contract_shape_in_logical_coordinates() {
         false,
         display(rect(0.0, 0.0, 3_456.0, 2_160.0), 2.0),
     );
-    let written = serde_json::to_value(set_window_state(&store, &state).unwrap()).unwrap();
+    let written = serde_json::to_value(set_window_state(&store, "main", &state).unwrap()).unwrap();
     let expected = json!({
         "storage": "ok",
         "version": 1,
@@ -145,6 +149,154 @@ fn a_capture_stores_the_contract_shape_in_logical_coordinates() {
     record.as_object_mut().unwrap().remove("storage");
     let bytes: Value = serde_json::from_slice(&store.config(WINDOW_STATE_KEY).unwrap()).unwrap();
     assert_eq!(bytes, record);
+}
+
+/// Contract section 5: a terminal window's capture must not overwrite the main
+/// window's rect, and the record keeps one version and one transaction.
+#[test]
+fn per_window_entries_are_isolated_and_bounded() {
+    let directory = Temp::new("per-window");
+    let store = store(&directory);
+    set_window_state(&store, "main", &windowed(rect(10.0, 20.0, 1_000.0, 700.0))).unwrap();
+
+    // A window with no entry reads as defaults and restores nothing, so a
+    // fresh terminal window opens at its configured geometry.
+    assert_eq!(
+        serde_json::to_value(window_state(&store, "terminal-1")).unwrap(),
+        defaults("defaults")
+    );
+    assert_eq!(
+        restore_placement(
+            &window_state(&store, "terminal-1"),
+            &[built_in()],
+            Some(built_in())
+        ),
+        None
+    );
+
+    let popped = serde_json::to_value(
+        set_window_state(
+            &store,
+            "terminal-1",
+            &windowed(rect(400.0, 300.0, 900.0, 600.0)),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(popped["storage"], "ok");
+    assert_eq!(popped["logical"]["x"], 400.0);
+    // The main window kept every field of its own rect.
+    assert_eq!(
+        serde_json::to_value(window_state(&store, "main")).unwrap()["logical"],
+        json!({ "x": 10.0, "y": 20.0, "width": 1_000.0, "height": 700.0 })
+    );
+
+    // One version at the root, and the terminal entry carries none.
+    let bytes: Value = serde_json::from_slice(&store.config(WINDOW_STATE_KEY).unwrap()).unwrap();
+    assert_eq!(bytes["version"], 1);
+    assert_eq!(bytes["terminal"]["version"], Value::Null);
+    assert_eq!(bytes["terminal"]["logical"]["x"], 400.0);
+
+    // Terminal windows are interchangeable and their labels restart at 1 every
+    // run, so they share one entry: the record is bounded however many windows
+    // a run pops out, and the last rect one was dragged to is the one the next
+    // run's first pop-out opens at — whatever label it is minted with.
+    for index in 2..=20 {
+        set_window_state(
+            &store,
+            &format!("terminal-{index}"),
+            &windowed(rect(f64::from(index), 0.0, 900.0, 600.0)),
+        )
+        .unwrap();
+    }
+    let bytes: Value = serde_json::from_slice(&store.config(WINDOW_STATE_KEY).unwrap()).unwrap();
+    assert_eq!(bytes.as_object().unwrap().len(), 7);
+    assert_eq!(bytes["logical"]["x"], 10.0);
+    assert_eq!(bytes["terminal"]["logical"]["x"], 20.0);
+    for label in ["terminal-1", "terminal-20", "terminal-99"] {
+        assert_eq!(
+            serde_json::to_value(window_state(&store, label)).unwrap()["logical"]["x"],
+            20.0,
+            "{label} must read the shared terminal entry"
+        );
+    }
+}
+
+/// A record written before the main window was ever captured has no main rect.
+/// Reading defaults out of it as though they had been stored replays the
+/// configured geometry as a placement: the first pop-out of a fresh install
+/// would pin the main window to 0,0 at 1440×900 on the next launch.
+#[test]
+fn a_terminal_capture_never_materializes_a_main_window_rect() {
+    let directory = Temp::new("terminal-first");
+    let store = store(&directory);
+    set_window_state(
+        &store,
+        "terminal-1",
+        &windowed(rect(400.0, 300.0, 900.0, 600.0)),
+    )
+    .unwrap();
+
+    assert_eq!(stored(&store), defaults("defaults"));
+    assert_eq!(
+        restore_placement(
+            &window_state(&store, "main"),
+            &[built_in()],
+            Some(built_in())
+        ),
+        None
+    );
+    let bytes: Value = serde_json::from_slice(&store.config(WINDOW_STATE_KEY).unwrap()).unwrap();
+    assert_eq!(bytes["logical"], Value::Null);
+    assert_eq!(bytes["terminal"]["logical"]["x"], 400.0);
+
+    // The main window's own capture still lands, and takes the terminal entry
+    // with it rather than dropping it.
+    set_window_state(&store, "main", &windowed(rect(10.0, 20.0, 1_000.0, 700.0))).unwrap();
+    assert_eq!(stored(&store)["logical"]["x"], 10.0);
+    assert_eq!(
+        serde_json::to_value(window_state(&store, "terminal-2")).unwrap()["logical"]["x"],
+        400.0
+    );
+}
+
+/// A key that is not part of the record is dropped rather than kept, so a
+/// garbage record cannot grow the document with arbitrary names.
+#[test]
+fn unknown_keys_are_dropped_by_normalization() {
+    let directory = Temp::new("labels");
+    let store = store(&directory);
+    store
+        .set_config(
+            WINDOW_STATE_KEY,
+            json!({
+                "version": 1,
+                "windows": { "terminal-1": { "logical": { "x": 9.0 } } },
+                "../escape": { "logical": { "x": 9.0 } },
+                "terminal": { "logical": { "x": 5.0, "y": 6.0, "width": 900.0, "height": 600.0 } }
+            })
+            .to_string()
+            .as_bytes(),
+        )
+        .unwrap();
+    set_window_state(&store, "main", &windowed(rect(1.0, 2.0, 1_000.0, 700.0))).unwrap();
+    let bytes: Value = serde_json::from_slice(&store.config(WINDOW_STATE_KEY).unwrap()).unwrap();
+    let mut keys = bytes.as_object().unwrap().keys().collect::<Vec<_>>();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "display",
+            "fullscreen",
+            "logical",
+            "maximized",
+            "scaleFactor",
+            "terminal",
+            "version"
+        ]
+    );
+    assert_eq!(bytes["logical"]["x"], 1.0);
+    assert_eq!(bytes["terminal"]["logical"]["x"], 5.0);
 }
 
 #[test]
@@ -191,7 +343,11 @@ fn unreadable_and_newer_records_read_as_defaults_and_are_never_rewritten() {
         assert_eq!(store.config(WINDOW_STATE_KEY).unwrap(), bytes);
         // Nothing trustworthy to replay, so the configured window is left alone.
         assert_eq!(
-            restore_placement(&window_state(&store), &[built_in()], Some(built_in())),
+            restore_placement(
+                &window_state(&store, "main"),
+                &[built_in()],
+                Some(built_in())
+            ),
             None
         );
     }
@@ -209,7 +365,7 @@ fn a_capture_onto_an_unreadable_record_keeps_the_stored_bytes() {
         b"not json".to_vec(),
     ] {
         store.set_config(WINDOW_STATE_KEY, &bytes).unwrap();
-        let written = set_window_state(&store, &windowed(rect(40.0, 40.0, 1_000.0, 700.0)))
+        let written = set_window_state(&store, "main", &windowed(rect(40.0, 40.0, 1_000.0, 700.0)))
             .unwrap_or_else(|error| {
                 panic!("an unreadable record must not fail the capture: {error}")
             });
@@ -240,7 +396,7 @@ fn an_older_record_upgrades_in_memory_and_persists_on_the_next_capture() {
         br#"{"version":0,"logical":{"x":40,"y":40,"width":1000,"height":700}}"#
     );
 
-    set_window_state(&store, &windowed(rect(40.0, 40.0, 1_000.0, 700.0))).unwrap();
+    set_window_state(&store, "main", &windowed(rect(40.0, 40.0, 1_000.0, 700.0))).unwrap();
     let bytes: Value = serde_json::from_slice(&store.config(WINDOW_STATE_KEY).unwrap()).unwrap();
     assert_eq!(bytes["version"], 1);
 }
@@ -249,7 +405,12 @@ fn an_older_record_upgrades_in_memory_and_persists_on_the_next_capture() {
 fn a_maximized_capture_keeps_the_last_windowed_rect() {
     let directory = Temp::new("maximized");
     let store = store(&directory);
-    set_window_state(&store, &windowed(rect(200.0, 150.0, 1_000.0, 700.0))).unwrap();
+    set_window_state(
+        &store,
+        "main",
+        &windowed(rect(200.0, 150.0, 1_000.0, 700.0)),
+    )
+    .unwrap();
 
     // A maximized window reports the rect it fills, not the one it restores to.
     let filled = captured(
@@ -259,7 +420,8 @@ fn a_maximized_capture_keeps_the_last_windowed_rect() {
         false,
         built_in(),
     );
-    let maximized = serde_json::to_value(set_window_state(&store, &filled).unwrap()).unwrap();
+    let maximized =
+        serde_json::to_value(set_window_state(&store, "main", &filled).unwrap()).unwrap();
     assert_eq!(maximized["maximized"], true);
     assert_eq!(
         maximized["logical"],
@@ -274,7 +436,8 @@ fn a_maximized_capture_keeps_the_last_windowed_rect() {
         true,
         built_in(),
     );
-    let fullscreen = serde_json::to_value(set_window_state(&store, &full).unwrap()).unwrap();
+    let fullscreen =
+        serde_json::to_value(set_window_state(&store, "main", &full).unwrap()).unwrap();
     assert_eq!(fullscreen["fullscreen"], true);
     assert_eq!(fullscreen["logical"]["width"], 1_000.0);
 }
