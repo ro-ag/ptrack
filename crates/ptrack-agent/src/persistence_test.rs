@@ -43,14 +43,40 @@ fn launched_registration() -> Registration {
 
 #[test]
 fn runtime_layout_hash_is_exact_and_creates_nothing() {
+    const EMPTY_INPUT_SHA256: &str =
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
     let home = TempDirectory::new("ptrack-agent-runtime-home");
     let path = runtime_dir(home.path(), "/project/./nested/..").unwrap();
-    assert_eq!(
-        path,
-        home.path()
-            .join("runtime")
-            .join("ea0135bca5e3bd815f5b7b8f8c83d86f584697bc29e0cc3b30937153abef2844")
+    // The Unix golden pins cross-run stability of the layout hash. On Windows
+    // the rooted input gains the current drive during normalization, so the
+    // expectation is derived by applying the same normalization and hashing
+    // the product performs.
+    #[cfg(unix)]
+    let expected_hex =
+        "ea0135bca5e3bd815f5b7b8f8c83d86f584697bc29e0cc3b30937153abef2844".to_owned();
+    #[cfg(windows)]
+    let expected_hex = {
+        use sha2::{Digest, Sha256};
+        let clean = crate::persistence::absolute_clean(
+            Path::new("/project/./nested/.."),
+            "derive expected runtime hash",
+        )
+        .unwrap();
+        let mut hex = String::with_capacity(64);
+        for byte in Sha256::digest(clean.to_string_lossy().as_bytes()) {
+            use std::fmt::Write as _;
+            write!(hex, "{byte:02x}").expect("writing to String cannot fail");
+        }
+        hex
+    };
+    assert_eq!(expected_hex.len(), 64);
+    assert!(
+        expected_hex
+            .chars()
+            .all(|character| matches!(character, '0'..='9' | 'a'..='f'))
     );
+    assert_ne!(expected_hex, EMPTY_INPUT_SHA256);
+    assert_eq!(path, home.path().join("runtime").join(&expected_hex));
     assert!(!path.exists());
     assert_eq!(
         run_history_path(home.path(), "/project").unwrap(),

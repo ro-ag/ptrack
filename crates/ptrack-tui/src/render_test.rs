@@ -346,11 +346,17 @@ fn milestone_issue_and_maintenance_rows_preserve_source_parity() {
     value.snapshot.meta.goal.clear();
     value.snapshot.meta.summary.clear();
     let maintenance = rendered(&value, 120, 25);
+    // The renderer builds this line with Path::join, so the expected string is
+    // derived the same way to keep the assertion platform-exact.
+    let destination = format!(
+        "Destination: {}",
+        PathBuf::from("/tmp/home").join("backups").display()
+    );
     for expected in [
         "Project health",
         "Maintenance actions",
         "(unset)",
-        "Destination: /tmp/home/backups",
+        destination.as_str(),
         "ptrack guide",
         "ptrack hook install",
     ] {
