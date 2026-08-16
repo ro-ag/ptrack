@@ -1,5 +1,6 @@
 use std::fmt;
 use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, TryLockError};
 use std::time::Duration;
 
@@ -8,10 +9,13 @@ use conpty_oxide::{PtyController, SessionOptions, Size};
 
 use super::{PtyProcess, StartRequest, split_windows_environment_entry};
 
+#[cfg(test)]
+mod pty_windows_test;
+
 pub(super) fn start(request: &StartRequest) -> io::Result<Box<dyn PtyProcess>> {
     let mut command = Command::new(&request.executable);
     command.args(&request.args);
-    command.current_dir(&request.cwd);
+    command.current_dir(simplify_verbatim_cwd(&request.cwd));
     command.env_clear();
     for entry in &request.env {
         // A cmd.exe ancestor exports per-drive working-directory bookkeeping
@@ -37,6 +41,28 @@ pub(super) fn start(request: &StartRequest) -> io::Result<Box<dyn PtyProcess>> {
         input: Mutex::new(Some(parts.input)),
         controller: Mutex::new(Some(parts.controller)),
     }))
+}
+
+/// Rewrites a canonicalized verbatim working directory into its plain form.
+///
+/// `fs::canonicalize` produces `\\?\C:\...` paths on Windows. cmd.exe rejects
+/// that form as a working directory ("UNC paths are not supported.") and
+/// silently starts in the Windows directory instead, so hand the spawn a
+/// plain drive path (`C:\...`) or classic UNC path (`\\server\share\...`).
+fn simplify_verbatim_cwd(cwd: &Path) -> PathBuf {
+    let Some(text) = cwd.to_str() else {
+        return cwd.to_path_buf();
+    };
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        let bytes = rest.as_bytes();
+        if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+            return PathBuf::from(rest);
+        }
+    }
+    cwd.to_path_buf()
 }
 
 struct WindowsPtyProcess {
