@@ -3099,6 +3099,10 @@ button.modal-backdrop:active {
 .activity-expanded .activity-detail {
   display: block;
   overflow: visible;
+  /* The height cap has to lift with the overflow. Leaving it two lines tall
+     while the text spills out visibly is what painted the note over its own
+     meta line in the memory dialog. */
+  max-height: none;
   -webkit-line-clamp: unset;
 }
 

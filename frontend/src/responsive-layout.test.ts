@@ -314,4 +314,16 @@ describe("responsive desktop layout contracts", () => {
       /\.terminal-window-host\s*\{[^}]*min-height:\s*0;[^}]*flex:\s*1 1 auto;/,
     );
   });
+
+  it("lifts the activity height cap wherever the detail is expanded", () => {
+    // The clamped variant caps height AND hides overflow; the expanded variant
+    // must lift both. Lifting only the overflow spills the text out of a
+    // two-line box and paints it over the meta line beneath it.
+    expect(styles).toMatch(
+      /\.activity-detail\s*\{[^}]*overflow:\s*hidden;[^}]*max-height:\s*calc\(1\.35em \* 2\);/,
+    );
+    expect(styles).toMatch(
+      /\.activity-expanded \.activity-detail\s*\{[^}]*overflow:\s*visible;[^}]*max-height:\s*none;/,
+    );
+  });
 });
