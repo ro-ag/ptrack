@@ -433,7 +433,16 @@ pub(super) fn assert_windows_reparse_path_containment() {
     let outside = temp.join("outside");
     fs::create_dir_all(project.join("dist")).unwrap();
     fs::create_dir_all(&outside).unwrap();
-    std::os::windows::fs::symlink_dir(&outside, project.join("dist/escape")).unwrap();
+    // Symlink creation on stock Windows requires Developer Mode or
+    // SeCreateSymbolicLinkPrivilege (os error 1314); only that specific
+    // failure skips, and the assertions run untouched when it succeeds.
+    if let Err(error) = std::os::windows::fs::symlink_dir(&outside, project.join("dist/escape")) {
+        if error.raw_os_error() == Some(1314) {
+            eprintln!("SKIP: symlink privilege not held (enable Developer Mode to run this test)");
+            return;
+        }
+        panic!("create windows directory symlink: {error}");
+    }
     let roots = vec!["dist".to_owned()];
     assert_eq!(
         resolve_project_path(&project, "dist/escape/new", &roots, false)

@@ -37,7 +37,20 @@ fn host_validates_and_mints_monotonic_authority_free_associations() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(root.path(), &alias).unwrap();
     #[cfg(windows)]
-    std::os::windows::fs::symlink_dir(root.path(), &alias).unwrap();
+    {
+        // Symlink creation on stock Windows requires Developer Mode or
+        // SeCreateSymbolicLinkPrivilege (os error 1314); only that specific
+        // failure skips, and the assertions run untouched when it succeeds.
+        if let Err(error) = std::os::windows::fs::symlink_dir(root.path(), &alias) {
+            if error.raw_os_error() == Some(1314) {
+                eprintln!(
+                    "SKIP: symlink privilege not held (enable Developer Mode to run this test)"
+                );
+                return;
+            }
+            panic!("create directory symlink: {error}");
+        }
+    }
     let catalog = Catalog {
         plans: vec![2],
         tasks: BTreeMap::from([(9, 2)]),
