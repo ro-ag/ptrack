@@ -303,6 +303,18 @@ describe("responsive desktop layout contracts", () => {
     );
   });
 
+  it("reflows the terminal window bar and keeps its terminal shrinkable", () => {
+    expect(styles).toMatch(
+      /\.terminal-window-bar\s*\{[^}]*flex-wrap:\s*wrap;/,
+    );
+    expect(styles).toMatch(
+      /\.terminal-window-gap\s*\{[^}]*flex-wrap:\s*wrap;/,
+    );
+    expect(styles).toMatch(
+      /\.terminal-window-host\s*\{[^}]*min-height:\s*0;[^}]*flex:\s*1 1 auto;/,
+    );
+  });
+
   it("lifts the activity height cap wherever the detail is expanded", () => {
     // The clamped variant caps height AND hides overflow; the expanded variant
     // must lift both. Lifting only the overflow spills the text out of a

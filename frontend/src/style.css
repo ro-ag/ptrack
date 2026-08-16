@@ -4465,6 +4465,90 @@ button.modal-backdrop:active {
   }
 }
 
+/* ------------------------------------------------------- terminal window */
+
+/* The mode marker is set before first paint, so the workspace never renders
+   in a terminal window and none of its controls join the focus order. */
+html[data-window-mode="terminal"] #app {
+  display: none;
+}
+
+.terminal-window {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  background: var(--terminal-bg);
+}
+
+.terminal-window-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-100);
+  border-bottom: 1px solid var(--line);
+  padding: var(--space-100) var(--space-150);
+}
+
+.terminal-window-identity {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.terminal-window-identity h1 {
+  min-width: 0;
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.terminal-window-status {
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.terminal-window-return {
+  min-width: 0;
+  flex: 1 1 220px;
+  margin: 0;
+  color: var(--muted);
+  text-align: right;
+  font-size: 0.75rem;
+}
+
+/* Stated in words, never by colour alone, and never styled as an error. */
+.terminal-window-gap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0;
+  border-bottom: 1px solid var(--line);
+  border-left: 3px solid var(--muted);
+  color: var(--text-soft);
+  background: var(--surface-soft);
+  padding: var(--space-100) var(--space-150);
+  font-size: 0.75rem;
+}
+
+.terminal-window-host {
+  position: relative;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  padding: var(--space-100) var(--space-150);
+}
+
+.terminal-window-host .xterm {
+  height: 100%;
+}
+
+.terminal-window-host .xterm-viewport {
+  scrollbar-color: var(--scrollbar-thumb) var(--terminal-bg);
+  scrollbar-width: thin;
+}
+
 @media (forced-colors: active) {
   button:focus-visible,
   input:focus-visible,
@@ -4485,6 +4569,10 @@ button.modal-backdrop:active {
   .setup-guide-file,
   .setup-guide-diff,
   .recent-project {
+    border-color: CanvasText;
+  }
+
+  .terminal-window-gap {
     border-color: CanvasText;
   }
 

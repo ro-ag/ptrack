@@ -1,8 +1,32 @@
-use std::{fs, path::Path};
+use std::{env, fs, path::Path};
 
 use serde_json::Value;
 
 use ptrack_desktop::{DesktopPlatform, MenuDispatch, menu_dispatch, menu_spec, window_spec};
+
+/// Reads a text file with its line endings normalized. Windows checks the tree
+/// out with CRLF, where a pattern spanning a newline matches nothing at all —
+/// and a scan that matches nothing yields an empty slice that every claim made
+/// against it passes. Every source scan below goes through here.
+fn read_text(path: &Path) -> String {
+    fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()))
+        .replace("\r\n", "\n")
+}
+
+fn shell_source() -> String {
+    read_text(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src/main.rs"))
+}
+
+/// The body of the window builder, as source text. A miss is fatal rather than
+/// empty: an empty body silently satisfies every claim made about it.
+fn terminal_window_builder(source: &str) -> &str {
+    source
+        .split_once("fn terminal_window(")
+        .and_then(|(_, rest)| rest.split_once("\n}\n"))
+        .map(|(body, _)| body)
+        .expect("the terminal window builder must be findable")
+}
 
 fn read_json(path: &Path) -> Value {
     let bytes = fs::read(path).unwrap_or_else(|error| {
@@ -16,11 +40,8 @@ fn read_json(path: &Path) -> Value {
 #[test]
 fn shell_has_only_the_bounded_adapter_commands() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let source = fs::read_to_string(manifest_dir.join("src/main.rs"))
-        .expect("desktop shell source should be readable");
-    let manifest = fs::read_to_string(manifest_dir.join("Cargo.toml"))
-        .expect("desktop shell manifest should be readable")
-        .replace("\r\n", "\n");
+    let source = shell_source();
+    let manifest = read_text(&manifest_dir.join("Cargo.toml"));
 
     assert_eq!(source.matches("#[tauri::command]").count(), 3);
     assert!(source.contains("gui_invoke"));
@@ -62,9 +83,16 @@ fn main_window_has_only_one_way_event_subscription_authority() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let capability = read_json(&manifest_dir.join("capabilities/main-window.json"));
 
+    // Plan #15 widens the label list to admit runtime-created terminal
+    // windows. The permission array below and every forbidden-permission
+    // assertion are unchanged: the windows that may listen grew, what any of
+    // them may do did not.
     assert_eq!(
         capability["windows"],
-        Value::Array(vec![Value::String("main".into())])
+        Value::Array(vec![
+            Value::String("main".into()),
+            Value::String("terminal-*".into()),
+        ])
     );
     assert_eq!(
         capability["permissions"],
@@ -89,6 +117,101 @@ fn main_window_has_only_one_way_event_subscription_authority() {
             "ambient permission {forbidden}"
         );
     }
+}
+
+/// A terminal window is a second window over the same runtime, so every
+/// app-wide handler is a defect the moment one exists.
+///
+/// Only claims that are inherently source-level live here — how the window is
+/// built, and which label the shell addresses. The behaviour behind them is
+/// tested where it can actually run: the assignment lifecycle and its
+/// report-exactly-once discipline in `ptrack-app`'s `desktop_runtime_test` and
+/// `terminal_windows_test`. Which arm of Tauri's window-event match a call sits
+/// in is not observable without a windowing harness, and asserting the source
+/// text of that match only reads as coverage it does not have.
+#[test]
+fn terminal_windows_are_label_scoped_and_independent() {
+    let source = shell_source();
+
+    // Which window event a call is wired to is source-level by nature: no test
+    // can deliver one without a windowing harness. These say where the calls
+    // sit, and nothing about what they do — that is the runtime's job above.
+    let handler = source
+        .split_once(".on_window_event(")
+        .and_then(|(_, rest)| rest.split_once(".invoke_handler("))
+        .map(|(body, _)| body)
+        .expect("the shell must register a window-event handler");
+    let close_requested = handler
+        .find("WindowEvent::CloseRequested")
+        .expect("the shell must handle the close request");
+    // Only the main window's close begins shutdown. A terminal window that
+    // began it would kill the app runtime and leave the main window a dead
+    // shell whose every command fails.
+    let main_only = handler
+        .find("if window.label() != MAIN_WINDOW_LABEL {")
+        .expect("close must be label scoped");
+    let shutdown = handler
+        .find("if runtime.begin_shutdown().is_err() {")
+        .expect("the main window's close must begin shutdown");
+    // The pop-in runs on destruction, not on the close request: the webview's
+    // stream socket drops with the webview, and only then does its session
+    // release the output lease the main window is about to re-claim.
+    let destroyed = handler
+        .find("WindowEvent::Destroyed")
+        .expect("a destroyed terminal window must pop its session back in");
+    let pop_in = handler
+        .find("pop_in_terminal_window(")
+        .expect("the destroyed window's session must go back to the main window");
+    assert!(close_requested < main_only && main_only < shutdown);
+    assert!(shutdown < destroyed && destroyed < pop_in);
+    assert_eq!(handler.matches("pop_in_terminal_window(").count(), 1);
+
+    // A failed build releases the assignment, so a failed pop-out never leaves
+    // a session with no owner.
+    let build = source
+        .find("if let Err(error) = build_terminal_window(&app, &label) {")
+        .expect("the window build must be fallible");
+    let release = source
+        .find("runtime.close_terminal_window(&label);")
+        .expect("a failed build must release the assignment");
+    assert!(build < release);
+
+    // The build is dispatched to the main thread: it deadlocks when called
+    // synchronously on Windows and `gui_invoke` runs on `spawn_blocking`.
+    assert!(source.contains("app.run_on_main_thread(move || {"));
+    // The window is independent, never a platform child. Scoped to the builder
+    // itself: `.parent(` anywhere else in the shell, in a path or a comment,
+    // says nothing about this window.
+    let builder = terminal_window_builder(&source);
+    assert!(builder.contains("WebviewWindowBuilder::new("));
+    assert!(!builder.contains(".parent("));
+    // One frontend bundle, addressed by URL fragment.
+    assert!(builder.contains("index.html#terminal-window={label}"));
+    // Menu commands reach the main window: every one of them acts on the
+    // project workspace, a broadcast would fire each one once per window, and
+    // targeting the focused window made them dead while a terminal window was
+    // in front.
+    assert!(source.contains("app.emit_to(MAIN_WINDOW_LABEL, event, ())"));
+    assert!(!source.contains("app.emit(event, ())"));
+    assert!(!source.contains("focused_label"));
+    // Theme and the exit flush cover every window, not the hard-coded `main`.
+    assert!(!source.contains("app.get_webview_window(\"main\")"));
+}
+
+/// Windows checks the tree out with CRLF. A scan spanning a newline finds
+/// nothing there, and the empty slice it falls back to satisfies every claim
+/// made against it — which is exactly how the builder claims above passed on
+/// Unix and failed on Windows. Reading the same source with CRLF endings must
+/// produce the same findings.
+#[test]
+fn source_scans_survive_a_crlf_checkout() {
+    let checkout = env::temp_dir().join(format!("ptrack-crlf-{}-main.rs", std::process::id()));
+    fs::write(&checkout, shell_source().replace('\n', "\r\n"))
+        .expect("a CRLF copy of the shell source should be writable");
+    let source = read_text(&checkout);
+    let found = terminal_window_builder(&source).contains("WebviewWindowBuilder::new(");
+    fs::remove_file(&checkout).ok();
+    assert!(found, "a CRLF checkout must scan the same as a LF one");
 }
 
 #[test]
@@ -122,8 +245,7 @@ fn tauri_uses_the_existing_frontend_and_exact_window_contract() {
     // Hidden at launch so the restored geometry is the first painted rect; the
     // shell shows the window in its setup once the replay has run.
     assert_eq!(config["app"]["windows"][0]["visible"], false);
-    let source = fs::read_to_string(manifest_dir.join("src/main.rs"))
-        .expect("desktop shell source should be readable");
+    let source = shell_source();
     let restore = source
         .find("restore_window_state(&window, &capture.version);")
         .expect("setup must replay the stored window geometry");
@@ -155,8 +277,7 @@ fn tauri_uses_the_existing_frontend_and_exact_window_contract() {
 
 #[test]
 fn external_url_gate_rejects_non_web_and_credentialed_urls() {
-    let source = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/main.rs"))
-        .expect("desktop shell source should be readable");
+    let source = shell_source();
     assert!(source.contains("matches!(parsed.scheme(), \"http\" | \"https\")"));
     assert!(source.contains("parsed.username().is_empty()"));
     assert!(source.contains("parsed.password().is_some()"));
@@ -205,10 +326,8 @@ fn menu_event_and_help_allowlists_are_exact() {
 
 #[test]
 fn parity_matrix_counts_are_self_consistent() {
-    let matrix = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/rust-parity-matrix.md"),
-    )
-    .expect("parity matrix should be readable");
+    let matrix =
+        read_text(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/rust-parity-matrix.md"));
     let ids = matrix
         .lines()
         .filter_map(|line| line.strip_prefix("| `"))

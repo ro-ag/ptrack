@@ -37,6 +37,7 @@ use tokio_util::sync::CancellationToken;
 use crate::diagnostics_report::{CapabilityCountsV1, DiagnosticsReportV1};
 use crate::layout_state::{layout_state, reset_window_layout, set_layout_state};
 use crate::preferences::{PreferencesDocumentV1, preferences, reset_preferences, set_preferences};
+use crate::terminal_windows::TerminalWindows;
 use crate::{
     ActiveRuntime, AgentRuntimeService, AppError, AppResult, ApplicationPort,
     LaunchedEventAuthority, LinkedAgentRuntimeHooks, Mutation, MutationResult, ProjectEndpoint,
@@ -68,7 +69,7 @@ const WORKSPACE_OPERATION_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub const FIRST_RUN_GOAL_MAX_BYTES: usize = 4_096;
 
-const COMMANDS: [&str; 84] = [
+const COMMANDS: [&str; 87] = [
     "AcknowledgeAgentHandoffV2",
     "AddTask",
     "AddTaskNote",
@@ -81,6 +82,7 @@ const COMMANDS: [&str; 84] = [
     "CancelUpdateOperation",
     "CancelWorkspaceChange",
     "CheckForUpdates",
+    "ClaimTerminalStream",
     "CloseProject",
     "CloseTerminal",
     "CloseTerminalV2",
@@ -111,6 +113,7 @@ const COMMANDS: [&str; 84] = [
     "GetTaskDetailV2",
     "GetTerminalProfiles",
     "GetTerminalProfilesV2",
+    "GetTerminalWindowSession",
     "GetUpdateState",
     "GetWorkspaceSnapshot",
     "GetWorkspaceState",
@@ -124,6 +127,7 @@ const COMMANDS: [&str; 84] = [
     "OpenHelpDestination",
     "OpenProject",
     "OpenRecentProjectV1",
+    "OpenTerminalWindow",
     "PickProjectDirectory",
     "PrepareAgentWorkflowV2",
     "PreviewAgentHandoffV2",
@@ -155,7 +159,7 @@ const COMMANDS: [&str; 84] = [
     "WriteTerminalMemoryV2",
 ];
 
-/// Exact current 84-method desktop bridge command allowlist.
+/// Exact current 88-method desktop bridge command allowlist.
 #[must_use]
 pub const fn allowed_desktop_commands() -> &'static [&'static str] {
     &COMMANDS
@@ -872,6 +876,7 @@ pub struct DesktopRuntime {
     state: Mutex<RuntimeState>,
     calls_changed: Condvar,
     watcher: Mutex<Option<WorkspaceWatcher>>,
+    terminal_windows: Mutex<TerminalWindows>,
     recent_projects: Arc<dyn RecentProjectsProvider>,
     initialization: Arc<dyn DesktopInitializationService>,
     update_service: Arc<dyn crate::DesktopUpdateService>,
@@ -907,6 +912,7 @@ impl DesktopRuntime {
             }),
             calls_changed: Condvar::new(),
             watcher: Mutex::new(None),
+            terminal_windows: Mutex::new(TerminalWindows::default()),
             recent_projects: config.recent_projects,
             initialization: config.initialization,
             update_service: config.update_service,
@@ -1046,8 +1052,65 @@ impl DesktopRuntime {
             "SetLayoutState" => self.set_layout_state(arguments),
             "ResetWindowLayout" => self.reset_window_layout(arguments),
             "ResetApplicationState" => self.reset_application_state(arguments),
+            "OpenTerminalWindow" => self.open_terminal_window_command(arguments),
+            "GetTerminalWindowSession" => self.terminal_window_session_command(arguments),
             _ => return None,
         })
+    }
+
+    fn open_terminal_window_command(&self, arguments: &[Value]) -> AppResult<Value> {
+        require_argument_count("OpenTerminalWindow", arguments, 1)?;
+        let label = self.open_terminal_window(string_arg(arguments, 0)?)?;
+        Ok(json!({ "label": label }))
+    }
+
+    fn terminal_window_session_command(&self, arguments: &[Value]) -> AppResult<Value> {
+        require_argument_count("GetTerminalWindowSession", arguments, 1)?;
+        Ok(json!({ "sessionId": self.terminal_window_session(string_arg(arguments, 0)?) }))
+    }
+
+    /// The generation a terminal-window assignment is fenced by: the open
+    /// workspace's generation, and nothing at all while no project is open.
+    fn terminal_window_fence(&self) -> Option<u64> {
+        let state = lock(&self.state);
+        (state.status == WorkspaceStatus::Open).then_some(state.generation)
+    }
+
+    /// Records one window assignment and returns its minted label. The shell
+    /// builds the window from that label and calls `close_terminal_window` if
+    /// the build fails, so a failed pop-out never leaves a session unowned.
+    ///
+    /// # Errors
+    /// Returns an error with no project open, without a session, when the
+    /// session is already shown by another window, or at the window limit.
+    pub fn open_terminal_window(&self, session_id: &str) -> AppResult<String> {
+        let fence = self.terminal_window_fence();
+        lock(&self.terminal_windows).open(fence, session_id)
+    }
+
+    /// The session one terminal window owns, or `None` for an unknown label.
+    #[must_use]
+    pub fn terminal_window_session(&self, label: &str) -> Option<String> {
+        lock(&self.terminal_windows).session(label)
+    }
+
+    /// Clears one assignment and reports the session it freed, once: the shell
+    /// pops a session back in exactly when this answers `Some`, so a second
+    /// call for the same window must free nothing.
+    pub fn close_terminal_window(&self, label: &str) -> Option<String> {
+        lock(&self.terminal_windows).close(label)
+    }
+
+    /// Labels whose workspace is gone — a switched or closed project — so the
+    /// shell can close their windows. Empty while the workspace is unchanged.
+    pub fn expire_terminal_windows(&self) -> Vec<String> {
+        let fence = self.terminal_window_fence();
+        lock(&self.terminal_windows).expire(fence)
+    }
+
+    /// Clears every assignment and reports the labels, for app shutdown.
+    pub fn drain_terminal_windows(&self) -> Vec<String> {
+        lock(&self.terminal_windows).drain()
     }
 
     fn get_preferences(self: &Arc<Self>, arguments: &[Value]) -> AppResult<Value> {
@@ -3587,6 +3650,21 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
                 } else {
                     Ok(Value::Null)
                 }
+            }
+            // Fenced by the bound workspace generation, so a ticket can never
+            // be minted for a session belonging to a superseded project.
+            "ClaimTerminalStream" => {
+                require_argument_count(method, arguments, 2)?;
+                value(
+                    self.terminal
+                        .as_ref()
+                        .ok_or_else(|| unavailable("terminal manager"))?
+                        .claim_stream_ticket(
+                            self.generation,
+                            string_arg(arguments, 0)?,
+                            u64_arg(arguments, 1)?,
+                        )?,
+                )
             }
             "CloseTerminal" | "CloseTerminalV2" => {
                 let (generation, offset) = if method == "CloseTerminalV2" {

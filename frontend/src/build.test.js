@@ -438,8 +438,39 @@ describe("production asset layout", () => {
       /id="terminal-force-stop"[\s\S]*class="terminal-action-button terminal-action-stop"[\s\S]*aria-label="Force stop terminal"[\s\S]*<svg[^>]*aria-hidden="true"/,
     );
     expect(index).toMatch(
-      /id="terminal-diagnostics"[\s\S]*aria-live="polite"[\s\S]*Content-free state only\. Restart creates a fresh session; streams are never reconnected\./,
+      /id="terminal-diagnostics"[\s\S]*aria-live="polite"[\s\S]*Content-free state only\. Restart creates a fresh session; a stream lost\s+on its own is claimed back for the same session\./,
     );
+    // Pop out: a real labelled control, absent until a single pane can move.
+    expect(index).toMatch(
+      /id="terminal-pop-out"[^>]*class="terminal-action-button"[^>]*type="button"[^>]*aria-label="Pop out terminal into its own window"[^>]*title="Pop out terminal"[^>]*hidden/,
+    );
+    // Terminal window mode: one document, marked before first paint.
+    expect(index).toMatch(/dataset\.windowMode\s*=\s*"terminal"/);
+    expect(styles).toMatch(
+      /html\[data-window-mode=["']?terminal["']?\]\s*#app\s*\{[^}]*display:\s*none/,
+    );
+    expect(index).toMatch(
+      /id="terminal-window"[^>]*class="terminal-window"[^>]*aria-labelledby="terminal-window-heading"[^>]*hidden/,
+    );
+    expect(index).toMatch(
+      /id="terminal-window-status"[^>]*role="status"[^>]*aria-live="polite"/,
+    );
+    // The way back is the window's own close: no in-page control can destroy
+    // a window without a capability this feature deliberately does not take.
+    expect(index).toMatch(
+      /id="terminal-window-return"[^>]*>\s*Closing this window returns the terminal to the p-track window\./,
+    );
+    // The gap notice states the fact in words, is not an alert, and keeps a
+    // border under forced colors so it never reads by colour alone.
+    expect(index).toMatch(
+      /id="terminal-window-gap"[^>]*role="note"[^>]*hidden>\s*<strong>Scrollback gap\.<\/strong>/,
+    );
+    expect(styles).toMatch(
+      /\.terminal-window-gap\s*\{\s*border-color:\s*CanvasText/,
+    );
+    expect(app).toContain("Earlier output was not carried over.");
+    expect(app).toContain("This terminal is running in its own window.");
+    expect(app).toContain("Reconnecting…");
     expect(styles).toMatch(
       /\.terminal-diagnostics\s*\{[\s\S]*max-height:[^;]+;[\s\S]*overflow-y:\s*auto/,
     );

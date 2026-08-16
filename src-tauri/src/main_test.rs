@@ -35,19 +35,26 @@ fn project_picker_cancellation_is_an_exact_no_selection_result() {
 
 /// Non-terminal captures run on their own thread, so one can wake up after the
 /// exit flush has already written the rect the window really closed at. That
-/// late write must be dropped, not ordered behind the good one.
+/// late write must be dropped, not ordered behind the good one — and the seal
+/// covers only the window it came from, because with two windows open the
+/// other one has not closed yet.
 #[test]
 fn a_capture_that_wakes_after_the_exit_flush_never_writes() {
     let capture = WindowStateCapture::new();
 
     // Ordinary trailing captures write and leave the gate open.
-    assert!(capture.guarded(false, || {}));
-    assert!(capture.guarded(false, || {}));
+    assert!(capture.guarded("main", false, |_| {}));
+    assert!(capture.guarded("main", false, |_| {}));
     // The exit flush writes and seals.
-    assert!(capture.guarded(true, || {}));
+    assert!(capture.guarded("main", true, |_| {}));
     // Anything arriving afterwards, exit flush included, is refused.
-    assert!(!capture.guarded(false, || {}));
-    assert!(!capture.guarded(true, || {}));
+    assert!(!capture.guarded("main", false, |_| {}));
+    assert!(!capture.guarded("main", true, |_| {}));
+
+    // A sealed main window never seals a terminal window with it.
+    assert!(capture.guarded("terminal-1", false, |label| assert_eq!(label, "terminal-1")));
+    assert!(capture.guarded("terminal-1", true, |_| {}));
+    assert!(!capture.guarded("terminal-1", false, |_| {}));
 }
 
 /// `"system"`, an absent record, and anything unreadable all resolve to no
