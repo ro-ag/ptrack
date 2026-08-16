@@ -1,8 +1,32 @@
-use std::{fs, path::Path};
+use std::{env, fs, path::Path};
 
 use serde_json::Value;
 
 use ptrack_desktop::{DesktopPlatform, MenuDispatch, menu_dispatch, menu_spec, window_spec};
+
+/// Reads a text file with its line endings normalized. Windows checks the tree
+/// out with CRLF, where a pattern spanning a newline matches nothing at all —
+/// and a scan that matches nothing yields an empty slice that every claim made
+/// against it passes. Every source scan below goes through here.
+fn read_text(path: &Path) -> String {
+    fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()))
+        .replace("\r\n", "\n")
+}
+
+fn shell_source() -> String {
+    read_text(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src/main.rs"))
+}
+
+/// The body of the window builder, as source text. A miss is fatal rather than
+/// empty: an empty body silently satisfies every claim made about it.
+fn terminal_window_builder(source: &str) -> &str {
+    source
+        .split_once("fn terminal_window(")
+        .and_then(|(_, rest)| rest.split_once("\n}\n"))
+        .map(|(body, _)| body)
+        .expect("the terminal window builder must be findable")
+}
 
 fn read_json(path: &Path) -> Value {
     let bytes = fs::read(path).unwrap_or_else(|error| {
@@ -16,11 +40,8 @@ fn read_json(path: &Path) -> Value {
 #[test]
 fn shell_has_only_the_bounded_adapter_commands() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let source = fs::read_to_string(manifest_dir.join("src/main.rs"))
-        .expect("desktop shell source should be readable");
-    let manifest = fs::read_to_string(manifest_dir.join("Cargo.toml"))
-        .expect("desktop shell manifest should be readable")
-        .replace("\r\n", "\n");
+    let source = shell_source();
+    let manifest = read_text(&manifest_dir.join("Cargo.toml"));
 
     assert_eq!(source.matches("#[tauri::command]").count(), 3);
     assert!(source.contains("gui_invoke"));
@@ -110,8 +131,7 @@ fn main_window_has_only_one_way_event_subscription_authority() {
 /// text of that match only reads as coverage it does not have.
 #[test]
 fn terminal_windows_are_label_scoped_and_independent() {
-    let source = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/main.rs"))
-        .expect("desktop shell source should be readable");
+    let source = shell_source();
 
     // Which window event a call is wired to is source-level by nature: no test
     // can deliver one without a windowing harness. These say where the calls
@@ -119,7 +139,8 @@ fn terminal_windows_are_label_scoped_and_independent() {
     let handler = source
         .split_once(".on_window_event(")
         .and_then(|(_, rest)| rest.split_once(".invoke_handler("))
-        .map_or("", |(body, _)| body);
+        .map(|(body, _)| body)
+        .expect("the shell must register a window-event handler");
     let close_requested = handler
         .find("WindowEvent::CloseRequested")
         .expect("the shell must handle the close request");
@@ -161,10 +182,7 @@ fn terminal_windows_are_label_scoped_and_independent() {
     // The window is independent, never a platform child. Scoped to the builder
     // itself: `.parent(` anywhere else in the shell, in a path or a comment,
     // says nothing about this window.
-    let builder = source
-        .split_once("fn terminal_window(")
-        .and_then(|(_, rest)| rest.split_once("\n}\n"))
-        .map_or("", |(body, _)| body);
+    let builder = terminal_window_builder(&source);
     assert!(builder.contains("WebviewWindowBuilder::new("));
     assert!(!builder.contains(".parent("));
     // One frontend bundle, addressed by URL fragment.
@@ -178,6 +196,22 @@ fn terminal_windows_are_label_scoped_and_independent() {
     assert!(!source.contains("focused_label"));
     // Theme and the exit flush cover every window, not the hard-coded `main`.
     assert!(!source.contains("app.get_webview_window(\"main\")"));
+}
+
+/// Windows checks the tree out with CRLF. A scan spanning a newline finds
+/// nothing there, and the empty slice it falls back to satisfies every claim
+/// made against it — which is exactly how the builder claims above passed on
+/// Unix and failed on Windows. Reading the same source with CRLF endings must
+/// produce the same findings.
+#[test]
+fn source_scans_survive_a_crlf_checkout() {
+    let checkout = env::temp_dir().join(format!("ptrack-crlf-{}-main.rs", std::process::id()));
+    fs::write(&checkout, shell_source().replace('\n', "\r\n"))
+        .expect("a CRLF copy of the shell source should be writable");
+    let source = read_text(&checkout);
+    let found = terminal_window_builder(&source).contains("WebviewWindowBuilder::new(");
+    fs::remove_file(&checkout).ok();
+    assert!(found, "a CRLF checkout must scan the same as a LF one");
 }
 
 #[test]
@@ -211,8 +245,7 @@ fn tauri_uses_the_existing_frontend_and_exact_window_contract() {
     // Hidden at launch so the restored geometry is the first painted rect; the
     // shell shows the window in its setup once the replay has run.
     assert_eq!(config["app"]["windows"][0]["visible"], false);
-    let source = fs::read_to_string(manifest_dir.join("src/main.rs"))
-        .expect("desktop shell source should be readable");
+    let source = shell_source();
     let restore = source
         .find("restore_window_state(&window, &capture.version);")
         .expect("setup must replay the stored window geometry");
@@ -244,8 +277,7 @@ fn tauri_uses_the_existing_frontend_and_exact_window_contract() {
 
 #[test]
 fn external_url_gate_rejects_non_web_and_credentialed_urls() {
-    let source = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/main.rs"))
-        .expect("desktop shell source should be readable");
+    let source = shell_source();
     assert!(source.contains("matches!(parsed.scheme(), \"http\" | \"https\")"));
     assert!(source.contains("parsed.username().is_empty()"));
     assert!(source.contains("parsed.password().is_some()"));
@@ -294,10 +326,8 @@ fn menu_event_and_help_allowlists_are_exact() {
 
 #[test]
 fn parity_matrix_counts_are_self_consistent() {
-    let matrix = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/rust-parity-matrix.md"),
-    )
-    .expect("parity matrix should be readable");
+    let matrix =
+        read_text(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/rust-parity-matrix.md"));
     let ids = matrix
         .lines()
         .filter_map(|line| line.strip_prefix("| `"))
