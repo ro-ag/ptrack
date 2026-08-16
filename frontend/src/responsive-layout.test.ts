@@ -302,4 +302,16 @@ describe("responsive desktop layout contracts", () => {
       /@media \(max-width:\s*600px\)[\s\S]*?\.modal\s*\{[^}]*place-items:\s*start center;[^}]*padding:\s*var\(--space-100\);[^}]*\}[\s\S]*?\.dialog-actions\s*\{[^}]*flex-wrap:\s*wrap;/,
     );
   });
+
+  it("lifts the activity height cap wherever the detail is expanded", () => {
+    // The clamped variant caps height AND hides overflow; the expanded variant
+    // must lift both. Lifting only the overflow spills the text out of a
+    // two-line box and paints it over the meta line beneath it.
+    expect(styles).toMatch(
+      /\.activity-detail\s*\{[^}]*overflow:\s*hidden;[^}]*max-height:\s*calc\(1\.35em \* 2\);/,
+    );
+    expect(styles).toMatch(
+      /\.activity-expanded \.activity-detail\s*\{[^}]*overflow:\s*visible;[^}]*max-height:\s*none;/,
+    );
+  });
 });
