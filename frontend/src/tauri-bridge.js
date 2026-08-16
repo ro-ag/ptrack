@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
+import { terminalWindowLabel } from "./terminal/pop-out";
+
 const COMMANDS = Object.freeze([
   "AcknowledgeAgentHandoffV2",
   "AddTask",
@@ -14,6 +16,7 @@ const COMMANDS = Object.freeze([
   "CancelUpdateOperation",
   "CancelWorkspaceChange",
   "CheckForUpdates",
+  "ClaimTerminalStream",
   "CloseProject",
   "CloseTerminal",
   "CloseTerminalV2",
@@ -44,6 +47,7 @@ const COMMANDS = Object.freeze([
   "GetTaskDetailV2",
   "GetTerminalProfiles",
   "GetTerminalProfilesV2",
+  "GetTerminalWindowSession",
   "GetUpdateState",
   "GetWorkspaceSnapshot",
   "GetWorkspaceState",
@@ -57,6 +61,7 @@ const COMMANDS = Object.freeze([
   "OpenHelpDestination",
   "OpenProject",
   "OpenRecentProjectV1",
+  "OpenTerminalWindow",
   "PickProjectDirectory",
   "PrepareAgentWorkflowV2",
   "PreviewAgentHandoffV2",
@@ -127,12 +132,27 @@ function installTauriBridge(target = globalThis, dependencies = {}) {
     ]),
   );
 
+  // Every listener is scoped to the window it belongs to. A listener left on
+  // the default `{ kind: "Any" }` target matches every emit unconditionally —
+  // Tauri short-circuits the filter for it — so an event targeted at one window
+  // would still fire in both. Broadcasts are unaffected: an unfiltered emit
+  // reaches a labelled listener just the same.
+  //
+  // Missing metadata falls back to the label in the URL fragment, which is how
+  // a terminal window is addressed in the first place: defaulting it to `main`
+  // would subscribe that window to the main window's events and to none of its
+  // own.
+  const eventTarget = {
+    kind: "AnyLabel",
+    label: target.__TAURI_INTERNALS__.metadata?.currentWindow?.label ??
+      terminalWindowLabel(target.location?.hash ?? "") ?? "main",
+  };
   const eventsOnMultiple = (name, callback) => {
     let disposed = false;
     let unlisten = null;
     void listenEvent(name, (event) => {
       if (!disposed) callback(event.payload);
-    }).then((dispose) => {
+    }, { target: eventTarget }).then((dispose) => {
       if (disposed) dispose();
       else unlisten = dispose;
     });

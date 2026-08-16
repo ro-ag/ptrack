@@ -62,9 +62,16 @@ fn main_window_has_only_one_way_event_subscription_authority() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let capability = read_json(&manifest_dir.join("capabilities/main-window.json"));
 
+    // Plan #15 widens the label list to admit runtime-created terminal
+    // windows. The permission array below and every forbidden-permission
+    // assertion are unchanged: the windows that may listen grew, what any of
+    // them may do did not.
     assert_eq!(
         capability["windows"],
-        Value::Array(vec![Value::String("main".into())])
+        Value::Array(vec![
+            Value::String("main".into()),
+            Value::String("terminal-*".into()),
+        ])
     );
     assert_eq!(
         capability["permissions"],
@@ -89,6 +96,88 @@ fn main_window_has_only_one_way_event_subscription_authority() {
             "ambient permission {forbidden}"
         );
     }
+}
+
+/// A terminal window is a second window over the same runtime, so every
+/// app-wide handler is a defect the moment one exists.
+///
+/// Only claims that are inherently source-level live here — how the window is
+/// built, and which label the shell addresses. The behaviour behind them is
+/// tested where it can actually run: the assignment lifecycle and its
+/// report-exactly-once discipline in `ptrack-app`'s `desktop_runtime_test` and
+/// `terminal_windows_test`. Which arm of Tauri's window-event match a call sits
+/// in is not observable without a windowing harness, and asserting the source
+/// text of that match only reads as coverage it does not have.
+#[test]
+fn terminal_windows_are_label_scoped_and_independent() {
+    let source = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/main.rs"))
+        .expect("desktop shell source should be readable");
+
+    // Which window event a call is wired to is source-level by nature: no test
+    // can deliver one without a windowing harness. These say where the calls
+    // sit, and nothing about what they do — that is the runtime's job above.
+    let handler = source
+        .split_once(".on_window_event(")
+        .and_then(|(_, rest)| rest.split_once(".invoke_handler("))
+        .map_or("", |(body, _)| body);
+    let close_requested = handler
+        .find("WindowEvent::CloseRequested")
+        .expect("the shell must handle the close request");
+    // Only the main window's close begins shutdown. A terminal window that
+    // began it would kill the app runtime and leave the main window a dead
+    // shell whose every command fails.
+    let main_only = handler
+        .find("if window.label() != MAIN_WINDOW_LABEL {")
+        .expect("close must be label scoped");
+    let shutdown = handler
+        .find("if runtime.begin_shutdown().is_err() {")
+        .expect("the main window's close must begin shutdown");
+    // The pop-in runs on destruction, not on the close request: the webview's
+    // stream socket drops with the webview, and only then does its session
+    // release the output lease the main window is about to re-claim.
+    let destroyed = handler
+        .find("WindowEvent::Destroyed")
+        .expect("a destroyed terminal window must pop its session back in");
+    let pop_in = handler
+        .find("pop_in_terminal_window(")
+        .expect("the destroyed window's session must go back to the main window");
+    assert!(close_requested < main_only && main_only < shutdown);
+    assert!(shutdown < destroyed && destroyed < pop_in);
+    assert_eq!(handler.matches("pop_in_terminal_window(").count(), 1);
+
+    // A failed build releases the assignment, so a failed pop-out never leaves
+    // a session with no owner.
+    let build = source
+        .find("if let Err(error) = build_terminal_window(&app, &label) {")
+        .expect("the window build must be fallible");
+    let release = source
+        .find("runtime.close_terminal_window(&label);")
+        .expect("a failed build must release the assignment");
+    assert!(build < release);
+
+    // The build is dispatched to the main thread: it deadlocks when called
+    // synchronously on Windows and `gui_invoke` runs on `spawn_blocking`.
+    assert!(source.contains("app.run_on_main_thread(move || {"));
+    // The window is independent, never a platform child. Scoped to the builder
+    // itself: `.parent(` anywhere else in the shell, in a path or a comment,
+    // says nothing about this window.
+    let builder = source
+        .split_once("fn terminal_window(")
+        .and_then(|(_, rest)| rest.split_once("\n}\n"))
+        .map_or("", |(body, _)| body);
+    assert!(builder.contains("WebviewWindowBuilder::new("));
+    assert!(!builder.contains(".parent("));
+    // One frontend bundle, addressed by URL fragment.
+    assert!(builder.contains("index.html#terminal-window={label}"));
+    // Menu commands reach the main window: every one of them acts on the
+    // project workspace, a broadcast would fire each one once per window, and
+    // targeting the focused window made them dead while a terminal window was
+    // in front.
+    assert!(source.contains("app.emit_to(MAIN_WINDOW_LABEL, event, ())"));
+    assert!(!source.contains("app.emit(event, ())"));
+    assert!(!source.contains("focused_label"));
+    // Theme and the exit flush cover every window, not the hard-coded `main`.
+    assert!(!source.contains("app.get_webview_window(\"main\")"));
 }
 
 #[test]

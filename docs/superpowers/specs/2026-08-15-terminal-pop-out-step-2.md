@@ -22,14 +22,13 @@ windows.
 
 ## 2. IPC
 
-Four new allowlisted `DesktopRuntime` commands. The Tauri command surface stays at exactly
+Three new allowlisted `DesktopRuntime` commands. The Tauri command surface stays at exactly
 three, so window creation happens inside `gui_invoke`.
 
 | Command | Arguments | Returns |
 | --- | --- | --- |
 | `OpenTerminalWindow` | `[sessionId]` | `{ "label": "terminal-1" }` |
 | `GetTerminalWindowSession` | `[label]` | `{ "sessionId": string \| null }` |
-| `CloseTerminalWindow` | `[label]` | `{ "sessionId": string \| null }` |
 | `ClaimTerminalStream` | `[sessionId, fromSequence]` | `{ "url": string, "fromSequence": number, "gap": bool }` |
 
 - `OpenTerminalWindow` mints the next `terminal-<n>` label, records the assignment, and builds
@@ -38,8 +37,11 @@ three, so window creation happens inside `gui_invoke`.
   `run_on_main_thread`. It does **not** use `parent()` — the window is independent.
 - `GetTerminalWindowSession` is how a freshly loaded terminal window learns what it owns. It
   returns `null` for an unknown label rather than erroring, so a stale window closes cleanly.
-- `CloseTerminalWindow` clears the assignment and returns the session that was freed, so the
-  caller knows what to take back.
+- A fourth command to close a window from the frontend was drafted and dropped: pop-in **is**
+  the window closing, already reachable from the keyboard through the Window menu, and a
+  second command reaching the same outcome by a different path is one more thing to keep in
+  step with the first. The assignment is cleared where the window is destroyed, and nowhere
+  else.
 - `ClaimTerminalStream` is the bridge exposure of the ticket minting that step 1 built but left
   unreachable. It is fenced by the workspace generation.
 
@@ -71,7 +73,13 @@ Pop out, in order:
 If any step fails, **the terminal stays where it was** and the main window re-claims its lease.
 A failed pop-out must never leave a session with no owner.
 
-Pop in is the same in reverse, and happens automatically when the terminal window closes.
+Pop in is the same in reverse, and happens automatically when the terminal window is destroyed
+— not when its close is requested, because the webview's stream socket must have dropped, and
+its session released the output lease, before the main window re-claims it.
+
+The pane the terminal left behind holds its place and cannot be closed while it does: it has no
+session of its own, so no close path would ask about it, and removing it would leave the window
+with a live shell and nowhere to hand it back.
 
 ## 5. Lifecycle — every handler must match on `window.label()`
 
@@ -81,9 +89,11 @@ second window exists:
 - **`CloseRequested` must not call `begin_shutdown` for a terminal window.** Today it would kill
   the whole app runtime, leaving the main window a shell whose every command fails. Only the
   main window's close begins shutdown.
-- **Geometry capture must not overwrite the main window's rect.** `window-state` gains
-  per-window entries keyed by label, keeping plan #14's versioned, totally-normalized,
-  single-transaction, never-overwrite-unreadable discipline. The capture seal becomes per-window.
+- **Geometry capture must not overwrite the main window's rect.** `window-state` gains one
+  second entry, shared by every terminal window — they are interchangeable and their labels
+  restart at 1 each run, so a per-label entry could only ever be read by a different window
+  than the one that wrote it — keeping plan #14's versioned, totally-normalized,
+  single-transaction, never-overwrite-unreadable discipline. The capture seal is per-window.
 - **Theme application must cover every window**, not the hard-coded `main`.
 - **The exit flush must not assume `main` is still registered** — with two windows, which is
   destroyed last varies.
@@ -94,8 +104,11 @@ second window exists:
 
 `Builder::menu` applies one menu to every window and `app.emit` broadcasts to every webview, so
 today every menu command would fire twice — "Open Project…" would open two dialogs. Menu events
-target the **focused** window with `emit_to`. Terminal windows ignore commands that make no
-sense there rather than acting on them.
+target the **main** window with `emit_to`, and raise it. Every command in the allowlist acts on
+the project workspace and a terminal window has no board, no palette and no dialogs, so
+"ignored where they make no sense" would mean a dead accelerator with no dialog, no message and
+no bell whenever a terminal window is in front. The menu roles — Quit, Close Window, Minimize,
+the Edit items — stay per-window: those are the platform's, not ours.
 
 ## 7. Honest scope
 

@@ -302,4 +302,16 @@ describe("responsive desktop layout contracts", () => {
       /@media \(max-width:\s*600px\)[\s\S]*?\.modal\s*\{[^}]*place-items:\s*start center;[^}]*padding:\s*var\(--space-100\);[^}]*\}[\s\S]*?\.dialog-actions\s*\{[^}]*flex-wrap:\s*wrap;/,
     );
   });
+
+  it("reflows the terminal window bar and keeps its terminal shrinkable", () => {
+    expect(styles).toMatch(
+      /\.terminal-window-bar\s*\{[^}]*flex-wrap:\s*wrap;/,
+    );
+    expect(styles).toMatch(
+      /\.terminal-window-gap\s*\{[^}]*flex-wrap:\s*wrap;/,
+    );
+    expect(styles).toMatch(
+      /\.terminal-window-host\s*\{[^}]*min-height:\s*0;[^}]*flex:\s*1 1 auto;/,
+    );
+  });
 });

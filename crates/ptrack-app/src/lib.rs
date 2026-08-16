@@ -14,6 +14,7 @@ mod production;
 mod service;
 mod shell_command;
 mod terminal_runtime;
+mod terminal_windows;
 mod update_runtime;
 pub mod window_state;
 
@@ -61,6 +62,7 @@ pub use terminal_runtime::{
     TerminalIdentityAuthority, TerminalProfileView, TerminalProfilesV2, TerminalRuntime,
     TerminalRuntimeConfig, TerminalSessionV2, TerminalStatusV2,
 };
+pub use terminal_windows::{TERMINAL_WINDOW_PREFIX, TerminalWindows};
 pub use update_runtime::{
     DesktopUpdateService, GlobalStoreUpdatePreferences, NoUpdatePreferences,
     UnavailableUpdateService, UpdateEventSink, UpdatePhase, UpdatePreferences, UpdateRelease,
@@ -85,6 +87,8 @@ mod service_test;
 mod shell_command_test;
 #[cfg(test)]
 mod terminal_runtime_test;
+#[cfg(test)]
+mod terminal_windows_test;
 #[cfg(test)]
 mod update_runtime_test;
 #[cfg(test)]
