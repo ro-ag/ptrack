@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::model::{ChangedArea, RepositoryState};
 use crate::runner::{CancellationToken, RepositoryError};
 use crate::snapshot::{ExecutionSession, RepositoryService};
-use crate::test_support::{FakeRunner, canonical, run_git};
+use crate::test_support::{FakeRunner, canonical, native_path, run_git};
 
 const NOW: i64 = 1_785_067_200; // 2026-07-26T12:00:00Z
 
@@ -88,7 +88,7 @@ fn capture_builds_bounded_read_only_snapshot_and_safe_ranges() {
         .capture(&CancellationToken::new(), "/repo")
         .expect("capture snapshot");
     assert_eq!(snapshot.state, RepositoryState::Ready);
-    assert_eq!(snapshot.root, "/repo");
+    assert_eq!(snapshot.root, native_path("/repo"));
     assert!(snapshot.linked_worktree);
     assert!(snapshot.worktrees_incomplete);
     assert_eq!(snapshot.status.branch, "feature");

@@ -93,8 +93,39 @@ pub(crate) fn run_git(root: &Path, args: &[&str]) {
     assert!(status.success(), "disposable git command failed: {args:?}");
 }
 
+/// Canonicalizes a test path into the same form the product emits: on Windows
+/// the `\\?\` (and `\\?\UNC\`) verbatim prefixes added by `fs::canonicalize`
+/// are stripped, mirroring `worktree::normalize_canonical`.
 pub(crate) fn canonical(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).expect("canonicalize test path")
+    normalize_canonical(std::fs::canonicalize(path).expect("canonicalize test path"))
+}
+
+#[cfg(windows)]
+fn normalize_canonical(path: PathBuf) -> PathBuf {
+    let value = path.to_string_lossy();
+    if let Some(unc) = value.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{unc}"));
+    }
+    if let Some(local) = value.strip_prefix(r"\\?\") {
+        return PathBuf::from(local);
+    }
+    path
+}
+
+#[cfg(not(windows))]
+fn normalize_canonical(path: PathBuf) -> PathBuf {
+    path
+}
+
+/// Applies the same lexical component normalization the product applies to
+/// git-reported paths (`Path` components collected back into a `PathBuf`), so
+/// expected values are derived per platform instead of hardcoded.
+pub(crate) fn native_path(value: &str) -> String {
+    Path::new(value)
+        .components()
+        .collect::<PathBuf>()
+        .to_string_lossy()
+        .into_owned()
 }
 
 pub(crate) fn sha(character: char) -> String {
