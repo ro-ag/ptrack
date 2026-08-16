@@ -204,6 +204,11 @@ fn terminal_window(app: &AppHandle, label: &str) -> Result<(), String> {
 fn close_windows<R: Runtime>(app: &AppHandle<R>, labels: Vec<String>) {
     for label in labels {
         if let Some(window) = app.get_webview_window(&label) {
+            // The shared app menu must not die with the window (see the
+            // `CloseRequested` arm); this path destroys without a close
+            // request, so it detaches on its own.
+            #[cfg(windows)]
+            let _ = window.remove_menu();
             let _ = window.destroy();
         }
     }
@@ -642,6 +647,16 @@ fn run_desktop(initial_path: Option<PathBuf>, initial_plan: u64) {
                 // the whole app runtime and leave the main window a shell whose
                 // every command fails. Its session pops back in on `Destroyed`.
                 if window.label() != MAIN_WINDOW_LABEL {
+                    // `Builder::menu` shares one native menu across every
+                    // window, and on Windows `DestroyWindow` destroys the menu
+                    // still attached to the dying window. Left attached, the
+                    // first pop-in kills the shared handle and every window
+                    // built afterwards paints without a menu bar. Detached
+                    // here, the menu survives the close. Windows only: macOS
+                    // has one application-global menu no window can take down,
+                    // and a GTK window owns its own menubar widget.
+                    #[cfg(windows)]
+                    let _ = window.remove_menu();
                     return;
                 }
                 let runtime = window.state::<Arc<DesktopRuntime>>();
