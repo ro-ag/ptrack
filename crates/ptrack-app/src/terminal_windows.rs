@@ -87,7 +87,9 @@ impl TerminalWindows {
     /// leaves the assignment untouched.
     pub fn set_tab(&mut self, label: &str, tab: TerminalWindowTab) -> AppResult<()> {
         if !self.assigned.contains_key(label) {
-            return Err(AppError::Message("no terminal window has that label".into()));
+            return Err(AppError::Message(
+                "no terminal window has that label".into(),
+            ));
         }
         self.check_sessions(Some(label), &tab.sessions)?;
         self.assigned.insert(label.to_owned(), tab);

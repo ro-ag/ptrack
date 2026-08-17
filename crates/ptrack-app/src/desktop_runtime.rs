@@ -5583,9 +5583,7 @@ fn tab_args(method: &str, arguments: &[Value], index: usize) -> AppResult<Termin
         .get(index + 1)
         .filter(|value| value.is_object())
         .cloned()
-        .ok_or_else(|| {
-            AppError::Message(format!("{method} requires an object tab shape"))
-        })?;
+        .ok_or_else(|| AppError::Message(format!("{method} requires an object tab shape")))?;
     Ok(TerminalWindowTab { sessions, shape })
 }
 

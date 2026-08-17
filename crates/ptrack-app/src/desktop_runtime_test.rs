@@ -1512,7 +1512,7 @@ fn terminal_window_assignments_answer_the_bridge_and_expire_with_the_project() {
     runtime
         .invoke(request(
             "OpenTerminalWindow",
-            vec![json!(["session-d"]), json!({ "id": "tab-2" })]
+            vec![json!(["session-d"]), json!({ "id": "tab-2" })],
         ))
         .unwrap();
     assert!(runtime.expire_terminal_windows().is_empty());
