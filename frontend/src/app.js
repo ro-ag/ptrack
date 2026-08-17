@@ -1,13 +1,18 @@
 import "./tauri-bridge";
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
 import { Terminal } from "@xterm/xterm";
 import { mountTerminalDock } from "./terminal/pane";
 import { TerminalStreamClient } from "./terminal/client";
 import {
   binaryStringToBytes,
+  commitClipboardPaste,
+  prepareClipboardPaste,
   splitTerminalInput,
+  terminalShortcutAction,
   terminalTextToBytes,
 } from "./terminal/paste";
+import { terminalSearchResultLabel } from "./terminal/search";
 import {
   normalizeTerminalProfileSettings,
   terminalRendererOptions,
@@ -44,7 +49,11 @@ import {
   readTerminalPreferenceOverrides,
   storageStatusNotice,
 } from "./settings/preferences";
-import { readTerminalProfileFontSize } from "./terminal/preferences";
+import {
+  clampTerminalFontSize,
+  readTerminalProfileFontSize,
+  writeTerminalProfileFontSize,
+} from "./terminal/preferences";
 import {
   diagnosticsRows,
   nextSettingsSectionIndex,
@@ -7832,6 +7841,8 @@ async function startTerminalWindow(label) {
       });
       const fit = new FitAddon();
       terminal.loadAddon(fit);
+      const search = new SearchAddon();
+      terminal.loadAddon(search);
       terminal.open(paneHost);
       terminal.textarea?.setAttribute(
         "aria-label",
@@ -7841,7 +7852,11 @@ async function startTerminalWindow(label) {
         sessionId,
         terminal,
         fit,
+        search,
         host: paneHost,
+        profileId,
+        fontSize,
+        baseFontSize: settings.fontSize,
         state: "connecting",
         sequence: 0,
         attempts: 0,
@@ -7901,7 +7916,138 @@ async function startTerminalWindow(label) {
       }, 300);
     });
 
+    // ------------------------------------------------- per-session surfaces
+    // The same search, paste guard, and zoom the dock offers (§4); project
+    // chrome — writeback, diagnostics, the association editor — stays in the
+    // window that owns the tab.
+    const activePane = () => panes.get(controller.workspace.tabs[0]?.activePaneId ?? "");
+    const searchBar = document.getElementById("terminal-window-search");
+    const searchInput = document.getElementById("terminal-window-search-input");
+    const searchResults = document.getElementById("terminal-window-search-results");
+    const searchClose = document.getElementById("terminal-window-search-close");
+    const searchOptions = (incremental) => ({
+      incremental,
+      decorations: {
+        matchBackground: "#26483e",
+        matchBorder: "#3dd6a3",
+        matchOverviewRuler: "#3dd6a3",
+        activeMatchBackground: "#7a5f1f",
+        activeMatchBorder: "#ffd75f",
+        activeMatchColorOverviewRuler: "#ffd75f",
+      },
+    });
+    const runSearch = (incremental, backwards = false) => {
+      const pane = activePane();
+      if (!pane) return;
+      const query = searchInput.value;
+      if (!query) {
+        pane.search.clearDecorations();
+        searchResults.textContent = "";
+        return;
+      }
+      const found = backwards
+        ? pane.search.findPrevious(query, searchOptions(false))
+        : pane.search.findNext(query, searchOptions(incremental));
+      if (!found) searchResults.textContent = "No results";
+    };
+    const openSearch = () => {
+      searchBar.hidden = false;
+      searchInput.focus();
+      searchInput.select();
+    };
+    const closeSearch = () => {
+      activePane()?.search.clearDecorations();
+      searchBar.hidden = true;
+      searchResults.textContent = "";
+      activePane()?.terminal.focus();
+    };
+    searchInput.addEventListener("input", () => runSearch(true));
+    searchInput.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeSearch();
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        runSearch(false, event.shiftKey);
+      }
+    });
+    searchClose.addEventListener("click", closeSearch);
+
+    const zoomPane = (pane, nextSize) => {
+      pane.fontSize = clampTerminalFontSize(nextSize);
+      pane.terminal.options.fontSize = pane.fontSize;
+      if (pane.profileId) {
+        writeTerminalProfileFontSize(localStorage, pane.profileId, pane.fontSize);
+      }
+      requestAnimationFrame(() => fitPane(pane));
+    };
+
     for (const pane of panes.values()) {
+      pane.search.onDidChangeResults((result) => {
+        if (pane !== activePane()) return;
+        searchResults.textContent = terminalSearchResultLabel(
+          result,
+          searchInput.value !== "",
+        );
+      });
+      pane.terminal.attachCustomKeyEventHandler((event) => {
+        const action = terminalShortcutAction(
+          event,
+          /Mac|iPhone|iPad/.test(navigator.platform) ? "mac" : "linux",
+          pane.terminal.hasSelection(),
+        );
+        if (!action) return true;
+        if (event.type !== "keydown" || event.repeat) return false;
+        event.preventDefault();
+        switch (action) {
+          case "search":
+            openSearch();
+            break;
+          case "zoom-in":
+            zoomPane(pane, pane.fontSize + 1);
+            break;
+          case "zoom-out":
+            zoomPane(pane, pane.fontSize - 1);
+            break;
+          case "zoom-reset":
+            zoomPane(pane, pane.baseFontSize);
+            break;
+          case "copy":
+            void navigator.clipboard
+              ?.writeText(pane.terminal.getSelection())
+              .catch(() => {});
+            break;
+          case "select-all":
+            pane.terminal.selectAll();
+            break;
+          case "clear":
+            pane.terminal.clear();
+            break;
+          default:
+            // Paste arrives through the DOM paste event below, where the
+            // clipboard's own payload feeds the guard.
+            return true;
+        }
+        return false;
+      });
+      // The dock's paste guard, fed by the event's own clipboard payload: a
+      // multi-line paste outside the alternate screen asks first.
+      pane.terminal.textarea?.addEventListener("paste", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const request = prepareClipboardPaste(
+          event.clipboardData?.getData("text") ?? "",
+          pane.terminal.buffer.active.type === "alternate",
+        );
+        void commitClipboardPaste(
+          request,
+          (pending) => Promise.resolve(window.confirm(
+            `Paste ${pending.lineCount} lines into the terminal?`,
+          )),
+          (text) => pane.terminal.paste(text),
+        );
+      });
+
       // One client per attach: the stream ticket is single-use and the
       // client's write generation is what stops input from a released
       // renderer reaching a re-claimed PTY, so a re-attach builds a new one

@@ -1194,6 +1194,31 @@
           shell keeps running either way.
         </p>
       </header>
+      <div
+        id="terminal-window-search"
+        class="terminal-window-search"
+        role="search"
+        aria-label="Search terminal output"
+        hidden
+      >
+        <input
+          id="terminal-window-search-input"
+          type="search"
+          placeholder="Search"
+          aria-label="Search terminal output"
+        />
+        <span
+          id="terminal-window-search-results"
+          class="terminal-window-search-results"
+          role="status"
+          aria-live="polite"
+        ></span>
+        <button
+          id="terminal-window-search-close"
+          type="button"
+          aria-label="Close search"
+        >×</button>
+      </div>
       <p id="terminal-window-gap" class="terminal-window-gap" role="note" hidden>
         <strong>Scrollback gap.</strong>
         <span id="terminal-window-gap-detail"></span>

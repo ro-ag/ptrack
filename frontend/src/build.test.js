@@ -471,6 +471,23 @@ describe("production asset layout", () => {
     expect(app).toContain("Earlier output was not carried over.");
     expect(app).toContain("This terminal is running in its own window.");
     expect(app).toContain("Reconnecting…");
+    // Step 3: the terminal window carries its whole tab — the bridge speaks
+    // tab shapes, and the window offers the dock's own per-session surfaces.
+    expect(app).toContain("GetTerminalWindowTab");
+    expect(app).toContain("SetTerminalWindowTab");
+    expect(index).toMatch(
+      /id="terminal-window-search"[^>]*class="terminal-window-search"[^>]*role="search"/,
+    );
+    expect(index).toMatch(
+      /id="terminal-window-search-input"[^>]*type="search"/,
+    );
+    expect(index).toMatch(
+      /id="terminal-window-search-results"[^>]*role="status"[^>]*aria-live="polite"/,
+    );
+    // Splitting and closing panes stay acts of the window that owns the tab.
+    expect(styles).toMatch(
+      /\.terminal-window-host \.terminal-split-leaf-chrome button:not\(\.terminal-split-leaf-select\)\s*\{\s*display:\s*none/,
+    );
     expect(styles).toMatch(
       /\.terminal-diagnostics\s*\{[\s\S]*max-height:[^;]+;[\s\S]*overflow-y:\s*auto/,
     );

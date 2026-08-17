@@ -4518,6 +4518,26 @@ html[data-window-mode="terminal"] #app {
   font-size: 0.75rem;
 }
 
+/* The same search affordance the dock offers, scoped to this window. */
+.terminal-window-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-100);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-soft);
+  padding: var(--space-100) var(--space-150);
+}
+
+.terminal-window-search input {
+  flex: 0 1 18rem;
+  min-width: 8rem;
+}
+
+.terminal-window-search-results {
+  color: var(--text-soft);
+  font-size: 0.75rem;
+}
+
 /* Stated in words, never by colour alone, and never styled as an error. */
 .terminal-window-gap {
   display: flex;
