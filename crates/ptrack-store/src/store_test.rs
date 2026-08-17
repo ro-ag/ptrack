@@ -640,11 +640,13 @@ fn files_are_private_and_symlinks_or_insecure_files_are_rejected() {
     drop(Store::create_new(&path, StoreKind::Project).unwrap());
     assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
 
+    // Leaked group/other bits — a git checkout, a copy under a default umask —
+    // are healed by tightening on open, never refused: removing access cannot
+    // leak anything, while failing closed here bricked every command and
+    // crashed the desktop at launch (v0.24.0 field report).
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
-    assert!(matches!(
-        Store::open_existing(&path, StoreKind::Project),
-        Err(StoreError::InsecurePermissions { .. })
-    ));
+    drop(Store::open_existing(&path, StoreKind::Project).unwrap());
+    assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
 
     let link = directory.path("link.redb");
     symlink(&path, &link).unwrap();

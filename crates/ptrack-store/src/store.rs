@@ -2321,10 +2321,22 @@ pub(crate) fn ensure_path_identity(path: &Path, expected: FileIdentity) -> Store
 
 #[cfg(unix)]
 fn validate_private_permissions(path: &Path, metadata: &fs::Metadata) -> StoreResult<()> {
-    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
     let mode = metadata.mode() & 0o777;
     if mode & 0o077 == 0 {
+        return Ok(());
+    }
+    // Leaked group/other bits — a git checkout, a copy under a default umask —
+    // are healed by tightening, never refused: removing access cannot leak
+    // anything, while failing closed here bricked every command through the
+    // active binding and crashed the desktop at launch (v0.24.0 field report).
+    // The re-read proves the tightening took effect on the same file.
+    let healed = fs::set_permissions(path, fs::Permissions::from_mode(0o600)).is_ok()
+        && fs::symlink_metadata(path)
+            .map(|current| current.file_type().is_file() && current.mode() & 0o077 == 0)
+            .unwrap_or(false);
+    if healed {
         Ok(())
     } else {
         Err(StoreError::InsecurePermissions {
