@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.24.1] - 2026-08-17
+
+### Fixed
+- The desktop no longer aborts silently when startup fails. A setup error used
+  to unwind out of the platform's launch callback — an immediate crash with no
+  message anywhere. Failures are now recorded to `ptrack-startup-failure.log`
+  in the home directory, shown in a native dialog, and the process exits
+  cleanly; a panic hook leaves the same evidence for any startup panic.
+- A project database with leaked group/other permission bits — a git checkout
+  or a copy made under a default umask — no longer bricks every command and
+  the desktop launch. The store tightens the file to owner-only on open and
+  re-verifies; files that cannot be tightened still fail closed.
+
 ## [0.24.0] - 2026-08-17
 
 ### Added
@@ -590,7 +603,8 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
-[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.24.0...HEAD
+[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.24.1...HEAD
+[0.24.1]: https://github.com/ro-ag/ptrack/releases/tag/v0.24.1
 [0.24.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.24.0
 [0.23.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.23.0
 [0.22.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.22.0
