@@ -24,7 +24,7 @@ import {
   linkedAssociationPointer,
   selectedInstalledAgentProfile,
 } from "./terminal/linked-launch";
-import { paneIds } from "./workspace/model";
+import { findTerminalPane, paneIds } from "./workspace/model";
 import {
   WorkspaceTabController,
   createCryptoIdFactory,
@@ -34,15 +34,17 @@ import {
   stableTerminalWritebackRequestID,
   terminalWritebackContentPolicy,
 } from "./terminal/writeback";
-import { initTheme } from "./theme";
+import { THEME_STORAGE_KEY, initTheme, resolveTheme } from "./theme";
 import {
   applyPreferenceMirrors,
   defaultPreferences,
   preferenceSaveMessage,
   preferencesFromMirrors,
   preferencesResponse,
+  readTerminalPreferenceOverrides,
   storageStatusNotice,
 } from "./settings/preferences";
+import { readTerminalProfileFontSize } from "./terminal/preferences";
 import {
   diagnosticsRows,
   nextSettingsSectionIndex,
@@ -7798,19 +7800,35 @@ async function startTerminalWindow(label) {
 
     // Sessions were recorded in pane order when the tab moved; the traversal
     // order survives normalization because the tree structure does.
+    // The same stored Settings overrides the main window applies: the shared
+    // profile record plus this origin's localStorage, so a font or scrollback
+    // choice means the same thing in every window (§4).
+    const overrides = readTerminalPreferenceOverrides(localStorage);
+    const profiles = await api().GetTerminalProfiles().catch(() => []);
+    const settingsForProfile = (profileId) => {
+      const profile = profiles.find((candidate) => candidate.id === profileId);
+      return normalizeTerminalProfileSettings({
+        ...(profile ?? {}),
+        fontFamily: overrides.fontFamily || profile?.fontFamily,
+        scrollback: overrides.scrollback || profile?.scrollback,
+      });
+    };
+
     const paneOrder = paneIds(tab.root);
     const panes = new Map();
-    const settings = normalizeTerminalProfileSettings({});
     for (const [index, paneId] of paneOrder.entries()) {
       const sessionId = sessions[index];
       if (!sessionId) continue;
       const paneHost = document.createElement("div");
       paneHost.className = "terminal-window-pane";
+      const profileId = findTerminalPane(tab.root, paneId)?.profileId ?? "";
+      const settings = settingsForProfile(profileId);
+      const fontSize = readTerminalProfileFontSize(localStorage, profileId, settings.fontSize);
       const terminal = new Terminal({
         allowProposedApi: true,
         cursorBlink: true,
         rescaleOverlappingGlyphs: true,
-        ...terminalRendererOptions(settings, settings.fontSize),
+        ...terminalRendererOptions(settings, fontSize),
       });
       const fit = new FitAddon();
       terminal.loadAddon(fit);
@@ -7966,6 +7984,15 @@ async function startTerminalWindow(label) {
       for (const pane of panes.values()) fitPane(pane);
     };
     window.addEventListener("resize", () => requestAnimationFrame(fitAll));
+    // A theme picked in the main window reaches this one through the shared
+    // stored record; the OS preference path is already followed by initTheme.
+    window.addEventListener("storage", (event) => {
+      if (event.key !== THEME_STORAGE_KEY && event.key !== null) return;
+      document.documentElement.dataset.theme = resolveTheme(
+        event.key === null ? null : event.newValue,
+        matchMedia("(prefers-color-scheme: light)").matches,
+      );
+    });
     fitAll();
     renderStatus();
     panes.get(tab.activePaneId)?.terminal.focus();
