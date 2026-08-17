@@ -4,7 +4,7 @@ use serde_json::json;
 
 use super::{
     ProjectPickerPurpose, WindowStateCapture, preferred_theme, project_picker_result,
-    validate_external_url,
+    validate_external_url, write_startup_failure,
 };
 
 #[test]
@@ -86,4 +86,23 @@ fn the_native_chrome_is_pinned_only_by_an_explicit_theme() {
 fn external_url_gate_remains_available_to_the_native_shell_tests() {
     assert!(validate_external_url("https://example.com/help").is_ok());
     assert!(validate_external_url("file:///tmp/help").is_err());
+}
+
+/// A startup failure must leave evidence that survives the process: the log
+/// records every failure in order, and the writer never replaces what an
+/// earlier launch recorded.
+#[test]
+fn startup_failures_are_recorded_and_appended() {
+    let root = std::env::temp_dir().join(format!("ptrack-startup-log-{}", std::process::id()));
+    std::fs::create_dir_all(&root).expect("temp dir");
+    let path = write_startup_failure(&root, "store open failed").expect("first write");
+    assert_eq!(path, root.join("ptrack-startup-failure.log"));
+    write_startup_failure(&root, "second launch failed").expect("second write");
+    let recorded = std::fs::read_to_string(&path).expect("read log");
+    std::fs::remove_dir_all(&root).ok();
+    assert!(recorded.contains("store open failed"));
+    assert!(recorded.contains("second launch failed"));
+    let first = recorded.find("store open failed").expect("first entry");
+    let second = recorded.find("second launch failed").expect("second entry");
+    assert!(first < second, "entries append in order");
 }

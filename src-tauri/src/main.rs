@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -571,7 +571,60 @@ fn restore_window_state<R: Runtime>(window: &tauri::WebviewWindow<R>, version: &
     }
 }
 
+/// Appends one startup failure to the evidence log in `directory` and returns
+/// the log's path. The log appends, never truncates: a failure on launch two
+/// must not erase what launch one recorded.
+fn write_startup_failure(directory: &Path, error: &str) -> std::io::Result<PathBuf> {
+    use std::io::Write;
+    let path = directory.join("ptrack-startup-failure.log");
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or_default();
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?;
+    writeln!(
+        file,
+        "[{seconds}] ptrack {}: {error}",
+        ptrack_cli::version()
+    )?;
+    Ok(path)
+}
+
+/// The evidence log lives in the user's home directory: it must be writable
+/// even when resolving the p-track global home is itself the failure.
+fn record_startup_failure(error: &str) -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    write_startup_failure(Path::new(&home), error).ok()
+}
+
+/// A setup failure must never unwind out of the platform's nounwind launch
+/// callback — that is an `abort()` with no message anywhere (macOS crash report
+/// B841AEC7, v0.24.0). The error is recorded, said out loud, and the process
+/// leaves in an orderly way.
+fn fail_startup(app: &tauri::AppHandle, error: &str) -> ! {
+    let recorded = record_startup_failure(error);
+    let detail = recorded
+        .map(|path| format!("\n\nRecorded at {}", path.display()))
+        .unwrap_or_default();
+    app.dialog()
+        .message(format!("p-track could not start.\n\n{error}{detail}"))
+        .title("p-track")
+        .blocking_show();
+    std::process::exit(1);
+}
+
+#[allow(clippy::too_many_lines)] // One linear launch sequence; splitting it hides the order.
 fn run_desktop(initial_path: Option<PathBuf>, initial_plan: u64) {
+    // Any panic during startup or run leaves the same evidence trail before
+    // the default hook prints to a stderr nobody can see under launchd.
+    let default_panic = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = record_startup_failure(&info.to_string());
+        default_panic(info);
+    }));
     let capture = Arc::new(WindowStateCapture::new());
     let capture_events = Arc::clone(&capture);
     let capture_exit = Arc::clone(&capture);
@@ -591,28 +644,39 @@ fn run_desktop(initial_path: Option<PathBuf>, initial_plan: u64) {
             let sink: Arc<dyn DesktopEventSink> = Arc::new(TauriEventSink {
                 app: app.handle().clone(),
             });
-            let global_home = resolve_global_home().map_err(std::io::Error::other)?;
-            // An explicit context wins: a named path, then a working directory
-            // that is itself a project. The opt-in only decides the Finder and
-            // Dock launch, where the working directory is no project.
-            let current_dir = std::env::current_dir().map_err(std::io::Error::other)?;
-            let current = match resolved_startup_project(
-                &global_home,
-                ptrack_cli::version(),
-                initial_path.clone(),
-                &current_dir,
-            ) {
-                StartupProjectV1::Open(path) => path,
-                StartupProjectV1::Welcome(_) => current_dir,
+            // Nothing below may return Err: tauri turns a setup error into a
+            // panic inside the platform's nounwind launch callback, which is
+            // an abort() with no diagnostics. Failures go through
+            // `fail_startup` instead.
+            let runtime = (|| -> Result<_, String> {
+                let global_home = resolve_global_home().map_err(|error| error.to_string())?;
+                // An explicit context wins: a named path, then a working
+                // directory that is itself a project. The opt-in only decides
+                // the Finder and Dock launch, where the working directory is
+                // no project.
+                let current_dir = std::env::current_dir().map_err(|error| error.to_string())?;
+                let current = match resolved_startup_project(
+                    &global_home,
+                    ptrack_cli::version(),
+                    initial_path.clone(),
+                    &current_dir,
+                ) {
+                    StartupProjectV1::Open(path) => path,
+                    StartupProjectV1::Welcome(_) => current_dir,
+                };
+                production_desktop_runtime(
+                    global_home,
+                    ptrack_cli::version(),
+                    &current,
+                    Some(Arc::clone(&sink)),
+                    initial_plan,
+                )
+                .map_err(|error| error.to_string())
+            })();
+            let runtime = match runtime {
+                Ok(runtime) => runtime,
+                Err(error) => fail_startup(app.handle(), &error),
             };
-            let runtime = production_desktop_runtime(
-                global_home,
-                ptrack_cli::version(),
-                &current,
-                Some(Arc::clone(&sink)),
-                initial_plan,
-            )
-            .map_err(std::io::Error::other)?;
             // The stored preference is only reachable once the runtime is bound,
             // and the window contract fixes that after the show. The webview has
             // not painted yet either way, so the first frame the user reads
