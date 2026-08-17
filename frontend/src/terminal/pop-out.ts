@@ -13,19 +13,18 @@ export function terminalWindowLabel(hash: string): string | null {
 }
 
 /**
- * Where the pop-out control is shown (§7). One session per terminal window,
- * moved whole: a split tab has no single pane to move, so the control is
- * absent there rather than present and broken.
+ * Where the pop-out control is shown (step 3 §1). The unit of movement is the
+ * tab: the control is present when every pane of the tab is running with a
+ * session, because a tab moves whole or not at all.
  */
 export function terminalPopOutControl(input: {
-  paneCount: number;
-  state: PaneRuntimeState;
-  hasSession: boolean;
+  panes: ReadonlyArray<{ state: PaneRuntimeState; hasSession: boolean }>;
   busy: boolean;
   closing: boolean;
 }): { present: boolean; disabled: boolean } {
   return {
-    present: input.paneCount === 1 && input.state === "running" && input.hasSession,
+    present: input.panes.length > 0 &&
+      input.panes.every((pane) => pane.state === "running" && pane.hasSession),
     disabled: input.busy || input.closing,
   };
 }

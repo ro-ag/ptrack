@@ -57,28 +57,39 @@ describe("panesHoldPoppedOutTerminal", () => {
 });
 
 describe("terminalPopOutControl", () => {
-  const running = {
-    paneCount: 1,
-    state: "running" as const,
-    hasSession: true,
-    busy: false,
-    closing: false,
-  };
+  const running = { state: "running" as const, hasSession: true };
+  const tab = { panes: [running, running], busy: false, closing: false };
 
-  it("is present only for a single running pane", () => {
-    expect(terminalPopOutControl(running).present).toBe(true);
-    expect(terminalPopOutControl({ ...running, paneCount: 2 }).present).toBe(false);
-    expect(terminalPopOutControl({ ...running, state: "closed" }).present).toBe(false);
-    expect(terminalPopOutControl({ ...running, state: "exited" }).present).toBe(false);
-    expect(terminalPopOutControl({ ...running, hasSession: false }).present).toBe(false);
+  it("is present only when every pane of the tab is running with a session", () => {
+    expect(terminalPopOutControl(tab).present).toBe(true);
+    expect(terminalPopOutControl({ ...tab, panes: [running] }).present).toBe(true);
+    expect(terminalPopOutControl({ ...tab, panes: [] }).present).toBe(false);
+    expect(
+      terminalPopOutControl({
+        ...tab,
+        panes: [running, { state: "closed" as const, hasSession: true }],
+      }).present,
+    ).toBe(false);
+    expect(
+      terminalPopOutControl({
+        ...tab,
+        panes: [running, { state: "exited" as const, hasSession: true }],
+      }).present,
+    ).toBe(false);
+    expect(
+      terminalPopOutControl({
+        ...tab,
+        panes: [running, { state: "running" as const, hasSession: false }],
+      }).present,
+    ).toBe(false);
   });
 
-  it("stays present but disabled while the pane is busy or closing", () => {
-    expect(terminalPopOutControl({ ...running, busy: true }))
+  it("stays present but disabled while the tab is busy or closing", () => {
+    expect(terminalPopOutControl({ ...tab, busy: true }))
       .toEqual({ present: true, disabled: true });
-    expect(terminalPopOutControl({ ...running, closing: true }))
+    expect(terminalPopOutControl({ ...tab, closing: true }))
       .toEqual({ present: true, disabled: true });
-    expect(terminalPopOutControl(running).disabled).toBe(false);
+    expect(terminalPopOutControl(tab).disabled).toBe(false);
   });
 });
 

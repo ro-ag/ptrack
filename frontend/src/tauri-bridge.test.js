@@ -17,7 +17,7 @@ describe("Tauri compatibility bridge", () => {
       "GetCapabilityAuditsV2", "GetDiagnosticsReport", "GetInitializationStatusV1",
       "GetLayoutState", "GetPendingInitializationV1",
       "GetPreferences", "GetRecentProjects", "GetRecentProjectsV1", "GetTaskDetailV2",
-      "GetTerminalProfiles", "GetTerminalProfilesV2", "GetTerminalWindowSession",
+      "GetTerminalProfiles", "GetTerminalProfilesV2", "GetTerminalWindowTab",
       "GetUpdateState",
       "GetWorkspaceSnapshot", "GetWorkspaceState", "InitializeProjectV1", "InstallShellCommand",
       "LaunchLinkedAgentV2", "MoveTask", "MoveTaskV2", "MoveTaskV3",
@@ -29,7 +29,8 @@ describe("Tauri compatibility bridge", () => {
       "ResizeTerminal", "ResizeTerminalV2", "ResolveRecentProjectV1",
       "RollbackLinkedAgentLaunchV2", "SaveCapabilityV2", "SearchV2",
       "SendAgentHandoffV2", "SetAgentTaskOwnershipV2", "SetAgentWorktreeV2",
-      "SetAutomaticUpdateChecks", "SetLayoutState", "SetPreferences", "StartFirstTaskV1",
+      "SetAutomaticUpdateChecks", "SetLayoutState", "SetPreferences", "SetTerminalWindowTab",
+      "StartFirstTaskV1",
       "TestCapabilityV2", "ValidateProjectTargetV1",
       "ValidateTerminalCWDsV2",
       "WriteTerminalMemoryV2",
@@ -175,7 +176,8 @@ describe("Tauri compatibility bridge", () => {
     const calls = [];
     const results = {
       OpenTerminalWindow: { label: "terminal-1" },
-      GetTerminalWindowSession: { sessionId: "session-a" },
+      GetTerminalWindowTab: { sessions: ["session-a"], shape: { id: "tab-1" } },
+      SetTerminalWindowTab: {},
       ClaimTerminalStream: { url: "ws://127.0.0.1:1/s", fromSequence: 42, gap: true },
     };
     const target = { __TAURI_INTERNALS__: {}, navigator: { clipboard: {} } };
@@ -188,12 +190,16 @@ describe("Tauri compatibility bridge", () => {
       clipboard: { readText: vi.fn(), writeText: vi.fn() },
     });
 
-    expect(await target.go.gui.App.OpenTerminalWindow("session-a")).toEqual({
+    expect(await target.go.gui.App.OpenTerminalWindow(["session-a"], { id: "tab-1" })).toEqual({
       label: "terminal-1",
     });
-    expect(await target.go.gui.App.GetTerminalWindowSession("terminal-1")).toEqual({
-      sessionId: "session-a",
+    expect(await target.go.gui.App.GetTerminalWindowTab("terminal-1")).toEqual({
+      sessions: ["session-a"],
+      shape: { id: "tab-1" },
     });
+    expect(
+      await target.go.gui.App.SetTerminalWindowTab("terminal-1", ["session-a"], { id: "tab-1" }),
+    ).toEqual({});
     expect(await target.go.gui.App.ClaimTerminalStream("session-a", 40)).toEqual({
       url: "ws://127.0.0.1:1/s",
       fromSequence: 42,
@@ -203,9 +209,17 @@ describe("Tauri compatibility bridge", () => {
     // the bridge can leave a terminal window on screen with its session gone.
     expect(target.go.gui.App.CloseTerminalWindow).toBeUndefined();
     expect(calls).toEqual([
-      ["gui_invoke", { request: { method: "OpenTerminalWindow", arguments: ["session-a"] } }],
       ["gui_invoke", {
-        request: { method: "GetTerminalWindowSession", arguments: ["terminal-1"] },
+        request: { method: "OpenTerminalWindow", arguments: [["session-a"], { id: "tab-1" }] },
+      }],
+      ["gui_invoke", {
+        request: { method: "GetTerminalWindowTab", arguments: ["terminal-1"] },
+      }],
+      ["gui_invoke", {
+        request: {
+          method: "SetTerminalWindowTab",
+          arguments: ["terminal-1", ["session-a"], { id: "tab-1" }],
+        },
       }],
       ["gui_invoke", {
         request: { method: "ClaimTerminalStream", arguments: ["session-a", 40] },
