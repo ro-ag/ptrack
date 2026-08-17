@@ -224,13 +224,13 @@ fn close_windows<R: Runtime>(app: &AppHandle<R>, labels: Vec<String>) {
 /// cannot report the same session twice.
 fn pop_in_terminal_window<R: Runtime>(app: &AppHandle<R>, label: &str) {
     let runtime = app.state::<Arc<DesktopRuntime>>();
-    let Some(session_id) = runtime.close_terminal_window(label) else {
+    let Some(tab) = runtime.close_terminal_window(label) else {
         return;
     };
     let _ = app.emit_to(
         MAIN_WINDOW_LABEL,
         "terminal:window-closed",
-        serde_json::json!({ "label": label, "sessionId": session_id }),
+        serde_json::json!({ "label": label, "sessions": tab.sessions, "shape": tab.shape }),
     );
 }
 

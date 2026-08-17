@@ -892,7 +892,7 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "GetTaskDetailV2",
             "GetTerminalProfiles",
             "GetTerminalProfilesV2",
-            "GetTerminalWindowSession",
+            "GetTerminalWindowTab",
             "GetUpdateState",
             "GetWorkspaceSnapshot",
             "GetWorkspaceState",
@@ -931,6 +931,7 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "SetAutomaticUpdateChecks",
             "SetLayoutState",
             "SetPreferences",
+            "SetTerminalWindowTab",
             "StartFirstTaskV1",
             "TestCapabilityV2",
             "ValidateProjectTargetV1",
@@ -1395,7 +1396,10 @@ fn terminal_window_assignments_answer_the_bridge_and_expire_with_the_project() {
     let welcome = DesktopRuntime::new(DesktopRuntimeConfig::unavailable("test"));
     assert_eq!(
         welcome
-            .invoke(request("OpenTerminalWindow", vec![json!("session-a")]))
+            .invoke(request(
+                "OpenTerminalWindow",
+                vec![json!(["session-a"]), json!({ "id": "tab-1" })]
+            ))
             .unwrap_err()
             .to_string(),
         "no project workspace is open"
@@ -1415,36 +1419,83 @@ fn terminal_window_assignments_answer_the_bridge_and_expire_with_the_project() {
     });
     assert_eq!(
         runtime
-            .invoke(request("OpenTerminalWindow", vec![json!("session-a")]))
+            .invoke(request(
+                "OpenTerminalWindow",
+                vec![json!(["session-a", "session-b"]), json!({ "id": "tab-1" })]
+            ))
             .unwrap(),
         json!({ "label": "terminal-1" })
     );
     assert_eq!(
         runtime
+            .invoke(request("GetTerminalWindowTab", vec![json!("terminal-1")]))
+            .unwrap(),
+        json!({ "sessions": ["session-a", "session-b"], "shape": { "id": "tab-1" } })
+    );
+    // A split inside the window replaces the assignment through the bridge.
+    assert_eq!(
+        runtime
             .invoke(request(
-                "GetTerminalWindowSession",
-                vec![json!("terminal-1")]
+                "SetTerminalWindowTab",
+                vec![
+                    json!("terminal-1"),
+                    json!(["session-a", "session-b", "session-c"]),
+                    json!({ "id": "tab-1", "split": true })
+                ]
             ))
             .unwrap(),
-        json!({ "sessionId": "session-a" })
+        json!({})
+    );
+    assert_eq!(
+        runtime
+            .invoke(request("GetTerminalWindowTab", vec![json!("terminal-1")]))
+            .unwrap(),
+        json!({
+            "sessions": ["session-a", "session-b", "session-c"],
+            "shape": { "id": "tab-1", "split": true }
+        })
+    );
+    assert_eq!(
+        runtime
+            .invoke(request(
+                "SetTerminalWindowTab",
+                vec![json!("terminal-9"), json!(["session-z"]), json!({})]
+            ))
+            .unwrap_err()
+            .to_string(),
+        "no terminal window has that label"
+    );
+    // A tab shape must be an object; anything else could only render nothing.
+    assert_eq!(
+        runtime
+            .invoke(request(
+                "OpenTerminalWindow",
+                vec![json!(["session-z"]), json!("shape")]
+            ))
+            .unwrap_err()
+            .to_string(),
+        "OpenTerminalWindow requires an object tab shape"
     );
     // An unknown label is null, not an error, so a stale window closes cleanly.
     assert_eq!(
         runtime
-            .invoke(request(
-                "GetTerminalWindowSession",
-                vec![json!("terminal-9")]
-            ))
+            .invoke(request("GetTerminalWindowTab", vec![json!("terminal-9")]))
             .unwrap(),
-        json!({ "sessionId": null })
+        json!({ "sessions": null, "shape": null })
     );
     // The assignment is the token the shell pops a session back in on: the
     // window's destruction clears it and reports the session exactly once, so a
     // second destruction — or a drain that already took it — reports nothing
     // and cannot hand the same session to the main window twice.
     assert_eq!(
-        runtime.close_terminal_window("terminal-1"),
-        Some("session-a".to_owned())
+        runtime
+            .close_terminal_window("terminal-1")
+            .map(|tab| tab.sessions),
+        Some(vec![
+            "session-a".to_owned(),
+            "session-b".to_owned(),
+            "session-c".to_owned()
+        ])
     );
     assert_eq!(runtime.close_terminal_window("terminal-1"), None);
     assert_eq!(runtime.close_terminal_window("terminal-9"), None);
@@ -1453,12 +1504,15 @@ fn terminal_window_assignments_answer_the_bridge_and_expire_with_the_project() {
             .invoke(request("OpenTerminalWindow", Vec::new()))
             .unwrap_err()
             .to_string(),
-        "OpenTerminalWindow requires exactly 1 arguments"
+        "OpenTerminalWindow requires exactly 2 arguments"
     );
 
     // A live assignment survives every other command and dies with the project.
     runtime
-        .invoke(request("OpenTerminalWindow", vec![json!("session-b")]))
+        .invoke(request(
+            "OpenTerminalWindow",
+            vec![json!(["session-d"]), json!({ "id": "tab-2" })]
+        ))
         .unwrap();
     assert!(runtime.expire_terminal_windows().is_empty());
     runtime
@@ -1467,12 +1521,9 @@ fn terminal_window_assignments_answer_the_bridge_and_expire_with_the_project() {
     assert_eq!(runtime.expire_terminal_windows(), ["terminal-2"]);
     assert_eq!(
         runtime
-            .invoke(request(
-                "GetTerminalWindowSession",
-                vec![json!("terminal-2")]
-            ))
+            .invoke(request("GetTerminalWindowTab", vec![json!("terminal-2")]))
             .unwrap(),
-        json!({ "sessionId": null })
+        json!({ "sessions": null, "shape": null })
     );
     // The project switch already took the assignment, so the destruction of the
     // window it closed pops nothing back into a workspace that is gone.
