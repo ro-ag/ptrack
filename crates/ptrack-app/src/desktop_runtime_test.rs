@@ -1392,6 +1392,7 @@ fn shutdown_is_idempotent_and_fences_future_calls() {
 /// bridge with its exact response shapes, and closing the project takes every
 /// terminal window with it.
 #[test]
+#[allow(clippy::too_many_lines)] // One bridge round-trip per contract shape.
 fn terminal_window_assignments_answer_the_bridge_and_expire_with_the_project() {
     let welcome = DesktopRuntime::new(DesktopRuntimeConfig::unavailable("test"));
     assert_eq!(

@@ -7889,6 +7889,9 @@ async function startTerminalWindow(label) {
       splitView.refresh(workspace);
       const current = workspace.tabs[0];
       const before = previous.tabs[0];
+      if (current && current.activePaneId !== before?.activePaneId) {
+        panes.get(current.activePaneId)?.terminal.focus();
+      }
       if (!current || current.root === before?.root) return;
       window.clearTimeout(shapePush ?? undefined);
       shapePush = window.setTimeout(() => {
