@@ -6,6 +6,36 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-08-17
+
+### Added
+- Terminal tabs pop out into their own windows: the whole tab moves — split
+  tree, running sessions, title — without restarting a shell, and closing the
+  window returns everything to the main window. Moves are all-or-nothing; a
+  failed pop-out leaves every session exactly where it was.
+- Terminal windows render splits with the same split view as the main window
+  and carry its per-session surfaces: search, the multi-line paste guard,
+  per-profile zoom, copy, and select-all. Split resizes made in the window
+  survive the return to the main window.
+- Terminal windows follow the shared stored profile settings, per-profile
+  font sizes, and color theme, so a choice made in either window means the
+  same thing in both.
+- First-run project onboarding, a coherent Settings and About experience, and
+  desktop state persistence: window geometry, layout, and the open project
+  are restored on the next launch.
+- Releasing a terminal renderer is now separate from terminating its session,
+  so losing a renderer can never kill a running shell; renderers re-claim
+  their stream with bounded backoff and a stated scrollback-gap notice.
+
+### Fixed
+- Windows: candidate destination directories are synced, project path
+  resolution through a file ancestor is denied, the pty working directory
+  strips the verbatim prefix cmd.exe rejects, and cmd.exe per-drive
+  environment entries are dropped before spawning.
+- Native window chrome matches the application theme, capability forms are
+  tightened, the plural capability listing routes through the broker, and the
+  activity panel grows when its detail is expanded.
+
 ### Removed
 - Removed the final Go source module and its build/CI integration after the
   v0.23.0 offline migration cutover. Historical exporter source remains
@@ -560,7 +590,8 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
-[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.23.0...HEAD
+[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.24.0...HEAD
+[0.24.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.24.0
 [0.23.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.23.0
 [0.22.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.22.0
 [0.21.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.21.0
