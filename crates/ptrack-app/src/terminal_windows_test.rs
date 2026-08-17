@@ -18,7 +18,10 @@ fn labels_are_monotonic_and_an_assignment_reports_the_tab_it_owns() {
             .unwrap(),
         "terminal-1"
     );
-    assert_eq!(windows.open(Some(1), tab(&["session-c"])).unwrap(), "terminal-2");
+    assert_eq!(
+        windows.open(Some(1), tab(&["session-c"])).unwrap(),
+        "terminal-2"
+    );
     let owned = windows.tab("terminal-1").unwrap();
     assert_eq!(owned.sessions, ["session-a", "session-b"]);
     assert_eq!(owned.shape, json!({ "id": "tab-1" }));
@@ -32,14 +35,20 @@ fn labels_are_monotonic_and_an_assignment_reports_the_tab_it_owns() {
     assert!(windows.tab("terminal-1").is_none());
     // A freed label is never reused, so a late message cannot reach a
     // different window.
-    assert_eq!(windows.open(Some(1), tab(&["session-a"])).unwrap(), "terminal-3");
+    assert_eq!(
+        windows.open(Some(1), tab(&["session-a"])).unwrap(),
+        "terminal-3"
+    );
 }
 
 #[test]
 fn opening_requires_an_open_workspace_sessions_and_room() {
     let mut windows = TerminalWindows::default();
     assert_eq!(
-        windows.open(None, tab(&["session-a"])).unwrap_err().to_string(),
+        windows
+            .open(None, tab(&["session-a"]))
+            .unwrap_err()
+            .to_string(),
         "no project workspace is open"
     );
     assert_eq!(
@@ -47,7 +56,10 @@ fn opening_requires_an_open_workspace_sessions_and_room() {
         "terminal session is required"
     );
     assert_eq!(
-        windows.open(Some(1), tab(&["session-a", ""])).unwrap_err().to_string(),
+        windows
+            .open(Some(1), tab(&["session-a", ""]))
+            .unwrap_err()
+            .to_string(),
         "terminal session is required"
     );
     // The same session twice inside one tab can never be rendered twice.
@@ -58,7 +70,9 @@ fn opening_requires_an_open_workspace_sessions_and_room() {
             .to_string(),
         "terminal is already in a terminal window"
     );
-    windows.open(Some(1), tab(&["session-a", "session-b"])).unwrap();
+    windows
+        .open(Some(1), tab(&["session-a", "session-b"]))
+        .unwrap();
     // A session one window owns cannot appear in another window's tab.
     assert_eq!(
         windows
@@ -68,10 +82,15 @@ fn opening_requires_an_open_workspace_sessions_and_room() {
         "terminal is already in a terminal window"
     );
     for index in 1..16 {
-        windows.open(Some(1), tab(&[&format!("extra-{index}")])).unwrap();
+        windows
+            .open(Some(1), tab(&[&format!("extra-{index}")]))
+            .unwrap();
     }
     assert_eq!(
-        windows.open(Some(1), tab(&["session-last"])).unwrap_err().to_string(),
+        windows
+            .open(Some(1), tab(&["session-last"]))
+            .unwrap_err()
+            .to_string(),
         "no more terminal windows can be opened"
     );
 }
@@ -101,11 +120,17 @@ fn set_tab_replaces_the_shape_and_sessions_of_one_window_only() {
         "terminal is already in a terminal window"
     );
     assert_eq!(
-        windows.set_tab("terminal-9", tab(&["session-z"])).unwrap_err().to_string(),
+        windows
+            .set_tab("terminal-9", tab(&["session-z"]))
+            .unwrap_err()
+            .to_string(),
         "no terminal window has that label"
     );
     assert_eq!(
-        windows.set_tab("terminal-1", tab(&[])).unwrap_err().to_string(),
+        windows
+            .set_tab("terminal-1", tab(&[]))
+            .unwrap_err()
+            .to_string(),
         "terminal session is required"
     );
     // A failed replacement leaves the assignment untouched.
@@ -119,7 +144,9 @@ fn set_tab_replaces_the_shape_and_sessions_of_one_window_only() {
 fn a_superseded_fence_expires_every_assignment_exactly_once() {
     let mut windows = TerminalWindows::default();
     windows.open(Some(1), tab(&["session-a"])).unwrap();
-    windows.open(Some(1), tab(&["session-b", "session-c"])).unwrap();
+    windows
+        .open(Some(1), tab(&["session-b", "session-c"]))
+        .unwrap();
     // The same generation closes nothing: this runs after every command.
     assert!(windows.expire(Some(1)).is_empty());
 
