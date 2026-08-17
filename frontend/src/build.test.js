@@ -475,6 +475,9 @@ describe("production asset layout", () => {
     // tab shapes, and the window offers the dock's own per-session surfaces.
     expect(app).toContain("GetTerminalWindowTab");
     expect(app).toContain("SetTerminalWindowTab");
+    // The dock adapter forwards both tab arguments; a one-argument forward
+    // was a live acceptance failure ("requires exactly 2 arguments").
+    expect(appSource).toContain("api().OpenTerminalWindow(sessions, shape)");
     expect(index).toMatch(
       /id="terminal-window-search"[^>]*class="terminal-window-search"[^>]*role="search"/,
     );

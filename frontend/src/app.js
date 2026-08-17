@@ -6848,8 +6848,8 @@ function generationTerminalBackend(generation) {
     },
     // Both are fenced by the workspace generation inside the runtime, so their
     // responses carry no generation of their own to assert here.
-    OpenTerminalWindow(sessionID) {
-      return api().OpenTerminalWindow(sessionID);
+    OpenTerminalWindow(sessions, shape) {
+      return api().OpenTerminalWindow(sessions, shape);
     },
     ClaimTerminalStream(sessionID, fromSequence) {
       return api().ClaimTerminalStream(sessionID, fromSequence);
