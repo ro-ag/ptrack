@@ -37,7 +37,7 @@ use tokio_util::sync::CancellationToken;
 use crate::diagnostics_report::{CapabilityCountsV1, DiagnosticsReportV1};
 use crate::layout_state::{layout_state, reset_window_layout, set_layout_state};
 use crate::preferences::{PreferencesDocumentV1, preferences, reset_preferences, set_preferences};
-use crate::terminal_windows::TerminalWindows;
+use crate::terminal_windows::{TerminalWindowTab, TerminalWindows};
 use crate::{
     ActiveRuntime, AgentRuntimeService, AppError, AppResult, ApplicationPort,
     LaunchedEventAuthority, LinkedAgentRuntimeHooks, Mutation, MutationResult, ProjectEndpoint,
@@ -69,7 +69,7 @@ const WORKSPACE_OPERATION_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub const FIRST_RUN_GOAL_MAX_BYTES: usize = 4_096;
 
-const COMMANDS: [&str; 87] = [
+const COMMANDS: [&str; 88] = [
     "AcknowledgeAgentHandoffV2",
     "AddTask",
     "AddTaskNote",
@@ -113,7 +113,7 @@ const COMMANDS: [&str; 87] = [
     "GetTaskDetailV2",
     "GetTerminalProfiles",
     "GetTerminalProfilesV2",
-    "GetTerminalWindowSession",
+    "GetTerminalWindowTab",
     "GetUpdateState",
     "GetWorkspaceSnapshot",
     "GetWorkspaceState",
@@ -152,6 +152,7 @@ const COMMANDS: [&str; 87] = [
     "SetAutomaticUpdateChecks",
     "SetLayoutState",
     "SetPreferences",
+    "SetTerminalWindowTab",
     "StartFirstTaskV1",
     "TestCapabilityV2",
     "ValidateProjectTargetV1",
@@ -1053,20 +1054,33 @@ impl DesktopRuntime {
             "ResetWindowLayout" => self.reset_window_layout(arguments),
             "ResetApplicationState" => self.reset_application_state(arguments),
             "OpenTerminalWindow" => self.open_terminal_window_command(arguments),
-            "GetTerminalWindowSession" => self.terminal_window_session_command(arguments),
+            "GetTerminalWindowTab" => self.terminal_window_tab_command(arguments),
+            "SetTerminalWindowTab" => self.set_terminal_window_tab_command(arguments),
             _ => return None,
         })
     }
 
     fn open_terminal_window_command(&self, arguments: &[Value]) -> AppResult<Value> {
-        require_argument_count("OpenTerminalWindow", arguments, 1)?;
-        let label = self.open_terminal_window(string_arg(arguments, 0)?)?;
+        require_argument_count("OpenTerminalWindow", arguments, 2)?;
+        let tab = tab_args("OpenTerminalWindow", arguments, 0)?;
+        let label = self.open_terminal_window(tab)?;
         Ok(json!({ "label": label }))
     }
 
-    fn terminal_window_session_command(&self, arguments: &[Value]) -> AppResult<Value> {
-        require_argument_count("GetTerminalWindowSession", arguments, 1)?;
-        Ok(json!({ "sessionId": self.terminal_window_session(string_arg(arguments, 0)?) }))
+    fn terminal_window_tab_command(&self, arguments: &[Value]) -> AppResult<Value> {
+        require_argument_count("GetTerminalWindowTab", arguments, 1)?;
+        Ok(match self.terminal_window_tab(string_arg(arguments, 0)?) {
+            Some(tab) => json!({ "sessions": tab.sessions, "shape": tab.shape }),
+            None => json!({ "sessions": null, "shape": null }),
+        })
+    }
+
+    fn set_terminal_window_tab_command(&self, arguments: &[Value]) -> AppResult<Value> {
+        require_argument_count("SetTerminalWindowTab", arguments, 3)?;
+        let label = string_arg(arguments, 0)?.to_owned();
+        let tab = tab_args("SetTerminalWindowTab", arguments, 1)?;
+        self.set_terminal_window_tab(&label, tab)?;
+        Ok(json!({}))
     }
 
     /// The generation a terminal-window assignment is fenced by: the open
@@ -1081,23 +1095,32 @@ impl DesktopRuntime {
     /// the build fails, so a failed pop-out never leaves a session unowned.
     ///
     /// # Errors
-    /// Returns an error with no project open, without a session, when the
-    /// session is already shown by another window, or at the window limit.
-    pub fn open_terminal_window(&self, session_id: &str) -> AppResult<String> {
+    /// Returns an error with no project open, without at least one session,
+    /// when any session is already shown by a window, or at the window limit.
+    pub fn open_terminal_window(&self, tab: TerminalWindowTab) -> AppResult<String> {
         let fence = self.terminal_window_fence();
-        lock(&self.terminal_windows).open(fence, session_id)
+        lock(&self.terminal_windows).open(fence, tab)
     }
 
-    /// The session one terminal window owns, or `None` for an unknown label.
+    /// The tab one terminal window owns, or `None` for an unknown label.
     #[must_use]
-    pub fn terminal_window_session(&self, label: &str) -> Option<String> {
-        lock(&self.terminal_windows).session(label)
+    pub fn terminal_window_tab(&self, label: &str) -> Option<TerminalWindowTab> {
+        lock(&self.terminal_windows).tab(label).cloned()
     }
 
-    /// Clears one assignment and reports the session it freed, once: the shell
-    /// pops a session back in exactly when this answers `Some`, so a second
-    /// call for the same window must free nothing.
-    pub fn close_terminal_window(&self, label: &str) -> Option<String> {
+    /// Replaces one window's tab after a split changed inside it.
+    ///
+    /// # Errors
+    /// Returns an error for an unknown label, without at least one session, or
+    /// when any session belongs to a different window.
+    pub fn set_terminal_window_tab(&self, label: &str, tab: TerminalWindowTab) -> AppResult<()> {
+        lock(&self.terminal_windows).set_tab(label, tab)
+    }
+
+    /// Clears one assignment and reports the tab it freed, once: the shell
+    /// pops a tab back in exactly when this answers `Some`, so a second call
+    /// for the same window must free nothing.
+    pub fn close_terminal_window(&self, label: &str) -> Option<TerminalWindowTab> {
         lock(&self.terminal_windows).close(label)
     }
 
@@ -5549,6 +5572,21 @@ fn bool_arg(arguments: &[Value], index: usize) -> AppResult<bool> {
 
 fn missing_arg(index: usize) -> AppError {
     AppError::Message(format!("desktop command argument {index} is invalid"))
+}
+
+/// A terminal-window tab from two adjacent arguments: the session list and
+/// the shape, which must be a JSON object — the frontend re-hydrates a split
+/// tree from it, and anything else could only ever render nothing.
+fn tab_args(method: &str, arguments: &[Value], index: usize) -> AppResult<TerminalWindowTab> {
+    let sessions = string_vec_arg(arguments, index)?;
+    let shape = arguments
+        .get(index + 1)
+        .filter(|value| value.is_object())
+        .cloned()
+        .ok_or_else(|| {
+            AppError::Message(format!("{method} requires an object tab shape"))
+        })?;
+    Ok(TerminalWindowTab { sessions, shape })
 }
 
 fn trimmed_nonempty(value: &str, error: &str) -> AppResult<String> {

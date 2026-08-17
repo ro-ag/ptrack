@@ -4544,6 +4544,24 @@ html[data-window-mode="terminal"] #app {
   height: 100%;
 }
 
+/* The split tree renders through the same split view as the main window; the
+   tab panel and every pane fill the window. */
+.terminal-window-host .terminal-split-tab-panel {
+  height: 100%;
+}
+
+.terminal-window-pane {
+  height: 100%;
+  min-height: 0;
+}
+
+/* Splitting and closing panes belong to the window that owns the tab; those
+   controls are absent here, not present and broken. Selecting stays: it is
+   the keyboard path to a pane. */
+.terminal-window-host .terminal-split-leaf-chrome button:not(.terminal-split-leaf-select) {
+  display: none;
+}
+
 .terminal-window-host .xterm-viewport {
   scrollbar-color: var(--scrollbar-thumb) var(--terminal-bg);
   scrollbar-width: thin;

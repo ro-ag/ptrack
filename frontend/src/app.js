@@ -24,19 +24,27 @@ import {
   linkedAssociationPointer,
   selectedInstalledAgentProfile,
 } from "./terminal/linked-launch";
+import { findTerminalPane, paneIds } from "./workspace/model";
+import {
+  WorkspaceTabController,
+  createCryptoIdFactory,
+} from "./workspace/tab-controller";
+import { WorkspaceSplitView } from "./workspace/split-view";
 import {
   stableTerminalWritebackRequestID,
   terminalWritebackContentPolicy,
 } from "./terminal/writeback";
-import { initTheme } from "./theme";
+import { THEME_STORAGE_KEY, initTheme, resolveTheme } from "./theme";
 import {
   applyPreferenceMirrors,
   defaultPreferences,
   preferenceSaveMessage,
   preferencesFromMirrors,
   preferencesResponse,
+  readTerminalPreferenceOverrides,
   storageStatusNotice,
 } from "./settings/preferences";
+import { readTerminalProfileFontSize } from "./terminal/preferences";
 import {
   diagnosticsRows,
   nextSettingsSectionIndex,
@@ -7734,10 +7742,13 @@ async function waitForBridge() {
 }
 
 /**
- * A terminal window renders the terminal surface and nothing else: it asks
- * which session it owns, claims the renderer lease, and attaches. Closing the
- * window returns the session to the main window, so the pop-in control is just
- * a window close the user can reach from the keyboard.
+ * A terminal window renders its tab's split tree and nothing else: it asks
+ * which tab it owns, re-hydrates the shape through the same controller and
+ * split view the main window uses, claims one renderer lease per pane, and
+ * attaches. Closing the window returns the whole tab to the main window, so
+ * the pop-in control is just a window close reachable from the keyboard.
+ * Only focus and split resizes may change the shape here; a resize is pushed
+ * back into the assignment so pop-in returns the tab as last seen.
  */
 async function startTerminalWindow(label) {
   const section = document.getElementById("terminal-window");
@@ -7753,115 +7764,241 @@ async function startTerminalWindow(label) {
 
   try {
     await waitForBridge();
-    const assignment = await api().GetTerminalWindowSession(label);
-    const sessionId = assignment?.sessionId;
-    if (!sessionId) {
+    const assignment = await api().GetTerminalWindowTab(label);
+    const sessions = assignment?.sessions;
+    if (!sessions || sessions.length === 0) {
       status.textContent = "This window no longer shows a terminal. Close it.";
       return;
     }
-    const workspace = await api().GetWorkspaceState();
-    const generation = Number(workspace?.generation || 0);
-    const claim = await api().ClaimTerminalStream(sessionId, 0);
+    const workspaceState = await api().GetWorkspaceState();
+    const generation = Number(workspaceState?.generation || 0);
 
-    const settings = normalizeTerminalProfileSettings({});
-    const terminal = new Terminal({
-      allowProposedApi: true,
-      cursorBlink: true,
-      rescaleOverlappingGlyphs: true,
-      ...terminalRendererOptions(settings, settings.fontSize),
-    });
-    const fit = new FitAddon();
-    terminal.loadAddon(fit);
-    terminal.open(host);
-    terminal.textarea?.setAttribute("aria-label", "Terminal session");
-    fit.fit();
+    const controller = new WorkspaceTabController(
+      createCryptoIdFactory(),
+      {
+        version: 1,
+        activeTabId: assignment.shape?.id ?? "",
+        tabs: [assignment.shape],
+      },
+      {
+        // The tab's structure belongs to the main window; this window may
+        // focus panes and resize splits, nothing else.
+        allowAction: (action) =>
+          action.type === "resize-split" || action.type === "focus-pane",
+      },
+    );
+    const tab = controller.workspace.tabs[0];
+    if (!tab) {
+      status.textContent = "This window no longer shows a terminal. Close it.";
+      return;
+    }
+    const heading = document.getElementById("terminal-window-heading");
+    if (tab.title) {
+      heading.textContent = tab.title;
+      document.title = `Terminal — ${tab.title}`;
+    }
 
-    let sequence = 0;
-    let attempts = 0;
-    let reclaiming = false;
-    let ended = false;
-    let client = null;
-
-    // One client per attach: the stream ticket is single-use and the client's
-    // write generation is what stops input from a released renderer reaching a
-    // re-claimed PTY, so a re-attach builds a new one instead of reopening it.
-    const attach = (url, from) => {
-      sequence = Number(from || 0);
-      const next = new TerminalStreamClient({
-        createWebSocket: (streamUrl) => new WebSocket(streamUrl),
-        // The rendered byte count is the sequence: a re-claim resumes exactly
-        // where the renderer stopped drawing, not where the socket stopped.
-        writeOutput: (output, done) => terminal.write(output, () => {
-          sequence += output.byteLength;
-          done();
-        }),
-        onStateChange: (state) => {
-          if (client !== next) return;
-          status.textContent = terminalWindowStatusLabel(state);
-          // Only a stream that opened earns a fresh re-claim budget.
-          if (state === "open") attempts = 0;
-          if (state === "closed" || state === "error") scheduleReclaim();
-        },
-        onGap: showGap,
-      });
-      client = next;
-      next.connect(url);
-    };
-
-    // A stream that ended without the shell ending is recoverable: claim the
-    // lease back from the last rendered sequence, bounded so it cannot spin.
-    const scheduleReclaim = () => {
-      if (reclaiming) return;
-      reclaiming = true;
-      void reclaimStream({
-        recoverable: () => !ended,
-        sequence: () => sequence,
-        wait: (delay) => new Promise((resolve) => window.setTimeout(resolve, delay)),
-        claim: (fromSequence) => api().ClaimTerminalStream(sessionId, fromSequence),
-        attach: (claim) => {
-          if (claim.gap) showGap();
-          attach(claim.url, claim.fromSequence);
-        },
-        reclaiming: () => {
-          attempts += 1;
-          status.textContent = reclaimingStreamNotice;
-        },
-        exhausted: () => {
-          status.textContent = streamReclaimFailedNotice;
-        },
-      }, attempts).finally(() => {
-        reclaiming = false;
+    // Sessions were recorded in pane order when the tab moved; the traversal
+    // order survives normalization because the tree structure does.
+    // The same stored Settings overrides the main window applies: the shared
+    // profile record plus this origin's localStorage, so a font or scrollback
+    // choice means the same thing in every window (§4).
+    const overrides = readTerminalPreferenceOverrides(localStorage);
+    const profiles = await api().GetTerminalProfiles().catch(() => []);
+    const settingsForProfile = (profileId) => {
+      const profile = profiles.find((candidate) => candidate.id === profileId);
+      return normalizeTerminalProfileSettings({
+        ...(profile ?? {}),
+        fontFamily: overrides.fontFamily || profile?.fontFamily,
+        scrollback: overrides.scrollback || profile?.scrollback,
       });
     };
 
-    terminal.onData((data) => {
-      for (const chunk of splitTerminalInput(terminalTextToBytes(data))) {
-        client?.sendInput(chunk);
-      }
-    });
-    terminal.onBinary((data) => {
-      for (const chunk of splitTerminalInput(binaryStringToBytes(data))) {
-        client?.sendInput(chunk);
-      }
-    });
-    window.runtime?.EventsOnMultiple?.("terminal:exit", (payload) => {
-      if (payload?.sessionId !== sessionId) return;
-      ended = true;
-      status.textContent = payload.error || `Exited (${payload.exitCode})`;
-    }, -1);
+    const paneOrder = paneIds(tab.root);
+    const panes = new Map();
+    for (const [index, paneId] of paneOrder.entries()) {
+      const sessionId = sessions[index];
+      if (!sessionId) continue;
+      const paneHost = document.createElement("div");
+      paneHost.className = "terminal-window-pane";
+      const profileId = findTerminalPane(tab.root, paneId)?.profileId ?? "";
+      const settings = settingsForProfile(profileId);
+      const fontSize = readTerminalProfileFontSize(localStorage, profileId, settings.fontSize);
+      const terminal = new Terminal({
+        allowProposedApi: true,
+        cursorBlink: true,
+        rescaleOverlappingGlyphs: true,
+        ...terminalRendererOptions(settings, fontSize),
+      });
+      const fit = new FitAddon();
+      terminal.loadAddon(fit);
+      terminal.open(paneHost);
+      terminal.textarea?.setAttribute(
+        "aria-label",
+        paneOrder.length === 1 ? "Terminal session" : `Terminal pane ${index + 1}`,
+      );
+      panes.set(paneId, {
+        sessionId,
+        terminal,
+        fit,
+        host: paneHost,
+        state: "connecting",
+        sequence: 0,
+        attempts: 0,
+        reclaiming: false,
+        ended: false,
+        client: null,
+      });
+    }
 
-    if (claim.gap) showGap();
-    attach(claim.url, claim.fromSequence);
+    // One status line for the window: the least-connected pane speaks for it,
+    // and a shell that ended says so in its own scrollback.
+    const renderStatus = () => {
+      const states = [...panes.values()].map((pane) => pane.state);
+      const aggregate = ["error", "closed", "connecting"].find((candidate) =>
+        states.includes(candidate),
+      ) ?? "open";
+      status.textContent = terminalWindowStatusLabel(aggregate);
+    };
 
-    const fitToWindow = () => {
-      fit.fit();
+    const fitPane = (pane) => {
+      pane.fit.fit();
       void api()
-        .ResizeTerminalV2(generation, sessionId, terminal.rows, terminal.cols)
+        .ResizeTerminalV2(generation, pane.sessionId, pane.terminal.rows, pane.terminal.cols)
         .catch(() => {});
     };
-    window.addEventListener("resize", () => requestAnimationFrame(fitToWindow));
-    fitToWindow();
-    terminal.focus();
+
+    const splitView = new WorkspaceSplitView({
+      container: host,
+      controller,
+      hostForPane: (paneId) => panes.get(paneId)?.host ?? null,
+      // Panes are closed where the tab lives — the chrome is hidden here.
+      closePane: () => {},
+      fitPanes: (paneIdList) => {
+        for (const paneId of paneIdList) {
+          const pane = panes.get(paneId);
+          if (pane) requestAnimationFrame(() => fitPane(pane));
+        }
+      },
+    });
+
+    // A resized split is pushed back into the assignment, debounced, so the
+    // tab pops back in with the geometry the user last saw in this window.
+    let shapePush = null;
+    controller.subscribe((workspace, previous) => {
+      splitView.refresh(workspace);
+      const current = workspace.tabs[0];
+      const before = previous.tabs[0];
+      if (current && current.activePaneId !== before?.activePaneId) {
+        panes.get(current.activePaneId)?.terminal.focus();
+      }
+      if (!current || current.root === before?.root) return;
+      window.clearTimeout(shapePush ?? undefined);
+      shapePush = window.setTimeout(() => {
+        void api()
+          .SetTerminalWindowTab(label, sessions, current)
+          .catch(() => {});
+      }, 300);
+    });
+
+    for (const pane of panes.values()) {
+      // One client per attach: the stream ticket is single-use and the
+      // client's write generation is what stops input from a released
+      // renderer reaching a re-claimed PTY, so a re-attach builds a new one
+      // instead of reopening it.
+      const attach = (url, from) => {
+        pane.sequence = Number(from || 0);
+        const next = new TerminalStreamClient({
+          createWebSocket: (streamUrl) => new WebSocket(streamUrl),
+          // The rendered byte count is the sequence: a re-claim resumes
+          // exactly where the renderer stopped drawing, not where the socket
+          // stopped.
+          writeOutput: (output, done) => pane.terminal.write(output, () => {
+            pane.sequence += output.byteLength;
+            done();
+          }),
+          onStateChange: (state) => {
+            if (pane.client !== next) return;
+            pane.state = state;
+            renderStatus();
+            // Only a stream that opened earns a fresh re-claim budget.
+            if (state === "open") pane.attempts = 0;
+            if (state === "closed" || state === "error") scheduleReclaim();
+          },
+          onGap: showGap,
+        });
+        pane.client = next;
+        next.connect(url);
+      };
+
+      // A stream that ended without the shell ending is recoverable: claim
+      // the lease back from the last rendered sequence, bounded so it cannot
+      // spin.
+      const scheduleReclaim = () => {
+        if (pane.reclaiming) return;
+        pane.reclaiming = true;
+        void reclaimStream({
+          recoverable: () => !pane.ended,
+          sequence: () => pane.sequence,
+          wait: (delay) => new Promise((resolve) => window.setTimeout(resolve, delay)),
+          claim: (fromSequence) => api().ClaimTerminalStream(pane.sessionId, fromSequence),
+          attach: (claim) => {
+            if (claim.gap) showGap();
+            attach(claim.url, claim.fromSequence);
+          },
+          reclaiming: () => {
+            pane.attempts += 1;
+            status.textContent = reclaimingStreamNotice;
+          },
+          exhausted: () => {
+            status.textContent = streamReclaimFailedNotice;
+          },
+        }, pane.attempts).finally(() => {
+          pane.reclaiming = false;
+        });
+      };
+
+      pane.terminal.onData((data) => {
+        for (const chunk of splitTerminalInput(terminalTextToBytes(data))) {
+          pane.client?.sendInput(chunk);
+        }
+      });
+      pane.terminal.onBinary((data) => {
+        for (const chunk of splitTerminalInput(binaryStringToBytes(data))) {
+          pane.client?.sendInput(chunk);
+        }
+      });
+
+      const claim = await api().ClaimTerminalStream(pane.sessionId, 0);
+      if (claim.gap) showGap();
+      attach(claim.url, claim.fromSequence);
+    }
+
+    window.runtime?.EventsOnMultiple?.("terminal:exit", (payload) => {
+      for (const pane of panes.values()) {
+        if (payload?.sessionId !== pane.sessionId) continue;
+        pane.ended = true;
+        pane.state = "closed";
+        status.textContent = payload.error || `Exited (${payload.exitCode})`;
+      }
+    }, -1);
+
+    const fitAll = () => {
+      for (const pane of panes.values()) fitPane(pane);
+    };
+    window.addEventListener("resize", () => requestAnimationFrame(fitAll));
+    // A theme picked in the main window reaches this one through the shared
+    // stored record; the OS preference path is already followed by initTheme.
+    window.addEventListener("storage", (event) => {
+      if (event.key !== THEME_STORAGE_KEY && event.key !== null) return;
+      document.documentElement.dataset.theme = resolveTheme(
+        event.key === null ? null : event.newValue,
+        matchMedia("(prefers-color-scheme: light)").matches,
+      );
+    });
+    fitAll();
+    renderStatus();
+    panes.get(tab.activePaneId)?.terminal.focus();
   } catch (error) {
     status.textContent = messageFrom(error);
   }

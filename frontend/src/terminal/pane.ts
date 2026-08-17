@@ -209,11 +209,12 @@ interface TerminalStreamClaim {
   gap: boolean;
 }
 
-/** Payload of the event a closing terminal window frees its session with. */
+/** Payload of the event a closing terminal window frees its tab with. */
 interface TerminalWindowClosed {
   generation?: number;
   label?: string;
-  sessionId?: string;
+  sessions?: string[];
+  shape?: unknown;
 }
 
 interface TerminalExit {
@@ -652,7 +653,7 @@ class TerminalDock {
       ),
     );
     this.#listen(this.#popOut, "click", () =>
-      void this.#runOperation((runtime) => this.#popOutPane(runtime)),
+      void this.#runOperation(() => this.#popOutTab()),
     );
     this.#listen(this.#open, "click", () =>
       void this.#runOperation((runtime) => this.#openTerminal(runtime)),
@@ -1044,31 +1045,60 @@ class TerminalDock {
   }
 
   /**
-   * Move the pane's session into its own window (§4). The renderer is released
-   * first so the window can claim the lease; if anything fails the session is
-   * claimed back here, because a failed pop-out must never leave it unowned.
+   * Move the active tab — split tree and all — into its own window (step 3
+   * §3). Every pane's renderer is released first so the window can claim the
+   * leases; if anything fails every session is claimed back here, because a
+   * failed pop-out must never leave any session unowned, and a tab must move
+   * whole or not at all.
    */
-  async #popOutPane(runtime: DockPaneRuntime): Promise<void> {
-    const sessionId = runtime.session?.sessionId;
-    if (this.#disposed || !sessionId || !this.#descriptorFor(runtime.paneId)) return;
+  async #popOutTab(): Promise<void> {
+    const workspace = this.#tabController.workspace;
+    const tab = workspace.tabs.find((candidate) => candidate.id === workspace.activeTabId);
+    if (this.#disposed || !tab) return;
+    const panes: { paneId: string; runtime: DockPaneRuntime; sessionId: string }[] = [];
+    for (const paneId of paneIds(tab.root)) {
+      const runtime = this.#runtimes.get(paneId);
+      const sessionId = runtime?.session?.sessionId;
+      // The control is only shown when every pane is running with a session;
+      // a pane that lost its session since renders the control's gate stale,
+      // and a partial move must be unrepresentable.
+      if (!runtime || !sessionId) return;
+      panes.push({ paneId, runtime, sessionId });
+    }
+    if (panes.length === 0) return;
+    const shape = structuredClone(tab);
     const result = await popOutTerminal({
-      release: () => this.#teardownRuntime(runtime),
-      open: () => this.#backend.OpenTerminalWindow(sessionId),
-      reclaim: () => this.#claimSessionIntoPane(runtime, sessionId),
+      release: () => {
+        for (const pane of panes) this.#teardownRuntime(pane.runtime);
+      },
+      open: () =>
+        this.#backend.OpenTerminalWindow(panes.map((pane) => pane.sessionId), shape),
+      reclaim: async () => {
+        // Every pane is tried: one refused claim must not strand the rest.
+        let failure: unknown = null;
+        for (const pane of panes) {
+          try {
+            await this.#claimSessionIntoPane(pane.runtime, pane.sessionId);
+          } catch (error) {
+            failure = failure ?? error;
+            this.#setState(pane.runtime, "failed", messageFrom(error));
+          }
+        }
+        if (failure !== null) throw failure;
+      },
     });
     if (this.#disposed) return;
     if (result.outcome === "popped-out") {
-      this.#poppedOut.set(sessionId, runtime.paneId);
-      this.#setState(runtime, "closed", poppedOutPaneNotice);
+      for (const pane of panes) {
+        this.#poppedOut.set(pane.sessionId, pane.paneId);
+        this.#setState(pane.runtime, "closed", poppedOutPaneNotice);
+      }
       // The control that was just pressed is now hidden, so focus lands on the
       // pane's tab rather than falling back to the document.
       this.#focusWorkspaceSurvivor();
       return;
     }
     this.#showError(result.error);
-    if (result.outcome === "unowned") {
-      this.#setState(runtime, "failed", messageFrom(result.error));
-    }
   }
 
   /**
@@ -1215,24 +1245,31 @@ class TerminalDock {
    * is closed cleanly rather than orphaned.
    */
   #popTerminalBackIn(payload: TerminalWindowClosed): void {
-    const sessionId = payload?.sessionId;
-    if (!sessionId || this.#disposed) return;
+    if (this.#disposed) return;
     if (
       this.#workspaceGeneration !== 0 &&
-      payload.generation !== undefined &&
+      payload?.generation !== undefined &&
       payload.generation !== this.#workspaceGeneration
     ) return;
-    const paneId = this.#poppedOut.get(sessionId);
-    if (paneId === undefined) return;
-    this.#poppedOut.delete(sessionId);
-    const runtime = this.#runtimes.get(paneId);
-    if (!runtime || runtime.session || runtime.state !== "closed" || runtime.busy) {
-      void this.#backend.CloseTerminal(sessionId, false).catch(() => {});
-      return;
+    for (const sessionId of payload?.sessions ?? []) {
+      if (!sessionId) continue;
+      const paneId = this.#poppedOut.get(sessionId);
+      if (paneId === undefined) {
+        // A session the window minted itself has no pane holding its place;
+        // it ends with the window rather than leaking without a renderer.
+        void this.#backend.CloseTerminal(sessionId, false).catch(() => {});
+        continue;
+      }
+      this.#poppedOut.delete(sessionId);
+      const runtime = this.#runtimes.get(paneId);
+      if (!runtime || runtime.session || runtime.state !== "closed" || runtime.busy) {
+        void this.#backend.CloseTerminal(sessionId, false).catch(() => {});
+        continue;
+      }
+      void this.#claimSessionIntoPane(runtime, sessionId).catch((error) => {
+        if (!this.#disposed) this.#showError(error);
+      });
     }
-    void this.#claimSessionIntoPane(runtime, sessionId).catch((error) => {
-      if (!this.#disposed) this.#showError(error);
-    });
   }
 
   async #closeTerminal(runtime: DockPaneRuntime): Promise<void> {
@@ -2533,9 +2570,13 @@ class TerminalDock {
     )?.association;
     const linked = this.#paneIsLinked(runtime, activeAssociation);
     const popOut = terminalPopOutControl({
-      paneCount: this.#activeTabPaneIds().length,
-      state: runtime.state,
-      hasSession: runtime.session !== null,
+      panes: this.#activeTabPaneIds().map((paneId) => {
+        const paneRuntime = this.#runtimes.get(paneId);
+        return {
+          state: paneRuntime?.state ?? "closed",
+          hasSession: Boolean(paneRuntime?.session),
+        };
+      }),
       busy: runtime.busy,
       closing: runtime.closing,
     });
