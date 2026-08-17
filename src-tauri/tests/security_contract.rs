@@ -253,11 +253,22 @@ fn tauri_uses_the_existing_frontend_and_exact_window_contract() {
         .find("let _ = window.show();")
         .expect("setup must show the hidden window");
     let runtime = source
-        .find("let runtime = production_desktop_runtime(")
+        .find("production_desktop_runtime(")
         .expect("setup must build the desktop runtime");
     // The show is unconditional: it precedes every fallible step of setup, so no
     // `?` can leave a permanently invisible window.
     assert!(restore < show && show < runtime);
+    // A setup error must never unwind out of the platform's nounwind launch
+    // callback — tauri turns a setup Err into exactly that, an abort() with no
+    // message anywhere. Failures are recorded and said out loud instead.
+    let failure = source
+        .find("Err(error) => fail_startup(app.handle(), &error)")
+        .expect("setup must route failures through fail_startup, never Err");
+    assert!(runtime < failure);
+    assert!(
+        source.contains("record_startup_failure(&info.to_string())"),
+        "a startup panic must leave evidence before the default hook"
+    );
     assert_eq!(config["bundle"]["macOS"]["minimumSystemVersion"], "12.0");
     assert_eq!(
         config["bundle"]["macOS"]["entitlements"],
