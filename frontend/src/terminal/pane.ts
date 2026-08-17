@@ -263,7 +263,10 @@ interface TerminalBackend {
   ): Promise<TerminalWritebackResult>;
   ResizeTerminal(sessionID: string, rows: number, columns: number): Promise<void>;
   CloseTerminal(sessionID: string, force: boolean): Promise<void>;
-  OpenTerminalWindow(sessionID: string): Promise<{ label: string }>;
+  OpenTerminalWindow(
+    sessions: readonly string[],
+    shape: WorkspaceTab,
+  ): Promise<{ label: string }>;
   ClaimTerminalStream(
     sessionID: string,
     fromSequence: number,
@@ -1240,9 +1243,52 @@ class TerminalDock {
   }
 
   /**
-   * A terminal window closed and handed its session back (§6). The pane that
-   * held its place takes it; if that pane is gone or already busy, the session
-   * is closed cleanly rather than orphaned.
+   * Splits resized inside the terminal window come back by position: the
+   * child can only resize, never restructure, so the returned tree pairs
+   * one-to-one with the held tab's and each pair's ratio is applied by the
+   * held split's own id. Anything malformed is simply not applied.
+   */
+  #applyReturnedShape(payload: TerminalWindowClosed): void {
+    const returnedRoot = (payload?.shape as { root?: unknown } | undefined)?.root;
+    if (!returnedRoot) return;
+    const heldPaneId = (payload?.sessions ?? [])
+      .map((sessionId) => this.#poppedOut.get(sessionId))
+      .find((paneId) => paneId !== undefined);
+    if (heldPaneId === undefined) return;
+    const workspace = this.#tabController.workspace;
+    const tab = workspace.tabs.find((candidate) =>
+      paneIds(candidate.root).includes(heldPaneId)
+    );
+    if (!tab) return;
+    const resizes: { splitId: string; ratio: number }[] = [];
+    const collect = (mine: Workspace["tabs"][number]["root"], theirs: unknown): void => {
+      if (mine.kind !== "split") return;
+      const returned = theirs as { kind?: string; ratio?: number; first?: unknown; second?: unknown };
+      if (returned?.kind !== "split") return;
+      const ratio = Number(returned.ratio);
+      if (Number.isFinite(ratio) && ratio !== mine.ratio) {
+        resizes.push({ splitId: mine.splitId, ratio });
+      }
+      collect(mine.first, returned.first);
+      collect(mine.second, returned.second);
+    };
+    collect(tab.root, returnedRoot);
+    for (const resize of resizes) {
+      this.#tabController.dispatch({
+        type: "resize-split",
+        tabId: tab.id,
+        splitId: resize.splitId,
+        ratio: resize.ratio,
+      });
+    }
+  }
+
+  /**
+   * A terminal window closed and handed its tab back (§6). The panes that
+   * held its place take the sessions — and the shape comes back as the
+   * window last had it, so a split resized there stays resized here. A pane
+   * that is gone or already busy closes its session cleanly rather than
+   * orphaning it.
    */
   #popTerminalBackIn(payload: TerminalWindowClosed): void {
     if (this.#disposed) return;
@@ -1251,6 +1297,7 @@ class TerminalDock {
       payload?.generation !== undefined &&
       payload.generation !== this.#workspaceGeneration
     ) return;
+    this.#applyReturnedShape(payload);
     for (const sessionId of payload?.sessions ?? []) {
       if (!sessionId) continue;
       const paneId = this.#poppedOut.get(sessionId);
