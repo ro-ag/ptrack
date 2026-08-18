@@ -391,6 +391,7 @@ impl ProjectStore {
                 order,
                 created_at: now,
                 updated_at: now,
+                hold_reason: None,
             };
             typed::put(transaction, RecordKey::Id(id), &value)?;
             Ok(value)
@@ -436,6 +437,7 @@ impl ProjectStore {
                 order: 0,
                 created_at: now,
                 updated_at: now,
+                hold_reason: None,
             };
             typed::put(transaction, RecordKey::Id(id), &plan)?;
             before_activate()?;
@@ -458,6 +460,27 @@ impl ProjectStore {
         self.mutate_id::<Plan>(id, |value, now| {
             value.status = status;
             value.updated_at = now;
+        })
+    }
+
+    /// Holds a plan with a reason, or resumes it with `None`.
+    ///
+    /// A plan that is done or archived cannot be put on hold; resuming is
+    /// always allowed so a mistakenly held record can be cleared.
+    pub fn set_plan_hold(&self, id: u64, reason: Option<String>) -> StoreResult<()> {
+        let now = self.clock.now_local();
+        self.write(|transaction| {
+            let mut plan = required_write::<Plan>(transaction, RecordKey::Id(id))?;
+            if reason.is_some() && plan.status != PlanStatus::Active {
+                return Err(StoreError::InvalidHold(format!(
+                    "plan #{id} is {} and cannot be put on hold",
+                    plan.status.as_str()
+                )));
+            }
+            plan.hold_reason = reason;
+            plan.updated_at = now;
+            typed::put(transaction, RecordKey::Id(id), &plan)?;
+            Ok(())
         })
     }
 
@@ -501,6 +524,7 @@ impl ProjectStore {
                 order,
                 created_at: now,
                 updated_at: now,
+                hold_reason: None,
             };
             typed::put(transaction, RecordKey::Id(id), &value)?;
             Ok(value)
@@ -552,6 +576,7 @@ impl ProjectStore {
                 order: 0,
                 created_at: now,
                 updated_at: now,
+                hold_reason: None,
             };
             typed::put(transaction, RecordKey::Id(id), &task)?;
             Ok(task)
@@ -659,6 +684,26 @@ impl ProjectStore {
         })
     }
 
+    /// Holds a task with a reason, or resumes it with `None`.
+    ///
+    /// A done task cannot be put on hold; resuming is always allowed so a
+    /// mistakenly held record can be cleared.
+    pub fn set_task_hold(&self, id: u64, reason: Option<String>) -> StoreResult<()> {
+        let now = self.clock.now_local();
+        self.write(|transaction| {
+            let mut task = required_write::<Task>(transaction, RecordKey::Id(id))?;
+            if reason.is_some() && task.status == TaskStatus::Done {
+                return Err(StoreError::InvalidHold(format!(
+                    "task #{id} is done and cannot be put on hold"
+                )));
+            }
+            task.hold_reason = reason;
+            task.updated_at = now;
+            typed::put(transaction, RecordKey::Id(id), &task)?;
+            Ok(())
+        })
+    }
+
     pub fn set_task_title(&self, id: u64, title: impl Into<String>) -> StoreResult<()> {
         let title = title.into();
         self.mutate_id::<Task>(id, |value, now| {
@@ -698,6 +743,7 @@ impl ProjectStore {
                 order,
                 created_at: task.created_at,
                 updated_at: now,
+                hold_reason: None,
             };
             typed::put(transaction, RecordKey::Id(plan_id), &plan)?;
             for mut note in typed::scan_write::<Note>(transaction)? {

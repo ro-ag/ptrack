@@ -136,6 +136,7 @@ fn record(collection: Collection, key: OwnedRecordKey, payload: &[u8]) -> Import
                 order: 0,
                 created_at: Timestamp::Zero,
                 updated_at: Timestamp::Zero,
+                hold_reason: None,
             }))
             .unwrap()
         }

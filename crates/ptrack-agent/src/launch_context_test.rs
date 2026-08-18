@@ -108,6 +108,7 @@ fn plan(id: u64) -> Plan {
         order: 1,
         created_at: CoreTimestamp::Zero,
         updated_at: CoreTimestamp::Zero,
+        hold_reason: None,
     }
 }
 
@@ -120,6 +121,7 @@ fn task(id: u64, plan_id: u64) -> Task {
         order: 1,
         created_at: CoreTimestamp::Zero,
         updated_at: CoreTimestamp::Zero,
+        hold_reason: None,
     }
 }
 

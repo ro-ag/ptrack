@@ -1,6 +1,6 @@
 use crate::{
-    CapabilityAudit, CapabilityKind, Digest32, MemoryKind, Meta, NativeRecord, Note, NoteTarget,
-    Timestamp, Validate,
+    CapabilityAudit, CapabilityKind, Digest32, MAX_HOLD_REASON_BYTES, MemoryKind, Meta,
+    NativeRecord, Note, NoteTarget, PlanStatus, TaskStatus, Timestamp, Validate,
 };
 
 use super::codec_test::valid_capability;
@@ -161,4 +161,41 @@ fn failed_audit_rejects_non_allowlisted_error_text() {
     assert!(audit.validate().is_err());
     audit.error_class = "timeout".to_owned();
     assert!(audit.validate().is_ok());
+}
+
+#[test]
+fn hold_reason_is_bounded_single_line_text_when_set() {
+    let mut plan = super::test_support::plan(1, "p", PlanStatus::Active, 0, 0);
+    assert!(plan.validate().is_ok());
+
+    for blank in ["", "   ", "\t "] {
+        plan.hold_reason = Some(blank.to_owned());
+        assert_eq!(
+            plan.validate().expect_err("blank hold reason").reason(),
+            "must be nonblank when set"
+        );
+    }
+
+    plan.hold_reason = Some("x".repeat(MAX_HOLD_REASON_BYTES));
+    assert!(plan.validate().is_ok());
+    plan.hold_reason = Some("x".repeat(MAX_HOLD_REASON_BYTES + 1));
+    assert_eq!(
+        plan.validate().expect_err("oversized hold reason").reason(),
+        "exceeds the hold reason bound"
+    );
+
+    for control in ["a\nb", "a\rb", "a\u{0}b"] {
+        plan.hold_reason = Some(control.to_owned());
+        assert_eq!(
+            plan.validate().expect_err("control character").field(),
+            "plan.hold_reason"
+        );
+    }
+
+    let mut task = super::test_support::task(1, 2, "t", TaskStatus::Todo, 0);
+    task.hold_reason = Some(" ".to_owned());
+    assert_eq!(
+        task.validate().expect_err("blank hold reason").field(),
+        "task.hold_reason"
+    );
 }

@@ -155,6 +155,9 @@ pub enum StoreError {
     StaleWorkspaceGeneration { expected: u64, active: u64 },
     /// A first-run plan or task request is invalid or conflicts with durable state.
     InvalidFirstRun(String),
+    /// A hold request targets a plan or task that has already reached a
+    /// terminal state. Resuming is always allowed; only holding is refused.
+    InvalidHold(String),
     /// A stored record envelope was invalid.
     Envelope(EnvelopeError),
     /// A filesystem operation failed.
@@ -330,6 +333,9 @@ impl fmt::Display for StoreError {
             ),
             Self::InvalidFirstRun(detail) => {
                 write!(formatter, "invalid first-run mutation: {detail}")
+            }
+            Self::InvalidHold(detail) => {
+                write!(formatter, "invalid hold mutation: {detail}")
             }
             Self::Envelope(error) => error.fmt(formatter),
             Self::Io(error) => error.fmt(formatter),

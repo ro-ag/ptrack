@@ -46,6 +46,7 @@ pub(crate) fn plan(
         order,
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
+        hold_reason: None,
     }
 }
 
@@ -58,6 +59,7 @@ pub(crate) fn task(id: u64, plan_id: u64, title: &str, status: TaskStatus, order
         order,
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
+        hold_reason: None,
     }
 }
 

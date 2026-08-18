@@ -143,6 +143,7 @@ fn populated_model() -> Model {
             order: 1,
             created_at: stamp(1_700_000_000),
             updated_at: stamp(1_700_000_100),
+            hold_reason: None,
         }],
         vec![Task {
             id: 3,
@@ -152,6 +153,7 @@ fn populated_model() -> Model {
             order: 1,
             created_at: stamp(1_700_000_000),
             updated_at: stamp(1_700_000_100),
+            hold_reason: None,
         }],
         vec![Issue {
             id: 9,
@@ -271,6 +273,7 @@ fn list_window_centers_cursor_truncates_and_fills_selection_row() {
             order: i64::try_from(id).unwrap(),
             created_at: Timestamp::Zero,
             updated_at: Timestamp::Zero,
+            hold_reason: None,
         })
         .collect();
     value.plan_cursor = 12;
@@ -504,6 +507,7 @@ fn inactive_plan_rows_reserve_the_active_star_column() {
         order: 2,
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
+        hold_reason: None,
     });
     value.focus = crate::model::PaneFocus::Tasks;
 

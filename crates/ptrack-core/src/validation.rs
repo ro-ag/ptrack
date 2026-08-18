@@ -19,6 +19,15 @@ const MAX_AUDIT_DURATION_MILLIS: i64 = 24 * 60 * 60 * 1_000;
 const MAX_AUDIT_BYTES: i64 = 1 << 40;
 const MAX_AUDIT_TARGET_BYTES: usize = 256;
 
+/// Maximum accepted UTF-8 bytes in a plan or task hold reason.
+///
+/// A hold reason is plain single-line prose meant for a list column and a
+/// one-line status banner, not a place to park a document. The bound is a
+/// deliberate new limit rather than a value borrowed from another field: it is
+/// generous enough for a sentence explaining a blocker and small enough that a
+/// hold reason can never dominate a record payload.
+pub const MAX_HOLD_REASON_BYTES: usize = 1024;
+
 /// A stable field-level reason a native record cannot be trusted.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidationError {
@@ -86,6 +95,29 @@ fn require_nonempty(value: &str, field: &'static str) -> Result<(), ValidationEr
     }
 }
 
+/// Rejects a set hold reason that is blank, oversized, or not single-line text.
+fn validate_hold_reason(
+    value: Option<&String>,
+    field: &'static str,
+) -> Result<(), ValidationError> {
+    let Some(reason) = value else {
+        return Ok(());
+    };
+    if reason.trim().is_empty() {
+        return Err(ValidationError::new(field, "must be nonblank when set"));
+    }
+    if reason.len() > MAX_HOLD_REASON_BYTES {
+        return Err(ValidationError::new(field, "exceeds the hold reason bound"));
+    }
+    if reason.chars().any(char::is_control) {
+        return Err(ValidationError::new(
+            field,
+            "must be single-line text without control characters",
+        ));
+    }
+    Ok(())
+}
+
 impl Validate for Timestamp {
     fn validate(&self) -> Result<(), ValidationError> {
         if let Self::Fixed {
@@ -143,6 +175,7 @@ impl Validate for Plan {
     fn validate(&self) -> Result<(), ValidationError> {
         require_id(self.id, "plan.id")?;
         require_nonnegative(self.order, "plan.order")?;
+        validate_hold_reason(self.hold_reason.as_ref(), "plan.hold_reason")?;
         validate_times(&[self.created_at, self.updated_at])
     }
 }
@@ -152,6 +185,7 @@ impl Validate for Task {
         require_id(self.id, "task.id")?;
         require_id(self.plan_id, "task.plan_id")?;
         require_nonnegative(self.order, "task.order")?;
+        validate_hold_reason(self.hold_reason.as_ref(), "task.hold_reason")?;
         validate_times(&[self.created_at, self.updated_at])
     }
 }

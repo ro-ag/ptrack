@@ -311,6 +311,8 @@ pub struct Plan {
     pub order: i64,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+    /// Single-line reason this plan is on hold, or `None` when it is running.
+    pub hold_reason: Option<String>,
 }
 
 impl Plan {
@@ -356,6 +358,8 @@ pub struct Task {
     pub order: i64,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+    /// Single-line reason this task is on hold, or `None` when it is running.
+    pub hold_reason: Option<String>,
 }
 
 impl Task {
