@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-08-18
+
 ### Added
 - Plans and tasks go on hold with a reason, independently of status.
   `ptrack plan hold|resume` and `ptrack task hold|resume` pause work that is
@@ -657,7 +659,8 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
-[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.25.0...HEAD
+[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.26.0...HEAD
+[0.26.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.26.0
 [0.25.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.25.0
 [0.24.4]: https://github.com/ro-ag/ptrack/releases/tag/v0.24.4
 [0.24.3]: https://github.com/ro-ag/ptrack/releases/tag/v0.24.3
