@@ -17,8 +17,8 @@ Releases publish via GitHub Actions on tag push only
 
 ## Prerequisites
 
-- Rust toolchain matching `rust-toolchain`/CI (`rustc`, `cargo`, `clippy`,
-  `rustfmt`) on `PATH`.
+- Rust toolchain matching the version pinned in CI workflows (currently
+  1.89.0) (`rustc`, `cargo`, `clippy`, `rustfmt`) on `PATH`.
 - Node.js + npm for `frontend/`.
 - `python3` (stdlib only; no extra packages required).
 - Optional, macOS packaging rehearsal only: a `SIGN_IDENTITY` codesign
@@ -170,7 +170,7 @@ Use one record per operating-system and architecture combination:
 
 ```text
 date_utc: YYYY-MM-DD
-commit: <git oid>
+ptrack_commit: <git oid>
 os: macos | windows | linux
 os_version: <public version>
 architecture: amd64 | arm64
