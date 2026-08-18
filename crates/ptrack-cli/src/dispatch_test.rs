@@ -431,6 +431,29 @@ fn plan_use_claims_a_plan_and_release_gives_it_back() {
 }
 
 #[test]
+fn plan_show_json_carries_null_claim_and_omits_the_name_when_unclaimed() {
+    let mut application = seeded();
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "plan", "show", "1", "--json"]);
+    assert!(stdout.contains("\"claimed_by\": null"));
+    assert!(!stdout.contains("claimed_by_name"));
+}
+
+#[test]
+fn plan_show_json_carries_the_claim_owner_and_its_resolved_name_when_claimed() {
+    let mut application = seeded();
+    application.snapshot.plans[0].claim_owner = Some("01hzvyekq3s7m8w9x0abcdefgh".to_owned());
+    application
+        .snapshot
+        .meta
+        .actors
+        .push(("01hzvyekq3s7m8w9x0abcdefgh".to_owned(), "Alice".to_owned()));
+
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "plan", "show", "1", "--json"]);
+    assert!(stdout.contains("\"claimed_by\": \"01hzvyekq3s7m8w9x0abcdefgh\""));
+    assert!(stdout.contains("\"claimed_by_name\": \"Alice\""));
+}
+
+#[test]
 fn help_plan_release_renders() {
     let (_, stdout, _) = invoke(&["ptrack", "help", "plan", "release"]);
     assert!(stdout.starts_with("Release your claim on a plan"));

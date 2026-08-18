@@ -217,6 +217,21 @@ fn claim_owner_resolves_to_actor_name_in_plan_view_and_markdown() {
     );
     assert_eq!(view.plan.claimed_by_name.as_deref(), Some("Alice"));
     assert!(view.markdown().contains("[claimed: Alice]"));
+
+    // Every text surface that renders a `PlanRef` carries the marker, not
+    // just the plan's own show view.
+    assert!(
+        show_task(&claimed, 1)
+            .expect("task exists")
+            .markdown()
+            .contains("Plan: #1 Build CLI [claimed: Alice]\n")
+    );
+    assert!(
+        show_milestone(&claimed, 1)
+            .expect("milestone exists")
+            .markdown()
+            .contains("[claimed: Alice]\n")
+    );
 }
 
 #[test]

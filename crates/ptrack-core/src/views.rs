@@ -203,10 +203,15 @@ impl TaskShow {
         if let Some(plan) = &self.plan {
             writeln!(
                 &mut output,
-                "Plan: #{} {}{}\n",
+                "Plan: #{} {}{}{}\n",
                 plan.id,
                 plan.title,
-                hold_marker(plan.hold_reason.as_deref())
+                hold_marker(plan.hold_reason.as_deref()),
+                claim_marker(
+                    plan.claimed_by_name
+                        .as_deref()
+                        .or(plan.claimed_by.as_deref())
+                )
             )
             .expect("writing to String cannot fail");
         }

@@ -372,8 +372,9 @@ pub fn hold_marker(reason: Option<&str>) -> String {
 
 /// Renders the shared claim marker, or nothing when the plan is unclaimed.
 ///
-/// Every text surface that shows a claimed plan appends this after the hold
-/// marker, so a claim looks the same everywhere.
+/// Every text surface that renders a `PlanRef` (plan show, task show,
+/// milestone show, search) appends this after the hold marker, so a claim
+/// looks the same everywhere a plan reference appears.
 #[must_use]
 pub fn claim_marker(owner: Option<&str>) -> String {
     owner.map_or_else(String::new, |owner| format!(" [claimed: {owner}]"))
