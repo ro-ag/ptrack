@@ -1491,6 +1491,11 @@ impl ProductionDesktopAuthority {
             });
         }
         let global_homes = global_home_exemptions(&self.global_home);
+        // A home directory — p-track's or the user's own — is refused by
+        // name rather than read as a foreign project store.
+        if let Some(refusal) = home_project_refusal(&canonical, &global_homes) {
+            return Ok(Self::recovery_validation(canonical_text, refusal));
+        }
         for (depth, ancestor) in canonical.ancestors().enumerate() {
             let storage = ancestor.join(".ptrack");
             // Depth 0 is the selected root itself, which never gets the exemption:
@@ -2848,11 +2853,35 @@ fn new_bootstrap_plan(
     })
 }
 
+/// Why a root can never be a project, or `None` for an ordinary candidate.
+///
+/// Two roots are refused by name rather than left to downstream checks, which
+/// would misreport them as recovery cases or colliding database destinations:
+/// a root whose `.ptrack` IS the global home ("`ptrack init` in `~`"), and the
+/// OS user home itself — even when `PTRACK_HOME` points somewhere else, a home
+/// directory initialized as a project would sweep every repository under it
+/// into one workspace.
+fn home_project_refusal(root: &Path, global_homes: &[PathBuf]) -> Option<&'static str> {
+    if is_global_home(&root.join(".ptrack"), global_homes) {
+        return Some("the p-track home directory cannot be a project");
+    }
+    let user_home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .and_then(|home| fs::canonicalize(PathBuf::from(home)).ok());
+    if user_home.is_some_and(|home_dir| same_path(root, &home_dir)) {
+        return Some("the user home directory cannot be a project");
+    }
+    None
+}
+
 fn validate_new_bootstrap_target(
     home: &Path,
     root: &Path,
     previous_marker: Option<&ActiveGeneration>,
 ) -> AppResult<()> {
+    if let Some(refusal) = home_project_refusal(root, &global_home_exemptions(home)) {
+        return Err(AppError::Message(refusal.to_owned()));
+    }
     if previous_marker.is_none() && path_is_present(&home.join("global.db"))? {
         return Err(recovery(
             "legacy global.db requires the offline migration workflow",
