@@ -1,25 +1,31 @@
 use std::path::{Component, Path, PathBuf};
 
-use ptrack_core::{NativeRecord, RecordKind, decode_record, encode_record};
+use ptrack_core::{NativeRecord, RecordKind, decode_record_at_schema, encode_record_at_schema};
 
-use crate::{
-    Collection, LEGACY_CODEC_RAW, NATIVE_CODEC, NATIVE_PAYLOAD_SCHEMA, OwnedRecordKey,
-    RecordEnvelope,
-};
+use crate::{Collection, LEGACY_CODEC_RAW, OwnedRecordKey, RecordEnvelope};
 
+/// Validates one record against its collection's contract.
+///
+/// This runs on every stored record when a database is opened, on every
+/// imported record, and on every write. It therefore accepts the whole payload
+/// schema range the build still understands rather than only the schema new
+/// writes are stamped with — pinning the current schema here would refuse every
+/// database written before the last bump.
 pub(crate) fn record(
     collection: Collection,
     key: &OwnedRecordKey,
     envelope: &RecordEnvelope,
 ) -> Result<(), String> {
-    if envelope.codec() != collection.import_codec()
-        || envelope.payload_schema() != collection.import_payload_schema()
+    let accepted = collection.accepted_payload_schemas();
+    if envelope.codec() != collection.accepted_codec()
+        || !accepted.contains(&envelope.payload_schema())
     {
         return Err(format!(
-            "collection {} requires codec {} schema {}, found codec {} schema {}",
+            "collection {} requires codec {} schema {}..={}, found codec {} schema {}",
             collection.name(),
-            collection.import_codec(),
-            collection.import_payload_schema(),
+            collection.accepted_codec(),
+            accepted.start(),
+            accepted.end(),
             envelope.codec(),
             envelope.payload_schema()
         ));
@@ -31,19 +37,20 @@ pub(crate) fn record(
     }
 }
 
+/// Decodes and canonicality-checks a native record at the schema its envelope
+/// declares, never at the current one, so an older record is judged against the
+/// layout it was actually written with.
 fn validate_native(
     collection: Collection,
     key: &OwnedRecordKey,
     envelope: &RecordEnvelope,
 ) -> Result<(), String> {
-    if envelope.codec() != NATIVE_CODEC || envelope.payload_schema() != NATIVE_PAYLOAD_SCHEMA {
-        return Err("native record has the wrong codec or payload schema".to_owned());
-    }
+    let schema = envelope.payload_schema();
     let kind = record_kind(collection)
         .ok_or_else(|| format!("collection {} has no native record kind", collection.name()))?;
-    let decoded = decode_record(kind, envelope.payload())
+    let decoded = decode_record_at_schema(kind, schema, envelope.payload())
         .map_err(|error| format!("invalid native {} record: {error}", collection.name()))?;
-    let canonical = encode_record(&decoded).map_err(|error| {
+    let canonical = encode_record_at_schema(&decoded, schema).map_err(|error| {
         format!(
             "cannot re-encode native {} record: {error}",
             collection.name()

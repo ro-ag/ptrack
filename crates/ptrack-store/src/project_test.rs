@@ -1241,6 +1241,134 @@ fn holds_round_trip_and_are_refused_on_terminal_records() {
     assert_eq!(store.plan(plan.id).unwrap().hold_reason, None);
 }
 
+/// A status transition into a terminal state must clear the hold, because
+/// `set_*_hold` refuses to create the done-and-held record that would otherwise
+/// persist.
+#[test]
+fn terminal_status_transitions_clear_the_hold_reason() {
+    let temp = Temp::new();
+    let path = temp.path("hold-clear.redb");
+    let expected = binding(&path, StoreKind::Project, "project-hold-clear");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+    let plan = store.add_plan("plan", 0).unwrap();
+    let task = store.add_task(plan.id, "task").unwrap();
+
+    // A task keeps its hold while it stays open, in either direction.
+    store
+        .set_task_hold(task.id, Some("blocked upstream".to_owned()))
+        .unwrap();
+    for status in [TaskStatus::Doing, TaskStatus::Blocked, TaskStatus::Todo] {
+        store.set_task_status(task.id, status).unwrap();
+        assert_eq!(
+            store.task(task.id).unwrap().hold_reason.as_deref(),
+            Some("blocked upstream"),
+            "{status:?}"
+        );
+    }
+    store.set_task_status(task.id, TaskStatus::Done).unwrap();
+    assert_eq!(store.task(task.id).unwrap().hold_reason, None);
+
+    // The compare-and-set path has the same hole and the same fix.
+    store.set_task_status(task.id, TaskStatus::Todo).unwrap();
+    store
+        .set_task_hold(task.id, Some("blocked upstream".to_owned()))
+        .unwrap();
+    let held = store.task(task.id).unwrap();
+    let updated = store
+        .compare_and_set_task_status(
+            task.id,
+            plan.id,
+            TaskStatus::Todo,
+            held.updated_at,
+            TaskStatus::Done,
+        )
+        .unwrap();
+    assert_eq!(updated.hold_reason, None);
+    assert_eq!(store.task(task.id).unwrap().hold_reason, None);
+
+    for status in [PlanStatus::Done, PlanStatus::Archived] {
+        store.set_plan_status(plan.id, PlanStatus::Active).unwrap();
+        store
+            .set_plan_hold(plan.id, Some("waiting on review".to_owned()))
+            .unwrap();
+        store.set_plan_status(plan.id, status).unwrap();
+        assert_eq!(store.plan(plan.id).unwrap().hold_reason, None, "{status:?}");
+    }
+}
+
+/// The regression the reviewer caught: opening an existing database
+/// re-validates every stored record, so a build that pinned the current payload
+/// schema there refused every database written before the bump.
+#[test]
+fn a_database_of_schema_1_records_opens_reads_and_upgrades_on_write() {
+    let temp = Temp::new();
+    let path = temp.path("schema-1-database.redb");
+    let expected = binding(&path, StoreKind::Project, "project-schema-1");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+    let plan = store.add_plan("legacy plan", 0).unwrap();
+    let task = store.add_task(plan.id, "legacy task").unwrap();
+
+    // Rewrite both records exactly as a released pre-hold build stored them:
+    // the current layout minus the trailing hold-reason option byte, under
+    // payload schema 1.
+    store
+        .write(|transaction| {
+            let plan_payload = encode_record(&NativeRecord::Plan(plan.clone())).unwrap();
+            let task_payload = encode_record(&NativeRecord::Task(task.clone())).unwrap();
+            for (collection, id, payload) in [
+                (Collection::Plans, plan.id, plan_payload),
+                (Collection::Tasks, task.id, task_payload),
+            ] {
+                let mut payload = payload;
+                assert_eq!(payload.pop(), Some(0));
+                let legacy = RecordEnvelope::new(NATIVE_CODEC, MIN_NATIVE_PAYLOAD_SCHEMA, payload);
+                transaction.put(collection, RecordKey::Id(id), &legacy)?;
+            }
+            Ok(())
+        })
+        .unwrap();
+    drop(store);
+
+    let expected = binding(&path, StoreKind::Project, "project-schema-1");
+    let store = ProjectStore::open_existing(&path, &expected, "test").unwrap();
+    assert_eq!(store.plan(plan.id).unwrap(), plan);
+    assert_eq!(store.task(task.id).unwrap(), task);
+    assert_eq!(stored_schema(&store, Collection::Plans, plan.id), 1);
+    assert_eq!(stored_schema(&store, Collection::Tasks, task.id), 1);
+
+    // Any write upgrades that one record in place; nothing else is rewritten.
+    store
+        .set_plan_hold(plan.id, Some("waiting on review".to_owned()))
+        .unwrap();
+    assert_eq!(
+        stored_schema(&store, Collection::Plans, plan.id),
+        NATIVE_PAYLOAD_SCHEMA
+    );
+    assert_eq!(stored_schema(&store, Collection::Tasks, task.id), 1);
+
+    // The half-upgraded database still opens, and the untouched schema-1 task
+    // still reads.
+    drop(store);
+    let expected = binding(&path, StoreKind::Project, "project-schema-1");
+    let store = ProjectStore::open_existing(&path, &expected, "test").unwrap();
+    assert_eq!(
+        store.plan(plan.id).unwrap().hold_reason.as_deref(),
+        Some("waiting on review")
+    );
+    assert_eq!(store.task(task.id).unwrap(), task);
+}
+
+fn stored_schema(store: &ProjectStore, collection: Collection, id: u64) -> u32 {
+    store
+        .read(|transaction| {
+            Ok(transaction
+                .get(collection, RecordKey::Id(id))?
+                .expect("record exists")
+                .payload_schema())
+        })
+        .unwrap()
+}
+
 #[test]
 fn schema_1_records_read_unheld_upgrade_on_write_and_future_schemas_fail_closed() {
     let plan = Plan {
@@ -1282,14 +1410,31 @@ fn schema_1_records_read_unheld_upgrade_on_write_and_future_schemas_fail_closed(
         "expected a schema error, got {error}"
     );
 
-    // Writes can never regress the stored schema.
+    // One acceptance rule governs reads, opens, imports, and writes, so a
+    // schema-1 envelope can be stored as well as read. Nothing in the
+    // application writes one — `typed::encode` always stamps the current
+    // schema — but import replays archives byte for byte and must not be
+    // refused for carrying the schema its exporter wrote.
     let temp = Temp::new();
     let path = temp.path("lazy-upgrade.redb");
     let expected = binding(&path, StoreKind::Project, "project-upgrade");
     let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
-    let refused = store
+    store
         .write(|transaction| {
             transaction.put(Collection::Plans, RecordKey::Id(plan.id), &legacy)?;
+            Ok(())
+        })
+        .unwrap();
+
+    // A schema outside the accepted range is still refused at the write gate.
+    let refused = store
+        .write(|transaction| {
+            let future = RecordEnvelope::new(
+                NATIVE_CODEC,
+                NATIVE_PAYLOAD_SCHEMA + 1,
+                legacy.payload().to_vec(),
+            );
+            transaction.put(Collection::Plans, RecordKey::Id(plan.id), &future)?;
             Ok(())
         })
         .unwrap_err();

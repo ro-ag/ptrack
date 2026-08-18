@@ -13,6 +13,12 @@ pub const LEGACY_CODEC_RAW: u16 = 2;
 pub const NATIVE_CODEC: u16 = 3;
 /// Current payload schema for canonical native ptrack positional records.
 pub const NATIVE_PAYLOAD_SCHEMA: u32 = 2;
+/// Oldest native payload schema this build still reads, imports, and stores.
+///
+/// Databases written before the plan and task hold reason carry schema-1
+/// records. They stay readable and upgrade lazily on their next write; nothing
+/// rewrites them on open.
+pub const MIN_NATIVE_PAYLOAD_SCHEMA: u32 = 1;
 
 /// A versioned wrapper around an opaque persisted model payload.
 ///

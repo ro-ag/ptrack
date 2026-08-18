@@ -459,6 +459,9 @@ impl ProjectStore {
     pub fn set_plan_status(&self, id: u64, status: PlanStatus) -> StoreResult<()> {
         self.mutate_id::<Plan>(id, |value, now| {
             value.status = status;
+            if !plan_status_can_hold(status) {
+                value.hold_reason = None;
+            }
             value.updated_at = now;
         })
     }
@@ -471,7 +474,7 @@ impl ProjectStore {
         let now = self.clock.now_local();
         self.write(|transaction| {
             let mut plan = required_write::<Plan>(transaction, RecordKey::Id(id))?;
-            if reason.is_some() && plan.status != PlanStatus::Active {
+            if reason.is_some() && !plan_status_can_hold(plan.status) {
                 return Err(StoreError::InvalidHold(format!(
                     "plan #{id} is {} and cannot be put on hold",
                     plan.status.as_str()
@@ -646,6 +649,9 @@ impl ProjectStore {
     pub fn set_task_status(&self, id: u64, status: TaskStatus) -> StoreResult<()> {
         self.mutate_id::<Task>(id, |value, now| {
             value.status = status;
+            if !task_status_can_hold(status) {
+                value.hold_reason = None;
+            }
             value.updated_at = now;
         })
     }
@@ -677,6 +683,9 @@ impl ProjectStore {
             }
             if task.status != status {
                 task.status = status;
+                if !task_status_can_hold(status) {
+                    task.hold_reason = None;
+                }
                 task.updated_at = now;
                 typed::put(transaction, RecordKey::Id(id), &task)?;
             }
@@ -692,7 +701,7 @@ impl ProjectStore {
         let now = self.clock.now_local();
         self.write(|transaction| {
             let mut task = required_write::<Task>(transaction, RecordKey::Id(id))?;
-            if reason.is_some() && task.status == TaskStatus::Done {
+            if reason.is_some() && !task_status_can_hold(task.status) {
                 return Err(StoreError::InvalidHold(format!(
                     "task #{id} is done and cannot be put on hold"
                 )));
@@ -1366,6 +1375,21 @@ fn first_run_title(title: String, kind: &str) -> StoreResult<String> {
         )));
     }
     Ok(title.to_owned())
+}
+
+/// Reports whether a plan in this status may carry a hold reason.
+///
+/// The hold mutation and every status transition share this predicate, so a
+/// transition can never leave behind the done-and-held state that
+/// [`ProjectStore::set_plan_hold`] refuses to create.
+fn plan_status_can_hold(status: PlanStatus) -> bool {
+    status == PlanStatus::Active
+}
+
+/// Reports whether a task in this status may carry a hold reason. A done task
+/// may not; see [`plan_status_can_hold`] for why both sides share the check.
+fn task_status_can_hold(status: TaskStatus) -> bool {
+    status != TaskStatus::Done
 }
 
 fn stamp_meta(meta: &mut Meta, now: Timestamp, writer_version: String) {

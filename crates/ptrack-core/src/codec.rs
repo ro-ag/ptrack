@@ -116,8 +116,29 @@ impl From<ValidationError> for CodecError {
 /// Returns an error when the record is semantically invalid or exceeds a
 /// defensive encoding bound.
 pub fn encode_record(record: &NativeRecord) -> Result<Vec<u8>, CodecError> {
+    encode_record_at_schema(record, NATIVE_PAYLOAD_SCHEMA)
+}
+
+/// Encodes one validated record as canonical bytes for a known payload schema.
+///
+/// Used to re-derive the canonical form of a stored record without upgrading
+/// it, so a schema-1 payload can be checked against the schema-1 layout it was
+/// written with.
+///
+/// # Errors
+///
+/// Returns an error for an unsupported payload schema, for a semantically
+/// invalid record, for a defensive encoding bound, and for a record that has no
+/// canonical form at the requested schema.
+pub fn encode_record_at_schema(
+    record: &NativeRecord,
+    payload_schema: u32,
+) -> Result<Vec<u8>, CodecError> {
+    if !(MIN_NATIVE_PAYLOAD_SCHEMA..=NATIVE_PAYLOAD_SCHEMA).contains(&payload_schema) {
+        return Err(CodecError::UnsupportedPayloadSchema(payload_schema));
+    }
     record.validate()?;
-    encode_unchecked(record, NATIVE_PAYLOAD_SCHEMA)
+    encode_unchecked(record, payload_schema)
 }
 
 /// Strictly decodes and validates one field-only payload written at the current
@@ -491,6 +512,13 @@ fn decode_meta(reader: &mut Reader<'_>) -> Result<Meta, CodecError> {
     })
 }
 
+/// The payload schema that introduced the plan and task hold reason.
+///
+/// This is deliberately an absolute schema number rather than a comparison
+/// against [`NATIVE_PAYLOAD_SCHEMA`]: the next bump to 3 must keep writing and
+/// reading the hold-reason option byte for schema-2 records.
+pub(crate) const HOLD_REASON_PAYLOAD_SCHEMA: u32 = 2;
+
 /// Writes the trailing hold reason, which exists only from payload schema 2.
 ///
 /// A schema-1 payload has no canonical form for a set hold reason, so encoding
@@ -500,14 +528,14 @@ fn encode_hold_reason(
     value: Option<&String>,
     payload_schema: u32,
 ) -> Result<(), CodecError> {
-    if payload_schema < NATIVE_PAYLOAD_SCHEMA {
-        return if value.is_some() {
-            Err(CodecError::NonCanonical)
-        } else {
-            Ok(())
-        };
+    if payload_schema >= HOLD_REASON_PAYLOAD_SCHEMA {
+        return writer.option(value, |writer, reason| writer.string(reason));
     }
-    writer.option(value, |writer, reason| writer.string(reason))
+    if value.is_some() {
+        Err(CodecError::NonCanonical)
+    } else {
+        Ok(())
+    }
 }
 
 /// Reads the trailing hold reason, absent before payload schema 2.
@@ -515,10 +543,11 @@ fn decode_hold_reason(
     reader: &mut Reader<'_>,
     payload_schema: u32,
 ) -> Result<Option<String>, CodecError> {
-    if payload_schema < NATIVE_PAYLOAD_SCHEMA {
-        return Ok(None);
+    if payload_schema >= HOLD_REASON_PAYLOAD_SCHEMA {
+        reader.option(Reader::string)
+    } else {
+        Ok(None)
     }
-    reader.option(Reader::string)
 }
 
 fn encode_plan(writer: &mut Writer, value: &Plan, payload_schema: u32) -> Result<(), CodecError> {

@@ -1,12 +1,13 @@
 #[cfg(test)]
 use std::cmp::Ordering;
 use std::fmt;
+use std::ops::RangeInclusive;
 
 use redb::TableDefinition;
 
 use crate::{
-    LEGACY_CODEC_GO_GOB, LEGACY_CODEC_RAW, NATIVE_CODEC, NATIVE_PAYLOAD_SCHEMA, StoreError,
-    StoreResult,
+    LEGACY_CODEC_GO_GOB, LEGACY_CODEC_RAW, MIN_NATIVE_PAYLOAD_SCHEMA, NATIVE_CODEC,
+    NATIVE_PAYLOAD_SCHEMA, StoreError, StoreResult,
 };
 
 pub(crate) const STORE_FAMILY: &[u8] = b"ptrack-redb";
@@ -234,9 +235,10 @@ impl Collection {
         }
     }
 
-    /// Returns the only codec accepted for this collection by a current import.
+    /// Returns the only codec accepted for this collection, on every path that
+    /// reads, opens, imports, or writes one of its records.
     #[must_use]
-    pub const fn import_codec(self) -> u16 {
+    pub const fn accepted_codec(self) -> u16 {
         match self {
             Self::GlobalConfig | Self::GlobalBackups => LEGACY_CODEC_RAW,
             Self::ProjectMeta
@@ -253,11 +255,24 @@ impl Collection {
         }
     }
 
-    /// Returns the only payload schema accepted by a current import.
+    /// Returns every payload schema this build accepts for the collection.
+    ///
+    /// Opening an existing database re-validates each stored record, so this
+    /// range is what decides whether a database written by an older build still
+    /// opens. It must therefore span every schema the decoder still understands,
+    /// not just the one new writes are stamped with.
+    ///
+    /// The native payload schema versions the whole positional record family at
+    /// once, not one record kind at a time: a bump that changes only the plan
+    /// and task layout still restamps every native collection, and the payloads
+    /// of the unchanged kinds are byte-identical across the range. Per-kind
+    /// counters would buy nothing and would have to be tracked forever, so the
+    /// two raw collections pin schema zero and every native collection shares
+    /// the one native range.
     #[must_use]
-    pub const fn import_payload_schema(self) -> u32 {
+    pub fn accepted_payload_schemas(self) -> RangeInclusive<u32> {
         match self {
-            Self::GlobalConfig | Self::GlobalBackups => 0,
+            Self::GlobalConfig | Self::GlobalBackups => 0..=0,
             Self::ProjectMeta
             | Self::Plans
             | Self::Tasks
@@ -268,7 +283,7 @@ impl Collection {
             | Self::Capabilities
             | Self::CapabilityAudits
             | Self::MemoryWritebacks
-            | Self::GlobalProjects => NATIVE_PAYLOAD_SCHEMA,
+            | Self::GlobalProjects => MIN_NATIVE_PAYLOAD_SCHEMA..=NATIVE_PAYLOAD_SCHEMA,
         }
     }
 

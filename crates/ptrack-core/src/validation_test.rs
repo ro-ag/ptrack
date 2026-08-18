@@ -184,12 +184,38 @@ fn hold_reason_is_bounded_single_line_text_when_set() {
         "exceeds the hold reason bound"
     );
 
-    for control in ["a\nb", "a\rb", "a\u{0}b"] {
+    for control in [
+        "a\nb",
+        "a\rb",
+        "a\u{0}b",
+        // Not `char::is_control`, but still line breaks and bidirectional
+        // overrides that can hide what a reason really says.
+        "a\u{2028}b",
+        "a\u{2029}b",
+        "a\u{202a}b",
+        "a\u{202b}b",
+        "a\u{202c}b",
+        "a\u{202d}b",
+        "a\u{202e}b",
+        "a\u{2066}b",
+        "a\u{2067}b",
+        "a\u{2068}b",
+        "a\u{2069}b",
+    ] {
         plan.hold_reason = Some(control.to_owned());
+        let error = plan.validate().expect_err("control character");
+        assert_eq!(error.field(), "plan.hold_reason");
         assert_eq!(
-            plan.validate().expect_err("control character").field(),
-            "plan.hold_reason"
+            error.reason(),
+            "must be single-line text without control characters"
         );
+        assert!(check_hold_reason(control).is_err(), "{control:?}");
+    }
+
+    // The neighbours of every rejected range stay usable.
+    for allowed in ["a\u{2027}b", "a\u{202f}b", "a\u{2065}b", "a\u{206a}b"] {
+        plan.hold_reason = Some(allowed.to_owned());
+        assert!(plan.validate().is_ok(), "{allowed:?}");
     }
 
     let mut task = super::test_support::task(1, 2, "t", TaskStatus::Todo, 0);

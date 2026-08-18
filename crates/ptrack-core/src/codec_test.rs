@@ -3,7 +3,7 @@ use crate::{
     GitScope, HttpScope, IssueStatus, MAX_LIST_ITEMS, MAX_PAYLOAD_BYTES, MIN_NATIVE_PAYLOAD_SCHEMA,
     MemoryKind, Meta, MilestoneStatus, NATIVE_PAYLOAD_SCHEMA, NativeRecord, Note, NoteTarget, Plan,
     PlanStatus, RecordKind, Severity, SshScope, Task, TaskStatus, Timestamp, decode_record,
-    decode_record_at_schema, encode_record,
+    decode_record_at_schema, encode_record, encode_record_at_schema,
 };
 
 fn fixed_time() -> Timestamp {
@@ -472,7 +472,7 @@ fn unknown_payload_schemas_fail_closed_before_any_layout_is_assumed() {
 
 #[test]
 fn a_set_hold_reason_has_no_canonical_schema_1_form() {
-    let mut payload = encode_record(&NativeRecord::Plan(Plan {
+    let mut plan = Plan {
         id: 1,
         title: "x".to_owned(),
         status: PlanStatus::Active,
@@ -481,20 +481,65 @@ fn a_set_hold_reason_has_no_canonical_schema_1_form() {
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
         hold_reason: None,
-    }))
-    .expect("encode");
+    };
+    let schema_2 = encode_record(&NativeRecord::Plan(plan.clone())).expect("encode");
     // Strip the schema-2 `None` option tag to obtain the schema-1 payload.
-    assert_eq!(payload.pop(), Some(0));
-    let record = decode_record_at_schema(RecordKind::Plan, MIN_NATIVE_PAYLOAD_SCHEMA, &payload)
+    let mut schema_1 = schema_2.clone();
+    assert_eq!(schema_1.pop(), Some(0));
+
+    let record = decode_record_at_schema(RecordKind::Plan, MIN_NATIVE_PAYLOAD_SCHEMA, &schema_1)
         .expect("schema 1 decode");
-    let NativeRecord::Plan(plan) = record else {
+    let NativeRecord::Plan(decoded) = record else {
         panic!("expected a plan");
     };
-    assert_eq!(plan.hold_reason, None);
+    assert_eq!(decoded.hold_reason, None);
+
+    // Neither layout is malleable into the other: the schema-1 payload is one
+    // byte short at schema 2, and the schema-2 payload has one byte too many at
+    // schema 1.
     assert!(matches!(
-        decode_record(RecordKind::Plan, &payload),
+        decode_record(RecordKind::Plan, &schema_1),
         Err(CodecError::Truncated { .. })
     ));
+    assert_eq!(
+        decode_record_at_schema(RecordKind::Plan, MIN_NATIVE_PAYLOAD_SCHEMA, &schema_2),
+        Err(CodecError::TrailingBytes(1))
+    );
+
+    // A set reason cannot be encoded at schema 1 at all: dropping it silently
+    // would make the hold vanish on a downgrade, so the encoder fails closed.
+    plan.hold_reason = Some("waiting on review".to_owned());
+    assert_eq!(
+        encode_record_at_schema(&NativeRecord::Plan(plan.clone()), MIN_NATIVE_PAYLOAD_SCHEMA),
+        Err(CodecError::NonCanonical)
+    );
+    let task = NativeRecord::Task(Task {
+        id: 1,
+        plan_id: 2,
+        title: "t".to_owned(),
+        status: TaskStatus::Todo,
+        order: 0,
+        created_at: Timestamp::Zero,
+        updated_at: Timestamp::Zero,
+        hold_reason: Some("blocked upstream".to_owned()),
+    });
+    assert_eq!(
+        encode_record_at_schema(&task, MIN_NATIVE_PAYLOAD_SCHEMA),
+        Err(CodecError::NonCanonical)
+    );
+    // Clearing the reason restores a canonical schema-1 form.
+    plan.hold_reason = None;
+    assert_eq!(
+        encode_record_at_schema(&NativeRecord::Plan(plan), MIN_NATIVE_PAYLOAD_SCHEMA),
+        Ok(schema_1)
+    );
+    // The schema range is checked before any layout is assumed, on both sides.
+    assert_eq!(
+        encode_record_at_schema(&task, NATIVE_PAYLOAD_SCHEMA + 1),
+        Err(CodecError::UnsupportedPayloadSchema(
+            NATIVE_PAYLOAD_SCHEMA + 1
+        ))
+    );
 }
 
 fn decode_hex(input: &str) -> Vec<u8> {

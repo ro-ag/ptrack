@@ -111,10 +111,25 @@ fn hold_reason_problem(reason: &str) -> Option<HoldReasonProblem> {
     if reason.len() > MAX_HOLD_REASON_BYTES {
         return Some(HoldReasonProblem::TooLong);
     }
-    if reason.chars().any(char::is_control) {
+    if reason.chars().any(is_forbidden_control) {
         return Some(HoldReasonProblem::ControlCharacters);
     }
     None
+}
+
+/// Reports whether a character would break a hold reason out of single-line
+/// plain text.
+///
+/// `char::is_control` covers the C0 and C1 blocks but not the Unicode
+/// separators U+2028 and U+2029, which terminate a line, nor the bidirectional
+/// formatting controls U+202A-U+202E and U+2066-U+2069, which can reorder the
+/// rendered text and hide what a reason really says.
+fn is_forbidden_control(value: char) -> bool {
+    value.is_control()
+        || matches!(
+            value,
+            '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+        )
 }
 
 /// Rejects a set hold reason that is blank, oversized, or not single-line text.
