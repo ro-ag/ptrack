@@ -55,6 +55,7 @@ pub struct ProjectStore {
     active: ActivatedStore,
     clock: Arc<dyn Clock>,
     writer_version: String,
+    actor: Option<ActorIdentity>,
 }
 
 impl ProjectStore {
@@ -131,6 +132,7 @@ impl ProjectStore {
             active: ActivatedStore::new(store, binding)?,
             clock: Arc::new(clock),
             writer_version: writer_version.into(),
+            actor: None,
         };
         let now = project.clock.now_local();
         let writer = project.writer_version.clone();
@@ -243,8 +245,20 @@ impl ProjectStore {
             active,
             clock: Arc::new(clock),
             writer_version: writer_version.into(),
+            actor: None,
         };
         Ok(project)
+    }
+
+    /// Configures the identity attributed to every mutation this store makes.
+    #[must_use]
+    pub fn with_actor(mut self, actor: Option<ActorIdentity>) -> Self {
+        self.actor = actor;
+        self
+    }
+
+    fn actor_id(&self) -> Option<&str> {
+        self.actor.as_ref().map(|actor| actor.id.as_str())
     }
 
     #[must_use]
@@ -265,7 +279,17 @@ impl ProjectStore {
         &self,
         operation: impl FnOnce(&mut WriteTransaction) -> StoreResult<R>,
     ) -> StoreResult<R> {
-        self.active.write(operation)
+        // The clock is only sampled when an actor is configured, so stores
+        // without an identity (and every existing clock-tick-counting test)
+        // see no change in how many times `now_local` advances.
+        self.active.write(|transaction| {
+            if let Some(actor) = &self.actor {
+                let now = self.clock.now_local();
+                let writer = self.writer_version.clone();
+                ensure_actor_registered(transaction, actor, now, writer)?;
+            }
+            operation(transaction)
+        })
     }
 
     pub(crate) fn read<R>(
@@ -345,7 +369,7 @@ impl ProjectStore {
                 order,
                 created_at: now,
                 updated_at: now,
-                actor: None,
+                actor: self.actor_id().map(str::to_owned),
                 ulid: None,
             };
             typed::put(transaction, RecordKey::Id(id), &value)?;
@@ -404,7 +428,7 @@ impl ProjectStore {
                 created_at: now,
                 updated_at: now,
                 hold_reason: None,
-                actor: None,
+                actor: self.actor_id().map(str::to_owned),
                 claim_conflict: false,
                 claim_epoch: 0,
                 claim_owner: None,
@@ -455,7 +479,7 @@ impl ProjectStore {
                 created_at: now,
                 updated_at: now,
                 hold_reason: None,
-                actor: None,
+                actor: self.actor_id().map(str::to_owned),
                 claim_conflict: false,
                 claim_epoch: 0,
                 claim_owner: None,
@@ -505,6 +529,7 @@ impl ProjectStore {
             }
             plan.hold_reason = reason;
             plan.updated_at = now;
+            plan.stamp_actor(self.actor_id());
             typed::put(transaction, RecordKey::Id(id), &plan)?;
             Ok(())
         })
@@ -530,6 +555,7 @@ impl ProjectStore {
             let mut plan = required_write::<Plan>(transaction, RecordKey::Id(id))?;
             plan.milestone_id = milestone_id;
             plan.updated_at = now;
+            plan.stamp_actor(self.actor_id());
             typed::put(transaction, RecordKey::Id(id), &plan)?;
             Ok(())
         })
@@ -551,7 +577,7 @@ impl ProjectStore {
                 created_at: now,
                 updated_at: now,
                 hold_reason: None,
-                actor: None,
+                actor: self.actor_id().map(str::to_owned),
                 ulid: None,
             };
             typed::put(transaction, RecordKey::Id(id), &value)?;
@@ -605,7 +631,7 @@ impl ProjectStore {
                 created_at: now,
                 updated_at: now,
                 hold_reason: None,
-                actor: None,
+                actor: self.actor_id().map(str::to_owned),
                 ulid: None,
             };
             typed::put(transaction, RecordKey::Id(id), &task)?;
@@ -660,6 +686,7 @@ impl ProjectStore {
             let mut task = task.clone();
             task.status = TaskStatus::Doing;
             task.updated_at = now;
+            task.stamp_actor(self.actor_id());
             typed::put(transaction, RecordKey::Id(task.id), &task)?;
             Ok(task)
         })
@@ -714,6 +741,7 @@ impl ProjectStore {
                     task.hold_reason = None;
                 }
                 task.updated_at = now;
+                task.stamp_actor(self.actor_id());
                 typed::put(transaction, RecordKey::Id(id), &task)?;
             }
             Ok(task)
@@ -736,6 +764,7 @@ impl ProjectStore {
             }
             task.hold_reason = reason;
             task.updated_at = now;
+            task.stamp_actor(self.actor_id());
             typed::put(transaction, RecordKey::Id(id), &task)?;
             Ok(())
         })
@@ -756,6 +785,7 @@ impl ProjectStore {
             let mut task = required_write::<Task>(transaction, RecordKey::Id(id))?;
             task.plan_id = plan_id;
             task.updated_at = now;
+            task.stamp_actor(self.actor_id());
             typed::put(transaction, RecordKey::Id(id), &task)?;
             Ok(())
         })
@@ -786,7 +816,9 @@ impl ProjectStore {
                 hold_reason: plan_status_can_hold(status)
                     .then_some(task.hold_reason)
                     .flatten(),
-                actor: None,
+                // The new plan is born claimed by the converting actor, not
+                // inherited from the task it replaces.
+                actor: self.actor_id().map(str::to_owned),
                 claim_conflict: false,
                 claim_epoch: 0,
                 claim_owner: None,
@@ -836,7 +868,7 @@ impl ProjectStore {
                 kind: MemoryKind::Legacy,
                 body,
                 created_at: now,
-                actor: None,
+                actor: self.actor_id().map(str::to_owned),
                 ulid: None,
             };
             typed::put(transaction, RecordKey::Id(id), &note)?;
@@ -881,7 +913,7 @@ impl ProjectStore {
                 task_id,
                 created_at: now,
                 updated_at: now,
-                actor: None,
+                actor: self.actor_id().map(str::to_owned),
                 ulid: None,
             };
             typed::put(transaction, RecordKey::Id(id), &issue)?;
@@ -944,7 +976,7 @@ impl ProjectStore {
                 plan_id,
                 task_id,
                 created_at: now,
-                actor: None,
+                actor: self.actor_id().map(str::to_owned),
                 ulid: None,
             };
             typed::put(transaction, RecordKey::Id(id), &commit)?;
@@ -1331,7 +1363,7 @@ impl ProjectStore {
         Ok(values)
     }
 
-    fn mutate_id<R: StoredRecord>(
+    fn mutate_id<R: StoredRecord + ActorStamped>(
         &self,
         id: u64,
         mutate: impl FnOnce(&mut R, Timestamp),
@@ -1340,6 +1372,7 @@ impl ProjectStore {
         self.write(|transaction| {
             let mut value = required_write::<R>(transaction, RecordKey::Id(id))?;
             mutate(&mut value, now);
+            value.stamp_actor(self.actor_id());
             typed::put(transaction, RecordKey::Id(id), &value)?;
             Ok(())
         })
@@ -1397,6 +1430,26 @@ ordered!(Milestone);
 ordered!(Plan);
 ordered!(Task);
 
+trait ActorStamped {
+    fn stamp_actor(&mut self, actor: Option<&str>);
+}
+
+macro_rules! actor_stamped {
+    ($type:ty) => {
+        impl ActorStamped for $type {
+            fn stamp_actor(&mut self, actor: Option<&str>) {
+                self.actor = actor.map(str::to_owned);
+            }
+        }
+    };
+}
+actor_stamped!(Plan);
+actor_stamped!(Task);
+actor_stamped!(Note);
+actor_stamped!(Milestone);
+actor_stamped!(Issue);
+actor_stamped!(Commit);
+
 fn required_write<R: StoredRecord>(
     transaction: &WriteTransaction,
     key: RecordKey<'_>,
@@ -1448,6 +1501,31 @@ fn task_status_can_hold(status: TaskStatus) -> bool {
 fn stamp_meta(meta: &mut Meta, now: Timestamp, writer_version: String) {
     meta.updated_at = now;
     meta.last_write_version = writer_version;
+}
+
+/// Keeps the Meta actor directory current for the configured identity so
+/// claim owners and attribution always resolve to a display name. No-op when
+/// the directory already holds the exact (id, name) pair.
+fn ensure_actor_registered(
+    transaction: &mut WriteTransaction,
+    actor: &ActorIdentity,
+    now: Timestamp,
+    writer: String,
+) -> StoreResult<()> {
+    let mut meta = required_write::<Meta>(transaction, RecordKey::Singleton)?;
+    match meta
+        .actors
+        .binary_search_by(|(id, _)| id.as_str().cmp(actor.id.as_str()))
+    {
+        Ok(index) if meta.actors[index].1 == actor.name => return Ok(()),
+        Ok(index) => meta.actors[index].1.clone_from(&actor.name),
+        Err(index) => meta
+            .actors
+            .insert(index, (actor.id.clone(), actor.name.clone())),
+    }
+    stamp_meta(&mut meta, now, writer);
+    typed::put(transaction, RecordKey::Singleton, &meta)?;
+    Ok(())
 }
 
 fn same_instant(left: Timestamp, right: Timestamp) -> bool {

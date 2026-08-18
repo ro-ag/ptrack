@@ -2402,11 +2402,13 @@ impl BoundDesktopWorkspace {
     }
 
     fn project_store(&self) -> AppResult<ProjectStore> {
+        let actor = lock(&self.application).identity()?;
         Ok(ProjectStore::open_existing(
             &self.endpoint.database,
             &self.endpoint.binding,
             &self.bindings.writer_version,
-        )?)
+        )?
+        .with_actor(actor))
     }
 
     #[allow(clippy::too_many_lines)] // One bounded storage capture keeps totals and rows aligned.

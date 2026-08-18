@@ -407,11 +407,13 @@ impl LocalApplication {
         operation: impl FnOnce(&ProjectStore) -> AppResult<R>,
     ) -> AppResult<R> {
         let endpoint = self.project()?;
+        let actor = self.with_global(crate::identity::load_identity)?;
         let store = ProjectStore::open_existing(
             &endpoint.database,
             &endpoint.binding,
             &self.bindings.writer_version,
-        )?;
+        )?
+        .with_actor(actor);
         let result = operation(&store);
         drop(store);
         if result.is_ok() {

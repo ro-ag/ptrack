@@ -14,7 +14,7 @@ use ptrack_core::{
 
 use crate::typed;
 use crate::{
-    ActiveBinding, Clock, Collection, GlobalStore, MemoryWriteRequest, NATIVE_CODEC,
+    ActiveBinding, ActorIdentity, Clock, Collection, GlobalStore, MemoryWriteRequest, NATIVE_CODEC,
     NATIVE_PAYLOAD_SCHEMA, ProjectRegistryCasResult, ProjectStore, RecordEnvelope, RecordKey,
     Store, StoreError, StoreKind,
 };
@@ -1576,4 +1576,42 @@ fn schema_1_records_read_unheld_upgrade_on_write_and_future_schemas_fail_closed(
         })
         .unwrap_err();
     assert!(matches!(refused, StoreError::InvalidImport(_)), "{refused}");
+}
+
+const ACTOR_A: &str = "01hzvyekq3s7m8w9x0abcdefgh";
+
+fn actor_a() -> ActorIdentity {
+    ActorIdentity {
+        id: ACTOR_A.to_owned(),
+        name: "Alice".to_owned(),
+    }
+}
+
+#[test]
+fn mutations_stamp_the_configured_actor_and_register_it() {
+    let temp = Temp::new();
+    let path = temp.path("actor-stamp.redb");
+    let expected = binding(&path, StoreKind::Project, "project-actor");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock())
+        .unwrap()
+        .with_actor(Some(actor_a()));
+    let plan = store.add_plan("attributed", 0).unwrap();
+    assert_eq!(plan.actor.as_deref(), Some(ACTOR_A));
+    let task = store.add_task(plan.id, "attributed task").unwrap();
+    assert_eq!(task.actor.as_deref(), Some(ACTOR_A));
+    store.set_task_title(task.id, "renamed").unwrap();
+    assert_eq!(store.task(task.id).unwrap().actor.as_deref(), Some(ACTOR_A));
+    let meta = store.meta().unwrap();
+    assert_eq!(meta.actor_name(ACTOR_A), Some("Alice"));
+}
+
+#[test]
+fn unset_actor_leaves_records_unattributed() {
+    let temp = Temp::new();
+    let path = temp.path("actor-unset.redb");
+    let expected = binding(&path, StoreKind::Project, "project-noactor");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+    let plan = store.add_plan("legacy write", 0).unwrap();
+    assert_eq!(plan.actor, None);
+    assert!(store.meta().unwrap().actors.is_empty());
 }
