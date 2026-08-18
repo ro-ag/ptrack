@@ -322,6 +322,7 @@ fn stored_actor_fields_must_be_identity_ids() {
     plan.actor = Some(ACTOR.to_owned());
     plan.ulid = Some(ACTOR.to_owned());
     plan.claim_owner = Some(ACTOR.to_owned());
+    plan.claim_epoch = 1;
     assert!(plan.validate().is_ok());
 
     // The `legacy` presentation sentinel is never storable, so an unattributed
@@ -383,4 +384,33 @@ fn meta_actor_maps_must_be_sorted_identity_keyed_and_bounded() {
     );
     meta.actors = vec![(FIRST.to_owned(), "x".repeat(MAX_IDENTITY_NAME_BYTES + 1))];
     assert!(meta.validate().is_err());
+}
+
+#[test]
+fn plan_claims_must_be_internally_consistent() {
+    const ACTOR: &str = "01hzvyekq3s7m8w9x0abcdefgh";
+    let mut plan = super::test_support::plan(1, "p", PlanStatus::Active, 0, 0);
+    // Never claimed, and released-with-preserved-epoch, are both valid.
+    assert!(plan.validate().is_ok());
+    plan.claim_epoch = 4;
+    assert!(plan.validate().is_ok());
+
+    plan.claim_owner = Some(ACTOR.to_owned());
+    assert!(plan.validate().is_ok());
+    plan.claim_epoch = 0;
+    assert_eq!(
+        plan.validate().expect_err("owner without epoch").field(),
+        "plan.claim_epoch"
+    );
+
+    // The conflict marker is accepted but never written; it only annotates a
+    // live claim.
+    plan.claim_epoch = 1;
+    plan.claim_conflict = true;
+    assert!(plan.validate().is_ok());
+    plan.claim_owner = None;
+    assert_eq!(
+        plan.validate().expect_err("conflict without owner").field(),
+        "plan.claim_conflict"
+    );
 }

@@ -326,15 +326,55 @@ impl ProjectStore {
         self.update_meta(|meta| meta.summary = summary)
     }
 
-    pub fn set_active_plan(&self, plan_id: u64) -> StoreResult<()> {
+    /// Claims a plan for the configured identity and makes it that identity's
+    /// active plan.
+    ///
+    /// A fresh claim or a `steal` bumps the claim epoch; re-using a plan you
+    /// already own is idempotent and leaves the epoch alone. Without a
+    /// configured identity this degrades to the legacy singleton write and
+    /// never touches a claim, so a single-developer install behaves exactly as
+    /// it did before claims existed.
+    ///
+    /// # Errors
+    /// Returns an error when the plan does not exist, when it is claimed by
+    /// someone else and `steal` is not set, or when `steal` is requested
+    /// without a configured identity.
+    pub fn use_plan(&self, plan_id: u64, steal: bool) -> StoreResult<()> {
         let now = self.clock.now_local();
         let writer = self.writer_version.clone();
         let actor = self.actor_id().map(str::to_owned);
+        if steal && actor.is_none() {
+            return Err(StoreError::InvalidClaim(
+                "--steal requires a configured identity; run 'ptrack config set user <name>'"
+                    .to_owned(),
+            ));
+        }
         self.write(|transaction| {
-            if plan_id != 0
-                && typed::get_write::<Plan>(transaction, RecordKey::Id(plan_id))?.is_none()
-            {
-                return Err(StoreError::NotFound);
+            if plan_id != 0 {
+                let mut plan = required_write::<Plan>(transaction, RecordKey::Id(plan_id))?;
+                if let Some(actor) = &actor {
+                    match plan.claim_owner.as_deref() {
+                        Some(owner) if owner == actor => {}
+                        Some(owner) if !steal => {
+                            return Err(StoreError::InvalidClaim(format!(
+                                "plan #{plan_id} is claimed by {owner}; take it over with \
+                                 'ptrack plan use {plan_id} --steal'"
+                            )));
+                        }
+                        _ => {
+                            plan.claim_owner = Some(actor.clone());
+                            plan.claim_epoch =
+                                plan.claim_epoch.checked_add(1).ok_or_else(|| {
+                                    StoreError::InvalidClaim(format!(
+                                        "plan #{plan_id} claim epoch overflowed"
+                                    ))
+                                })?;
+                            plan.actor = Some(actor.clone());
+                            plan.updated_at = now;
+                            typed::put(transaction, RecordKey::Id(plan_id), &plan)?;
+                        }
+                    }
+                }
             }
             let mut meta = required_write::<Meta>(transaction, RecordKey::Singleton)?;
             match &actor {
@@ -344,6 +384,45 @@ impl ProjectStore {
             stamp_meta(&mut meta, now, writer);
             typed::put(transaction, RecordKey::Singleton, &meta)?;
             Ok(())
+        })
+    }
+
+    pub fn set_active_plan(&self, plan_id: u64) -> StoreResult<()> {
+        self.use_plan(plan_id, false)
+    }
+
+    /// Releases the caller's own claim on a plan, preserving the epoch so a
+    /// later claim never reuses an epoch a stale writer might still hold.
+    ///
+    /// # Errors
+    /// Returns an error without a configured identity, when the plan is not
+    /// claimed, or when the claim belongs to someone else.
+    pub fn release_plan(&self, plan_id: u64) -> StoreResult<()> {
+        let now = self.clock.now_local();
+        let Some(actor) = self.actor_id().map(str::to_owned) else {
+            return Err(StoreError::InvalidClaim(
+                "releasing a claim requires a configured identity; run \
+                 'ptrack config set user <name>'"
+                    .to_owned(),
+            ));
+        };
+        self.write(|transaction| {
+            let mut plan = required_write::<Plan>(transaction, RecordKey::Id(plan_id))?;
+            match plan.claim_owner.as_deref() {
+                None => Err(StoreError::InvalidClaim(format!(
+                    "plan #{plan_id} is not claimed"
+                ))),
+                Some(owner) if owner != actor => Err(StoreError::InvalidClaim(format!(
+                    "plan #{plan_id} is claimed by {owner}, not you"
+                ))),
+                Some(_) => {
+                    plan.claim_owner = None;
+                    plan.actor = Some(actor.clone());
+                    plan.updated_at = now;
+                    typed::put(transaction, RecordKey::Id(plan_id), &plan)?;
+                    Ok(())
+                }
+            }
         })
     }
 
@@ -510,10 +589,13 @@ impl ProjectStore {
     }
 
     pub fn set_plan_status(&self, id: u64, status: PlanStatus) -> StoreResult<()> {
-        self.mutate_id::<Plan>(id, |value, now| {
+        self.mutate_plan_gated(id, |value, now| {
             value.status = status;
             if !plan_status_can_hold(status) {
                 value.hold_reason = None;
+                // A finished plan holds nobody's claim; the epoch is preserved
+                // so the next claim still fences out a stale writer.
+                value.claim_owner = None;
             }
             value.updated_at = now;
         })
@@ -544,7 +626,7 @@ impl ProjectStore {
 
     pub fn set_plan_title(&self, id: u64, title: impl Into<String>) -> StoreResult<()> {
         let title = title.into();
-        self.mutate_id::<Plan>(id, |value, now| {
+        self.mutate_plan_gated(id, |value, now| {
             value.title = title;
             value.updated_at = now;
         })
@@ -560,6 +642,7 @@ impl ProjectStore {
                 return Err(StoreError::NotFound);
             }
             let mut plan = required_write::<Plan>(transaction, RecordKey::Id(id))?;
+            require_claim_access(&plan, self.actor_id())?;
             plan.milestone_id = milestone_id;
             plan.updated_at = now;
             plan.stamp_actor(self.actor_id());
@@ -572,7 +655,8 @@ impl ProjectStore {
         let title = title.into();
         let now = self.clock.now_local();
         self.write(|transaction| {
-            require_id_write::<Plan>(transaction, plan_id)?;
+            let plan = required_write::<Plan>(transaction, RecordKey::Id(plan_id))?;
+            require_claim_access(&plan, self.actor_id())?;
             let order = count_write::<Task>(transaction)?;
             let id = transaction.next_id(Collection::Tasks)?;
             let value = Task {
@@ -614,6 +698,7 @@ impl ProjectStore {
                     "first task plan is not the sole active first plan".to_owned(),
                 ));
             }
+            require_claim_access(plan, self.actor_id())?;
             let tasks = typed::scan_write::<Task>(transaction)?;
             if let [task] = tasks.as_slice()
                 && task.plan_id == plan_id
@@ -674,6 +759,7 @@ impl ProjectStore {
                     "first task start does not match durable onboarding state".to_owned(),
                 ));
             }
+            require_claim_access(plan, self.actor_id())?;
             if task.status == TaskStatus::Doing {
                 return if same_instant(task.created_at, expected_updated_at) {
                     Ok(task.clone())
@@ -708,7 +794,7 @@ impl ProjectStore {
     }
 
     pub fn set_task_status(&self, id: u64, status: TaskStatus) -> StoreResult<()> {
-        self.mutate_id::<Task>(id, |value, now| {
+        self.mutate_task_gated(id, |value, now| {
             value.status = status;
             if !task_status_can_hold(status) {
                 value.hold_reason = None;
@@ -728,6 +814,8 @@ impl ProjectStore {
         let now = self.clock.now_local();
         self.write(|transaction| {
             let mut task = required_write::<Task>(transaction, RecordKey::Id(id))?;
+            let plan = required_write::<Plan>(transaction, RecordKey::Id(task.plan_id))?;
+            require_claim_access(&plan, self.actor_id())?;
             if task.plan_id != expected_plan_id
                 || task.status != expected_status
                 || !same_instant(task.updated_at, expected_updated_at)
@@ -779,17 +867,22 @@ impl ProjectStore {
 
     pub fn set_task_title(&self, id: u64, title: impl Into<String>) -> StoreResult<()> {
         let title = title.into();
-        self.mutate_id::<Task>(id, |value, now| {
+        self.mutate_task_gated(id, |value, now| {
             value.title = title;
             value.updated_at = now;
         })
     }
 
+    /// Moves a task between plans. Both the source and the target plan must be
+    /// free of someone else's claim.
     pub fn set_task_plan(&self, id: u64, plan_id: u64) -> StoreResult<()> {
         let now = self.clock.now_local();
         self.write(|transaction| {
-            require_id_write::<Plan>(transaction, plan_id)?;
+            let target = required_write::<Plan>(transaction, RecordKey::Id(plan_id))?;
+            require_claim_access(&target, self.actor_id())?;
             let mut task = required_write::<Task>(transaction, RecordKey::Id(id))?;
+            let source = required_write::<Plan>(transaction, RecordKey::Id(task.plan_id))?;
+            require_claim_access(&source, self.actor_id())?;
             task.plan_id = plan_id;
             task.updated_at = now;
             task.stamp_actor(self.actor_id());
@@ -803,6 +896,7 @@ impl ProjectStore {
         self.write(|transaction| {
             let task = required_write::<Task>(transaction, RecordKey::Id(id))?;
             let parent = required_write::<Plan>(transaction, RecordKey::Id(task.plan_id))?;
+            require_claim_access(&parent, self.actor_id())?;
             let order = count_write::<Plan>(transaction)?;
             let plan_id = transaction.next_id(Collection::Plans)?;
             let status = if task.status == TaskStatus::Done {
@@ -827,8 +921,8 @@ impl ProjectStore {
                 // inherited from the task it replaces.
                 actor: self.actor_id().map(str::to_owned),
                 claim_conflict: false,
-                claim_epoch: 0,
-                claim_owner: None,
+                claim_epoch: u64::from(self.actor_id().is_some()),
+                claim_owner: self.actor_id().map(str::to_owned),
                 ulid: None,
             };
             typed::put(transaction, RecordKey::Id(plan_id), &plan)?;
@@ -1378,6 +1472,44 @@ impl ProjectStore {
         Ok(values)
     }
 
+    /// Loads a plan, gates it on the caller's claim, then mutates and stamps it.
+    fn mutate_plan_gated(
+        &self,
+        id: u64,
+        mutate: impl FnOnce(&mut Plan, Timestamp),
+    ) -> StoreResult<()> {
+        let now = self.clock.now_local();
+        let actor = self.actor_id().map(str::to_owned);
+        self.write(|transaction| {
+            let mut plan = required_write::<Plan>(transaction, RecordKey::Id(id))?;
+            require_claim_access(&plan, actor.as_deref())?;
+            mutate(&mut plan, now);
+            plan.actor = actor;
+            typed::put(transaction, RecordKey::Id(id), &plan)?;
+            Ok(())
+        })
+    }
+
+    /// Loads a task, gates it on its owning plan's claim, then mutates and
+    /// stamps it.
+    fn mutate_task_gated(
+        &self,
+        id: u64,
+        mutate: impl FnOnce(&mut Task, Timestamp),
+    ) -> StoreResult<()> {
+        let now = self.clock.now_local();
+        let actor = self.actor_id().map(str::to_owned);
+        self.write(|transaction| {
+            let mut task = required_write::<Task>(transaction, RecordKey::Id(id))?;
+            let plan = required_write::<Plan>(transaction, RecordKey::Id(task.plan_id))?;
+            require_claim_access(&plan, actor.as_deref())?;
+            mutate(&mut task, now);
+            task.actor = actor;
+            typed::put(transaction, RecordKey::Id(id), &task)?;
+            Ok(())
+        })
+    }
+
     fn mutate_id<R: StoredRecord + ActorStamped>(
         &self,
         id: u64,
@@ -1464,6 +1596,19 @@ actor_stamped!(Note);
 actor_stamped!(Milestone);
 actor_stamped!(Issue);
 actor_stamped!(Commit);
+
+/// The single claim gate: content mutations to a plan claimed by someone
+/// other than the caller are refused. An unset actor is never an owner, so it
+/// is refused too — enforcement is fail-closed and strictly prospective.
+fn require_claim_access(plan: &Plan, actor: Option<&str>) -> StoreResult<()> {
+    match plan.claim_owner.as_deref() {
+        Some(owner) if actor != Some(owner) => Err(StoreError::InvalidClaim(format!(
+            "plan #{} is claimed by {owner}; take it over with 'ptrack plan use {} --steal'",
+            plan.id, plan.id
+        ))),
+        _ => Ok(()),
+    }
+}
 
 fn required_write<R: StoredRecord>(
     transaction: &WriteTransaction,

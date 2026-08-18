@@ -352,6 +352,22 @@ impl Validate for Plan {
         validate_identity_option(self.actor.as_ref(), "plan.actor")?;
         validate_identity_option(self.ulid.as_ref(), "plan.ulid")?;
         validate_identity_option(self.claim_owner.as_ref(), "plan.claim_owner")?;
+        // Claim consistency: every owner arrived through a claim that bumped
+        // the epoch, and the conflict marker only annotates a live claim. A
+        // release clears the owner and keeps the epoch, so a nonzero epoch
+        // without an owner is the normal released shape.
+        if self.claim_owner.is_some() && self.claim_epoch == 0 {
+            return Err(ValidationError::new(
+                "plan.claim_epoch",
+                "must be nonzero while the plan is claimed",
+            ));
+        }
+        if self.claim_conflict && self.claim_owner.is_none() {
+            return Err(ValidationError::new(
+                "plan.claim_conflict",
+                "must not be set on an unclaimed plan",
+            ));
+        }
         validate_times(&[self.created_at, self.updated_at])
     }
 }

@@ -13,6 +13,14 @@ use crate::schema::StoreKind;
 /// can drift away from the `Display` below.
 pub const INVALID_HOLD_PREFIX: &str = "invalid hold mutation: ";
 
+/// The layer prefix [`StoreError::InvalidClaim`] renders before its detail.
+///
+/// The detail is already a whole sentence ("plan #3 is claimed by ..."), so
+/// presentation layers strip this prefix instead of maintaining a parallel
+/// message table. Exported so no caller has to hardcode a copy that can drift
+/// away from the `Display` below.
+pub const INVALID_CLAIM_PREFIX: &str = "invalid claim mutation: ";
+
 /// An error encountered while decoding a persisted record envelope.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EnvelopeError {
@@ -166,6 +174,9 @@ pub enum StoreError {
     /// A hold request targets a plan or task that has already reached a
     /// terminal state. Resuming is always allowed; only holding is refused.
     InvalidHold(String),
+    /// A claim-gated mutation was attempted against a plan claimed by someone
+    /// else, or a claim operation was invalid for the caller's identity.
+    InvalidClaim(String),
     /// A stored record envelope was invalid.
     Envelope(EnvelopeError),
     /// A filesystem operation failed.
@@ -344,6 +355,9 @@ impl fmt::Display for StoreError {
             }
             Self::InvalidHold(detail) => {
                 write!(formatter, "{INVALID_HOLD_PREFIX}{detail}")
+            }
+            Self::InvalidClaim(detail) => {
+                write!(formatter, "{INVALID_CLAIM_PREFIX}{detail}")
             }
             Self::Envelope(error) => error.fmt(formatter),
             Self::Io(error) => error.fmt(formatter),

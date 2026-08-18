@@ -14,9 +14,9 @@ use ptrack_core::{
 
 use crate::typed;
 use crate::{
-    ActiveBinding, ActorIdentity, Clock, Collection, GlobalStore, MemoryWriteRequest, NATIVE_CODEC,
-    NATIVE_PAYLOAD_SCHEMA, ProjectRegistryCasResult, ProjectStore, RecordEnvelope, RecordKey,
-    Store, StoreError, StoreKind,
+    ActiveBinding, ActorIdentity, Clock, Collection, GlobalStore, INVALID_CLAIM_PREFIX,
+    MemoryWriteRequest, NATIVE_CODEC, NATIVE_PAYLOAD_SCHEMA, ProjectRegistryCasResult,
+    ProjectStore, RecordEnvelope, RecordKey, Store, StoreError, StoreKind,
 };
 
 static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -1659,4 +1659,121 @@ fn active_plan_is_per_actor_with_legacy_singleton_fallback() {
     // An explicit zero entry means "none", not "fall back".
     store.set_active_plan(0).unwrap();
     assert_eq!(store.snapshot().unwrap().meta.active_plan, 0);
+}
+
+fn reopen_as(path: &std::path::Path, label: &str, actor: Option<ActorIdentity>) -> ProjectStore {
+    let expected = binding(path, StoreKind::Project, label);
+    ProjectStore::open_existing(path, &expected, "test")
+        .unwrap()
+        .with_actor(actor)
+}
+
+#[test]
+fn claims_gate_content_mutations_but_not_holds_notes_or_issues() {
+    let temp = Temp::new();
+    let path = temp.path("claims.redb");
+    let expected = binding(&path, StoreKind::Project, "project-claims");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+    let plan = store.add_plan("shared", 0).unwrap();
+    let task = store.add_task(plan.id, "shared task").unwrap();
+    drop(store);
+
+    // A claims the plan.
+    let store = reopen_as(&path, "project-claims", Some(actor_a()));
+    store.use_plan(plan.id, false).unwrap();
+    let claimed = store.plan(plan.id).unwrap();
+    assert_eq!(claimed.claim_owner.as_deref(), Some(ACTOR_A));
+    assert_eq!(claimed.claim_epoch, 1);
+    // Re-using your own claim is idempotent: no epoch bump.
+    store.use_plan(plan.id, false).unwrap();
+    assert_eq!(store.plan(plan.id).unwrap().claim_epoch, 1);
+    drop(store);
+
+    // B: content mutations refused, communication channels open.
+    let store = reopen_as(&path, "project-claims", Some(actor_b()));
+    let refused = store.set_plan_title(plan.id, "hijack").unwrap_err();
+    assert!(matches!(refused, StoreError::InvalidClaim(_)), "{refused}");
+    assert!(refused.to_string().starts_with(INVALID_CLAIM_PREFIX));
+    assert!(matches!(
+        store
+            .set_task_status(task.id, TaskStatus::Doing)
+            .unwrap_err(),
+        StoreError::InvalidClaim(_)
+    ));
+    assert!(matches!(
+        store.add_task(plan.id, "b task").unwrap_err(),
+        StoreError::InvalidClaim(_)
+    ));
+    store
+        .set_plan_hold(plan.id, Some("please pause".to_owned()))
+        .unwrap();
+    store.set_task_hold(task.id, None).unwrap();
+    store
+        .add_note(NoteTarget::Plan, plan.id, "note from B")
+        .unwrap();
+    store.add_issue("issue from B", "", None, task.id).unwrap();
+    // Non-steal takeover refused; steal succeeds and bumps the epoch.
+    assert!(matches!(
+        store.use_plan(plan.id, false).unwrap_err(),
+        StoreError::InvalidClaim(_)
+    ));
+    store.use_plan(plan.id, true).unwrap();
+    let stolen = store.plan(plan.id).unwrap();
+    assert_eq!(stolen.claim_owner.as_deref(), Some(ACTOR_B));
+    assert_eq!(stolen.claim_epoch, 2);
+    // Release frees the claim, keeps the epoch, and only the owner may do it.
+    store.release_plan(plan.id).unwrap();
+    let released = store.plan(plan.id).unwrap();
+    assert_eq!(released.claim_owner, None);
+    assert_eq!(released.claim_epoch, 2);
+    assert!(matches!(
+        store.release_plan(plan.id).unwrap_err(),
+        StoreError::InvalidClaim(_)
+    ));
+}
+
+#[test]
+fn unset_actor_cannot_mutate_claimed_content_and_terminal_status_releases() {
+    let temp = Temp::new();
+    let path = temp.path("claims-terminal.redb");
+    let expected = binding(&path, StoreKind::Project, "project-terminal");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+    let plan = store.add_plan("terminal", 0).unwrap();
+    drop(store);
+
+    let store = reopen_as(&path, "project-terminal", Some(actor_a()));
+    store.use_plan(plan.id, false).unwrap();
+    drop(store);
+
+    // No identity configured: claimed content is refused fail-closed.
+    let store = reopen_as(&path, "project-terminal", None);
+    assert!(matches!(
+        store.set_plan_title(plan.id, "anon edit").unwrap_err(),
+        StoreError::InvalidClaim(_)
+    ));
+    drop(store);
+
+    // The owner finishing the plan auto-releases the claim.
+    let store = reopen_as(&path, "project-terminal", Some(actor_a()));
+    store.set_plan_status(plan.id, PlanStatus::Done).unwrap();
+    let done = store.plan(plan.id).unwrap();
+    assert_eq!(done.claim_owner, None);
+    assert_eq!(done.claim_epoch, 1);
+}
+
+#[test]
+fn convert_births_the_new_plan_claimed_by_the_converter() {
+    let temp = Temp::new();
+    let path = temp.path("claims-convert.redb");
+    let expected = binding(&path, StoreKind::Project, "project-convert");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+    let plan = store.add_plan("parent", 0).unwrap();
+    let task = store.add_task(plan.id, "promote me").unwrap();
+    drop(store);
+
+    let store = reopen_as(&path, "project-convert", Some(actor_a()));
+    store.use_plan(plan.id, false).unwrap();
+    let born = store.convert_task_to_plan(task.id).unwrap();
+    assert_eq!(born.claim_owner.as_deref(), Some(ACTOR_A));
+    assert_eq!(born.claim_epoch, 1);
 }

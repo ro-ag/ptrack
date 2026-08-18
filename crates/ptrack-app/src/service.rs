@@ -167,6 +167,10 @@ pub enum Mutation {
         reason: Option<String>,
     },
     SetActivePlan(u64),
+    /// Takes over a plan claimed by someone else and makes it active.
+    StealPlan(u64),
+    /// Gives up the caller's own claim on a plan.
+    ReleasePlanClaim(u64),
     SetPlanTitle {
         id: u64,
         title: String,
@@ -563,6 +567,14 @@ impl ApplicationPort for LocalApplication {
                 }
                 Mutation::SetActivePlan(id) => {
                     store.set_active_plan(id)?;
+                    MutationResult::None
+                }
+                Mutation::StealPlan(id) => {
+                    store.use_plan(id, true)?;
+                    MutationResult::None
+                }
+                Mutation::ReleasePlanClaim(id) => {
+                    store.release_plan(id)?;
                     MutationResult::None
                 }
                 Mutation::SetPlanTitle { id, title } => {
