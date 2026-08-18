@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="Install and update p-track safely, understand its local data and privacy boundaries, and back up before an in-place schema migration.">
+    <meta name="description" content="Install and update p-track safely, understand its local data and privacy boundaries, and back up before consequential database changes.">
     <meta name="ptrack-version" content="0.24.4">
     <title>Install &amp; Safety · p-track Help Center</title>
     <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
@@ -124,12 +124,11 @@
           <pre><code>ptrack backup</code></pre>
           <p>The command byte-copies the live project database to <code>&lt;global-home&gt;/backups/&lt;project&gt;-&lt;timestamp&gt;.db</code> and records the path in the global store. There is no built-in restore command.</p>
           <div class="callout warning">
-            <p><strong>Do not overstate this backup.</strong> The implementation does not promise encryption, an atomic destination, or a transaction-consistent snapshot of concurrent writers. The copy excludes runtime state and WebView <code>localStorage</code>. Before a consequential migration or manual restore, stop project writers, preserve the current database separately, and verify the chosen copy before replacing anything.</p>
+            <p><strong>Do not overstate this backup.</strong> The implementation does not promise encryption, an atomic destination, or a transaction-consistent snapshot of concurrent writers. The copy excludes runtime state and WebView <code>localStorage</code>. Before a consequential manual restore, stop project writers, preserve the current database separately, and verify the chosen copy before replacing anything.</p>
           </div>
 
-          <h2 id="migration">Plan for schema migration</h2>
-          <p>Legacy bbolt data is migrated only by the explicit offline exporter, importer, and activation coordinator. Activation keeps the legacy files untouched, verifies every candidate and source identity, and publishes the active-generation marker last. Runtime commands never discover or fall back to a legacy database.</p>
-          <p>Automatic rollback is permitted only while every activated global and project store still proves that no application write occurred. After any write, preserve the batch journal, handoff, receipt, marker, and legacy files and stop for manual recovery; forcing an old marker could discard new work.</p>
+          <h2 id="migration">Retired legacy databases</h2>
+          <p>Runtime commands resolve only the stores named by the attested active-generation marker. Retired bbolt-era files such as <code>global.db</code> or <code>.ptrack/ptrack.db</code> are inert evidence: p-track never reads, migrates, or refuses work because of them, and they can be archived or deleted at any time.</p>
 
           <h2 id="safety-checklist">Safety checklist</h2>
           <ol>
@@ -138,7 +137,7 @@
             <li>Treat co-hosted checksums as corruption detection, not an independent signature.</li>
             <li>Preserve update journals and rollback artifacts during recovery.</li>
             <li>Remember that broker capabilities do not restrict ordinary shells.</li>
-            <li>Back up and stop writers before migration or manual database replacement.</li>
+            <li>Back up and stop writers before manual database replacement.</li>
           </ol>
         </article>
 
@@ -153,7 +152,7 @@
             <li><a href="#privacy">Privacy</a></li>
             <li><a href="#data-paths">Data paths</a></li>
             <li><a href="#backup">Backup</a></li>
-            <li><a href="#migration">Migration</a></li>
+            <li><a href="#migration">Legacy databases</a></li>
             <li><a href="#safety-checklist">Safety checklist</a></li>
           </ul>
         </aside>

@@ -1,3 +1,4 @@
+#[cfg(test)]
 use std::cmp::Ordering;
 use std::fmt;
 
@@ -12,6 +13,7 @@ pub(crate) const STORE_FAMILY: &[u8] = b"ptrack-redb";
 pub(crate) const STORE_OWNER: &[u8] = b"ptrack-storage-tool";
 pub(crate) const STORE_STATE_READY: &[u8] = b"ready";
 pub(crate) const STORE_STATE_ACTIVE: &[u8] = b"active";
+#[cfg(test)]
 pub(crate) const STORE_STATE_IMPORTING: &[u8] = b"importing";
 /// The current application-level ptrack database schema.
 pub const STORE_SCHEMA_VERSION: u32 = 4;
@@ -392,6 +394,7 @@ impl OwnedRecordKey {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn validated_encoded_len(&self, collection: Collection) -> StoreResult<usize> {
         let borrowed = self.as_borrowed();
         let actual = borrowed.kind();
@@ -410,6 +413,7 @@ impl OwnedRecordKey {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn compare_encoded(
         &self,
         other: &Self,
@@ -425,6 +429,7 @@ impl OwnedRecordKey {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn matches_encoded(
         &self,
         collection: Collection,

@@ -3221,18 +3221,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ptrack-db-import"
-version = "0.1.0"
-dependencies = [
- "ptrack-core",
- "ptrack-store",
- "rustix",
- "serde",
- "serde_json",
- "sha2",
-]
-
-[[package]]
 name = "ptrack-desktop"
 version = "0.24.4"
 dependencies = [

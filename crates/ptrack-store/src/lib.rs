@@ -26,9 +26,8 @@ pub use bounded::{
     Bounded, MAX_ASSOCIATION_SCAN, MAX_BOUNDED_READ, ScanBounded, TaskAssociations, TaskProgress,
 };
 pub use cutover::{
-    CutoverLease, CutoverLockMode, LegacyReadLease, PrivatePathIdentity, acquire_cutover_lock,
-    acquire_legacy_read_lease, open_private_path, protect_private_directory, protect_private_file,
-    replace_private_file, sync_private_directory, verify_legacy_source_identity,
+    CutoverLease, CutoverLockMode, PrivatePathIdentity, acquire_cutover_lock, open_private_path,
+    protect_private_directory, protect_private_file, replace_private_file, sync_private_directory,
     verify_private_open_handle, verify_private_path,
 };
 pub use discovery::{
@@ -42,10 +41,13 @@ pub use envelope::{
 pub use error::{EnvelopeError, StoreError, StoreResult};
 pub use global::{GlobalStore, ProjectRegistryCasResult};
 pub use import::{
-    IMPORT_BUNDLE_VERSION, ImportCollection, ImportCollectionReport, ImportData, ImportProvenance,
-    ImportRecord, ImportReport, JSON_STAGE_VERSION, JsonStageImportData, JsonStageProvenance,
-    MAX_IMPORT_BYTES, MAX_IMPORT_ENVELOPE_BYTES, MAX_IMPORT_KEY_BYTES, MAX_IMPORT_PAYLOAD_BYTES,
-    MAX_IMPORT_RECORDS,
+    IMPORT_BUNDLE_VERSION, JSON_STAGE_VERSION, JsonStageProvenance, MAX_IMPORT_BYTES,
+    MAX_IMPORT_ENVELOPE_BYTES, MAX_IMPORT_KEY_BYTES, MAX_IMPORT_PAYLOAD_BYTES, MAX_IMPORT_RECORDS,
+};
+#[cfg(test)]
+pub use import::{
+    ImportCollection, ImportCollectionReport, ImportData, ImportProvenance, ImportRecord,
+    ImportReport, JsonStageImportData,
 };
 pub use project::{
     CAPABILITY_AUDIT_GLOBAL_LIMIT, CURRENT_PROJECT_FORMAT, FIRST_RUN_TITLE_MAX_BYTES,

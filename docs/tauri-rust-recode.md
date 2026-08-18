@@ -57,8 +57,10 @@ crates/ptrack-terminal/    PTYs, profiles, streams, shell integration, cleanup
 crates/ptrack-updater/     discovery, verified staging, recovery, native handoff
 crates/ptrack-cli/         command parsing, output and exit compatibility
 crates/ptrack-tui/         terminal UI presentation and input flows
-crates/ptrack-db-import/   offline batch validation and redb candidate creation
 ```
+
+The offline migration tool (`ptrack-db-import`) served the one-time bbolt
+cutover and was removed once no legacy databases remained in use.
 
 Dependencies point inward. `ptrack-core` has no platform or storage authority.
 `ptrack-store` owns database handles and depends on the native record contract.

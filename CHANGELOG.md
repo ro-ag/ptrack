@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+- The offline bbolt migration tool (`ptrack-db-import`) and every legacy-
+  database refusal. With no projects left on the old format, retired
+  bbolt-era files (`global.db`, `.ptrack/ptrack.db`) are now inert evidence:
+  initialization and validation never read them, never refuse because of
+  them, and never steer anyone to the removed "offline migration workflow".
+  Open-validation of existing migrated stores (their `imported`/`json-stage`
+  manifest contracts) is unchanged.
+
 ## [0.24.4] - 2026-08-17
 
 ### Fixed

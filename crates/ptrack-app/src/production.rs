@@ -1503,9 +1503,7 @@ impl ProductionDesktopAuthority {
             if depth > 0 && is_global_home(&storage, &global_homes) {
                 continue;
             }
-            if path_is_present(&storage.join("ptrack.db"))?
-                || path_is_present(&storage.join("ptrack.redb"))?
-            {
+            if path_is_present(&storage.join("ptrack.redb"))? {
                 return Ok(Self::recovery_validation(
                     canonical_text,
                     "an unregistered project store requires recovery",
@@ -1522,15 +1520,12 @@ impl ProductionDesktopAuthority {
                 ));
             }
         }
-        // A bound runtime is the proof the global state is healthy. Legacy
-        // `global.db` next to it is retained migration evidence — the v0.23.0
-        // cutover guidance says to keep it — and must not wall off new
-        // projects. With no bound runtime, either database's presence means an
-        // unfinished migration or a store the runtime refused, and a leftover
-        // bootstrap plan is an interrupted bootstrap either way.
+        // A bound runtime is the proof the global state is healthy. With no
+        // bound runtime, the database's presence means a store the runtime
+        // refused, and a leftover bootstrap plan is an interrupted bootstrap
+        // either way.
         if (lock(&self.state).runtime.is_none()
-            && (path_is_present(&self.global_home.join("global.db"))?
-                || path_is_present(&self.global_home.join("global.redb"))?))
+            && path_is_present(&self.global_home.join("global.redb"))?)
             || path_is_present(&self.global_home.join("runtime").join(BOOTSTRAP_PLAN))?
         {
             return Ok(Self::recovery_validation(
@@ -1660,10 +1655,7 @@ impl ProductionDesktopAuthority {
                 return Err(recovery("selected project root is already registered"));
             }
             require_new_project_storage_absent(&root, &self.global_home)?;
-            if existing.is_none()
-                && (path_is_present(&home.join("global.db"))?
-                    || path_is_present(&home.join("global.redb"))?)
-            {
+            if existing.is_none() && path_is_present(&home.join("global.redb"))? {
                 return Err(recovery("global runtime state changed before commit"));
             }
         }
@@ -2882,22 +2874,12 @@ fn validate_new_bootstrap_target(
     if let Some(refusal) = home_project_refusal(root, &global_home_exemptions(home)) {
         return Err(AppError::Message(refusal.to_owned()));
     }
-    if previous_marker.is_none() && path_is_present(&home.join("global.db"))? {
-        return Err(recovery(
-            "legacy global.db requires the offline migration workflow",
-        ));
-    }
     if previous_marker.is_none() && path_is_present(&home.join("global.redb"))? {
         return Err(recovery(
             "an unpublished Rust global database requires recovery",
         ));
     }
     let project_directory = root.join(".ptrack");
-    if path_is_present(&project_directory.join("ptrack.db"))? {
-        return Err(recovery(
-            "legacy .ptrack/ptrack.db requires the offline migration workflow",
-        ));
-    }
     if path_is_present(&project_directory.join("ptrack.redb"))? {
         return Err(recovery(
             "an unmapped Rust project database requires recovery",
@@ -2973,12 +2955,7 @@ fn same_path(left: &Path, right: &Path) -> bool {
 }
 
 fn selected_project_storage_present(root: &Path) -> bool {
-    [
-        root.join(".ptrack/ptrack.db"),
-        root.join(".ptrack/ptrack.redb"),
-    ]
-    .iter()
-    .any(|path| path_is_present(path).unwrap_or(true))
+    path_is_present(&root.join(".ptrack/ptrack.redb")).unwrap_or(true)
 }
 
 fn selected_project_directory_present(root: &Path) -> bool {
