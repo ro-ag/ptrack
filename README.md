@@ -109,9 +109,9 @@ cd your-project
 ptrack init --goal "Ship the widget service"
 ptrack plan add "Build the storage layer"
 ptrack plan use 1
-ptrack task add "Define bbolt buckets" --plan 1
+ptrack task add "Define the storage schema" --plan 1
 ptrack task start 1
-ptrack note add "Chose bbolt over Badger" --task 1
+ptrack note add "Chose redb for the storage layer" --task 1
 ```
 
 Now choose the interface that fits the job:
@@ -341,7 +341,7 @@ in the manual acceptance matrix.
 
 Like the terminal dashboard, the GUI opens the database only for each action.
 The CLI and AI agents can therefore keep reading and writing the same project
-without the board retaining bbolt's write lock.
+without the board retaining the database write lock.
 
 ### Desktop keyboard shortcuts
 
@@ -501,15 +501,8 @@ agent integrations and explicitly approved broker capabilities.
 Set `PTRACK_HOME` to move the global store, backups, and update staging. The
 persisted automatic-check opt-in is ordinary configuration in `global.redb`;
 no GitHub credential or asset URL is stored. Runtime commands resolve only
-stores named by the attested active-generation marker; they never fall back to
-an old bbolt database. JSON is produced only when a command is explicitly
-asked for `--json` output.
-
-Migration from a legacy bbolt store is an explicit offline operation. It keeps
-the legacy files untouched, validates imported candidates, and publishes the
-active-generation marker last. Automatic rollback is allowed only before any
-application write reaches the new global or project stores; afterward, stop
-and recover from preserved evidence instead of forcing a downgrade.
+stores named by the attested active-generation marker. JSON is produced only
+when a command is explicitly asked for `--json` output.
 
 ## Development
 

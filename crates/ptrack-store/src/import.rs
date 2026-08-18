@@ -1,12 +1,21 @@
+#[cfg(test)]
 use std::cmp::Ordering;
+#[cfg(test)]
 use std::collections::BTreeMap;
+#[cfg(test)]
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+#[cfg(test)]
 use std::path::Path;
 
+#[cfg(test)]
 use ptrack_core::{NativeRecord, RecordKind, Timestamp, decode_record};
+#[cfg(test)]
 use redb::{Database, Durability, ReadableTable};
 
+#[cfg(test)]
+use crate::StoreKind;
 use crate::envelope::RECORD_ENVELOPE_HEADER_LENGTH;
+#[cfg(test)]
 use crate::schema::{
     MANIFEST_KEY_BATCH_MANIFEST_SHA256, MANIFEST_KEY_DATABASE_JSON_SHA256,
     MANIFEST_KEY_IMPORT_BUNDLE_SHA256, MANIFEST_KEY_IMPORT_BUNDLE_VERSION,
@@ -14,9 +23,9 @@ use crate::schema::{
     MANIFEST_KEY_STAGE_VERSION, MANIFEST_KEY_STATE, MANIFEST_TABLE, SEQUENCES_TABLE,
     STORE_STATE_READY,
 };
+#[cfg(test)]
 use crate::{
-    Collection, OwnedRecordKey, QuarantinedLegacyRecord, RecordEnvelope, StoreError, StoreKind,
-    StoreResult,
+    Collection, OwnedRecordKey, QuarantinedLegacyRecord, RecordEnvelope, StoreError, StoreResult,
 };
 
 /// Maximum number of records accepted by one complete database import.
@@ -37,6 +46,7 @@ pub const IMPORT_BUNDLE_VERSION: u16 = 2;
 pub const JSON_STAGE_VERSION: u16 = 1;
 pub(crate) const MAX_LEGACY_PROJECT_FORMAT: u64 = 5;
 
+#[cfg(test)]
 /// Immutable source provenance committed atomically with a completed import.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ImportProvenance {
@@ -45,6 +55,7 @@ pub struct ImportProvenance {
     pub bundle_sha256: [u8; 32],
 }
 
+#[cfg(test)]
 /// One complete, destination-family-specific legacy database image.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImportData {
@@ -63,6 +74,7 @@ pub struct JsonStageProvenance {
     pub quarantine_count: u64,
 }
 
+#[cfg(test)]
 /// One complete candidate image decoded from a validated JSON staging artifact.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct JsonStageImportData {
@@ -74,6 +86,7 @@ pub struct JsonStageImportData {
     pub quarantine: Vec<QuarantinedLegacyRecord>,
 }
 
+#[cfg(test)]
 /// Every record and the exact legacy sequence for one collection.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImportCollection {
@@ -83,6 +96,7 @@ pub struct ImportCollection {
     pub sequence: Option<u64>,
 }
 
+#[cfg(test)]
 /// One already-wrapped legacy value addressed by its typed key.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImportRecord {
@@ -90,6 +104,7 @@ pub struct ImportRecord {
     pub envelope: RecordEnvelope,
 }
 
+#[cfg(test)]
 /// Verified summary of a completed import.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImportReport {
@@ -100,6 +115,7 @@ pub struct ImportReport {
     pub collections: Vec<ImportCollectionReport>,
 }
 
+#[cfg(test)]
 /// Verified counts and sequence for one imported collection.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImportCollectionReport {
@@ -109,17 +125,21 @@ pub struct ImportCollectionReport {
     pub sequence: Option<u64>,
 }
 
+#[cfg(test)]
 pub(crate) struct ValidatedImport {
     pub(crate) data: ImportData,
     pub(crate) report: ImportReport,
 }
 
+#[cfg(test)]
 pub(crate) struct ValidatedJsonStageImport {
     pub(crate) data: JsonStageImportData,
     pub(crate) report: ImportReport,
 }
 
+#[cfg(test)]
 impl ImportData {
+    #[cfg(test)]
     pub(crate) fn validate(self) -> StoreResult<ValidatedImport> {
         if self.provenance.bundle_version != IMPORT_BUNDLE_VERSION {
             return Err(StoreError::InvalidImport(format!(
@@ -133,7 +153,9 @@ impl ImportData {
     }
 }
 
+#[cfg(test)]
 impl JsonStageImportData {
+    #[cfg(test)]
     pub(crate) fn validate(self) -> StoreResult<ValidatedJsonStageImport> {
         validate_source_format(self.kind, self.source_format)?;
         if self.kind == StoreKind::Global && !self.quarantine.is_empty() {
@@ -160,6 +182,7 @@ impl JsonStageImportData {
     }
 }
 
+#[cfg(test)]
 fn validate_json_stage_capabilities(collections: &[ImportCollection]) -> StoreResult<()> {
     let Some(capabilities) = collections
         .iter()
@@ -189,6 +212,7 @@ fn validate_json_stage_capabilities(collections: &[ImportCollection]) -> StoreRe
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_source_format(kind: StoreKind, source_format: u64) -> StoreResult<()> {
     match kind {
         StoreKind::Project if source_format > MAX_LEGACY_PROJECT_FORMAT => {
@@ -203,6 +227,7 @@ fn validate_source_format(kind: StoreKind, source_format: u64) -> StoreResult<()
     }
 }
 
+#[cfg(test)]
 fn validate_collections(
     kind: StoreKind,
     collections: &[ImportCollection],
@@ -345,6 +370,7 @@ fn validate_collections(
     Ok(report)
 }
 
+#[cfg(test)]
 pub(crate) fn write_import(
     database: &Database,
     import: &ValidatedImport,
@@ -406,6 +432,7 @@ pub(crate) fn write_import(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn write_json_stage_import(
     database: &Database,
     import: &ValidatedJsonStageImport,
@@ -467,6 +494,7 @@ pub(crate) fn write_json_stage_import(
     }
 }
 
+#[cfg(test)]
 fn write_collections(
     transaction: &redb::WriteTransaction,
     collections: &[ImportCollection],
@@ -491,6 +519,7 @@ fn write_collections(
     Ok(())
 }
 
+#[cfg(test)]
 fn verify_collections(
     transaction: &redb::WriteTransaction,
     collections: &[ImportCollection],
@@ -550,6 +579,7 @@ fn verify_collections(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn length_u64(length: usize) -> StoreResult<u64> {
     u64::try_from(length).map_err(|_| StoreError::ImportLimitExceeded {
         limit: "platform length",
@@ -558,6 +588,7 @@ pub(crate) fn length_u64(length: usize) -> StoreResult<u64> {
     })
 }
 
+#[cfg(test)]
 pub(crate) fn validated_record_size(key_len: usize, payload_len: usize) -> StoreResult<u64> {
     let key_len = length_u64(key_len)?;
     let payload_len = length_u64(payload_len)?;
@@ -582,6 +613,7 @@ pub(crate) fn validated_record_size(key_len: usize, payload_len: usize) -> Store
     checked_add(key_len, envelope_len, "encoded bytes", MAX_IMPORT_BYTES)
 }
 
+#[cfg(test)]
 pub(crate) fn checked_add(
     current: u64,
     added: u64,
@@ -599,6 +631,7 @@ pub(crate) fn checked_add(
     Ok(actual)
 }
 
+#[cfg(test)]
 pub(crate) fn require_limit(limit: &'static str, maximum: u64, actual: u64) -> StoreResult<()> {
     if actual <= maximum {
         Ok(())

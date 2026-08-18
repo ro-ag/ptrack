@@ -6,7 +6,6 @@ members = [
     "crates/ptrack-capability-policy",
     "crates/ptrack-cli",
     "crates/ptrack-core",
-    "crates/ptrack-db-import",
     "crates/ptrack-git",
     "crates/ptrack-store",
     "crates/ptrack-terminal",

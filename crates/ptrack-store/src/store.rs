@@ -13,6 +13,8 @@ use redb::{
 };
 
 use crate::import::MAX_LEGACY_PROJECT_FORMAT;
+#[cfg(test)]
+use crate::schema::STORE_STATE_IMPORTING;
 use crate::schema::{
     MANIFEST_KEY_ACTIVATION_GENERATION, MANIFEST_KEY_APPLICATION_WRITES,
     MANIFEST_KEY_BATCH_MANIFEST_SHA256, MANIFEST_KEY_CANONICAL_PATH, MANIFEST_KEY_DATABASE_ID,
@@ -22,14 +24,14 @@ use crate::schema::{
     MANIFEST_KEY_SOURCE_FORMAT, MANIFEST_KEY_STAGE_VERSION, MANIFEST_KEY_STATE,
     MANIFEST_KEY_STORE_KIND, MANIFEST_TABLE, QUARANTINE_TABLE, SEQUENCES_TABLE, STORE_FAMILY,
     STORE_ORIGIN_CREATED, STORE_ORIGIN_IMPORTED, STORE_ORIGIN_JSON_STAGE, STORE_OWNER,
-    STORE_SCHEMA_VERSION, STORE_STATE_ACTIVE, STORE_STATE_IMPORTING, STORE_STATE_READY,
-    collections_for, decode_key,
+    STORE_SCHEMA_VERSION, STORE_STATE_ACTIVE, STORE_STATE_READY, collections_for, decode_key,
 };
 use crate::{
-    Collection, IMPORT_BUNDLE_VERSION, ImportData, ImportReport, JSON_STAGE_VERSION,
-    JsonStageImportData, JsonStageProvenance, OwnedRecordKey, RecordEnvelope, RecordKey,
-    StoreError, StoreKind, StoreResult,
+    Collection, IMPORT_BUNDLE_VERSION, JSON_STAGE_VERSION, JsonStageProvenance, OwnedRecordKey,
+    RecordEnvelope, RecordKey, StoreError, StoreKind, StoreResult,
 };
+#[cfg(test)]
+use crate::{ImportData, ImportReport, JsonStageImportData};
 
 const LOCK_TIMEOUT: Duration = Duration::from_secs(1);
 const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(20);
@@ -257,24 +259,10 @@ impl Store {
 
     /// Imports one complete legacy database into a new destination.
     ///
-    /// All input is bounded and validated before the destination is created.
-    /// Once created, its manifest remains `importing` until records, exact
-    /// sequences, and post-write verification commit atomically with `ready`.
-    /// Failures never unlink the artifact and normal opens reject it.
-    pub fn import_new(
-        path: impl AsRef<Path>,
-        data: ImportData,
-    ) -> StoreResult<(Self, ImportReport)> {
-        Self::import_new_inner(
-            path.as_ref(),
-            data,
-            || Ok(()),
-            || Ok(()),
-            || Ok(()),
-            || Ok(()),
-        )
-    }
-
+    /// Retained for tests only: the offline migration tool is gone, but
+    /// existing stores created by it stay on disk, and the open-validation
+    /// contract for their `imported` origin needs imported fixtures.
+    #[cfg(test)]
     pub(crate) fn import_new_inner(
         path: &Path,
         data: ImportData,
@@ -339,16 +327,9 @@ impl Store {
     }
 
     /// Creates one verified candidate from a standalone canonical JSON stage.
-    ///
-    /// Quarantined legacy capability bytes are committed to a private inert
-    /// table and are never available through ordinary collection APIs.
-    pub fn import_json_stage_new(
-        path: impl AsRef<Path>,
-        data: JsonStageImportData,
-    ) -> StoreResult<(Self, ImportReport)> {
-        Self::import_json_stage_new_inner(path.as_ref(), data, || Ok(()))
-    }
-
+    /// Retained for tests only, like [`Self::import_new_inner`], to build
+    /// `json-stage` origin fixtures for the open-validation contract.
+    #[cfg(test)]
     pub(crate) fn import_json_stage_new_inner(
         path: &Path,
         data: JsonStageImportData,
@@ -2269,6 +2250,7 @@ impl DestinationParent {
     }
 }
 
+#[cfg(test)]
 fn ensure_committed_import_destination(
     parent: &DestinationParent,
     destination: &Path,
@@ -2281,6 +2263,7 @@ fn ensure_committed_import_destination(
         })
 }
 
+#[cfg(test)]
 fn committed_import_verification_error(path: &Path, error: StoreError) -> StoreError {
     match error {
         StoreError::DestinationParentChanged { .. }

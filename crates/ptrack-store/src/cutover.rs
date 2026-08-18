@@ -26,35 +26,6 @@ pub struct PrivatePathIdentity {
     pub inode: u64,
 }
 
-/// Retained bbolt-compatible shared source lock used by offline cutover.
-#[derive(Debug)]
-pub struct LegacyReadLease {
-    file: File,
-    identity: PrivatePathIdentity,
-}
-
-impl LegacyReadLease {
-    #[must_use]
-    pub const fn identity(&self) -> PrivatePathIdentity {
-        self.identity
-    }
-
-    /// Clones the locked source handle for read-only verification.
-    ///
-    /// # Errors
-    ///
-    /// Returns an I/O error when the operating system cannot duplicate the handle.
-    pub fn try_clone_file(&self) -> StoreResult<File> {
-        Ok(self.file.try_clone()?)
-    }
-}
-
-impl Drop for LegacyReadLease {
-    fn drop(&mut self) {
-        unlock(&self.file);
-    }
-}
-
 impl CutoverLease {
     #[must_use]
     pub fn path(&self) -> &Path {
@@ -310,83 +281,6 @@ pub fn verify_private_path(path: &Path, directory: bool) -> StoreResult<PrivateP
     }
 }
 
-/// Acquires a nonblocking shared lock compatible with bbolt's writer lock.
-///
-/// # Errors
-///
-/// Returns an activation or I/O error when the source is unsafe or currently
-/// held by an incompatible writer.
-pub fn acquire_legacy_read_lease(path: &Path) -> StoreResult<LegacyReadLease> {
-    let file = open_legacy_source(path)?;
-    let identity = opened_identity(&file)?;
-    lock_shared_nonblocking(&file)?;
-    Ok(LegacyReadLease { file, identity })
-}
-
-/// Verifies the exact no-reparse identity of a legacy migration source.
-/// Legacy databases predate the private-DACL policy, so this deliberately
-/// pins type and identity without rewriting or requiring their permissions.
-pub fn verify_legacy_source_identity(path: &Path) -> StoreResult<PrivatePathIdentity> {
-    let file = open_legacy_source(path)?;
-    opened_identity(&file)
-}
-
-#[cfg(unix)]
-fn open_legacy_source(path: &Path) -> StoreResult<File> {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed())
-        .open(path)?;
-    if !file.metadata()?.is_file() {
-        return Err(StoreError::ActivationBinding(
-            "legacy source must be a real file".to_owned(),
-        ));
-    }
-    Ok(file)
-}
-
-#[cfg(windows)]
-fn open_legacy_source(path: &Path) -> StoreResult<File> {
-    Ok(crate::private_windows::open_no_reparse(
-        path, false, false, false,
-    )?)
-}
-
-#[cfg(not(any(unix, windows)))]
-fn open_legacy_source(_: &Path) -> StoreResult<File> {
-    Err(StoreError::ActivationBinding(
-        "legacy source opening is unsupported on this platform".to_owned(),
-    ))
-}
-
-#[cfg(unix)]
-fn opened_identity(file: &File) -> StoreResult<PrivatePathIdentity> {
-    use std::os::unix::fs::MetadataExt;
-    let metadata = file.metadata()?;
-    Ok(PrivatePathIdentity {
-        device: metadata.dev(),
-        inode: metadata.ino(),
-    })
-}
-
-#[cfg(windows)]
-fn opened_identity(file: &File) -> StoreResult<PrivatePathIdentity> {
-    let identity = crate::private_windows::identity(file)?;
-    Ok(PrivatePathIdentity {
-        device: u64::from(identity.volume),
-        inode: identity.index,
-    })
-}
-
-#[cfg(not(any(unix, windows)))]
-fn opened_identity(_: &File) -> StoreResult<PrivatePathIdentity> {
-    Err(StoreError::ActivationBinding(
-        "private file identity is unsupported on this platform".to_owned(),
-    ))
-}
-
 /// Atomically replaces a protected file with a same-directory temporary file.
 ///
 /// # Errors
@@ -542,44 +436,8 @@ fn lock(file: &File, mode: CutoverLockMode) -> StoreResult<()> {
 }
 
 #[cfg(unix)]
-fn lock_shared_nonblocking(file: &File) -> StoreResult<()> {
-    rustix::fs::flock(file, rustix::fs::FlockOperation::NonBlockingLockShared).map_err(|error| {
-        StoreError::ActivationBinding(format!(
-            "legacy source writer fence is unavailable: {error}"
-        ))
-    })
-}
-
-#[cfg(unix)]
 fn unlock(file: &File) {
     let _ = rustix::fs::flock(file, rustix::fs::FlockOperation::Unlock);
-}
-
-#[cfg(windows)]
-#[allow(unsafe_code)]
-fn lock_shared_nonblocking(file: &File) -> StoreResult<()> {
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Storage::FileSystem::{LOCKFILE_FAIL_IMMEDIATELY, LockFileEx};
-    use windows_sys::Win32::System::IO::OVERLAPPED;
-
-    let mut overlapped = OVERLAPPED::default();
-    // SAFETY: handle and OVERLAPPED are valid for this synchronous byte-range lock.
-    if unsafe {
-        LockFileEx(
-            file.as_raw_handle(),
-            LOCKFILE_FAIL_IMMEDIATELY,
-            0,
-            1,
-            0,
-            &raw mut overlapped,
-        )
-    } == 0
-    {
-        return Err(StoreError::ActivationBinding(
-            "legacy source writer fence is unavailable".to_owned(),
-        ));
-    }
-    Ok(())
 }
 
 #[cfg(windows)]
@@ -634,10 +492,3 @@ fn lock(_: &File, _: CutoverLockMode) -> StoreResult<()> {
 
 #[cfg(not(any(unix, windows)))]
 fn unlock(_: &File) {}
-
-#[cfg(not(any(unix, windows)))]
-fn lock_shared_nonblocking(_: &File) -> StoreResult<()> {
-    Err(StoreError::ActivationBinding(
-        "legacy source locking is unsupported on this platform".to_owned(),
-    ))
-}

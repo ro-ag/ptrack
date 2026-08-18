@@ -744,13 +744,15 @@ fn production_recent_resolution_uses_descendant_open_semantics_and_exact_confirm
 }
 
 #[test]
-fn routed_init_refuses_legacy_global_and_project_databases() {
+fn routed_init_ignores_retired_legacy_databases() {
     let temp = Temp::new();
     let home = temp.0.join("home");
     let project = temp.0.join("project");
     fs::create_dir(&home).unwrap();
     fs::create_dir(&project).unwrap();
     private_directory(&home);
+    // The retired bbolt-era global.db is inert evidence: it may not refuse a
+    // fresh initialization or steer anyone to the removed migration workflow.
     fs::write(home.join("global.db"), b"legacy").unwrap();
     let request = InitRequest {
         root: Some(project.clone()),
@@ -759,25 +761,31 @@ fn routed_init_refuses_legacy_global_and_project_databases() {
         no_guide: true,
     };
     let mut application = RoutedApplication::new(home.clone(), project.clone(), "test");
-    assert!(
-        application
-            .initialize(request.clone())
-            .unwrap_err()
-            .to_string()
-            .contains("legacy global.db requires the offline migration workflow")
+    let result = application.initialize(request.clone()).unwrap();
+    assert!(!result.already_initialized);
+    assert_eq!(
+        PathBuf::from(&result.database),
+        project.join(".ptrack/ptrack.redb")
     );
 
-    fs::remove_file(home.join("global.db")).unwrap();
-    fs::create_dir(project.join(".ptrack")).unwrap();
-    fs::write(project.join(".ptrack/ptrack.db"), b"legacy").unwrap();
-    let mut application = RoutedApplication::new(home, project, "test");
-    assert!(
-        application
-            .initialize(request)
-            .unwrap_err()
-            .to_string()
-            .contains("legacy .ptrack/ptrack.db requires the offline migration workflow")
-    );
+    // A stray legacy project directory still fails closed, but with the
+    // generic preexisting-destination refusal, not migration guidance.
+    let stray = temp.0.join("stray");
+    fs::create_dir(&stray).unwrap();
+    fs::create_dir(stray.join(".ptrack")).unwrap();
+    fs::write(stray.join(".ptrack/ptrack.db"), b"legacy").unwrap();
+    let stray_request = InitRequest {
+        root: Some(stray.clone()),
+        goal: String::new(),
+        force: false,
+        no_guide: true,
+    };
+    let mut application = RoutedApplication::new(home, stray, "test");
+    let error = application
+        .initialize(stray_request)
+        .unwrap_err()
+        .to_string();
+    assert!(!error.contains("migration"), "error: {error}");
 }
 
 #[test]

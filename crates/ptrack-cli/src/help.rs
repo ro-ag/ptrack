@@ -5,7 +5,7 @@ use crate::error::CliError;
 const ROOT_LONG: &str = concat!(
     "p-track keeps project plans alive across human and AI sessions. It stores\n",
     "goals, plans, tasks, issues, milestones, notes, and commit context in an embedded\n",
-    "bbolt database so a fresh agent can reload project context. Every subcommand is\n",
+    "database so a fresh agent can reload project context. Every subcommand is\n",
     "non-interactive and exits non-zero on error."
 );
 
@@ -426,7 +426,7 @@ fn specification(path: &[String]) -> Spec {
         ["init"] => leaf_spec(
             "init",
             concat!(
-                "Create a .ptrack/ptrack.db database at the git root (or cwd, or an\n",
+                "Create a .ptrack/ptrack.redb database at the git root (or cwd, or an\n",
                 "explicit --root) and optionally seed a north-star goal. Run again in the\n",
                 "same project to refresh the agent guide (a no-op if unchanged). Refuses\n",
                 "only to nest a NEW project inside a different existing one, unless --force."

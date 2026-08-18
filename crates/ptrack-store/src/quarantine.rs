@@ -1,11 +1,11 @@
+#[cfg(test)]
 use std::cmp::Ordering;
 
 use redb::ReadableTable;
 
-use crate::import::{
-    MAX_IMPORT_BYTES, MAX_IMPORT_KEY_BYTES, MAX_IMPORT_PAYLOAD_BYTES, checked_add, length_u64,
-    require_limit,
-};
+use crate::import::{MAX_IMPORT_BYTES, MAX_IMPORT_KEY_BYTES, MAX_IMPORT_PAYLOAD_BYTES};
+#[cfg(test)]
+use crate::import::{checked_add, length_u64, require_limit};
 use crate::schema::QUARANTINE_TABLE;
 use crate::sha256;
 use crate::{StoreError, StoreResult};
@@ -21,6 +21,7 @@ pub enum QuarantineReason {
 }
 
 impl QuarantineReason {
+    #[cfg(test)]
     const fn tag(self) -> u8 {
         match self {
             Self::InvalidCapability => 1,
@@ -54,6 +55,7 @@ pub struct QuarantinedLegacyRecord {
     pub reason: QuarantineReason,
 }
 
+#[cfg(test)]
 pub(crate) fn validate(records: &[QuarantinedLegacyRecord]) -> StoreResult<(u64, u64)> {
     let count = length_u64(records.len())?;
     require_limit("quarantine record count", crate::MAX_IMPORT_RECORDS, count)?;
@@ -99,6 +101,7 @@ pub(crate) fn validate(records: &[QuarantinedLegacyRecord]) -> StoreResult<(u64,
     Ok((count, bytes))
 }
 
+#[cfg(test)]
 pub(crate) fn write(
     transaction: &redb::WriteTransaction,
     records: &[QuarantinedLegacyRecord],
@@ -113,6 +116,7 @@ pub(crate) fn write(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn verify_written(
     transaction: &redb::WriteTransaction,
     records: &[QuarantinedLegacyRecord],
@@ -204,6 +208,7 @@ pub(crate) fn validate_stored(
     Ok(())
 }
 
+#[cfg(test)]
 fn encode_key(record: &QuarantinedLegacyRecord) -> StoreResult<Vec<u8>> {
     if record.source_bucket.as_slice() != record.reason.source_bucket() {
         return Err(StoreError::InvalidImport(
@@ -235,6 +240,7 @@ fn encode_key(record: &QuarantinedLegacyRecord) -> StoreResult<Vec<u8>> {
     Ok(encoded)
 }
 
+#[cfg(test)]
 fn encode_value(record: &QuarantinedLegacyRecord) -> StoreResult<Vec<u8>> {
     require_limit(
         "quarantine gob bytes",
