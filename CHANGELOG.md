@@ -6,6 +6,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Plans and tasks go on hold with a reason, independently of status.
+  `ptrack plan hold|resume` and `ptrack task hold|resume` pause work that is
+  waiting on something external; the item keeps its `todo`/`doing`/`blocked`
+  status and its board column, and gains a hold marker in every read surface —
+  CLI lists and `show`, `search`, the dashboard, the desktop board, and the
+  launch context handed to an agent. `ptrack next` refuses held work,
+  `ptrack context` lists it in its own bucket instead of the pick-up list, and
+  `resume` — or completing the item — clears the hold.
+
+### Changed
+- **Compatibility: upgrade every installed copy of p-track.** The first write
+  from this version stamps the project or global database with payload schema
+  2. Older p-track builds accept only schema 1 and refuse the whole database
+  fail-closed, with `invalid database manifest: collection plans requires
+  codec 3 schema 1, found codec 3 schema 2` or the equivalent for another
+  collection. Nothing is damaged and no data is lost — the older binary reads
+  nothing and writes nothing — but a machine that runs both an old and a new
+  p-track against the same project will see the old one refuse it from the
+  first write of any kind onward, hold or not.
+
 ## [0.25.0] - 2026-08-18
 
 ### Removed

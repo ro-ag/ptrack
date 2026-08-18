@@ -506,7 +506,11 @@ fn plan_leaf(name: &str) -> Spec {
             "Show a plan with its tasks and notes",
             JSON_FLAGS,
         ),
-        "done" => leaf_spec("plan done <id>", "Mark a plan done", HELP_ONLY),
+        "done" => leaf_spec(
+            "plan done <id>",
+            "Mark a plan done (clears any hold on it)",
+            HELP_ONLY,
+        ),
         "use" => leaf_spec("plan use <id>", "Set the active plan", HELP_ONLY),
         "hold" => leaf_spec(
             "plan hold <id> <reason...>",
@@ -558,7 +562,11 @@ fn task_leaf(name: &str) -> Spec {
             "Mark a task in progress (doing)",
             HELP_ONLY,
         ),
-        "done" => leaf_spec("task done <id>", "Mark a task done", HELP_ONLY),
+        "done" => leaf_spec(
+            "task done <id>",
+            "Mark a task done (clears any hold on it)",
+            HELP_ONLY,
+        ),
         "block" => leaf_spec("task block <id>", "Mark a task blocked", HELP_ONLY),
         "hold" => leaf_spec(
             "task hold <id> <reason...>",

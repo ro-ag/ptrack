@@ -123,8 +123,11 @@ fn hold_reason_problem(reason: &str) -> Option<HoldReasonProblem> {
 /// `char::is_control` covers the C0 and C1 blocks but not the Unicode
 /// separators U+2028 and U+2029, which terminate a line; the bidirectional
 /// formatting controls U+202A-U+202E and U+2066-U+2069; the directional marks
-/// U+200E (LRM), U+200F (RLM), and U+061C (ALM); or the zero-width characters
-/// U+200B-U+200D (zero-width space, non-joiner, and joiner) — all of which can
+/// U+200E (LRM), U+200F (RLM), and U+061C (ALM); the zero-width characters
+/// U+200B-U+200D (zero-width space, non-joiner, and joiner), U+FEFF (zero-width
+/// no-break space / byte order mark), U+2060 (word joiner), and U+180E (Mongolian
+/// vowel separator); or the tag block U+E0000-U+E007F, whose invisible ASCII
+/// mirror can smuggle a whole second sentence into a reason — all of which can
 /// reorder or hide what a reason really says without showing up as a visible
 /// character.
 fn is_forbidden_control(value: char) -> bool {
@@ -137,6 +140,10 @@ fn is_forbidden_control(value: char) -> bool {
                 | '\u{2066}'..='\u{2069}'
                 | '\u{061c}'
                 | '\u{200b}'..='\u{200f}'
+                | '\u{feff}'
+                | '\u{2060}'
+                | '\u{180e}'
+                | '\u{e0000}'..='\u{e007f}'
         )
 }
 

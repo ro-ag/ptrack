@@ -422,8 +422,9 @@ ptrack task resume 12
 to status: the item keeps its `todo`/`doing`/`blocked` status and its board
 column, and simply gains a hold marker in the CLI, dashboard, and Desktop.
 `ptrack next` skips held work, and `ptrack context` lists it separately so an
-agent does not pick it up. Holds are set from the CLI; the interfaces display
-them.
+agent does not pick it up. `resume` clears the hold, and so does completing the
+item: a task marked `done`, or a plan marked done or archived, drops its hold
+automatically. Holds are set from the CLI; the interfaces display them.
 
 ## Agent workflow
 

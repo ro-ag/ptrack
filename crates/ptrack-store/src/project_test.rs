@@ -198,6 +198,10 @@ fn convert_task_to_plan_carries_the_hold_reason_only_when_set() {
     assert_eq!(promoted.status, PlanStatus::Active);
     assert_eq!(promoted.hold_reason.as_deref(), Some("waiting on review"));
 
+    // A done task cannot be held today, so this pins the mapping rather than
+    // the guard: `convert_task_to_plan` now filters the carried hold through
+    // `plan_status_can_hold`, so a future status mapping that sends a held task
+    // to a done or archived plan still cannot mint a done-and-held record.
     let done = store.add_task(parent.id, "done").unwrap();
     store.set_task_status(done.id, TaskStatus::Done).unwrap();
     let promoted_done = store.convert_task_to_plan(done.id).unwrap();
@@ -1203,6 +1207,23 @@ fn holds_round_trip_and_are_refused_on_terminal_records() {
         .unwrap();
     store
         .set_task_hold(task.id, Some("blocked upstream".to_owned()))
+        .unwrap();
+    assert_eq!(
+        store.plan(plan.id).unwrap().hold_reason.as_deref(),
+        Some("waiting on review")
+    );
+    assert_eq!(
+        store.task(task.id).unwrap().hold_reason.as_deref(),
+        Some("blocked upstream")
+    );
+
+    // Surrounding whitespace is trimmed at the store, the one path every writer
+    // shares, so the CLI and the app mutation store the same words the same way.
+    store
+        .set_plan_hold(plan.id, Some("  waiting on review  ".to_owned()))
+        .unwrap();
+    store
+        .set_task_hold(task.id, Some("\tblocked upstream\n".to_owned()))
         .unwrap();
     assert_eq!(
         store.plan(plan.id).unwrap().hold_reason.as_deref(),

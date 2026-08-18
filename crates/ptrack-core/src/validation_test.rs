@@ -209,6 +209,14 @@ fn hold_reason_is_bounded_single_line_text_when_set() {
         "a\u{200d}b",
         "a\u{200e}b",
         "a\u{200f}b",
+        // The remaining invisibles: byte order mark, word joiner, Mongolian
+        // vowel separator, and the tag block that mirrors ASCII invisibly.
+        "a\u{feff}b",
+        "a\u{2060}b",
+        "a\u{180e}b",
+        "a\u{e0000}b",
+        "a\u{e0041}b",
+        "a\u{e007f}b",
     ] {
         plan.hold_reason = Some(control.to_owned());
         let error = plan.validate().expect_err("control character");
@@ -230,6 +238,9 @@ fn hold_reason_is_bounded_single_line_text_when_set() {
         "a\u{061d}b",
         "a\u{200a}b",
         "a\u{2010}b",
+        "a\u{205f}b",
+        "a\u{180f}b",
+        "a\u{e0080}b",
     ] {
         plan.hold_reason = Some(allowed.to_owned());
         assert!(plan.validate().is_ok(), "{allowed:?}");

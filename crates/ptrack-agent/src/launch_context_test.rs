@@ -212,6 +212,37 @@ fn context_is_exact_bounded_untrusted_json_with_relevant_memory() {
 }
 
 #[test]
+fn a_held_plan_or_task_states_its_hold_in_the_launch_document() {
+    let root = TempDirectory::new("ptrack-agent-launch-hold");
+    let canonical = fs::canonicalize(root.path()).unwrap();
+    let mut store = Store::new(canonical.clone());
+    store.plans.insert(2, plan(2));
+    store.tasks.insert(9, task(9, 2));
+    let pointer = AssociationPointer {
+        version: 1,
+        plan_id: 2,
+        task_id: 9,
+    };
+    {
+        // An unheld plan and task omit the field rather than emitting a null.
+        let host = AssociationHost::new(&canonical, 7, Some(&store)).unwrap();
+        let context = build_launch_context(Some(&store), Some(&host), pointer).unwrap();
+        assert!(!context.text.contains("hold"));
+    }
+
+    store.plans.get_mut(&2).unwrap().hold_reason = Some("budget freeze".to_owned());
+    store.tasks.get_mut(&9).unwrap().hold_reason = Some("waiting on review".to_owned());
+    let host = AssociationHost::new(&canonical, 7, Some(&store)).unwrap();
+    let context = build_launch_context(Some(&store), Some(&host), pointer).unwrap();
+
+    let document: Value = serde_json::from_str(&context.text).unwrap();
+    assert_eq!(document["plan"]["hold"], "on hold: budget freeze");
+    assert_eq!(document["task"]["hold"], "on hold: waiting on review");
+    // A hold leaves the status alone, so the status alone cannot carry it.
+    assert_eq!(document["task"]["status"], "doing");
+}
+
+#[test]
 fn context_fences_store_and_redacts_credentials_before_utf8_caps() {
     let root = TempDirectory::new("ptrack-agent-launch-fence");
     let other = TempDirectory::new("ptrack-agent-launch-other");

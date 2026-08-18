@@ -28,8 +28,8 @@ progress:\", \"Done:\", etc. — ptrack tracks status separately. Set it with\n\
 \n\
 **Pausing work.** A plan or task waiting on something external goes on hold with\n\
 a reason, independently of its status: `ptrack task hold <id> \"waiting on review\"`\n\
-/ `ptrack task resume <id>` (same for `plan hold|resume`). Do not pick up a held\n\
-item; `ptrack next` skips them.\n\
+/ `ptrack task resume <id>` (same for `plan hold|resume`). Completing the item\n\
+clears its hold too. Do not pick up a held item; `ptrack next` skips them.\n\
 \n\
 **Record decisions, not narration.** Notes are the human-visible audit trail of\n\
 what you did and *why*. When you make a choice, hit a blocker, or find a\n\

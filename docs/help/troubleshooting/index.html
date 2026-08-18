@@ -70,6 +70,9 @@ ptrack context</code></pre>
 
           <h3>Database format is newer than this p-track</h3>
           <p>Install a compatible newer p-track binary and retry. The older binary refuses the database and leaves it untouched. Do not force it open, downgrade it, or attempt a schema edit. Review the documented <a href="../install-and-safety/#migration">migration boundary</a>.</p>
+          <p>This refusal can also read like corruption. A record written by a newer p-track is reported as an invalid manifest, naming the collection and the two schema numbers:</p>
+          <pre><code>invalid database manifest: collection plans requires codec 3 schema 1, found codec 3 schema 2</code></pre>
+          <p>Any <code>requires codec … schema …, found codec … schema …</code> message whose <em>found</em> schema is the higher number means exactly one thing: this database was written by a newer p-track, and this binary is the old one. Nothing is damaged and nothing is lost. Upgrade every installed copy of p-track — including the other one you use on this machine — and retry. Do not delete, recreate, or restore the database, and do not edit it; a project database and the global database are both refused whole, so the fix is the binary, never the data.</p>
 
           <h2 id="desktop-and-board">Desktop project and board state</h2>
           <p>If <strong>Open Project</strong> or <strong>Switch Project</strong> reports active terminals, agent runs, or resource operations, inspect the confirmation instead of repeating the action. Confirming stops the counted resources and cleans up the current project before switching; canceling keeps the current workspace. If the confirmation expires or resources change, start the switch again so p-track can recount them.</p>

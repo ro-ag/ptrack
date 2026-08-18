@@ -471,6 +471,7 @@ impl ProjectStore {
     /// A plan that is done or archived cannot be put on hold; resuming is
     /// always allowed so a mistakenly held record can be cleared.
     pub fn set_plan_hold(&self, id: u64, reason: Option<String>) -> StoreResult<()> {
+        let reason = normalize_hold_reason(reason);
         let now = self.clock.now_local();
         self.write(|transaction| {
             let mut plan = required_write::<Plan>(transaction, RecordKey::Id(id))?;
@@ -698,6 +699,7 @@ impl ProjectStore {
     /// A done task cannot be put on hold; resuming is always allowed so a
     /// mistakenly held record can be cleared.
     pub fn set_task_hold(&self, id: u64, reason: Option<String>) -> StoreResult<()> {
+        let reason = normalize_hold_reason(reason);
         let now = self.clock.now_local();
         self.write(|transaction| {
             let mut task = required_write::<Task>(transaction, RecordKey::Id(id))?;
@@ -740,19 +742,24 @@ impl ProjectStore {
             let parent = required_write::<Plan>(transaction, RecordKey::Id(task.plan_id))?;
             let order = count_write::<Plan>(transaction)?;
             let plan_id = transaction.next_id(Collection::Plans)?;
+            let status = if task.status == TaskStatus::Done {
+                PlanStatus::Done
+            } else {
+                PlanStatus::Active
+            };
             let plan = Plan {
                 id: plan_id,
                 title: task.title,
-                status: if task.status == TaskStatus::Done {
-                    PlanStatus::Done
-                } else {
-                    PlanStatus::Active
-                },
+                status,
                 milestone_id: parent.milestone_id,
                 order,
                 created_at: task.created_at,
                 updated_at: now,
-                hold_reason: task.hold_reason,
+                // A held task can only map onto a status that may hold; the
+                // guard keeps a future mapping from minting a done-and-held plan.
+                hold_reason: plan_status_can_hold(status)
+                    .then_some(task.hold_reason)
+                    .flatten(),
             };
             typed::put(transaction, RecordKey::Id(plan_id), &plan)?;
             for mut note in typed::scan_write::<Note>(transaction)? {
@@ -1375,6 +1382,13 @@ fn first_run_title(title: String, kind: &str) -> StoreResult<String> {
         )));
     }
     Ok(title.to_owned())
+}
+
+/// Trims a hold reason where every writer meets: the CLI already trims at its
+/// input boundary, and this keeps the app mutation and any other caller of
+/// `set_plan_hold`/`set_task_hold` storing the same value for the same words.
+fn normalize_hold_reason(reason: Option<String>) -> Option<String> {
+    reason.map(|reason| reason.trim().to_owned())
 }
 
 /// Reports whether a plan in this status may carry a hold reason.

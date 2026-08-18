@@ -86,7 +86,7 @@
             </table>
           </div>
 
-          <p>A hold is separate from status. <code>plan hold</code> and <code>task hold</code> pause an item with a reason, and <code>resume</code> clears it; the item keeps its own status, so <code>task list --status</code> still filters on <code>todo</code>, <code>doing</code>, <code>done</code>, and <code>blocked</code> only. Held work is skipped by <code>next</code>, listed separately by <code>context</code>, and marked in every read surface.</p>
+          <p>A hold is separate from status. <code>plan hold</code> and <code>task hold</code> pause an item with a reason, and <code>resume</code> clears it — as does completing the item, since a done task or a done or archived plan clears its hold automatically. The item keeps its own status, so <code>task list --status</code> still filters on <code>todo</code>, <code>doing</code>, <code>done</code>, and <code>blocked</code> only. Held work is skipped by <code>next</code>, listed separately by <code>context</code>, and marked in every read surface.</p>
 
           <h2 id="json-output">JSON output</h2>
           <p><code>--json</code> is command-specific, not a global promise. It is documented for only these read commands:</p>

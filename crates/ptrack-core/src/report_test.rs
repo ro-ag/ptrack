@@ -198,6 +198,49 @@ fn context_bounds_project_wide_lists_and_uses_newest_notes() {
     );
 }
 
+/// A held blocked task leaves the blocked bucket, so the bucket's "+N more"
+/// must count what the bucket itself held back, never the raw blocked total —
+/// otherwise the digest promises a longer list than `task list --status blocked`
+/// would explain, or hides one it truncated.
+#[test]
+fn the_blocked_bucket_counts_more_from_the_same_filtered_list_it_shows() {
+    let tasks = (1..=10)
+        .map(|id| {
+            task(
+                id,
+                1,
+                &format!("blocked {id}"),
+                TaskStatus::Blocked,
+                i64::try_from(id).expect("small fixture id fits i64"),
+            )
+        })
+        .collect();
+    let mut snapshot = ProjectSnapshot::new(
+        meta(0),
+        Vec::new(),
+        vec![plan(1, "plan", PlanStatus::Active, 0, 0)],
+        tasks,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
+    // Exactly the two tasks that would have been "+2 more" are the held ones.
+    snapshot.tasks[8].hold_reason = Some("vendor outage".to_owned());
+    snapshot.tasks[9].hold_reason = Some("vendor outage".to_owned());
+
+    let digest = context(&snapshot);
+    assert_eq!(digest.blocked.len(), 8);
+    assert_eq!(digest.blocked_more, 0);
+    assert_eq!(digest.on_hold.len(), 2);
+    assert_eq!(digest.on_hold_more, 0);
+
+    let markdown = digest.markdown();
+    assert!(!markdown.contains("more (use `ptrack task list --status blocked`)"));
+    // The inventory counts a held blocked task under both, and names the hold,
+    // so the shorter bucket above still reconciles with the totals.
+    assert!(markdown.contains("10 tasks (0 done · 10 blocked · 10 open · 2 on hold)"));
+}
+
 #[test]
 fn context_silently_omits_a_missing_active_plan() {
     let snapshot = ProjectSnapshot::new(
