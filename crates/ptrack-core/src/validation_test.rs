@@ -201,6 +201,14 @@ fn hold_reason_is_bounded_single_line_text_when_set() {
         "a\u{2067}b",
         "a\u{2068}b",
         "a\u{2069}b",
+        // Directional marks and zero-width characters: invisible, but they
+        // can still reorder or hide what a reason really says.
+        "a\u{061c}b",
+        "a\u{200b}b",
+        "a\u{200c}b",
+        "a\u{200d}b",
+        "a\u{200e}b",
+        "a\u{200f}b",
     ] {
         plan.hold_reason = Some(control.to_owned());
         let error = plan.validate().expect_err("control character");
@@ -213,7 +221,16 @@ fn hold_reason_is_bounded_single_line_text_when_set() {
     }
 
     // The neighbours of every rejected range stay usable.
-    for allowed in ["a\u{2027}b", "a\u{202f}b", "a\u{2065}b", "a\u{206a}b"] {
+    for allowed in [
+        "a\u{2027}b",
+        "a\u{202f}b",
+        "a\u{2065}b",
+        "a\u{206a}b",
+        "a\u{061b}b",
+        "a\u{061d}b",
+        "a\u{200a}b",
+        "a\u{2010}b",
+    ] {
         plan.hold_reason = Some(allowed.to_owned());
         assert!(plan.validate().is_ok(), "{allowed:?}");
     }

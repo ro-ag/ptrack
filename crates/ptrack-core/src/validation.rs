@@ -121,14 +121,22 @@ fn hold_reason_problem(reason: &str) -> Option<HoldReasonProblem> {
 /// plain text.
 ///
 /// `char::is_control` covers the C0 and C1 blocks but not the Unicode
-/// separators U+2028 and U+2029, which terminate a line, nor the bidirectional
-/// formatting controls U+202A-U+202E and U+2066-U+2069, which can reorder the
-/// rendered text and hide what a reason really says.
+/// separators U+2028 and U+2029, which terminate a line; the bidirectional
+/// formatting controls U+202A-U+202E and U+2066-U+2069; the directional marks
+/// U+200E (LRM), U+200F (RLM), and U+061C (ALM); or the zero-width characters
+/// U+200B-U+200D (zero-width space, non-joiner, and joiner) — all of which can
+/// reorder or hide what a reason really says without showing up as a visible
+/// character.
 fn is_forbidden_control(value: char) -> bool {
     value.is_control()
         || matches!(
             value,
-            '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+            '\u{2028}'
+                | '\u{2029}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{061c}'
+                | '\u{200b}'..='\u{200f}'
         )
 }
 

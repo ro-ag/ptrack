@@ -752,7 +752,7 @@ impl ProjectStore {
                 order,
                 created_at: task.created_at,
                 updated_at: now,
-                hold_reason: None,
+                hold_reason: task.hold_reason,
             };
             typed::put(transaction, RecordKey::Id(plan_id), &plan)?;
             for mut note in typed::scan_write::<Note>(transaction)? {

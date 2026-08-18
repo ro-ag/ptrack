@@ -180,6 +180,32 @@ fn typed_project_mutations_conversion_cas_and_snapshot_are_atomic() {
 }
 
 #[test]
+fn convert_task_to_plan_carries_the_hold_reason_only_when_set() {
+    let temp = Temp::new();
+    let path = temp.path("convert-hold.redb");
+    let expected = binding(&path, StoreKind::Project, "convert-hold");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+
+    let milestone = store.add_milestone("m").unwrap();
+    let parent = store.add_plan("parent", milestone.id).unwrap();
+
+    let held = store.add_task(parent.id, "held").unwrap();
+    store.set_task_status(held.id, TaskStatus::Doing).unwrap();
+    store
+        .set_task_hold(held.id, Some("waiting on review".to_owned()))
+        .unwrap();
+    let promoted = store.convert_task_to_plan(held.id).unwrap();
+    assert_eq!(promoted.status, PlanStatus::Active);
+    assert_eq!(promoted.hold_reason.as_deref(), Some("waiting on review"));
+
+    let done = store.add_task(parent.id, "done").unwrap();
+    store.set_task_status(done.id, TaskStatus::Done).unwrap();
+    let promoted_done = store.convert_task_to_plan(done.id).unwrap();
+    assert_eq!(promoted_done.status, PlanStatus::Done);
+    assert_eq!(promoted_done.hold_reason, None);
+}
+
+#[test]
 fn first_plan_and_task_are_atomic_idempotent_and_fail_closed_on_ambiguity() {
     let temp = Temp::new();
     let path = temp.path("first-run.redb");
