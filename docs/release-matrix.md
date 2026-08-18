@@ -11,18 +11,21 @@ interactive matrices.
 
 | OS | Arch | CI runner | Minimum OS / baseline | Webview | Package format | Signing |
 |---|---|---|---|---|---|---|
-| macOS | amd64 | macos-15-intel | 12.0 (`minimumSystemVersion` in `src-tauri/tauri.conf.json`) | wkwebview | Signed, notarized DMG | Developer ID + notarization |
-| macOS | arm64 | macos-15 | 12.0 | wkwebview | Signed, notarized DMG | Developer ID + notarization |
+| macOS | amd64 | macos-15-intel | 12.0 (`minimumSystemVersion` in `src-tauri/tauri.conf.json`) | wkwebview | Signed, notarized DMG + unsigned CLI tar.gz | Developer ID + notarization (DMG only) |
+| macOS | arm64 | macos-15 | 12.0 | wkwebview | Signed, notarized DMG + unsigned CLI tar.gz | Developer ID + notarization (DMG only) |
 | Windows | amd64 | windows-2025 | Windows as provided by windows-2025 | webview2 | ZIP | None (unsigned) |
 | Windows | arm64 | windows-11-arm | Windows as provided by windows-11-arm | webview2 | ZIP | None (unsigned) |
 | Linux | amd64 | ubuntu-24.04 | glibc/webkit2gtk as provided by ubuntu-24.04 | webkitgtk | tar.gz | None (unsigned) |
 | Linux | arm64 | ubuntu-24.04-arm | glibc/webkit2gtk as provided by ubuntu-24.04-arm | webkitgtk | tar.gz | None (unsigned) |
 
-These six targets are the exact `build` matrix in `.github/workflows/release.yml`
-and the exact six package names `tools/release_contract.py` hardcodes via
-`ARCHES = ("amd64", "arm64")`. There is no distro matrix pinned for Linux
-beyond the ubuntu-24.04 runner images; no other libc, webview engine, or
-distro is validated.
+These six targets are the exact `build` matrix in `.github/workflows/release.yml`.
+`tools/release_contract.py`'s `package_names()` hardcodes the same two arches
+via `ARCHES = ("amd64", "arm64")`, but emits eight package names, not six: for
+each arch it lists a darwin `.dmg`, a darwin CLI `.tar.gz`, a linux `.tar.gz`,
+and a windows `.zip` (macOS ships two packages per arch — DMG plus the unsigned
+CLI archive — while Windows and Linux ship one each). There is no distro
+matrix pinned for Linux beyond the ubuntu-24.04 runner images; no other libc,
+webview engine, or distro is validated.
 
 Every package ships alongside a `checksums.txt` (SHA-256, one line per
 package, written by `tools/release_contract.py checksums`) in the same
