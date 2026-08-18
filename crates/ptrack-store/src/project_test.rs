@@ -1410,6 +1410,86 @@ fn a_database_of_schema_1_records_opens_reads_and_upgrades_on_write() {
     assert_eq!(store.task(task.id).unwrap(), task);
 }
 
+/// The 0.26-era analogue of the schema-1 test above: a database whose records
+/// were written at payload schema 2 (hold reasons present, no actor/claim
+/// fields) opens as-is, reads correctly, and upgrades lazily per record on
+/// write. This is the exact upgrade path every existing 0.26 database takes.
+#[test]
+fn a_database_of_schema_2_records_opens_reads_and_upgrades_on_write() {
+    let temp = Temp::new();
+    let path = temp.path("schema-2-database.redb");
+    let expected = binding(&path, StoreKind::Project, "project-schema-2");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+    let plan = store.add_plan("held plan", 0).unwrap();
+    store
+        .set_plan_hold(plan.id, Some("waiting on review".to_owned()))
+        .unwrap();
+    let plan = store.plan(plan.id).unwrap();
+    let task = store.add_task(plan.id, "schema-2 task").unwrap();
+    let meta = store.meta().unwrap();
+
+    // Rewrite all three records exactly as a released 0.26 build stored them:
+    // payload schema 2, hold reason present, none of the schema-3 fields.
+    store
+        .write(|transaction| {
+            let plan_payload =
+                encode_record_at_schema(&NativeRecord::Plan(plan.clone()), 2).unwrap();
+            let task_payload =
+                encode_record_at_schema(&NativeRecord::Task(task.clone()), 2).unwrap();
+            let meta_payload =
+                encode_record_at_schema(&NativeRecord::Meta(meta.clone()), 2).unwrap();
+            transaction.put(
+                Collection::Plans,
+                RecordKey::Id(plan.id),
+                &RecordEnvelope::new(NATIVE_CODEC, 2, plan_payload),
+            )?;
+            transaction.put(
+                Collection::Tasks,
+                RecordKey::Id(task.id),
+                &RecordEnvelope::new(NATIVE_CODEC, 2, task_payload),
+            )?;
+            transaction.put(
+                Collection::ProjectMeta,
+                RecordKey::Singleton,
+                &RecordEnvelope::new(NATIVE_CODEC, 2, meta_payload),
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    drop(store);
+
+    // The database opens without any migration step and reads exactly.
+    let expected = binding(&path, StoreKind::Project, "project-schema-2");
+    let store = ProjectStore::open_existing(&path, &expected, "test").unwrap();
+    assert_eq!(store.plan(plan.id).unwrap(), plan);
+    assert_eq!(store.task(task.id).unwrap(), task);
+    assert_eq!(stored_schema(&store, Collection::Plans, plan.id), 2);
+    assert_eq!(stored_schema(&store, Collection::Tasks, task.id), 2);
+
+    // One write upgrades that one record to schema 3; nothing else moves.
+    store.set_task_title(task.id, "renamed").unwrap();
+    assert_eq!(
+        stored_schema(&store, Collection::Tasks, task.id),
+        NATIVE_PAYLOAD_SCHEMA
+    );
+    assert_eq!(stored_schema(&store, Collection::Plans, plan.id), 2);
+
+    // The half-upgraded database still opens and both records still read.
+    drop(store);
+    let expected = binding(&path, StoreKind::Project, "project-schema-2");
+    let store = ProjectStore::open_existing(&path, &expected, "test").unwrap();
+    assert_eq!(
+        store.plan(plan.id).unwrap().hold_reason.as_deref(),
+        Some("waiting on review")
+    );
+    assert_eq!(store.task(task.id).unwrap().title, "renamed");
+    // The legacy singleton still answers active-plan reads for any actor.
+    assert_eq!(
+        store.meta().unwrap().active_plan_for(None),
+        meta.active_plan
+    );
+}
+
 fn stored_schema(store: &ProjectStore, collection: Collection, id: u64) -> u32 {
     store
         .read(|transaction| {
