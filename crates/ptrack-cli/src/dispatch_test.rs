@@ -2,9 +2,9 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use ptrack_app::{
-    AppError, AppResult, ApplicationPort, CapabilityCancellation, CapabilityMcpOutcome,
-    GuideAction, HookAction, HookResult, INVALID_HOLD_PREFIX, InitRequest, InitResult, Mutation,
-    MutationResult, ProcessOutput,
+    ActorIdentity, AppError, AppResult, ApplicationPort, CapabilityCancellation,
+    CapabilityMcpOutcome, GuideAction, HookAction, HookResult, INVALID_HOLD_PREFIX, InitRequest,
+    InitResult, Mutation, MutationResult, ProcessOutput,
 };
 use ptrack_core::{
     Meta, Plan, PlanStatus, ProjectRef, ProjectSnapshot, Task, TaskStatus, Timestamp,
@@ -18,6 +18,7 @@ struct FakeApplication {
     capability_result: Option<AppResult<Vec<u8>>>,
     capability_calls: Vec<(String, String)>,
     mcp_input: Vec<u8>,
+    identity: Option<ActorIdentity>,
 }
 
 impl Default for FakeApplication {
@@ -46,6 +47,7 @@ impl Default for FakeApplication {
             capability_result: None,
             capability_calls: Vec::new(),
             mcp_input: Vec::new(),
+            identity: None,
         }
     }
 }
@@ -101,6 +103,19 @@ impl ApplicationPort for FakeApplication {
 
     fn projects(&mut self) -> AppResult<Vec<ProjectRef>> {
         Ok(Vec::new())
+    }
+
+    fn identity(&mut self) -> AppResult<Option<ActorIdentity>> {
+        Ok(self.identity.clone())
+    }
+
+    fn set_identity(&mut self, name: &str) -> AppResult<ActorIdentity> {
+        let identity = ActorIdentity {
+            id: "00000000000000000000000000".to_owned(),
+            name: name.trim().to_owned(),
+        };
+        self.identity = Some(identity.clone());
+        Ok(identity)
     }
 
     fn backup(&mut self) -> AppResult<PathBuf> {
@@ -571,4 +586,47 @@ fn due_parse_errors_wrap_the_exact_go_time_parse_error() {
         assert!(stderr.is_empty());
         assert_eq!(result.expect_err("invalid due").to_string(), expected);
     }
+}
+
+#[test]
+fn config_show_before_set_reports_no_user() {
+    let (result, stdout, stderr) = invoke(&["ptrack", "config", "show"]);
+    assert_eq!(result.expect("config show"), RunOutcome::ExitSuccess);
+    assert_eq!(
+        stdout,
+        "no user configured (run 'ptrack config set user <name>')\n"
+    );
+    assert!(stderr.is_empty());
+}
+
+#[test]
+fn config_set_user_mints_an_identity_and_show_json_reflects_it() {
+    let mut application = FakeApplication::default();
+    let (result, stdout, stderr) = invoke_with(
+        &mut application,
+        &["ptrack", "config", "set", "user", "Rodrigo"],
+    );
+    assert_eq!(result.expect("config set"), RunOutcome::ExitSuccess);
+    assert_eq!(stdout, "user Rodrigo (00000000000000000000000000)\n");
+    assert!(stderr.is_empty());
+
+    let (result, stdout, stderr) =
+        invoke_with(&mut application, &["ptrack", "config", "show", "--json"]);
+    assert_eq!(result.expect("config show json"), RunOutcome::ExitSuccess);
+    assert_eq!(
+        stdout,
+        "{\n  \"id\": \"00000000000000000000000000\",\n  \"name\": \"Rodrigo\"\n}\n"
+    );
+    assert!(stderr.is_empty());
+}
+
+#[test]
+fn config_set_rejects_an_unknown_key() {
+    let (result, stdout, stderr) = invoke(&["ptrack", "config", "set", "badkey", "x"]);
+    assert_eq!(
+        result.expect_err("unknown config key").to_string(),
+        "unknown config key \"badkey\" (want \"user\")"
+    );
+    assert!(stdout.is_empty());
+    assert!(stderr.is_empty());
 }

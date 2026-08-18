@@ -485,6 +485,21 @@ impl<'a> From<&'a SearchView> for SearchJson<'a> {
     }
 }
 
+#[derive(Serialize)]
+pub struct ConfigUserJson<'a> {
+    pub id: Option<&'a str>,
+    pub name: Option<&'a str>,
+}
+
+impl<'a> From<Option<&'a ptrack_app::ActorIdentity>> for ConfigUserJson<'a> {
+    fn from(value: Option<&'a ptrack_app::ActorIdentity>) -> Self {
+        Self {
+            id: value.map(|identity| identity.id.as_str()),
+            name: value.map(|identity| identity.name.as_str()),
+        }
+    }
+}
+
 pub fn raw_or_null<T>(values: Vec<T>) -> Option<Vec<T>> {
     nonempty(values)
 }

@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use ptrack_app::{
-    AppError, AppResult, ApplicationPort, CapabilityCancellation, CapabilityMcpOutcome,
-    GuideAction, HookAction, HookResult, InitRequest, InitResult, Mutation, MutationResult,
-    ProcessOutput,
+    ActorIdentity, AppError, AppResult, ApplicationPort, CapabilityCancellation,
+    CapabilityMcpOutcome, GuideAction, HookAction, HookResult, InitRequest, InitResult, Mutation,
+    MutationResult, ProcessOutput,
 };
 use ptrack_core::{
     Meta, Plan, PlanStatus, ProjectRef, ProjectSnapshot, Task, TaskStatus, Timestamp,
@@ -44,6 +44,14 @@ impl ApplicationPort for FakeApplication {
     }
 
     fn projects(&mut self) -> AppResult<Vec<ProjectRef>> {
+        unreachable!()
+    }
+
+    fn identity(&mut self) -> AppResult<Option<ActorIdentity>> {
+        unreachable!()
+    }
+
+    fn set_identity(&mut self, _name: &str) -> AppResult<ActorIdentity> {
         unreachable!()
     }
 

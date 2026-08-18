@@ -18,9 +18,9 @@ use ptrack_core::{
 };
 
 use crate::compat_json::{
-    BoardJson, CommitJson, DigestJson, IssueJson, IssueShowJson, MilestoneJson, MilestoneShowJson,
-    NextJson, NoteRow, PlanRow, PlanShowJson, ProjectJson, SearchJson, StatusJson, TaskRow,
-    TaskShowJson, raw_or_null, timestamp,
+    BoardJson, CommitJson, ConfigUserJson, DigestJson, IssueJson, IssueShowJson, MilestoneJson,
+    MilestoneShowJson, NextJson, NoteRow, PlanRow, PlanShowJson, ProjectJson, SearchJson,
+    StatusJson, TaskRow, TaskShowJson, raw_or_null, timestamp,
 };
 use crate::error::CliError;
 use crate::output;
@@ -113,6 +113,7 @@ fn dispatch(
         ["issue", command] => issue(command, leaf, application, io),
         ["note", command] => note(command, leaf, application, io),
         ["commit", command] => commit(command, leaf, application, io),
+        ["config", command] => config(command, leaf, application, io),
         ["hook", command] => hook(command, application, io),
         ["context"] => context_command(leaf, application, io),
         ["guide"] => guide(leaf, application, io),
@@ -871,6 +872,48 @@ fn commit(
             }
         }
         _ => return Err(CliError::message("internal commit dispatch mismatch")),
+    }
+    Ok(RunOutcome::ExitSuccess)
+}
+
+fn config(
+    command: &str,
+    matches: &ArgMatches,
+    application: &mut dyn ApplicationPort,
+    io: &mut Io<'_>,
+) -> Result<RunOutcome, CliError> {
+    match command {
+        "set" => {
+            let args = values(matches, "values");
+            if args[0] != "user" {
+                return Err(CliError::message(format!(
+                    "unknown config key {:?} (want \"user\")",
+                    args[0]
+                )));
+            }
+            let identity = application.set_identity(&args[1..].join(" "))?;
+            output::line(
+                io.stdout,
+                format_args!("user {} ({})", identity.name, identity.id),
+            )?;
+        }
+        "show" => {
+            let identity = application.identity()?;
+            if matches.get_flag("json") {
+                output::json(io.stdout, &ConfigUserJson::from(identity.as_ref()))?;
+            } else if let Some(identity) = identity {
+                output::line(
+                    io.stdout,
+                    format_args!("user {} ({})", identity.name, identity.id),
+                )?;
+            } else {
+                output::line(
+                    io.stdout,
+                    "no user configured (run 'ptrack config set user <name>')",
+                )?;
+            }
+        }
+        _ => return Err(CliError::message("internal config dispatch mismatch")),
     }
     Ok(RunOutcome::ExitSuccess)
 }

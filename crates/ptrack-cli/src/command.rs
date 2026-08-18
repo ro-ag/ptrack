@@ -57,6 +57,8 @@ pub const LEAVES: &[LeafSpec] = &[
     leaf(&["commit", "record"], ArgCount::None),
     leaf(&["commit", "list"], ArgCount::None),
     leaf(&["commit", "show"], ArgCount::Exact(1)),
+    leaf(&["config", "set"], ArgCount::Minimum(2)),
+    leaf(&["config", "show"], ArgCount::None),
     leaf(&["hook", "install"], ArgCount::None),
     leaf(&["hook", "uninstall"], ArgCount::None),
     leaf(&["hook", "status"], ArgCount::None),

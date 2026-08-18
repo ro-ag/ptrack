@@ -22,6 +22,14 @@ pub const MEMORY_WRITEBACK_REPLAY_LIMIT: usize = 256;
 pub const CAPABILITY_AUDIT_GLOBAL_LIMIT: i64 = 5_000;
 pub const FIRST_RUN_TITLE_MAX_BYTES: usize = 240;
 
+/// The configured machine-wide user identity: a stable random ID minted once
+/// by `ptrack config set user`, plus its mutable display name.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActorIdentity {
+    pub id: String,
+    pub name: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MemoryWriteRequest {
     pub request_id: String,

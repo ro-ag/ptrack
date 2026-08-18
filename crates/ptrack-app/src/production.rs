@@ -14,11 +14,12 @@ use ptrack_capability::{BrokerConfig, BrokerServer, BrokerServerConfig};
 use ptrack_core::upsert_guide;
 use ptrack_core::{ProjectRef, ProjectSnapshot};
 use ptrack_store::{
-    ActiveBinding, ActiveGeneration, ActiveGenerationProject, CutoverLease, CutoverLockMode,
-    GlobalStore, PinnedProjectDirectory, PrivatePathIdentity, ProjectRegistryCasResult,
-    ProjectStore, StoreError, StoreKind, acquire_cutover_lock, install_active_generation,
-    load_active_generation, open_private_path, protect_private_directory, protect_private_file,
-    replace_private_file, sha256_digest, sync_private_directory, validate_active_generation,
+    ActiveBinding, ActiveGeneration, ActiveGenerationProject, ActorIdentity, CutoverLease,
+    CutoverLockMode, GlobalStore, PinnedProjectDirectory, PrivatePathIdentity,
+    ProjectRegistryCasResult, ProjectStore, StoreError, StoreKind, acquire_cutover_lock,
+    install_active_generation, load_active_generation, open_private_path,
+    protect_private_directory, protect_private_file, replace_private_file, sha256_digest,
+    sync_private_directory, validate_active_generation,
 };
 use ptrack_terminal::{
     Manager, ProfileKind, discover_profiles, load_profile_config_if_exists, merge_profiles,
@@ -430,6 +431,14 @@ impl ApplicationPort for RoutedApplication {
 
     fn projects(&mut self) -> AppResult<Vec<ProjectRef>> {
         self.local_global()?.projects()
+    }
+
+    fn identity(&mut self) -> AppResult<Option<ActorIdentity>> {
+        self.local_global()?.identity()
+    }
+
+    fn set_identity(&mut self, name: &str) -> AppResult<ActorIdentity> {
+        self.local_global()?.set_identity(name)
     }
 
     fn backup(&mut self) -> AppResult<PathBuf> {

@@ -142,6 +142,11 @@ pub fn root() -> Command {
                     c.arg(positional("reference", 1)).arg(flag("stat"))
                 }),
         )
+        .subcommand(
+            group("config", &["set", "show"])
+                .mut_subcommand("set", |c| c.arg(positional("values", 2..)))
+                .mut_subcommand("show", |c| c.arg(flag("json"))),
+        )
         .subcommand(group("hook", &["install", "uninstall", "status"]))
         .subcommand(leaf("context").arg(flag("json")))
         .subcommand(leaf("guide").arg(flag("print")))
