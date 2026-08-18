@@ -143,6 +143,7 @@ fn populated_model() -> Model {
             order: 1,
             created_at: stamp(1_700_000_000),
             updated_at: stamp(1_700_000_100),
+            hold_reason: None,
         }],
         vec![Task {
             id: 3,
@@ -152,6 +153,7 @@ fn populated_model() -> Model {
             order: 1,
             created_at: stamp(1_700_000_000),
             updated_at: stamp(1_700_000_100),
+            hold_reason: None,
         }],
         vec![Issue {
             id: 9,
@@ -271,6 +273,7 @@ fn list_window_centers_cursor_truncates_and_fills_selection_row() {
             order: i64::try_from(id).unwrap(),
             created_at: Timestamp::Zero,
             updated_at: Timestamp::Zero,
+            hold_reason: None,
         })
         .collect();
     value.plan_cursor = 12;
@@ -504,6 +507,7 @@ fn inactive_plan_rows_reserve_the_active_star_column() {
         order: 2,
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
+        hold_reason: None,
     });
     value.focus = crate::model::PaneFocus::Tasks;
 
@@ -519,6 +523,54 @@ fn inactive_plan_rows_reserve_the_active_star_column() {
         .position(|cell| cell.symbol() == "#")
         .expect("inactive plan hash");
     assert_eq!(inactive_hash, active_hash);
+}
+
+#[test]
+fn held_plans_and_tasks_keep_their_column_and_gain_a_pause_marker() {
+    let mut value = populated_model();
+    value.welcome = false;
+    value.snapshot.plans[0].hold_reason = Some("waiting on design".to_owned());
+    value.snapshot.tasks[0].hold_reason = Some("waiting on review".to_owned());
+
+    // Overview rows carry the marker but never the reason.
+    let overview = rendered(&value, 120, 30);
+    assert!(overview.contains("⏸ #1 Rust terminal UI"), "{overview}");
+    assert!(overview.contains("⏸ #3 Render every screen"), "{overview}");
+    assert!(!overview.contains("waiting on"), "{overview}");
+
+    // The board keeps the held task in its own Doing column — no hold lane.
+    value.tab = Tab::Board;
+    let board = rendered_lines(&value, 120, 30);
+    let titles = board
+        .iter()
+        .find(|line| line.contains("Doing"))
+        .expect("column titles");
+    assert!(!titles.to_lowercase().contains("hold"), "{titles}");
+    let card = board
+        .iter()
+        .find(|line| line.contains("#3 Render every screen"))
+        .expect("board card");
+    assert!(card.contains("⏸ #3 Render every screen"), "{card}");
+
+    // Only the item view spells the reason out.
+    value.tab = Tab::Overview;
+    value.detail = Some(DetailTarget::Task(3));
+    let task_detail = rendered(&value, 100, 30);
+    assert!(
+        task_detail.contains("On hold   ⏸ waiting on review"),
+        "{task_detail}"
+    );
+
+    value.detail = Some(DetailTarget::Plan(1));
+    let plan_detail = rendered(&value, 100, 30);
+    assert!(
+        plan_detail.contains("On hold   ⏸ waiting on design"),
+        "{plan_detail}"
+    );
+    assert!(
+        plan_detail.contains("⏸ #3 Render every screen"),
+        "{plan_detail}"
+    );
 }
 
 #[test]

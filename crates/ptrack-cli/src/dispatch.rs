@@ -13,7 +13,8 @@ use ptrack_app::{
 };
 use ptrack_core::{
     IssueStatus, MilestoneStatus, NoteTarget, PlanStatus, Severity, TaskStatus, Timestamp,
-    board_for, context, next, search, show_issue, show_milestone, show_plan, show_task,
+    board_for, check_hold_reason, context, hold_marker, next, search, show_issue, show_milestone,
+    show_plan, show_task,
 };
 
 use crate::compat_json::{
@@ -295,6 +296,26 @@ fn milestone(
     Ok(RunOutcome::ExitSuccess)
 }
 
+/// Joins, trims, and checks a hold reason at the input boundary, so the codec's
+/// field-path message never reaches a person and `"  waiting  "` stores as
+/// `"waiting"`.
+fn hold_reason(args: &[String]) -> Result<String, CliError> {
+    let reason = args.join(" ").trim().to_owned();
+    check_hold_reason(&reason).map_err(CliError::message)?;
+    Ok(reason)
+}
+
+/// Store hold refusals already read as sentences ("task #3 is done and cannot
+/// be put on hold"); drop the layer prefix rather than restate them.
+fn hold_error(error: ptrack_app::AppError) -> CliError {
+    let message = error.to_string();
+    CliError::message(
+        message
+            .strip_prefix(ptrack_app::INVALID_HOLD_PREFIX)
+            .unwrap_or(&message),
+    )
+}
+
 fn plan(
     command: &str,
     matches: &ArgMatches,
@@ -327,6 +348,7 @@ fn plan(
                         title: &plan.title,
                         status: plan.status.as_str(),
                         active: plan.id == snapshot.meta.active_plan,
+                        hold_reason: plan.hold_reason.as_deref(),
                     })
                     .collect();
                 output::json(io.stdout, &rows)?;
@@ -339,7 +361,13 @@ fn plan(
                     };
                     output::line(
                         io.stdout,
-                        format_args!("#{} [{}] {mark} {}", plan.id, plan.status, plan.title),
+                        format_args!(
+                            "#{} [{}] {mark} {}{}",
+                            plan.id,
+                            plan.status,
+                            plan.title,
+                            hold_marker(plan.hold_reason.as_deref())
+                        ),
                     )?;
                 }
             }
@@ -362,6 +390,25 @@ fn plan(
             expect_none(
                 application.mutate(Mutation::SetActivePlan(parse_u64(first(matches, "id")?)?))?,
             )?;
+        }
+        "hold" => {
+            let args = values(matches, "values");
+            let id = parse_u64(&args[0])?;
+            let reason = hold_reason(&args[1..])?;
+            expect_none(
+                application
+                    .mutate(Mutation::SetPlanHold {
+                        id,
+                        reason: Some(reason.clone()),
+                    })
+                    .map_err(hold_error)?,
+            )?;
+            output::line(io.stdout, format_args!("plan #{id} on hold: {reason}"))?;
+        }
+        "resume" => {
+            let id = parse_u64(first(matches, "id")?)?;
+            expect_none(application.mutate(Mutation::SetPlanHold { id, reason: None })?)?;
+            output::line(io.stdout, format_args!("plan #{id} resumed"))?;
         }
         "rename" => {
             let args = values(matches, "values");
@@ -423,6 +470,7 @@ fn task(
                         plan_id: task.plan_id,
                         title: &task.title,
                         status: task.status.as_str(),
+                        hold_reason: task.hold_reason.as_deref(),
                     })
                     .collect();
                 output::json(io.stdout, &rows)?;
@@ -431,8 +479,12 @@ fn task(
                     output::line(
                         io.stdout,
                         format_args!(
-                            "#{} [{}] {} (plan {})",
-                            task.id, task.status, task.title, task.plan_id
+                            "#{} [{}] {} (plan {}){}",
+                            task.id,
+                            task.status,
+                            task.title,
+                            task.plan_id,
+                            hold_marker(task.hold_reason.as_deref())
                         ),
                     )?;
                 }
@@ -463,6 +515,25 @@ fn task(
                 id: parse_u64(&args[0])?,
                 title: args[1..].join(" "),
             })?)?;
+        }
+        "hold" => {
+            let args = values(matches, "values");
+            let id = parse_u64(&args[0])?;
+            let reason = hold_reason(&args[1..])?;
+            expect_none(
+                application
+                    .mutate(Mutation::SetTaskHold {
+                        id,
+                        reason: Some(reason.clone()),
+                    })
+                    .map_err(hold_error)?,
+            )?;
+            output::line(io.stdout, format_args!("task #{id} on hold: {reason}"))?;
+        }
+        "resume" => {
+            let id = parse_u64(first(matches, "id")?)?;
+            expect_none(application.mutate(Mutation::SetTaskHold { id, reason: None })?)?;
+            output::line(io.stdout, format_args!("task #{id} resumed"))?;
         }
         "move" => {
             let id = parse_u64(first(matches, "id")?)?;
@@ -943,6 +1014,15 @@ fn board(
     Ok(RunOutcome::ExitSuccess)
 }
 
+/// Renders the ` (N on hold)` status suffix, or nothing when none are held.
+fn held_suffix(count: usize) -> String {
+    if count == 0 {
+        String::new()
+    } else {
+        format!(" ({count} on hold)")
+    }
+}
+
 fn status(
     matches: &ArgMatches,
     application: &mut dyn ApplicationPort,
@@ -961,6 +1041,18 @@ fn status(
             TaskStatus::Blocked => blocked += 1,
         }
     }
+    // A hold is orthogonal to status: a held task still counts under its own
+    // status above and again here.
+    let on_hold = snapshot
+        .tasks
+        .iter()
+        .filter(|task| task.hold_reason.is_some())
+        .count();
+    let plans_on_hold = snapshot
+        .plans
+        .iter()
+        .filter(|plan| plan.hold_reason.is_some())
+        .count();
     if matches.get_flag("json") {
         output::json(
             io.stdout,
@@ -973,6 +1065,8 @@ fn status(
                 doing,
                 done,
                 blocked,
+                on_hold,
+                plans_on_hold,
             },
         )?;
     } else {
@@ -1006,9 +1100,19 @@ fn status(
         )?;
         output::line(
             io.stdout,
-            format_args!("tasks: {todo} todo, {doing} doing, {done} done, {blocked} blocked"),
+            format_args!(
+                "tasks: {todo} todo, {doing} doing, {done} done, {blocked} blocked{}",
+                held_suffix(on_hold)
+            ),
         )?;
-        output::line(io.stdout, format_args!("plans: {}", snapshot.plans.len()))?;
+        output::line(
+            io.stdout,
+            format_args!(
+                "plans: {}{}",
+                snapshot.plans.len(),
+                held_suffix(plans_on_hold)
+            ),
+        )?;
     }
     Ok(RunOutcome::ExitSuccess)
 }

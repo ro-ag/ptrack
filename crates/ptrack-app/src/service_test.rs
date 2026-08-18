@@ -3,12 +3,15 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ptrack_capability::{BrokerConfig, BrokerServer, BrokerServerConfig, McpCancellation};
-use ptrack_core::PlanStatus;
-use ptrack_store::{ActiveBinding, GlobalStore, PinnedProjectDirectory, ProjectStore, StoreKind};
+use ptrack_core::{PlanStatus, TaskStatus};
+use ptrack_store::{
+    ActiveBinding, GlobalStore, PinnedProjectDirectory, ProjectStore, StoreError, StoreKind,
+};
 
 use crate::{
-    ApplicationPort, CapabilityMcpOutcome, CapabilitySessionEnvironment, InitRequest,
-    LocalApplication, Mutation, MutationResult, ProjectEndpoint, WorkspaceBindings,
+    AppError, ApplicationPort, CapabilityMcpOutcome, CapabilitySessionEnvironment,
+    INVALID_HOLD_PREFIX, InitRequest, LocalApplication, Mutation, MutationResult, ProjectEndpoint,
+    WorkspaceBindings,
 };
 #[cfg(unix)]
 use crate::{GuideAction, HookAction, HookResult};
@@ -108,6 +111,109 @@ fn operations_reopen_and_drop_the_store() {
     assert_eq!(
         application.snapshot().expect("reload").plans[0].status,
         PlanStatus::Done
+    );
+}
+
+#[test]
+fn hold_mutations_reach_the_store_and_keep_the_underlying_status() {
+    let directory = TestDirectory::new("hold");
+    let (mut application, _) = configured(&directory, true);
+    let MutationResult::Plan(plan) = application
+        .mutate(Mutation::AddPlan {
+            title: "one".to_owned(),
+            milestone_id: 0,
+        })
+        .expect("add plan")
+    else {
+        panic!("wrong mutation result");
+    };
+    let MutationResult::Task(task) = application
+        .mutate(Mutation::AddTask {
+            plan_id: plan.id,
+            title: "work".to_owned(),
+        })
+        .expect("add task")
+    else {
+        panic!("wrong mutation result");
+    };
+
+    application
+        .mutate(Mutation::SetTaskStatus {
+            id: task.id,
+            status: TaskStatus::Doing,
+        })
+        .expect("start task");
+    application
+        .mutate(Mutation::SetTaskHold {
+            id: task.id,
+            reason: Some("waiting on review".to_owned()),
+        })
+        .expect("hold task");
+    application
+        .mutate(Mutation::SetPlanHold {
+            id: plan.id,
+            reason: Some("paused".to_owned()),
+        })
+        .expect("hold plan");
+
+    let snapshot = application.snapshot().expect("snapshot");
+    assert_eq!(
+        snapshot.tasks[0].hold_reason.as_deref(),
+        Some("waiting on review")
+    );
+    assert_eq!(snapshot.tasks[0].status, TaskStatus::Doing);
+    assert_eq!(snapshot.plans[0].hold_reason.as_deref(), Some("paused"));
+    assert_eq!(snapshot.plans[0].status, PlanStatus::Active);
+
+    application
+        .mutate(Mutation::SetTaskStatus {
+            id: task.id,
+            status: TaskStatus::Done,
+        })
+        .expect("finish task");
+    let error = application
+        .mutate(Mutation::SetTaskHold {
+            id: task.id,
+            reason: Some("too late".to_owned()),
+        })
+        .expect_err("a done task cannot be put on hold");
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "{INVALID_HOLD_PREFIX}task #{} is done and cannot be put on hold",
+            task.id
+        )
+    );
+
+    application
+        .mutate(Mutation::SetTaskHold {
+            id: task.id,
+            reason: None,
+        })
+        .expect("resume task");
+    application
+        .mutate(Mutation::SetPlanHold {
+            id: plan.id,
+            reason: None,
+        })
+        .expect("resume plan");
+    let snapshot = application.snapshot().expect("snapshot");
+    assert!(snapshot.tasks[0].hold_reason.is_none());
+    assert!(snapshot.plans[0].hold_reason.is_none());
+}
+
+/// The CLI strips [`INVALID_HOLD_PREFIX`] off an [`AppError`] to show the
+/// store's own sentence. Pin the constant against the real `StoreError`
+/// rendering so a reworded `Display` fails here instead of leaking the layer
+/// prefix to a person.
+#[test]
+fn the_hold_prefix_constant_is_what_the_store_error_actually_renders() {
+    let error = AppError::from(StoreError::InvalidHold(
+        "task #1 is done and cannot be put on hold".to_owned(),
+    ));
+    assert_eq!(
+        error.to_string().strip_prefix(INVALID_HOLD_PREFIX),
+        Some("task #1 is done and cannot be put on hold")
     );
 }
 

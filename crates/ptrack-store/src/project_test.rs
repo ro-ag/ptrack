@@ -8,13 +8,15 @@ use std::time::Instant;
 use ptrack_capability_policy::{AuditEvent, confirm_approval, normalize, sanitize_audit};
 use ptrack_core::{
     Capability, CapabilityAudit, CapabilityAuditPolicy, CapabilityKind, CapabilityLimits, Digest32,
-    GitScope, MemoryKind, NativeRecord, NoteTarget, PlanStatus, RecordKind, TaskStatus, Timestamp,
-    decode_record,
+    GitScope, MIN_NATIVE_PAYLOAD_SCHEMA, MemoryKind, NativeRecord, NoteTarget, Plan, PlanStatus,
+    RecordKind, TaskStatus, Timestamp, decode_record, encode_record,
 };
 
+use crate::typed;
 use crate::{
-    ActiveBinding, Clock, Collection, GlobalStore, MemoryWriteRequest, ProjectRegistryCasResult,
-    ProjectStore, RecordKey, Store, StoreError, StoreKind,
+    ActiveBinding, Clock, Collection, GlobalStore, MemoryWriteRequest, NATIVE_CODEC,
+    NATIVE_PAYLOAD_SCHEMA, ProjectRegistryCasResult, ProjectStore, RecordEnvelope, RecordKey,
+    Store, StoreError, StoreKind,
 };
 
 static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -175,6 +177,36 @@ fn typed_project_mutations_conversion_cas_and_snapshot_are_atomic() {
         ProjectStore::open_existing(&path, &wrong, "test"),
         Err(StoreError::ActivationBinding(_))
     ));
+}
+
+#[test]
+fn convert_task_to_plan_carries_the_hold_reason_only_when_set() {
+    let temp = Temp::new();
+    let path = temp.path("convert-hold.redb");
+    let expected = binding(&path, StoreKind::Project, "convert-hold");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+
+    let milestone = store.add_milestone("m").unwrap();
+    let parent = store.add_plan("parent", milestone.id).unwrap();
+
+    let held = store.add_task(parent.id, "held").unwrap();
+    store.set_task_status(held.id, TaskStatus::Doing).unwrap();
+    store
+        .set_task_hold(held.id, Some("waiting on review".to_owned()))
+        .unwrap();
+    let promoted = store.convert_task_to_plan(held.id).unwrap();
+    assert_eq!(promoted.status, PlanStatus::Active);
+    assert_eq!(promoted.hold_reason.as_deref(), Some("waiting on review"));
+
+    // A done task cannot be held today, so this pins the mapping rather than
+    // the guard: `convert_task_to_plan` now filters the carried hold through
+    // `plan_status_can_hold`, so a future status mapping that sends a held task
+    // to a done or archived plan still cannot mint a done-and-held record.
+    let done = store.add_task(parent.id, "done").unwrap();
+    store.set_task_status(done.id, TaskStatus::Done).unwrap();
+    let promoted_done = store.convert_task_to_plan(done.id).unwrap();
+    assert_eq!(promoted_done.status, PlanStatus::Done);
+    assert_eq!(promoted_done.hold_reason, None);
 }
 
 #[test]
@@ -1156,4 +1188,302 @@ fn typed_write_rejects_path_replacement_before_mutation() {
     drop(store);
     fs::remove_file(path).unwrap();
     fs::rename(moved, temp.path("identity.redb")).unwrap();
+}
+
+#[test]
+fn holds_round_trip_and_are_refused_on_terminal_records() {
+    let temp = Temp::new();
+    let path = temp.path("hold.redb");
+    let expected = binding(&path, StoreKind::Project, "project-hold");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+
+    let plan = store.add_plan("plan", 0).unwrap();
+    let task = store.add_task(plan.id, "task").unwrap();
+    assert_eq!(plan.hold_reason, None);
+    assert_eq!(task.hold_reason, None);
+
+    store
+        .set_plan_hold(plan.id, Some("waiting on review".to_owned()))
+        .unwrap();
+    store
+        .set_task_hold(task.id, Some("blocked upstream".to_owned()))
+        .unwrap();
+    assert_eq!(
+        store.plan(plan.id).unwrap().hold_reason.as_deref(),
+        Some("waiting on review")
+    );
+    assert_eq!(
+        store.task(task.id).unwrap().hold_reason.as_deref(),
+        Some("blocked upstream")
+    );
+
+    // Surrounding whitespace is trimmed at the store, the one path every writer
+    // shares, so the CLI and the app mutation store the same words the same way.
+    store
+        .set_plan_hold(plan.id, Some("  waiting on review  ".to_owned()))
+        .unwrap();
+    store
+        .set_task_hold(task.id, Some("\tblocked upstream\n".to_owned()))
+        .unwrap();
+    assert_eq!(
+        store.plan(plan.id).unwrap().hold_reason.as_deref(),
+        Some("waiting on review")
+    );
+    assert_eq!(
+        store.task(task.id).unwrap().hold_reason.as_deref(),
+        Some("blocked upstream")
+    );
+
+    // A held record survives a reopen, so the hold is durable and not derived.
+    drop(store);
+    let expected = binding(&path, StoreKind::Project, "project-hold");
+    let store = ProjectStore::open_existing(&path, &expected, "test").unwrap();
+    assert_eq!(
+        store.plan(plan.id).unwrap().hold_reason.as_deref(),
+        Some("waiting on review")
+    );
+
+    // Resuming is always allowed, including from a terminal state.
+    store.set_task_hold(task.id, None).unwrap();
+    assert_eq!(store.task(task.id).unwrap().hold_reason, None);
+    store.set_task_status(task.id, TaskStatus::Done).unwrap();
+    store.set_task_hold(task.id, None).unwrap();
+
+    let error = store
+        .set_task_hold(task.id, Some("too late".to_owned()))
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "invalid hold mutation: task #{} is done and cannot be put on hold",
+            task.id
+        )
+    );
+
+    store.set_plan_hold(plan.id, None).unwrap();
+    for status in [PlanStatus::Done, PlanStatus::Archived] {
+        store.set_plan_status(plan.id, status).unwrap();
+        store.set_plan_hold(plan.id, None).unwrap();
+        assert!(matches!(
+            store.set_plan_hold(plan.id, Some("too late".to_owned())),
+            Err(StoreError::InvalidHold(_))
+        ));
+    }
+
+    assert!(matches!(
+        store.set_plan_hold(9_999, None),
+        Err(StoreError::NotFound)
+    ));
+
+    // Reason bounds are enforced at the core trust boundary, so a malformed
+    // reason never reaches the database.
+    store.set_plan_status(plan.id, PlanStatus::Active).unwrap();
+    for bad in [
+        "   ".to_owned(),
+        "line\nbreak".to_owned(),
+        "x".repeat(1_025),
+    ] {
+        assert!(store.set_plan_hold(plan.id, Some(bad)).is_err());
+    }
+    assert_eq!(store.plan(plan.id).unwrap().hold_reason, None);
+}
+
+/// A status transition into a terminal state must clear the hold, because
+/// `set_*_hold` refuses to create the done-and-held record that would otherwise
+/// persist.
+#[test]
+fn terminal_status_transitions_clear_the_hold_reason() {
+    let temp = Temp::new();
+    let path = temp.path("hold-clear.redb");
+    let expected = binding(&path, StoreKind::Project, "project-hold-clear");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+    let plan = store.add_plan("plan", 0).unwrap();
+    let task = store.add_task(plan.id, "task").unwrap();
+
+    // A task keeps its hold while it stays open, in either direction.
+    store
+        .set_task_hold(task.id, Some("blocked upstream".to_owned()))
+        .unwrap();
+    for status in [TaskStatus::Doing, TaskStatus::Blocked, TaskStatus::Todo] {
+        store.set_task_status(task.id, status).unwrap();
+        assert_eq!(
+            store.task(task.id).unwrap().hold_reason.as_deref(),
+            Some("blocked upstream"),
+            "{status:?}"
+        );
+    }
+    store.set_task_status(task.id, TaskStatus::Done).unwrap();
+    assert_eq!(store.task(task.id).unwrap().hold_reason, None);
+
+    // The compare-and-set path has the same hole and the same fix.
+    store.set_task_status(task.id, TaskStatus::Todo).unwrap();
+    store
+        .set_task_hold(task.id, Some("blocked upstream".to_owned()))
+        .unwrap();
+    let held = store.task(task.id).unwrap();
+    let updated = store
+        .compare_and_set_task_status(
+            task.id,
+            plan.id,
+            TaskStatus::Todo,
+            held.updated_at,
+            TaskStatus::Done,
+        )
+        .unwrap();
+    assert_eq!(updated.hold_reason, None);
+    assert_eq!(store.task(task.id).unwrap().hold_reason, None);
+
+    for status in [PlanStatus::Done, PlanStatus::Archived] {
+        store.set_plan_status(plan.id, PlanStatus::Active).unwrap();
+        store
+            .set_plan_hold(plan.id, Some("waiting on review".to_owned()))
+            .unwrap();
+        store.set_plan_status(plan.id, status).unwrap();
+        assert_eq!(store.plan(plan.id).unwrap().hold_reason, None, "{status:?}");
+    }
+}
+
+/// The regression the reviewer caught: opening an existing database
+/// re-validates every stored record, so a build that pinned the current payload
+/// schema there refused every database written before the bump.
+#[test]
+fn a_database_of_schema_1_records_opens_reads_and_upgrades_on_write() {
+    let temp = Temp::new();
+    let path = temp.path("schema-1-database.redb");
+    let expected = binding(&path, StoreKind::Project, "project-schema-1");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+    let plan = store.add_plan("legacy plan", 0).unwrap();
+    let task = store.add_task(plan.id, "legacy task").unwrap();
+
+    // Rewrite both records exactly as a released pre-hold build stored them:
+    // the current layout minus the trailing hold-reason option byte, under
+    // payload schema 1.
+    store
+        .write(|transaction| {
+            let plan_payload = encode_record(&NativeRecord::Plan(plan.clone())).unwrap();
+            let task_payload = encode_record(&NativeRecord::Task(task.clone())).unwrap();
+            for (collection, id, payload) in [
+                (Collection::Plans, plan.id, plan_payload),
+                (Collection::Tasks, task.id, task_payload),
+            ] {
+                let mut payload = payload;
+                assert_eq!(payload.pop(), Some(0));
+                let legacy = RecordEnvelope::new(NATIVE_CODEC, MIN_NATIVE_PAYLOAD_SCHEMA, payload);
+                transaction.put(collection, RecordKey::Id(id), &legacy)?;
+            }
+            Ok(())
+        })
+        .unwrap();
+    drop(store);
+
+    let expected = binding(&path, StoreKind::Project, "project-schema-1");
+    let store = ProjectStore::open_existing(&path, &expected, "test").unwrap();
+    assert_eq!(store.plan(plan.id).unwrap(), plan);
+    assert_eq!(store.task(task.id).unwrap(), task);
+    assert_eq!(stored_schema(&store, Collection::Plans, plan.id), 1);
+    assert_eq!(stored_schema(&store, Collection::Tasks, task.id), 1);
+
+    // Any write upgrades that one record in place; nothing else is rewritten.
+    store
+        .set_plan_hold(plan.id, Some("waiting on review".to_owned()))
+        .unwrap();
+    assert_eq!(
+        stored_schema(&store, Collection::Plans, plan.id),
+        NATIVE_PAYLOAD_SCHEMA
+    );
+    assert_eq!(stored_schema(&store, Collection::Tasks, task.id), 1);
+
+    // The half-upgraded database still opens, and the untouched schema-1 task
+    // still reads.
+    drop(store);
+    let expected = binding(&path, StoreKind::Project, "project-schema-1");
+    let store = ProjectStore::open_existing(&path, &expected, "test").unwrap();
+    assert_eq!(
+        store.plan(plan.id).unwrap().hold_reason.as_deref(),
+        Some("waiting on review")
+    );
+    assert_eq!(store.task(task.id).unwrap(), task);
+}
+
+fn stored_schema(store: &ProjectStore, collection: Collection, id: u64) -> u32 {
+    store
+        .read(|transaction| {
+            Ok(transaction
+                .get(collection, RecordKey::Id(id))?
+                .expect("record exists")
+                .payload_schema())
+        })
+        .unwrap()
+}
+
+#[test]
+fn schema_1_records_read_unheld_upgrade_on_write_and_future_schemas_fail_closed() {
+    let plan = Plan {
+        id: 1,
+        title: "legacy".to_owned(),
+        status: PlanStatus::Active,
+        milestone_id: 0,
+        order: 0,
+        created_at: timestamp(1_700_000_000),
+        updated_at: timestamp(1_700_000_000),
+        hold_reason: None,
+    };
+    // An older build stored the current layout minus the trailing hold-reason
+    // option, under payload schema 1.
+    let mut payload = encode_record(&NativeRecord::Plan(plan.clone())).unwrap();
+    assert_eq!(payload.pop(), Some(0));
+    let legacy = RecordEnvelope::new(NATIVE_CODEC, MIN_NATIVE_PAYLOAD_SCHEMA, payload);
+
+    // It still decodes, and reads as not held.
+    assert_eq!(typed::decode::<Plan>(legacy.clone()).unwrap(), plan);
+
+    // Re-encoding lands at the current schema, so any write upgrades the record
+    // in place without the open path ever touching it.
+    let upgraded = typed::encode(&plan).unwrap();
+    assert_eq!(upgraded.payload_schema(), NATIVE_PAYLOAD_SCHEMA);
+    assert_eq!(upgraded.payload().len(), legacy.payload().len() + 1);
+    assert_eq!(typed::decode::<Plan>(upgraded).unwrap(), plan);
+
+    // A schema this build does not know fails closed on read instead of being
+    // decoded at the current layout.
+    let future = RecordEnvelope::new(
+        NATIVE_CODEC,
+        NATIVE_PAYLOAD_SCHEMA + 1,
+        legacy.payload().to_vec(),
+    );
+    let error = typed::decode::<Plan>(future).unwrap_err();
+    assert!(
+        error.to_string().contains("payload schema"),
+        "expected a schema error, got {error}"
+    );
+
+    // One acceptance rule governs reads, opens, imports, and writes, so a
+    // schema-1 envelope can be stored as well as read. Nothing in the
+    // application writes one — `typed::encode` always stamps the current
+    // schema — but import replays archives byte for byte and must not be
+    // refused for carrying the schema its exporter wrote.
+    let temp = Temp::new();
+    let path = temp.path("lazy-upgrade.redb");
+    let expected = binding(&path, StoreKind::Project, "project-upgrade");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+    store
+        .write(|transaction| {
+            transaction.put(Collection::Plans, RecordKey::Id(plan.id), &legacy)?;
+            Ok(())
+        })
+        .unwrap();
+
+    // A schema outside the accepted range is still refused at the write gate.
+    let refused = store
+        .write(|transaction| {
+            let future = RecordEnvelope::new(
+                NATIVE_CODEC,
+                NATIVE_PAYLOAD_SCHEMA + 1,
+                legacy.payload().to_vec(),
+            );
+            transaction.put(Collection::Plans, RecordKey::Id(plan.id), &future)?;
+            Ok(())
+        })
+        .unwrap_err();
+    assert!(matches!(refused, StoreError::InvalidImport(_)), "{refused}");
 }

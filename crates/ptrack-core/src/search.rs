@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 
-use crate::report::{issue_line, note_line, notes_markdown, task_line};
+use crate::report::{hold_marker, issue_line, note_line, notes_markdown, task_line};
 use crate::views::plan_ref;
 use crate::{IssueLine, MilestoneRef, NoteLine, PlanRef, ProjectSnapshot, TaskLine};
 
@@ -92,8 +92,11 @@ impl SearchView {
             for plan in &self.plans {
                 writeln!(
                     &mut output,
-                    "- #{} {} [{}]",
-                    plan.id, plan.title, plan.status
+                    "- #{} {} [{}]{}",
+                    plan.id,
+                    plan.title,
+                    plan.status,
+                    hold_marker(plan.hold_reason.as_deref())
                 )
                 .expect("writing to String cannot fail");
             }
@@ -104,8 +107,12 @@ impl SearchView {
             for task in &self.tasks {
                 writeln!(
                     &mut output,
-                    "- [{}] #{} {} (plan {})",
-                    task.status, task.id, task.title, task.plan_id
+                    "- [{}] #{} {} (plan {}){}",
+                    task.status,
+                    task.id,
+                    task.title,
+                    task.plan_id,
+                    hold_marker(task.hold_reason.as_deref())
                 )
                 .expect("writing to String cannot fail");
             }

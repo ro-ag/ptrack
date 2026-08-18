@@ -2,6 +2,25 @@ use crate::search;
 use crate::test_support::snapshot;
 
 #[test]
+fn search_markdown_carries_the_same_hold_marker_as_every_other_surface() {
+    let mut held = snapshot();
+    held.plans[0].hold_reason = Some("budget freeze".to_owned());
+    held.tasks[1].hold_reason = Some("waiting on review".to_owned());
+
+    assert_eq!(
+        search(&held, "cli").markdown(),
+        "# Search: \"cli\"\n\
+\n\
+## Plans\n\
+- #1 Build CLI [active] [on hold: budget freeze]\n\
+\n"
+    );
+    assert!(search(&held, "context").markdown().contains(
+        "## Tasks\n- [doing] #1 context command (plan 1) [on hold: waiting on review]\n"
+    ));
+}
+
+#[test]
 fn search_matches_exact_fields_case_insensitively_in_snapshot_order() {
     let snapshot = snapshot();
     let commands = search(&snapshot, "COMMAND");

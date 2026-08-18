@@ -2,7 +2,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use ptrack_core::{
     Capability, CapabilityAudit, Commit, Issue, MemoryWritebackRecord, Meta, Milestone,
-    NativeRecord, Note, Plan, ProjectRef, RecordKind, Task, Timestamp, decode_record,
+    NativeRecord, Note, Plan, ProjectRef, RecordKind, Task, Timestamp, decode_record_at_schema,
     encode_record,
 };
 
@@ -178,8 +178,13 @@ pub(crate) fn encode<R: StoredRecord>(record: &R) -> StoreResult<RecordEnvelope>
     ))
 }
 
+/// Decodes a stored record at the payload schema its envelope declares.
+///
+/// Unknown and future schemas are rejected here rather than being decoded at
+/// the current layout, so a record written by a newer build fails closed with a
+/// schema error instead of a misleading structural one.
 pub(crate) fn decode<R: StoredRecord>(envelope: RecordEnvelope) -> StoreResult<R> {
-    let native = decode_record(R::KIND, envelope.payload())
+    let native = decode_record_at_schema(R::KIND, envelope.payload_schema(), envelope.payload())
         .map_err(|error| StoreError::InvalidManifest(error.to_string()))?;
     R::from_native(native).ok_or_else(|| {
         StoreError::InvalidManifest("stored record kind does not match its collection".to_owned())

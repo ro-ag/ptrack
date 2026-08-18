@@ -1,4 +1,17 @@
-use super::{EnvelopeError, RECORD_ENVELOPE_VERSION, RecordEnvelope};
+use super::{
+    EnvelopeError, MIN_NATIVE_PAYLOAD_SCHEMA, NATIVE_CODEC, NATIVE_PAYLOAD_SCHEMA,
+    RECORD_ENVELOPE_VERSION, RecordEnvelope,
+};
+
+#[test]
+fn store_schema_constants_are_pinned_to_ptrack_core() {
+    assert_eq!(NATIVE_CODEC, ptrack_core::NATIVE_CODEC);
+    assert_eq!(NATIVE_PAYLOAD_SCHEMA, ptrack_core::NATIVE_PAYLOAD_SCHEMA);
+    assert_eq!(
+        MIN_NATIVE_PAYLOAD_SCHEMA,
+        ptrack_core::MIN_NATIVE_PAYLOAD_SCHEMA
+    );
+}
 
 #[test]
 fn envelope_v1_has_a_stable_big_endian_layout() {

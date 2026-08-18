@@ -19,6 +19,15 @@ const MAX_AUDIT_DURATION_MILLIS: i64 = 24 * 60 * 60 * 1_000;
 const MAX_AUDIT_BYTES: i64 = 1 << 40;
 const MAX_AUDIT_TARGET_BYTES: usize = 256;
 
+/// Maximum accepted UTF-8 bytes in a plan or task hold reason.
+///
+/// A hold reason is plain single-line prose meant for a list column and a
+/// one-line status banner, not a place to park a document. The bound is a
+/// deliberate new limit rather than a value borrowed from another field: it is
+/// generous enough for a sentence explaining a blocker and small enough that a
+/// hold reason can never dominate a record payload.
+pub const MAX_HOLD_REASON_BYTES: usize = 1024;
+
 /// A stable field-level reason a native record cannot be trusted.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidationError {
@@ -86,6 +95,102 @@ fn require_nonempty(value: &str, field: &'static str) -> Result<(), ValidationEr
     }
 }
 
+/// The ways a hold reason can be unusable, shared by the record validator and
+/// the input-boundary check so the two can never disagree about what is
+/// storable.
+enum HoldReasonProblem {
+    Blank,
+    TooLong,
+    ControlCharacters,
+}
+
+fn hold_reason_problem(reason: &str) -> Option<HoldReasonProblem> {
+    if reason.trim().is_empty() {
+        return Some(HoldReasonProblem::Blank);
+    }
+    if reason.len() > MAX_HOLD_REASON_BYTES {
+        return Some(HoldReasonProblem::TooLong);
+    }
+    if reason.chars().any(is_forbidden_control) {
+        return Some(HoldReasonProblem::ControlCharacters);
+    }
+    None
+}
+
+/// Reports whether a character would break a hold reason out of single-line
+/// plain text.
+///
+/// `char::is_control` covers the C0 and C1 blocks but not the Unicode
+/// separators U+2028 and U+2029, which terminate a line; the bidirectional
+/// formatting controls U+202A-U+202E and U+2066-U+2069; the directional marks
+/// U+200E (LRM), U+200F (RLM), and U+061C (ALM); the zero-width characters
+/// U+200B-U+200D (zero-width space, non-joiner, and joiner), U+FEFF (zero-width
+/// no-break space / byte order mark), U+2060 (word joiner), and U+180E (Mongolian
+/// vowel separator); or the tag block U+E0000-U+E007F, whose invisible ASCII
+/// mirror can smuggle a whole second sentence into a reason — all of which can
+/// reorder or hide what a reason really says without showing up as a visible
+/// character.
+fn is_forbidden_control(value: char) -> bool {
+    value.is_control()
+        || matches!(
+            value,
+            '\u{2028}'
+                | '\u{2029}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{061c}'
+                | '\u{200b}'..='\u{200f}'
+                | '\u{feff}'
+                | '\u{2060}'
+                | '\u{180e}'
+                | '\u{e0000}'..='\u{e007f}'
+        )
+}
+
+/// Rejects a set hold reason that is blank, oversized, or not single-line text.
+fn validate_hold_reason(
+    value: Option<&String>,
+    field: &'static str,
+) -> Result<(), ValidationError> {
+    match value.and_then(|reason| hold_reason_problem(reason)) {
+        None => Ok(()),
+        Some(HoldReasonProblem::Blank) => {
+            Err(ValidationError::new(field, "must be nonblank when set"))
+        }
+        Some(HoldReasonProblem::TooLong) => {
+            Err(ValidationError::new(field, "exceeds the hold reason bound"))
+        }
+        Some(HoldReasonProblem::ControlCharacters) => Err(ValidationError::new(
+            field,
+            "must be single-line text without control characters",
+        )),
+    }
+}
+
+/// Checks a hold reason typed by a person, before it reaches the store.
+///
+/// The record validator fires deep inside `encode_record`, so without this the
+/// user would see a field-path message such as
+/// `plan.hold_reason must be nonblank when set`. Both checks share
+/// [`hold_reason_problem`], so anything accepted here is storable.
+///
+/// # Errors
+///
+/// Returns a printable sentence when the reason cannot be stored.
+pub fn check_hold_reason(reason: &str) -> Result<(), String> {
+    match hold_reason_problem(reason) {
+        None => Ok(()),
+        Some(HoldReasonProblem::Blank) => Err("the hold reason cannot be blank".to_owned()),
+        Some(HoldReasonProblem::TooLong) => Err(format!(
+            "the hold reason is {} bytes; the limit is {MAX_HOLD_REASON_BYTES}",
+            reason.len()
+        )),
+        Some(HoldReasonProblem::ControlCharacters) => {
+            Err("the hold reason must be one line without control characters".to_owned())
+        }
+    }
+}
+
 impl Validate for Timestamp {
     fn validate(&self) -> Result<(), ValidationError> {
         if let Self::Fixed {
@@ -143,6 +248,7 @@ impl Validate for Plan {
     fn validate(&self) -> Result<(), ValidationError> {
         require_id(self.id, "plan.id")?;
         require_nonnegative(self.order, "plan.order")?;
+        validate_hold_reason(self.hold_reason.as_ref(), "plan.hold_reason")?;
         validate_times(&[self.created_at, self.updated_at])
     }
 }
@@ -152,6 +258,7 @@ impl Validate for Task {
         require_id(self.id, "task.id")?;
         require_id(self.plan_id, "task.plan_id")?;
         require_nonnegative(self.order, "task.order")?;
+        validate_hold_reason(self.hold_reason.as_ref(), "task.hold_reason")?;
         validate_times(&[self.created_at, self.updated_at])
     }
 }

@@ -35,10 +35,10 @@ pub use discovery::{
     find_project_database, global_home_from, init_project_directory,
 };
 pub use envelope::{
-    LEGACY_CODEC_GO_GOB, LEGACY_CODEC_RAW, NATIVE_CODEC, NATIVE_PAYLOAD_SCHEMA,
-    RECORD_ENVELOPE_VERSION, RecordEnvelope,
+    LEGACY_CODEC_GO_GOB, LEGACY_CODEC_RAW, MIN_NATIVE_PAYLOAD_SCHEMA, NATIVE_CODEC,
+    NATIVE_PAYLOAD_SCHEMA, RECORD_ENVELOPE_VERSION, RecordEnvelope,
 };
-pub use error::{EnvelopeError, StoreError, StoreResult};
+pub use error::{EnvelopeError, INVALID_HOLD_PREFIX, StoreError, StoreResult};
 pub use global::{GlobalStore, ProjectRegistryCasResult};
 pub use import::{
     IMPORT_BUNDLE_VERSION, JSON_STAGE_VERSION, JsonStageProvenance, MAX_IMPORT_BYTES,

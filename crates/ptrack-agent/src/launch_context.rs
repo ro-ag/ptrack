@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 
-use ptrack_core::{Commit, Issue, Meta, Note, NoteTarget, Plan, Task};
+use ptrack_core::{Commit, Issue, MAX_HOLD_REASON_BYTES, Meta, Note, NoteTarget, Plan, Task};
 use serde::{Deserialize, Serialize};
 
 use crate::{AssociationError, AssociationHost, AssociationPointer, AssociationTarget};
@@ -148,6 +148,9 @@ struct PlanDocument {
     id: u64,
     title: String,
     status: String,
+    /// Rendered by [`hold_line`]; absent while the plan is not held.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hold: Option<String>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -156,6 +159,9 @@ struct TaskDocument {
     plan_id: u64,
     title: String,
     status: String,
+    /// Rendered by [`hold_line`]; absent while the task is not held.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hold: Option<String>,
 }
 #[derive(Serialize)]
 struct DecisionDocument {
@@ -255,11 +261,13 @@ fn build_document(
             })?;
         let (title, changed) = truncate_utf8(&plan.title, MAX_TITLE_BYTES);
         let (status, status_changed) = truncate_utf8(plan.status.as_str(), MAX_LABEL_BYTES);
-        truncated |= changed || status_changed;
+        let (hold, hold_changed) = hold_line(plan.hold_reason.as_deref());
+        truncated |= changed || status_changed || hold_changed;
         document.plan = Some(PlanDocument {
             id: plan.id,
             title,
             status,
+            hold,
         });
     }
     if target.task_id != 0 {
@@ -280,12 +288,14 @@ fn build_document(
         }
         let (title, changed) = truncate_utf8(&task.title, MAX_TITLE_BYTES);
         let (status, status_changed) = truncate_utf8(task.status.as_str(), MAX_LABEL_BYTES);
-        truncated |= changed || status_changed;
+        let (hold, hold_changed) = hold_line(task.hold_reason.as_deref());
+        truncated |= changed || status_changed || hold_changed;
         document.task = Some(TaskDocument {
             id: task.id,
             plan_id: task.plan_id,
             title,
             status,
+            hold,
         });
     }
     document.truncated = truncated;
@@ -488,6 +498,17 @@ fn truncate_utf8(value: &str, limit: usize) -> (String, bool) {
         ),
         true,
     )
+}
+
+/// Renders a hold as `on hold: <reason>`, the same sentence every other p-track
+/// surface shows, so a launched agent reads the hold instead of having to infer
+/// it from a status that a hold deliberately leaves alone.
+fn hold_line(reason: Option<&str>) -> (Option<String>, bool) {
+    let Some(reason) = reason else {
+        return (None, false);
+    };
+    let (reason, changed) = truncate_utf8(reason, MAX_HOLD_REASON_BYTES);
+    (Some(format!("on hold: {reason}")), changed)
 }
 
 fn valid_prefix(value: &str, limit: usize) -> &str {

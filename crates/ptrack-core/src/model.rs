@@ -311,6 +311,8 @@ pub struct Plan {
     pub order: i64,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+    /// Single-line reason this plan is on hold, or `None` when it is running.
+    pub hold_reason: Option<String>,
 }
 
 impl Plan {
@@ -356,6 +358,8 @@ pub struct Task {
     pub order: i64,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+    /// Single-line reason this task is on hold, or `None` when it is running.
+    pub hold_reason: Option<String>,
 }
 
 impl Task {
@@ -504,11 +508,15 @@ pub struct Counts {
     pub milestones_done: usize,
     pub plans: usize,
     pub plans_done: usize,
+    /// Plans carrying a hold reason; orthogonal to `plans_done`.
+    pub plans_on_hold: usize,
     pub tasks: usize,
     pub tasks_done: usize,
     pub tasks_blocked: usize,
     /// Every task not in the done state.
     pub tasks_open: usize,
+    /// Tasks carrying a hold reason; orthogonal to every status total above.
+    pub tasks_on_hold: usize,
     pub issues: usize,
     pub issues_open: usize,
     pub commits: usize,

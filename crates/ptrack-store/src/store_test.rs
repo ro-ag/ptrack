@@ -73,6 +73,7 @@ fn plan(id: u64) -> RecordEnvelope {
         order: 0,
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
+        hold_reason: None,
     }))
 }
 
@@ -85,6 +86,7 @@ fn task(id: u64) -> RecordEnvelope {
         order: 0,
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
+        hold_reason: None,
     }))
 }
 

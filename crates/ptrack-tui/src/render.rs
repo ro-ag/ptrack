@@ -299,6 +299,7 @@ fn draw_overview(frame: &mut Frame<'_>, area: Rect, model: &Model) {
                 // Go reserves the active-star column for every unselected row.
                 spans.push(Span::raw("  "));
             }
+            spans.push(hold_span(plan.hold_reason.as_deref()));
             spans.push(Span::styled(
                 format!("#{} {}", plan.id, plan.title),
                 Style::default().fg(plan_color(plan.status)),
@@ -335,8 +336,10 @@ fn draw_overview(frame: &mut Frame<'_>, area: Rect, model: &Model) {
                         task_icon(task.status),
                         Style::default().fg(task_color(task.status)),
                     ),
+                    Span::raw(" "),
+                    hold_span(task.hold_reason.as_deref()),
                     Span::styled(
-                        format!(" #{} {}", task.id, task.title),
+                        format!("#{} {}", task.id, task.title),
                         Style::default().fg(TEXT),
                     ),
                 ]),
@@ -443,7 +446,12 @@ fn draw_board(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             .take(range.1.saturating_sub(range.0))
             .map(|(index, task)| {
                 selected(
-                    &format!("#{} {}", task.id, task.title),
+                    &format!(
+                        "{}#{} {}",
+                        hold_mark(task.hold_reason.as_deref()),
+                        task.id,
+                        task.title
+                    ),
                     column == model.board_col && index == model.board_row,
                     column == model.board_col,
                     task_color(task.status),
@@ -553,6 +561,7 @@ fn draw_milestones(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         let mut open = 0;
         for plan in model.snapshot.plans_for_milestone(milestone.id) {
             plans.push(Line::from(vec![
+                hold_span(plan.hold_reason.as_deref()),
                 Span::styled(
                     format!("#{} {}", plan.id, plan.title),
                     Style::default().fg(TEXT),
@@ -890,6 +899,9 @@ fn detail_content(model: &Model) -> (String, Vec<Line<'static>>) {
                     &format!("{} {}", task_icon(task.status), task.status),
                 ),
             ];
+            if let Some(reason) = task.hold_reason.as_deref() {
+                rows.push(line_kv("On hold", &format!("⏸ {reason}")));
+            }
             if let Some(plan) = model.snapshot.plan(task.plan_id) {
                 rows.push(line_kv("Plan", &format!("#{} {}", plan.id, plan.title)));
             }
@@ -955,6 +967,9 @@ fn detail_content(model: &Model) -> (String, Vec<Line<'static>>) {
                 Line::raw(""),
                 line_kv("Status", plan.status.as_str()),
             ];
+            if let Some(reason) = plan.hold_reason.as_deref() {
+                rows.push(line_kv("On hold", &format!("⏸ {reason}")));
+            }
             if let Some(milestone) = model.snapshot.milestone(plan.milestone_id) {
                 rows.push(line_kv(
                     "Milestone",
@@ -977,8 +992,10 @@ fn detail_content(model: &Model) -> (String, Vec<Line<'static>>) {
                             task_icon(task.status),
                             Style::default().fg(task_color(task.status)),
                         ),
+                        Span::raw(" "),
+                        hold_span(task.hold_reason.as_deref()),
                         Span::styled(
-                            format!(" #{} {}", task.id, task.title),
+                            format!("#{} {}", task.id, task.title),
                             Style::default().fg(TEXT),
                         ),
                     ])
@@ -1781,6 +1798,17 @@ fn color_focused_border(frame: &mut Frame<'_>, area: Rect) {
             cell.set_fg(ACCENT);
         }
     }
+}
+
+/// Compact pause marker for a held plan or task. Hold is orthogonal to status,
+/// so this prefixes the row inside its existing column rather than moving it;
+/// the reason itself is only spelled out in the item view.
+fn hold_mark(reason: Option<&str>) -> &'static str {
+    if reason.is_some() { "⏸ " } else { "" }
+}
+
+fn hold_span(reason: Option<&str>) -> Span<'static> {
+    Span::styled(hold_mark(reason), Style::default().fg(AMBER))
 }
 
 fn task_icon(status: TaskStatus) -> &'static str {

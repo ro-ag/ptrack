@@ -159,6 +159,11 @@ pub enum Mutation {
         id: u64,
         status: PlanStatus,
     },
+    /// `Some` holds the plan with that reason; `None` resumes it.
+    SetPlanHold {
+        id: u64,
+        reason: Option<String>,
+    },
     SetActivePlan(u64),
     SetPlanTitle {
         id: u64,
@@ -171,6 +176,11 @@ pub enum Mutation {
     SetTaskStatus {
         id: u64,
         status: TaskStatus,
+    },
+    /// `Some` holds the task with that reason; `None` resumes it.
+    SetTaskHold {
+        id: u64,
+        reason: Option<String>,
     },
     SetTaskTitle {
         id: u64,
@@ -493,6 +503,8 @@ impl ApplicationPort for LocalApplication {
         self.with_project(|store| Ok(store.snapshot()?))
     }
 
+    // One flat arm per mutation; splitting it would only hide the dispatch.
+    #[allow(clippy::too_many_lines)]
     fn mutate(&mut self, mutation: Mutation) -> AppResult<MutationResult> {
         self.with_project(|store| {
             let result = match mutation {
@@ -531,6 +543,10 @@ impl ApplicationPort for LocalApplication {
                     store.set_plan_status(id, status)?;
                     MutationResult::None
                 }
+                Mutation::SetPlanHold { id, reason } => {
+                    store.set_plan_hold(id, reason)?;
+                    MutationResult::None
+                }
                 Mutation::SetActivePlan(id) => {
                     store.set_active_plan(id)?;
                     MutationResult::None
@@ -544,6 +560,10 @@ impl ApplicationPort for LocalApplication {
                 }
                 Mutation::SetTaskStatus { id, status } => {
                     store.set_task_status(id, status)?;
+                    MutationResult::None
+                }
+                Mutation::SetTaskHold { id, reason } => {
+                    store.set_task_hold(id, reason)?;
                     MutationResult::None
                 }
                 Mutation::SetTaskTitle { id, title } => {

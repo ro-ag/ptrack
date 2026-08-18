@@ -49,6 +49,9 @@ pub use production::{
     ProductionRecentProjects, RoutedApplication, RuntimeBindingState, StartupProjectV1,
     production_desktop_runtime, resolve_global_home, resolved_startup_project, startup_project,
 };
+/// Re-exported so a presentation layer can strip the store's hold-refusal
+/// prefix off an [`AppError`] without depending on `ptrack-store` itself.
+pub use ptrack_store::INVALID_HOLD_PREFIX;
 pub use service::{
     AppError, AppResult, ApplicationPort, CapabilityCancellation, CapabilityMcpOutcome,
     CapabilitySessionEnvironment, GuideAction, HookAction, HookResult, InitRequest, InitResult,

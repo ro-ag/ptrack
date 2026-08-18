@@ -42,6 +42,90 @@ Drill deeper: `ptrack next` · `ptrack milestone list` · `ptrack plan show <id>
 }
 
 #[test]
+fn context_moves_held_tasks_out_of_the_pick_up_list_into_their_own_bucket() {
+    let mut snapshot = snapshot();
+    snapshot.tasks[1].hold_reason = Some("waiting on review".to_owned());
+    let digest = context(&snapshot);
+
+    assert_eq!(
+        digest
+            .active_plan
+            .as_ref()
+            .expect("active plan")
+            .open_tasks
+            .iter()
+            .map(|task| task.id)
+            .collect::<Vec<_>>(),
+        vec![3]
+    );
+    assert_eq!(
+        digest
+            .on_hold
+            .iter()
+            .map(|task| task.id)
+            .collect::<Vec<_>>(),
+        vec![1]
+    );
+
+    let markdown = digest.markdown();
+    assert!(markdown.contains(
+        "## On hold (project-wide)\n- #1 context command (plan 1) [on hold: waiting on review]\n"
+    ));
+    assert!(markdown.contains("4 tasks (1 done · 1 blocked · 3 open · 1 on hold)"));
+}
+
+#[test]
+fn context_lists_a_blocked_and_held_task_only_under_on_hold() {
+    let mut snapshot = snapshot();
+    // Task #3 is blocked; holding it makes the hold the only bucket it belongs
+    // to, since a hold is the stronger "do not pick this up" signal.
+    snapshot.tasks[2].hold_reason = Some("vendor outage".to_owned());
+    let digest = context(&snapshot);
+
+    assert!(digest.blocked.is_empty());
+    assert_eq!(
+        digest
+            .on_hold
+            .iter()
+            .map(|task| task.id)
+            .collect::<Vec<_>>(),
+        vec![3]
+    );
+
+    let markdown = digest.markdown();
+    assert!(!markdown.contains("## Blocked (project-wide)"));
+    assert!(markdown.contains(
+        "## On hold (project-wide)\n- #3 publish release (plan 1) [on hold: vendor outage]\n"
+    ));
+}
+
+#[test]
+fn a_held_active_plan_replaces_the_digest_pick_up_list_with_its_reason() {
+    let mut snapshot = snapshot();
+    snapshot.plans[0].hold_reason = Some("budget freeze".to_owned());
+    let digest = context(&snapshot);
+
+    // `next` refuses to pick anything out of a held plan; the digest must not
+    // offer candidates it would refuse.
+    assert!(
+        digest
+            .active_plan
+            .as_ref()
+            .expect("active plan")
+            .open_tasks
+            .is_empty()
+    );
+
+    let markdown = digest.markdown();
+    assert!(markdown.contains(
+        "**#1 Build CLI** [on hold: budget freeze]\n\n\
+         ### Open tasks\n_plan on hold: budget freeze_\n"
+    ));
+    assert!(!markdown.contains("- [doing] #1 context command"));
+    assert!(markdown.contains("2 plans (1 done · 1 on hold)"));
+}
+
+#[test]
 fn context_bounds_project_wide_lists_and_uses_newest_notes() {
     let tasks = (1..=10)
         .map(|id| {
@@ -112,6 +196,49 @@ fn context_bounds_project_wide_lists_and_uses_newest_notes() {
             .markdown()
             .contains("- … +2 more (use `ptrack issue list`)")
     );
+}
+
+/// A held blocked task leaves the blocked bucket, so the bucket's "+N more"
+/// must count what the bucket itself held back, never the raw blocked total —
+/// otherwise the digest promises a longer list than `task list --status blocked`
+/// would explain, or hides one it truncated.
+#[test]
+fn the_blocked_bucket_counts_more_from_the_same_filtered_list_it_shows() {
+    let tasks = (1..=10)
+        .map(|id| {
+            task(
+                id,
+                1,
+                &format!("blocked {id}"),
+                TaskStatus::Blocked,
+                i64::try_from(id).expect("small fixture id fits i64"),
+            )
+        })
+        .collect();
+    let mut snapshot = ProjectSnapshot::new(
+        meta(0),
+        Vec::new(),
+        vec![plan(1, "plan", PlanStatus::Active, 0, 0)],
+        tasks,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
+    // Exactly the two tasks that would have been "+2 more" are the held ones.
+    snapshot.tasks[8].hold_reason = Some("vendor outage".to_owned());
+    snapshot.tasks[9].hold_reason = Some("vendor outage".to_owned());
+
+    let digest = context(&snapshot);
+    assert_eq!(digest.blocked.len(), 8);
+    assert_eq!(digest.blocked_more, 0);
+    assert_eq!(digest.on_hold.len(), 2);
+    assert_eq!(digest.on_hold_more, 0);
+
+    let markdown = digest.markdown();
+    assert!(!markdown.contains("more (use `ptrack task list --status blocked`)"));
+    // The inventory counts a held blocked task under both, and names the hold,
+    // so the shorter bucket above still reconciles with the totals.
+    assert!(markdown.contains("10 tasks (0 done · 10 blocked · 10 open · 2 on hold)"));
 }
 
 #[test]

@@ -39,6 +39,8 @@
   --blocked-rgb: 255, 95, 135;
   --info: #5fafff;
   --issue-chip: #ff9db5;
+  --hold: #ffab5f;
+  --hold-rgb: 255, 171, 95;
 
   --body-glow-1: radial-gradient(60rem 40rem at -8% -18%, rgba(61, 214, 163, 0.07), transparent 60%);
   --body-glow-2: radial-gradient(70rem 50rem at 112% 118%, rgba(99, 102, 241, 0.06), transparent 60%);
@@ -136,6 +138,8 @@
   --blocked-rgb: 214, 51, 99;
   --info: #1d6fc5;
   --issue-chip: #c2255c;
+  --hold: #b45309;
+  --hold-rgb: 180, 83, 9;
 
   --body-glow-1: radial-gradient(60rem 40rem at -8% -18%, rgba(13, 150, 104, 0.08), transparent 60%);
   --body-glow-2: radial-gradient(70rem 50rem at 112% 118%, rgba(99, 102, 241, 0.05), transparent 60%);
@@ -556,6 +560,14 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Pause marker for a held plan; the reason itself is the row's tooltip. */
+.sidebar-plan-hold {
+  flex: 0 0 auto;
+  color: var(--hold);
+  font-size: 0.6875rem;
+  line-height: 1;
 }
 
 /* Accent marker for the project's active plan. */
@@ -2401,6 +2413,21 @@ textarea::placeholder {
 .card-linked-runtime[data-state="live"] {
   border-color: color-mix(in srgb, var(--info) 55%, var(--border));
   color: var(--info);
+}
+
+/* Hold is orthogonal to status: a held card keeps its lane and gains this
+   badge, so there is no hold column anywhere in the board. */
+.card-hold {
+  align-self: flex-start;
+  margin-top: var(--space-050);
+  border: 1px solid rgba(var(--hold-rgb), 0.4);
+  border-radius: 999px;
+  color: var(--hold);
+  background: rgba(var(--hold-rgb), 0.09);
+  padding: 2px 7px;
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
 
 .context-chip {

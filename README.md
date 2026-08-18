@@ -411,6 +411,21 @@ are retained but unlinked because issues cannot target plans.
 In the dashboard, select a task and press `M` to move it or `P` to convert it.
 The same actions are available from `?` and from the task's item view.
 
+Work that is paused on something external goes on hold with a reason:
+
+```sh
+ptrack task hold 12 waiting on the upstream schema decision
+ptrack task resume 12
+```
+
+`ptrack plan hold|resume` does the same for a whole plan. A hold is orthogonal
+to status: the item keeps its `todo`/`doing`/`blocked` status and its board
+column, and simply gains a hold marker in the CLI, dashboard, and Desktop.
+`ptrack next` skips held work, and `ptrack context` lists it separately so an
+agent does not pick it up. `resume` clears the hold, and so does completing the
+item: a task marked `done`, or a plan marked done or archived, drops its hold
+automatically. Holds are set from the CLI; the interfaces display them.
+
 ## Agent workflow
 
 A fresh agent—including a replacement using another supported agent tool—starts
@@ -495,8 +510,8 @@ Put `#<task-id>` in a commit message to link the commit to that task.
 | `ptrack goal show\|set S` | Show or update the north-star goal. |
 | `ptrack summary show\|set S` | Show or update the rolling project summary. |
 | `ptrack milestone add\|list\|show\|done\|open\|due\|rename` | Manage checkpoints that group plans. |
-| `ptrack plan add\|list\|show\|done\|use\|rename` | Manage plans; `show` includes tasks and notes. |
-| `ptrack task add\|list\|show\|start\|done\|block\|rename\|move\|convert` | Manage tasks; move them between plans or convert them into plans. |
+| `ptrack plan add\|list\|show\|done\|use\|rename\|hold\|resume` | Manage plans; `show` includes tasks and notes; `hold <id> <reason…>` pauses one. |
+| `ptrack task add\|list\|show\|start\|done\|block\|rename\|move\|convert\|hold\|resume` | Manage tasks; move them between plans, convert them into plans, or put one on hold with a reason. |
 | `ptrack issue add\|list\|show\|close\|open\|severity\|rename` | Track issues and bugs, optionally linked to tasks. |
 | `ptrack note add\|list` | Attach or list project, plan, and task notes. |
 | `ptrack commit add\|list\|show\|record` | Browse the recorded git audit trail; `show` prints the diff. |

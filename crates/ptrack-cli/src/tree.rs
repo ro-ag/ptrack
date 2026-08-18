@@ -53,21 +53,29 @@ pub fn root() -> Command {
             .mut_subcommand("rename", |c| c.arg(positional("values", 2..))),
         )
         .subcommand(
-            group("plan", &["add", "list", "show", "done", "use", "rename"])
-                .mut_subcommand("add", |c| {
-                    c.arg(positional("title", 1..)).arg(option("milestone"))
-                })
-                .mut_subcommand("list", |c| c.arg(flag("json")))
-                .mut_subcommand("show", |c| c.arg(positional("id", 1)).arg(flag("json")))
-                .mut_subcommand("done", |c| c.arg(positional("id", 1)))
-                .mut_subcommand("use", |c| c.arg(positional("id", 1)))
-                .mut_subcommand("rename", |c| c.arg(positional("values", 2..))),
+            group(
+                "plan",
+                &[
+                    "add", "list", "show", "done", "use", "rename", "hold", "resume",
+                ],
+            )
+            .mut_subcommand("add", |c| {
+                c.arg(positional("title", 1..)).arg(option("milestone"))
+            })
+            .mut_subcommand("list", |c| c.arg(flag("json")))
+            .mut_subcommand("show", |c| c.arg(positional("id", 1)).arg(flag("json")))
+            .mut_subcommand("done", |c| c.arg(positional("id", 1)))
+            .mut_subcommand("use", |c| c.arg(positional("id", 1)))
+            .mut_subcommand("rename", |c| c.arg(positional("values", 2..)))
+            .mut_subcommand("hold", |c| c.arg(positional("values", 2..)))
+            .mut_subcommand("resume", |c| c.arg(positional("id", 1))),
         )
         .subcommand(
             group(
                 "task",
                 &[
                     "add", "list", "show", "start", "done", "block", "rename", "move", "convert",
+                    "hold", "resume",
                 ],
             )
             .mut_subcommand("add", |c| {
@@ -82,7 +90,9 @@ pub fn root() -> Command {
             .mut_subcommand("block", |c| c.arg(positional("id", 1)))
             .mut_subcommand("rename", |c| c.arg(positional("values", 2..)))
             .mut_subcommand("move", |c| c.arg(positional("id", 1)).arg(option("plan")))
-            .mut_subcommand("convert", |c| c.alias("promote").arg(positional("id", 1))),
+            .mut_subcommand("convert", |c| c.alias("promote").arg(positional("id", 1)))
+            .mut_subcommand("hold", |c| c.arg(positional("values", 2..)))
+            .mut_subcommand("resume", |c| c.arg(positional("id", 1))),
         )
         .subcommand(
             group(

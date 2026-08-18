@@ -69,6 +69,7 @@ fn overview_task_note_falls_back_to_the_current_plan() {
         order: 1,
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
+        hold_reason: None,
     });
     value.welcome = false;
     value.focus = PaneFocus::Tasks;
@@ -100,6 +101,7 @@ fn detail_scroll_is_bounded_to_the_last_full_viewport() {
         order: 1,
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
+        hold_reason: None,
     });
     value.welcome = false;
     value.detail = Some(DetailTarget::Plan(1));
@@ -124,6 +126,7 @@ fn board_column_change_is_deferred_until_the_mutation_and_reload_succeed() {
         order: 1,
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
+        hold_reason: None,
     });
     value.snapshot.tasks.push(Task {
         id: 2,
@@ -133,6 +136,7 @@ fn board_column_change_is_deferred_until_the_mutation_and_reload_succeed() {
         order: 1,
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
+        hold_reason: None,
     });
     value.welcome = false;
     value.tab = Tab::Board;

@@ -1,8 +1,9 @@
 use crate::{
     Capability, CapabilityAuditPolicy, CapabilityKind, CapabilityLimits, CodecError, Digest32,
-    GitScope, HttpScope, IssueStatus, MAX_LIST_ITEMS, MAX_PAYLOAD_BYTES, MemoryKind, Meta,
-    MilestoneStatus, NativeRecord, Note, NoteTarget, Plan, PlanStatus, RecordKind, Severity,
-    SshScope, TaskStatus, Timestamp, decode_record, encode_record,
+    GitScope, HttpScope, IssueStatus, MAX_LIST_ITEMS, MAX_PAYLOAD_BYTES, MIN_NATIVE_PAYLOAD_SCHEMA,
+    MemoryKind, Meta, MilestoneStatus, NATIVE_PAYLOAD_SCHEMA, NativeRecord, Note, NoteTarget, Plan,
+    PlanStatus, RecordKind, Severity, SshScope, Task, TaskStatus, Timestamp, decode_record,
+    decode_record_at_schema, encode_record, encode_record_at_schema,
 };
 
 fn fixed_time() -> Timestamp {
@@ -124,10 +125,11 @@ fn plan_golden_bytes_pin_enum_and_signed_order() {
         order: 3,
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
+        hold_reason: None,
     });
     let expected = [
         0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, b'x', 3, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0,
-        3, 0, 0,
+        3, 0, 0, 0,
     ];
     assert_eq!(encode_record(&record).expect("encode"), expected);
     assert_round_trip(&record);
@@ -188,6 +190,7 @@ fn malformed_and_trailing_payloads_are_rejected() {
         order: 0,
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
+        hold_reason: None,
     });
     let encoded = encode_record(&plan).expect("encode");
     assert!(matches!(
@@ -219,6 +222,7 @@ fn invalid_utf8_enum_and_time_tags_are_rejected() {
         order: 0,
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
+        hold_reason: None,
     }))
     .expect("encode");
     plan[12] = 99;
@@ -373,12 +377,169 @@ fn go_encoder_golden_payloads_decode_and_reencode_exactly() {
 
     for (kind, golden) in fixtures {
         let payload = decode_hex(golden);
-        let record = decode_record(kind, &payload).expect("decode Go golden payload");
+        // The Go encoder wrote payload schema 1. Decoding at that schema also
+        // proves the schema-1 canonical round trip, because the decoder
+        // re-encodes at the schema it was given.
+        let record = decode_record_at_schema(kind, MIN_NATIVE_PAYLOAD_SCHEMA, &payload)
+            .expect("decode Go golden payload");
+        match &record {
+            // Plan and Task gained a trailing hold reason at schema 2, so their
+            // schema-1 payloads round-trip byte for byte only at schema 1.
+            NativeRecord::Plan(plan) => {
+                assert_eq!(plan.hold_reason, None);
+                let mut upgraded = payload.clone();
+                upgraded.push(0);
+                assert_eq!(
+                    encode_record(&record).expect("re-encode at schema 2"),
+                    upgraded
+                );
+            }
+            NativeRecord::Task(task) => {
+                assert_eq!(task.hold_reason, None);
+                let mut upgraded = payload.clone();
+                upgraded.push(0);
+                assert_eq!(
+                    encode_record(&record).expect("re-encode at schema 2"),
+                    upgraded
+                );
+            }
+            _ => assert_eq!(
+                encode_record(&record).expect("re-encode Go golden"),
+                payload
+            ),
+        }
+    }
+}
+
+#[test]
+fn hold_reason_round_trips_and_pins_its_schema_2_bytes() {
+    let record = NativeRecord::Plan(Plan {
+        id: 1,
+        title: "x".to_owned(),
+        status: PlanStatus::Active,
+        milestone_id: 0,
+        order: 0,
+        created_at: Timestamp::Zero,
+        updated_at: Timestamp::Zero,
+        hold_reason: Some("waiting on review".to_owned()),
+    });
+    let mut expected = vec![
+        0, 0, 0, 0, 0, 0, 0, 1, // id
+        0, 0, 0, 1, b'x', // title
+        1,    // active
+        0, 0, 0, 0, 0, 0, 0, 0, // milestone
+        0, 0, 0, 0, 0, 0, 0, 0, // order
+        0, 0, // zero times
+        1, 0, 0, 0, 17, // hold reason present, 17 bytes
+    ];
+    expected.extend_from_slice(b"waiting on review");
+    assert_eq!(encode_record(&record).expect("encode"), expected);
+    assert_round_trip(&record);
+
+    let task = NativeRecord::Task(Task {
+        id: 1,
+        plan_id: 2,
+        title: "t".to_owned(),
+        status: TaskStatus::Blocked,
+        order: 0,
+        created_at: Timestamp::Zero,
+        updated_at: Timestamp::Zero,
+        hold_reason: Some("blocked upstream".to_owned()),
+    });
+    assert_round_trip(&task);
+}
+
+#[test]
+fn unknown_payload_schemas_fail_closed_before_any_layout_is_assumed() {
+    let record = NativeRecord::Plan(Plan {
+        id: 1,
+        title: "x".to_owned(),
+        status: PlanStatus::Active,
+        milestone_id: 0,
+        order: 0,
+        created_at: Timestamp::Zero,
+        updated_at: Timestamp::Zero,
+        hold_reason: None,
+    });
+    let payload = encode_record(&record).expect("encode");
+    for schema in [0, NATIVE_PAYLOAD_SCHEMA + 1, u32::MAX] {
         assert_eq!(
-            encode_record(&record).expect("re-encode Go golden"),
-            payload
+            decode_record_at_schema(RecordKind::Plan, schema, &payload),
+            Err(CodecError::UnsupportedPayloadSchema(schema))
         );
     }
+}
+
+#[test]
+fn a_set_hold_reason_has_no_canonical_schema_1_form() {
+    let mut plan = Plan {
+        id: 1,
+        title: "x".to_owned(),
+        status: PlanStatus::Active,
+        milestone_id: 0,
+        order: 0,
+        created_at: Timestamp::Zero,
+        updated_at: Timestamp::Zero,
+        hold_reason: None,
+    };
+    let schema_2 = encode_record(&NativeRecord::Plan(plan.clone())).expect("encode");
+    // Strip the schema-2 `None` option tag to obtain the schema-1 payload.
+    let mut schema_1 = schema_2.clone();
+    assert_eq!(schema_1.pop(), Some(0));
+
+    let record = decode_record_at_schema(RecordKind::Plan, MIN_NATIVE_PAYLOAD_SCHEMA, &schema_1)
+        .expect("schema 1 decode");
+    let NativeRecord::Plan(decoded) = record else {
+        panic!("expected a plan");
+    };
+    assert_eq!(decoded.hold_reason, None);
+
+    // Neither layout is malleable into the other: the schema-1 payload is one
+    // byte short at schema 2, and the schema-2 payload has one byte too many at
+    // schema 1.
+    assert!(matches!(
+        decode_record(RecordKind::Plan, &schema_1),
+        Err(CodecError::Truncated { .. })
+    ));
+    assert_eq!(
+        decode_record_at_schema(RecordKind::Plan, MIN_NATIVE_PAYLOAD_SCHEMA, &schema_2),
+        Err(CodecError::TrailingBytes(1))
+    );
+
+    // A set reason cannot be encoded at schema 1 at all: dropping it silently
+    // would make the hold vanish on a downgrade, so the encoder fails closed.
+    plan.hold_reason = Some("waiting on review".to_owned());
+    assert_eq!(
+        encode_record_at_schema(&NativeRecord::Plan(plan.clone()), MIN_NATIVE_PAYLOAD_SCHEMA),
+        Err(CodecError::NonCanonical)
+    );
+    let task = NativeRecord::Task(Task {
+        id: 1,
+        plan_id: 2,
+        title: "t".to_owned(),
+        status: TaskStatus::Todo,
+        order: 0,
+        created_at: Timestamp::Zero,
+        updated_at: Timestamp::Zero,
+        hold_reason: Some("blocked upstream".to_owned()),
+    });
+    assert_eq!(
+        encode_record_at_schema(&task, MIN_NATIVE_PAYLOAD_SCHEMA),
+        Err(CodecError::NonCanonical)
+    );
+    // Clearing the reason restores a canonical schema-1 form.
+    plan.hold_reason = None;
+    assert_eq!(
+        encode_record_at_schema(&NativeRecord::Plan(plan), MIN_NATIVE_PAYLOAD_SCHEMA),
+        Ok(schema_1)
+    );
+    // The schema range is checked before any layout is assumed, on both sides.
+    assert_eq!(
+        encode_record_at_schema(&task, NATIVE_PAYLOAD_SCHEMA + 1),
+        Err(CodecError::UnsupportedPayloadSchema(
+            NATIVE_PAYLOAD_SCHEMA + 1
+        ))
+    );
 }
 
 fn decode_hex(input: &str) -> Vec<u8> {

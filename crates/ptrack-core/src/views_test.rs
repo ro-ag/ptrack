@@ -48,6 +48,92 @@ fn next_matches_active_plan_priority_and_messages() {
 }
 
 #[test]
+fn next_skips_held_tasks_and_stops_at_a_held_active_plan() {
+    // Task #1 is the doing pick; holding it leaves nothing actionable.
+    let mut held = snapshot();
+    held.tasks[1].hold_reason = Some("waiting on review".to_owned());
+    assert_eq!(
+        next(&held).expect("active plan exists").markdown(),
+        "no actionable task in the active plan\n"
+    );
+
+    held.tasks.push(task(5, 1, "fallback", TaskStatus::Todo, 5));
+    let view = next(&held).expect("active plan exists");
+    assert_eq!(view.task.as_ref().map(|task| task.id), Some(5));
+
+    let mut held_plan = snapshot();
+    held_plan.plans[0].hold_reason = Some("budget freeze".to_owned());
+    let view = next(&held_plan).expect("active plan exists");
+    assert!(view.task.is_none());
+    assert_eq!(view.markdown(), "active plan on hold: budget freeze\n");
+    // The reason is a field, not something a consumer parses out of the prose.
+    assert_eq!(view.plan_hold_reason.as_deref(), Some("budget freeze"));
+    assert!(
+        next(&snapshot())
+            .expect("active plan exists")
+            .plan_hold_reason
+            .is_none()
+    );
+}
+
+#[test]
+fn holds_render_as_one_marker_in_plan_and_task_views() {
+    let mut held = snapshot();
+    held.plans[0].hold_reason = Some("budget freeze".to_owned());
+    held.tasks[1].hold_reason = Some("waiting on review".to_owned());
+
+    assert_eq!(
+        show_plan(&held, 1).expect("plan exists").markdown(),
+        "# Plan #1 Build CLI [active] [on hold: budget freeze]\n\
+\n\
+## Tasks\n\
+- [done] #2 init command\n\
+- [doing] #1 context command [on hold: waiting on review]\n\
+- [blocked] #3 publish release\n\
+\n\
+## Notes\n\
+- [decision] (plan #1) use dependency-free reports\n"
+    );
+    assert_eq!(
+        show_task(&held, 1).expect("task exists").markdown(),
+        "# Task #1 context command [doing] [on hold: waiting on review]\n\
+\n\
+Plan: #1 Build CLI [on hold: budget freeze]\n\
+\n\
+## Notes\n\
+- [handoff] (task #1) resume here\n"
+    );
+    assert_eq!(
+        board_for(&held, 1).expect("plan exists").markdown(),
+        "# Board — #1 Build CLI\n\
+\n\
+## Todo (0)\n\
+_none_\n\
+\n\
+## Doing (1)\n\
+- #1 context command [on hold: waiting on review]\n\
+\n\
+## Blocked (1)\n\
+- #3 publish release\n\
+\n\
+## Done (1)\n\
+- #2 init command\n\
+\n"
+    );
+    assert_eq!(
+        show_milestone(&held, 1)
+            .expect("milestone exists")
+            .markdown(),
+        "# Milestone #1 Ship beta [open] (due 1969-12-31)\n\
+\n\
+Tasks: 1 done · 2 open\n\
+\n\
+## Plans\n\
+- #1 Build CLI [active] [on hold: budget freeze]\n"
+    );
+}
+
+#[test]
 fn show_plan_and_task_markdown_are_byte_exact() {
     let snapshot = snapshot();
     assert_eq!(

@@ -5,14 +5,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use ptrack_core::{
     Meta, NativeRecord, ProjectRef, RecordKind, Task, TaskStatus, Timestamp, decode_record,
-    encode_record,
+    decode_record_at_schema, encode_record,
 };
 
 use super::{
     Collection, IMPORT_BUNDLE_VERSION, ImportCollection, ImportData, ImportProvenance,
     ImportRecord, MAX_IMPORT_BYTES, MAX_IMPORT_ENVELOPE_BYTES, MAX_IMPORT_KEY_BYTES,
-    MAX_IMPORT_PAYLOAD_BYTES, MAX_IMPORT_RECORDS, OwnedRecordKey, RecordEnvelope, RecordKey, Store,
-    StoreError, StoreKind,
+    MAX_IMPORT_PAYLOAD_BYTES, MAX_IMPORT_RECORDS, MIN_NATIVE_PAYLOAD_SCHEMA, NATIVE_PAYLOAD_SCHEMA,
+    OwnedRecordKey, RecordEnvelope, RecordKey, Store, StoreError, StoreKind,
 };
 use crate::import::validated_record_size;
 use crate::protect_private_directory;
@@ -136,6 +136,7 @@ fn record(collection: Collection, key: OwnedRecordKey, payload: &[u8]) -> Import
                 order: 0,
                 created_at: Timestamp::Zero,
                 updated_at: Timestamp::Zero,
+                hold_reason: None,
             }))
             .unwrap()
         }
@@ -156,11 +157,62 @@ fn record(collection: Collection, key: OwnedRecordKey, payload: &[u8]) -> Import
     ImportRecord {
         key,
         envelope: RecordEnvelope::new(
-            collection.import_codec(),
-            collection.import_payload_schema(),
+            collection.accepted_codec(),
+            *collection.accepted_payload_schemas().end(),
             payload,
         ),
     }
+}
+
+/// Archives exported by released builds carry schema-1 envelopes. Import
+/// accepts the same schema range as open, so those archives keep importing;
+/// only their next write upgrades them.
+#[test]
+fn archives_written_at_the_previous_payload_schema_still_import() {
+    let directory = TestDirectory::new();
+    let path = directory.path("legacy-schema.redb");
+    let mut data = complete_import(StoreKind::Project);
+
+    // A schema-1 task payload is the current layout minus the trailing
+    // hold-reason option byte.
+    let mut legacy = record(Collection::Tasks, OwnedRecordKey::Id(3), b"legacy task");
+    let mut payload = legacy.envelope.payload().to_vec();
+    assert_eq!(payload.pop(), Some(0));
+    legacy.envelope = RecordEnvelope::new(
+        Collection::Tasks.accepted_codec(),
+        MIN_NATIVE_PAYLOAD_SCHEMA,
+        payload,
+    );
+    let tasks = collection_mut(&mut data, Collection::Tasks);
+    tasks.records.push(legacy);
+    tasks.sequence = Some(3);
+
+    let (store, report) = Store::import_new(&path, data).unwrap();
+    assert_eq!(report.record_count, 2);
+    store
+        .read(|transaction| {
+            let stored = transaction
+                .get(Collection::Tasks, RecordKey::Id(3))?
+                .unwrap();
+            assert_eq!(stored.payload_schema(), MIN_NATIVE_PAYLOAD_SCHEMA);
+            let NativeRecord::Task(task) = decode_record_at_schema(
+                RecordKind::Task,
+                stored.payload_schema(),
+                stored.payload(),
+            )
+            .unwrap() else {
+                panic!("task payload")
+            };
+            assert_eq!(task.title, "legacy task");
+            assert_eq!(task.hold_reason, None);
+            Ok(())
+        })
+        .unwrap();
+
+    // Reopening re-validates every stored record, which is exactly where a
+    // schema pin would have refused the whole database.
+    drop(store);
+    Store::open_existing(&path, StoreKind::Project).unwrap();
 }
 
 #[test]
@@ -279,7 +331,7 @@ fn successful_global_import_uses_raw_and_native_codecs() {
             let config = transaction
                 .get(Collection::GlobalConfig, RecordKey::Bytes(b"theme"))?
                 .unwrap();
-            assert_eq!(config.codec(), Collection::GlobalConfig.import_codec());
+            assert_eq!(config.codec(), Collection::GlobalConfig.accepted_codec());
             assert_eq!(config.payload(), b"dark");
             let project = transaction
                 .get(
@@ -287,7 +339,7 @@ fn successful_global_import_uses_raw_and_native_codecs() {
                     RecordKey::Bytes(project_registry_path()),
                 )?
                 .unwrap();
-            assert_eq!(project.codec(), Collection::GlobalProjects.import_codec());
+            assert_eq!(project.codec(), Collection::GlobalProjects.accepted_codec());
             Ok(())
         })
         .unwrap();
@@ -439,8 +491,8 @@ fn every_invalid_import_is_rejected_before_destination_creation() {
                 .push(ImportRecord {
                     key: OwnedRecordKey::Bytes(b"key".to_vec()),
                     envelope: RecordEnvelope::new(
-                        Collection::GlobalProjects.import_codec(),
-                        Collection::GlobalProjects.import_payload_schema(),
+                        Collection::GlobalProjects.accepted_codec(),
+                        NATIVE_PAYLOAD_SCHEMA,
                         b"value",
                     ),
                 });
@@ -453,7 +505,7 @@ fn every_invalid_import_is_rejected_before_destination_creation() {
                 .push(ImportRecord {
                     key: OwnedRecordKey::Bytes(b"/project".to_vec()),
                     envelope: RecordEnvelope::new(
-                        Collection::GlobalProjects.import_codec(),
+                        Collection::GlobalProjects.accepted_codec(),
                         0,
                         b"value",
                     ),

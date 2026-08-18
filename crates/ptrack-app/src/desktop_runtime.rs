@@ -2489,6 +2489,7 @@ impl BoundDesktopWorkspace {
                     is_active: plan.id == snapshot.meta.active_plan,
                     tasks_total: progress.total,
                     tasks_done: progress.done,
+                    hold_reason: plan.hold_reason.clone(),
                 }
             })
             .collect();
@@ -4159,6 +4160,10 @@ struct PlanSummaryView {
     is_active: bool,
     tasks_total: usize,
     tasks_done: usize,
+    /// Present only while the plan is on hold; the frontend renders it as a
+    /// marker on the existing row rather than a separate grouping.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hold_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -4172,6 +4177,10 @@ struct TaskView {
     commit_count: usize,
     issue_count: usize,
     latest_note: String,
+    /// Present only while the task is on hold. Hold is orthogonal to status, so
+    /// the card stays in its status column and only gains a badge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hold_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     linked_runtime: Option<TaskLinkedRuntimeSummaryView>,
 }
@@ -4360,6 +4369,7 @@ fn board_view(
                     commit_count: *commit_counts.get(&task.id).unwrap_or(&0),
                     issue_count: *issue_counts.get(&task.id).unwrap_or(&0),
                     latest_note: latest_notes.get(&task.id).cloned().unwrap_or_default(),
+                    hold_reason: task.hold_reason.clone(),
                     linked_runtime: None,
                 })
                 .collect(),
@@ -4385,6 +4395,7 @@ fn board_view(
                 is_active: plan.id == snapshot.meta.active_plan,
                 tasks_total: entry.0,
                 tasks_done: entry.1,
+                hold_reason: plan.hold_reason.clone(),
             }
         })
         .collect();
@@ -4442,6 +4453,7 @@ fn snapshot_board_view(
                 is_active: false,
                 tasks_total: entry.0,
                 tasks_done: entry.1,
+                hold_reason: plan.hold_reason.clone(),
             }
         })
         .collect();
@@ -4580,6 +4592,7 @@ fn task_card(snapshot: &ProjectSnapshot, task: &Task) -> TaskView {
         latest_note: notes
             .last()
             .map_or_else(String::new, |note| note.body.clone()),
+        hold_reason: task.hold_reason.clone(),
         linked_runtime: None,
     }
 }
@@ -4594,6 +4607,7 @@ fn snapshot_blocker_card(task: &Task) -> TaskView {
         commit_count: 0,
         issue_count: 0,
         latest_note: String::new(),
+        hold_reason: task.hold_reason.clone(),
         linked_runtime: None,
     }
 }

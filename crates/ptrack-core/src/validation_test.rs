@@ -1,6 +1,6 @@
 use crate::{
-    CapabilityAudit, CapabilityKind, Digest32, MemoryKind, Meta, NativeRecord, Note, NoteTarget,
-    Timestamp, Validate,
+    CapabilityAudit, CapabilityKind, Digest32, MAX_HOLD_REASON_BYTES, MemoryKind, Meta,
+    NativeRecord, Note, NoteTarget, PlanStatus, TaskStatus, Timestamp, Validate, check_hold_reason,
 };
 
 use super::codec_test::valid_capability;
@@ -161,4 +161,123 @@ fn failed_audit_rejects_non_allowlisted_error_text() {
     assert!(audit.validate().is_err());
     audit.error_class = "timeout".to_owned();
     assert!(audit.validate().is_ok());
+}
+
+#[test]
+fn hold_reason_is_bounded_single_line_text_when_set() {
+    let mut plan = super::test_support::plan(1, "p", PlanStatus::Active, 0, 0);
+    assert!(plan.validate().is_ok());
+
+    for blank in ["", "   ", "\t "] {
+        plan.hold_reason = Some(blank.to_owned());
+        assert_eq!(
+            plan.validate().expect_err("blank hold reason").reason(),
+            "must be nonblank when set"
+        );
+    }
+
+    plan.hold_reason = Some("x".repeat(MAX_HOLD_REASON_BYTES));
+    assert!(plan.validate().is_ok());
+    plan.hold_reason = Some("x".repeat(MAX_HOLD_REASON_BYTES + 1));
+    assert_eq!(
+        plan.validate().expect_err("oversized hold reason").reason(),
+        "exceeds the hold reason bound"
+    );
+
+    for control in [
+        "a\nb",
+        "a\rb",
+        "a\u{0}b",
+        // Not `char::is_control`, but still line breaks and bidirectional
+        // overrides that can hide what a reason really says.
+        "a\u{2028}b",
+        "a\u{2029}b",
+        "a\u{202a}b",
+        "a\u{202b}b",
+        "a\u{202c}b",
+        "a\u{202d}b",
+        "a\u{202e}b",
+        "a\u{2066}b",
+        "a\u{2067}b",
+        "a\u{2068}b",
+        "a\u{2069}b",
+        // Directional marks and zero-width characters: invisible, but they
+        // can still reorder or hide what a reason really says.
+        "a\u{061c}b",
+        "a\u{200b}b",
+        "a\u{200c}b",
+        "a\u{200d}b",
+        "a\u{200e}b",
+        "a\u{200f}b",
+        // The remaining invisibles: byte order mark, word joiner, Mongolian
+        // vowel separator, and the tag block that mirrors ASCII invisibly.
+        "a\u{feff}b",
+        "a\u{2060}b",
+        "a\u{180e}b",
+        "a\u{e0000}b",
+        "a\u{e0041}b",
+        "a\u{e007f}b",
+    ] {
+        plan.hold_reason = Some(control.to_owned());
+        let error = plan.validate().expect_err("control character");
+        assert_eq!(error.field(), "plan.hold_reason");
+        assert_eq!(
+            error.reason(),
+            "must be single-line text without control characters"
+        );
+        assert!(check_hold_reason(control).is_err(), "{control:?}");
+    }
+
+    // The neighbours of every rejected range stay usable.
+    for allowed in [
+        "a\u{2027}b",
+        "a\u{202f}b",
+        "a\u{2065}b",
+        "a\u{206a}b",
+        "a\u{061b}b",
+        "a\u{061d}b",
+        "a\u{200a}b",
+        "a\u{2010}b",
+        "a\u{205f}b",
+        "a\u{180f}b",
+        "a\u{e0080}b",
+    ] {
+        plan.hold_reason = Some(allowed.to_owned());
+        assert!(plan.validate().is_ok(), "{allowed:?}");
+    }
+
+    let mut task = super::test_support::task(1, 2, "t", TaskStatus::Todo, 0);
+    task.hold_reason = Some(" ".to_owned());
+    assert_eq!(
+        task.validate().expect_err("blank hold reason").field(),
+        "task.hold_reason"
+    );
+}
+
+#[test]
+fn the_input_boundary_check_agrees_with_the_record_validator() {
+    assert_eq!(check_hold_reason("waiting on review"), Ok(()));
+    assert_eq!(
+        check_hold_reason("   "),
+        Err("the hold reason cannot be blank".to_owned())
+    );
+    assert_eq!(
+        check_hold_reason("a\nb"),
+        Err("the hold reason must be one line without control characters".to_owned())
+    );
+    assert_eq!(
+        check_hold_reason(&"x".repeat(MAX_HOLD_REASON_BYTES + 1)),
+        Err(format!(
+            "the hold reason is {} bytes; the limit is {MAX_HOLD_REASON_BYTES}",
+            MAX_HOLD_REASON_BYTES + 1
+        ))
+    );
+
+    // Anything the boundary accepts must also survive the record validator.
+    let mut plan = super::test_support::plan(1, "p", PlanStatus::Active, 0, 0);
+    for reason in ["ok", &"x".repeat(MAX_HOLD_REASON_BYTES), "still ok"] {
+        assert_eq!(check_hold_reason(reason), Ok(()));
+        plan.hold_reason = Some(reason.to_owned());
+        assert!(plan.validate().is_ok());
+    }
 }

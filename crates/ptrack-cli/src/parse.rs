@@ -36,11 +36,17 @@ const GROUPS: &[(&str, &[&str])] = &[
         "milestone",
         &["add", "list", "show", "done", "open", "due", "rename"],
     ),
-    ("plan", &["add", "list", "show", "done", "use", "rename"]),
+    (
+        "plan",
+        &[
+            "add", "list", "show", "done", "use", "rename", "hold", "resume",
+        ],
+    ),
     (
         "task",
         &[
-            "add", "list", "show", "start", "done", "block", "rename", "move", "convert",
+            "add", "list", "show", "start", "done", "block", "rename", "move", "convert", "hold",
+            "resume",
         ],
     ),
     (

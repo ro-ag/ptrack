@@ -11,7 +11,14 @@ use crate::{
 /// Stable envelope codec ID for native ptrack positional records.
 pub const NATIVE_CODEC: u16 = 3;
 /// Current schema of native ptrack positional record payloads.
-pub const NATIVE_PAYLOAD_SCHEMA: u32 = 1;
+pub const NATIVE_PAYLOAD_SCHEMA: u32 = 2;
+/// Oldest native payload schema this build still decodes.
+///
+/// Schema 1 predates the plan and task hold reason. Schema-1 payloads decode
+/// with `hold_reason: None` and are re-encoded at [`NATIVE_PAYLOAD_SCHEMA`] on
+/// their next write, so stored records upgrade lazily and no database is
+/// rewritten on open.
+pub const MIN_NATIVE_PAYLOAD_SCHEMA: u32 = 1;
 /// Maximum accepted bytes in one native record payload.
 pub const MAX_PAYLOAD_BYTES: usize = 256 * 1024 * 1024;
 /// Maximum accepted UTF-8 bytes in one string field.
@@ -34,6 +41,7 @@ pub enum CodecError {
     InvalidTimestampTag(u8),
     TrailingBytes(usize),
     NonCanonical,
+    UnsupportedPayloadSchema(u32),
     UnsupportedRecordKind(RecordKind),
     InvalidRecord(ValidationError),
 }
@@ -77,6 +85,11 @@ impl fmt::Display for CodecError {
                 write!(formatter, "native payload has {count} trailing bytes")
             }
             Self::NonCanonical => formatter.write_str("native payload is not canonical"),
+            Self::UnsupportedPayloadSchema(schema) => write!(
+                formatter,
+                "native payload schema {schema} is outside the supported range \
+                 {MIN_NATIVE_PAYLOAD_SCHEMA} through {NATIVE_PAYLOAD_SCHEMA}"
+            ),
             Self::UnsupportedRecordKind(kind) => {
                 write!(
                     formatter,
@@ -103,17 +116,60 @@ impl From<ValidationError> for CodecError {
 /// Returns an error when the record is semantically invalid or exceeds a
 /// defensive encoding bound.
 pub fn encode_record(record: &NativeRecord) -> Result<Vec<u8>, CodecError> {
-    record.validate()?;
-    encode_unchecked(record)
+    encode_record_at_schema(record, NATIVE_PAYLOAD_SCHEMA)
 }
 
-/// Strictly decodes and validates one field-only payload of an externally known kind.
+/// Encodes one validated record as canonical bytes for a known payload schema.
+///
+/// Used to re-derive the canonical form of a stored record without upgrading
+/// it, so a schema-1 payload can be checked against the schema-1 layout it was
+/// written with.
+///
+/// # Errors
+///
+/// Returns an error for an unsupported payload schema, for a semantically
+/// invalid record, for a defensive encoding bound, and for a record that has no
+/// canonical form at the requested schema.
+pub fn encode_record_at_schema(
+    record: &NativeRecord,
+    payload_schema: u32,
+) -> Result<Vec<u8>, CodecError> {
+    if !(MIN_NATIVE_PAYLOAD_SCHEMA..=NATIVE_PAYLOAD_SCHEMA).contains(&payload_schema) {
+        return Err(CodecError::UnsupportedPayloadSchema(payload_schema));
+    }
+    record.validate()?;
+    encode_unchecked(record, payload_schema)
+}
+
+/// Strictly decodes and validates one field-only payload written at the current
+/// payload schema.
 ///
 /// # Errors
 ///
 /// Returns an error for any malformed, noncanonical, oversized, trailing, or
 /// semantically invalid input.
 pub fn decode_record(kind: RecordKind, payload: &[u8]) -> Result<NativeRecord, CodecError> {
+    decode_record_at_schema(kind, NATIVE_PAYLOAD_SCHEMA, payload)
+}
+
+/// Strictly decodes and validates one field-only payload written at a known
+/// payload schema.
+///
+/// Canonicality is checked against the encoding of that same schema, so a
+/// schema-1 payload must round-trip byte for byte through the schema-1 layout.
+///
+/// # Errors
+///
+/// Returns an error for an unsupported payload schema, and for any malformed,
+/// noncanonical, oversized, trailing, or semantically invalid input.
+pub fn decode_record_at_schema(
+    kind: RecordKind,
+    payload_schema: u32,
+    payload: &[u8],
+) -> Result<NativeRecord, CodecError> {
+    if !(MIN_NATIVE_PAYLOAD_SCHEMA..=NATIVE_PAYLOAD_SCHEMA).contains(&payload_schema) {
+        return Err(CodecError::UnsupportedPayloadSchema(payload_schema));
+    }
     if payload.len() > MAX_PAYLOAD_BYTES {
         return Err(CodecError::PayloadTooLarge {
             actual: payload.len(),
@@ -123,8 +179,8 @@ pub fn decode_record(kind: RecordKind, payload: &[u8]) -> Result<NativeRecord, C
     let mut reader = Reader::new(payload);
     let record = match kind {
         RecordKind::Meta => NativeRecord::Meta(decode_meta(&mut reader)?),
-        RecordKind::Plan => NativeRecord::Plan(decode_plan(&mut reader)?),
-        RecordKind::Task => NativeRecord::Task(decode_task(&mut reader)?),
+        RecordKind::Plan => NativeRecord::Plan(decode_plan(&mut reader, payload_schema)?),
+        RecordKind::Task => NativeRecord::Task(decode_task(&mut reader, payload_schema)?),
         RecordKind::Note => NativeRecord::Note(decode_note(&mut reader)?),
         RecordKind::Milestone => NativeRecord::Milestone(decode_milestone(&mut reader)?),
         RecordKind::Issue => NativeRecord::Issue(decode_issue(&mut reader)?),
@@ -145,18 +201,18 @@ pub fn decode_record(kind: RecordKind, payload: &[u8]) -> Result<NativeRecord, C
         return Err(CodecError::TrailingBytes(reader.remaining()));
     }
     record.validate()?;
-    if encode_unchecked(&record)? != payload {
+    if encode_unchecked(&record, payload_schema)? != payload {
         return Err(CodecError::NonCanonical);
     }
     Ok(record)
 }
 
-fn encode_unchecked(record: &NativeRecord) -> Result<Vec<u8>, CodecError> {
+fn encode_unchecked(record: &NativeRecord, payload_schema: u32) -> Result<Vec<u8>, CodecError> {
     let mut writer = Writer::default();
     match record {
         NativeRecord::Meta(value) => encode_meta(&mut writer, value)?,
-        NativeRecord::Plan(value) => encode_plan(&mut writer, value)?,
-        NativeRecord::Task(value) => encode_task(&mut writer, value)?,
+        NativeRecord::Plan(value) => encode_plan(&mut writer, value, payload_schema)?,
+        NativeRecord::Task(value) => encode_task(&mut writer, value, payload_schema)?,
         NativeRecord::Note(value) => encode_note(&mut writer, value)?,
         NativeRecord::Milestone(value) => encode_milestone(&mut writer, value)?,
         NativeRecord::Issue(value) => encode_issue(&mut writer, value)?,
@@ -456,17 +512,56 @@ fn decode_meta(reader: &mut Reader<'_>) -> Result<Meta, CodecError> {
     })
 }
 
-fn encode_plan(writer: &mut Writer, value: &Plan) -> Result<(), CodecError> {
+/// The payload schema that introduced the plan and task hold reason.
+///
+/// This is deliberately an absolute schema number rather than a comparison
+/// against [`NATIVE_PAYLOAD_SCHEMA`]: the next bump to 3 must keep writing and
+/// reading the hold-reason option byte for schema-2 records.
+pub(crate) const HOLD_REASON_PAYLOAD_SCHEMA: u32 = 2;
+
+/// Writes the trailing hold reason, which exists only from payload schema 2.
+///
+/// A schema-1 payload has no canonical form for a set hold reason, so encoding
+/// one at that schema is rejected rather than silently dropped.
+fn encode_hold_reason(
+    writer: &mut Writer,
+    value: Option<&String>,
+    payload_schema: u32,
+) -> Result<(), CodecError> {
+    if payload_schema >= HOLD_REASON_PAYLOAD_SCHEMA {
+        return writer.option(value, |writer, reason| writer.string(reason));
+    }
+    if value.is_some() {
+        Err(CodecError::NonCanonical)
+    } else {
+        Ok(())
+    }
+}
+
+/// Reads the trailing hold reason, absent before payload schema 2.
+fn decode_hold_reason(
+    reader: &mut Reader<'_>,
+    payload_schema: u32,
+) -> Result<Option<String>, CodecError> {
+    if payload_schema >= HOLD_REASON_PAYLOAD_SCHEMA {
+        reader.option(Reader::string)
+    } else {
+        Ok(None)
+    }
+}
+
+fn encode_plan(writer: &mut Writer, value: &Plan, payload_schema: u32) -> Result<(), CodecError> {
     writer.u64(value.id)?;
     writer.string(&value.title)?;
     encode_enum!(writer, value.status);
     writer.u64(value.milestone_id)?;
     writer.i64(value.order)?;
     writer.timestamp(value.created_at)?;
-    writer.timestamp(value.updated_at)
+    writer.timestamp(value.updated_at)?;
+    encode_hold_reason(writer, value.hold_reason.as_ref(), payload_schema)
 }
 
-fn decode_plan(reader: &mut Reader<'_>) -> Result<Plan, CodecError> {
+fn decode_plan(reader: &mut Reader<'_>, payload_schema: u32) -> Result<Plan, CodecError> {
     Ok(Plan {
         id: reader.u64()?,
         title: reader.string()?,
@@ -475,20 +570,22 @@ fn decode_plan(reader: &mut Reader<'_>) -> Result<Plan, CodecError> {
         order: reader.i64()?,
         created_at: reader.timestamp()?,
         updated_at: reader.timestamp()?,
+        hold_reason: decode_hold_reason(reader, payload_schema)?,
     })
 }
 
-fn encode_task(writer: &mut Writer, value: &Task) -> Result<(), CodecError> {
+fn encode_task(writer: &mut Writer, value: &Task, payload_schema: u32) -> Result<(), CodecError> {
     writer.u64(value.id)?;
     writer.u64(value.plan_id)?;
     writer.string(&value.title)?;
     encode_enum!(writer, value.status);
     writer.i64(value.order)?;
     writer.timestamp(value.created_at)?;
-    writer.timestamp(value.updated_at)
+    writer.timestamp(value.updated_at)?;
+    encode_hold_reason(writer, value.hold_reason.as_ref(), payload_schema)
 }
 
-fn decode_task(reader: &mut Reader<'_>) -> Result<Task, CodecError> {
+fn decode_task(reader: &mut Reader<'_>, payload_schema: u32) -> Result<Task, CodecError> {
     Ok(Task {
         id: reader.u64()?,
         plan_id: reader.u64()?,
@@ -497,6 +594,7 @@ fn decode_task(reader: &mut Reader<'_>) -> Result<Task, CodecError> {
         order: reader.i64()?,
         created_at: reader.timestamp()?,
         updated_at: reader.timestamp()?,
+        hold_reason: decode_hold_reason(reader, payload_schema)?,
     })
 }
 
