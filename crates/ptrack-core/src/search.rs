@@ -38,7 +38,7 @@ pub fn search(snapshot: &ProjectSnapshot, term: &str) -> SearchView {
             .plans
             .iter()
             .filter(|plan| has(&plan.title))
-            .map(plan_ref)
+            .map(|plan| plan_ref(&snapshot.meta, plan))
             .collect(),
         tasks: snapshot
             .tasks

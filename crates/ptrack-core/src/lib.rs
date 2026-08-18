@@ -27,7 +27,8 @@ pub use model::{
     StoredDate, Task, TaskStatus, Timestamp,
 };
 pub use report::{
-    Digest, IssueLine, NoteLine, PlanBrief, ReportError, TaskLine, context, hold_marker,
+    Digest, IssueLine, NoteLine, PlanBrief, ReportError, TaskLine, claim_marker, context,
+    hold_marker,
 };
 pub use search::{SearchView, search};
 pub use snapshot::ProjectSnapshot;

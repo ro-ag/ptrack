@@ -12,9 +12,9 @@ use ptrack_app::{
     ApplicationPort, GuideAction, HookAction, HookResult, InitRequest, Mutation, MutationResult,
 };
 use ptrack_core::{
-    IssueStatus, MilestoneStatus, NoteTarget, PlanStatus, Severity, TaskStatus, Timestamp,
-    board_for, check_hold_reason, context, hold_marker, next, search, show_issue, show_milestone,
-    show_plan, show_task,
+    IssueStatus, LEGACY_ACTOR, MilestoneStatus, NoteTarget, PlanStatus, Severity, TaskStatus,
+    Timestamp, board_for, check_hold_reason, claim_marker, context, hold_marker, next, search,
+    show_issue, show_milestone, show_plan, show_task,
 };
 
 use crate::compat_json::{
@@ -361,6 +361,8 @@ fn plan(
                         status: plan.status.as_str(),
                         active: plan.id == snapshot.meta.active_plan,
                         hold_reason: plan.hold_reason.as_deref(),
+                        claimed_by: plan.claim_owner.as_deref(),
+                        actor: plan.actor.as_deref().unwrap_or(LEGACY_ACTOR),
                     })
                     .collect();
                 output::json(io.stdout, &rows)?;
@@ -374,11 +376,16 @@ fn plan(
                     output::line(
                         io.stdout,
                         format_args!(
-                            "#{} [{}] {mark} {}{}",
+                            "#{} [{}] {mark} {}{}{}",
                             plan.id,
                             plan.status,
                             plan.title,
-                            hold_marker(plan.hold_reason.as_deref())
+                            hold_marker(plan.hold_reason.as_deref()),
+                            claim_marker(
+                                plan.claim_owner
+                                    .as_deref()
+                                    .map(|owner| snapshot.meta.actor_name(owner).unwrap_or(owner))
+                            )
                         ),
                     )?;
                 }
@@ -496,6 +503,7 @@ fn task(
                         title: &task.title,
                         status: task.status.as_str(),
                         hold_reason: task.hold_reason.as_deref(),
+                        actor: task.actor.as_deref().unwrap_or(LEGACY_ACTOR),
                     })
                     .collect();
                 output::json(io.stdout, &rows)?;

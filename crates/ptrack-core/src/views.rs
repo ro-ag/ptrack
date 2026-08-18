@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 
-use crate::report::{ReportError, hold_marker, note_line, notes_markdown, task_line};
+use crate::report::{ReportError, claim_marker, hold_marker, note_line, notes_markdown, task_line};
 use crate::{NoteLine, ProjectSnapshot, TaskLine, TaskStatus};
 
 /// A compact plan reference.
@@ -11,6 +11,11 @@ pub struct PlanRef {
     pub status: String,
     /// Set while the plan is on hold; orthogonal to its status.
     pub hold_reason: Option<String>,
+    /// Identity holding the hard claim on this plan; `None` when unclaimed.
+    pub claimed_by: Option<String>,
+    /// Resolved display name for `claimed_by`; `None` when the directory has
+    /// no entry for that identity.
+    pub claimed_by_name: Option<String>,
 }
 
 /// The single most actionable task, or an explanation of its absence.
@@ -111,7 +116,7 @@ pub fn show_plan(snapshot: &ProjectSnapshot, id: u64) -> Result<PlanShow, Report
         .plan(id)
         .ok_or_else(|| ReportError::not_found("plan", id))?;
     Ok(PlanShow {
-        plan: plan_ref(plan),
+        plan: plan_ref(&snapshot.meta, plan),
         tasks: snapshot.tasks_for_plan(id).map(task_line).collect(),
         notes: snapshot.notes_for_plan(id).map(note_line).collect(),
     })
@@ -122,11 +127,17 @@ impl PlanShow {
     #[must_use]
     pub fn markdown(&self) -> String {
         let mut output = format!(
-            "# Plan #{} {} [{}]{}\n\n## Tasks\n",
+            "# Plan #{} {} [{}]{}{}\n\n## Tasks\n",
             self.plan.id,
             self.plan.title,
             self.plan.status,
-            hold_marker(self.plan.hold_reason.as_deref())
+            hold_marker(self.plan.hold_reason.as_deref()),
+            claim_marker(
+                self.plan
+                    .claimed_by_name
+                    .as_deref()
+                    .or(self.plan.claimed_by.as_deref())
+            )
         );
         if self.tasks.is_empty() {
             output.push_str("_none_\n");
@@ -171,7 +182,9 @@ pub fn show_task(snapshot: &ProjectSnapshot, id: u64) -> Result<TaskShow, Report
         .ok_or_else(|| ReportError::not_found("task", id))?;
     Ok(TaskShow {
         task: task_line(task),
-        plan: snapshot.plan(task.plan_id).map(plan_ref),
+        plan: snapshot
+            .plan(task.plan_id)
+            .map(|plan| plan_ref(&snapshot.meta, plan)),
         notes: snapshot.notes_for_task(id).map(note_line).collect(),
     })
 }
@@ -254,7 +267,10 @@ pub fn show_milestone(snapshot: &ProjectSnapshot, id: u64) -> Result<MilestoneSh
             .stored_date()
             .map(|date| date.to_string())
             .unwrap_or_default(),
-        plans: plans.into_iter().map(plan_ref).collect(),
+        plans: plans
+            .into_iter()
+            .map(|plan| plan_ref(&snapshot.meta, plan))
+            .collect(),
         tasks_done,
         tasks_open,
     })
@@ -280,11 +296,16 @@ impl MilestoneShow {
         for plan in &self.plans {
             writeln!(
                 &mut output,
-                "- #{} {} [{}]{}",
+                "- #{} {} [{}]{}{}",
                 plan.id,
                 plan.title,
                 plan.status,
-                hold_marker(plan.hold_reason.as_deref())
+                hold_marker(plan.hold_reason.as_deref()),
+                claim_marker(
+                    plan.claimed_by_name
+                        .as_deref()
+                        .or(plan.claimed_by.as_deref())
+                )
             )
             .expect("writing to String cannot fail");
         }
@@ -423,11 +444,17 @@ impl Board {
     }
 }
 
-pub(crate) fn plan_ref(plan: &crate::Plan) -> PlanRef {
+pub(crate) fn plan_ref(meta: &crate::Meta, plan: &crate::Plan) -> PlanRef {
     PlanRef {
         id: plan.id,
         title: plan.title.clone(),
         status: plan.status.as_str().to_owned(),
         hold_reason: plan.hold_reason.clone(),
+        claimed_by: plan.claim_owner.clone(),
+        claimed_by_name: plan
+            .claim_owner
+            .as_deref()
+            .and_then(|owner| meta.actor_name(owner))
+            .map(str::to_owned),
     }
 }
