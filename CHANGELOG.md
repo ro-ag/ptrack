@@ -9,6 +9,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.24.2] - 2026-08-17
 
 ### Fixed
+- Initializing a new project no longer fails with "global runtime state
+  requires recovery" on a healthy machine that kept its legacy `global.db` as
+  migration evidence. A bound runtime now vouches for the global state;
+  unfinished migrations and leftover bootstrap plans still fail closed.
 - A global home directory carrying group/other permission bits — a restore, a
   sync, or a copy made under a default umask — no longer locks the runtime out
   with "global home permissions are not private". The directory is tightened
