@@ -1517,9 +1517,15 @@ impl ProductionDesktopAuthority {
                 ));
             }
         }
-        if path_is_present(&self.global_home.join("global.db"))?
-            || (lock(&self.state).runtime.is_none()
-                && path_is_present(&self.global_home.join("global.redb"))?)
+        // A bound runtime is the proof the global state is healthy. Legacy
+        // `global.db` next to it is retained migration evidence — the v0.23.0
+        // cutover guidance says to keep it — and must not wall off new
+        // projects. With no bound runtime, either database's presence means an
+        // unfinished migration or a store the runtime refused, and a leftover
+        // bootstrap plan is an interrupted bootstrap either way.
+        if (lock(&self.state).runtime.is_none()
+            && (path_is_present(&self.global_home.join("global.db"))?
+                || path_is_present(&self.global_home.join("global.redb"))?))
             || path_is_present(&self.global_home.join("runtime").join(BOOTSTRAP_PLAN))?
         {
             return Ok(Self::recovery_validation(

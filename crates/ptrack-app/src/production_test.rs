@@ -3070,3 +3070,49 @@ fn write_test_bootstrap_plan(path: &Path, plan: &TestBootstrapPlan) {
     fs::write(path, bytes).unwrap();
     private_file(path);
 }
+
+/// A migrated machine keeps `global.db` as recovery evidence — the v0.23.0
+/// cutover guidance says to preserve it. With the runtime bound to a healthy
+/// `global.redb`, that retained file must not wall off new-project
+/// initialization behind "global runtime state requires recovery".
+#[test]
+fn retained_legacy_global_db_does_not_block_new_projects_on_a_bound_runtime() {
+    let temp = Temp::new();
+    let home = temp.0.join("home");
+    let first = temp.0.join("first-project");
+    let project = temp.0.join("fresh-project");
+    fs::create_dir(&first).unwrap();
+    fs::create_dir(&project).unwrap();
+    let desktop = production_desktop_runtime(home.clone(), "test", &temp.0, None, 0).unwrap();
+    // A real initialization binds the runtime and creates the healthy
+    // `global.redb`; only then is the retained legacy file pure evidence.
+    let ready = desktop
+        .invoke(desktop_request(
+            "ValidateProjectTargetV1",
+            vec![serde_json::json!(first)],
+        ))
+        .unwrap();
+    assert_eq!(ready["kind"], "new");
+    desktop
+        .invoke(desktop_request(
+            "InitializeProjectV1",
+            vec![serde_json::json!({
+                "operationId": ready["operationId"],
+                "root": ready["canonicalRoot"],
+                "goal": "Bind the runtime",
+                "guideChoice": "skip",
+                "guidePreviewToken": ""
+            })],
+        ))
+        .unwrap();
+    fs::write(home.join("global.db"), b"legacy evidence").unwrap();
+    let validation = desktop
+        .invoke(desktop_request(
+            "ValidateProjectTargetV1",
+            vec![serde_json::json!(project)],
+        ))
+        .unwrap();
+    assert_eq!(validation["kind"], "new", "validation: {validation}");
+    assert_eq!(validation["canonicalRoot"], project.to_str().unwrap());
+    desktop.begin_shutdown().unwrap();
+}
