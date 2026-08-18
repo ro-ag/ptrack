@@ -3096,3 +3096,55 @@ fn every_allowlisted_capability_method_routes_to_the_broker() {
         );
     }
 }
+
+#[test]
+fn held_plans_and_tasks_reach_the_board_payload_without_leaving_their_column() {
+    let directory = TestDirectory::new("board-hold");
+    let (bindings, task_id) = bound_bindings(&directory);
+    let store = ProjectStore::open_existing(
+        &bindings.project.as_ref().unwrap().database,
+        &bindings.project.as_ref().unwrap().binding,
+        "test",
+    )
+    .unwrap();
+    let plan_id = store.meta().unwrap().active_plan;
+    store
+        .set_task_hold(task_id, Some("waiting on review".to_owned()))
+        .unwrap();
+    store
+        .set_plan_hold(plan_id, Some("waiting on design".to_owned()))
+        .unwrap();
+    drop(store);
+    let workspace = BoundDesktopWorkspace::new(
+        7,
+        0,
+        bindings.clone(),
+        Box::new(LocalApplication::new(bindings)),
+        None,
+        None,
+        None,
+    );
+
+    let board = workspace
+        .invoke("GetBoardV2", &[json!(7), json!(0)])
+        .unwrap();
+    let columns = board["board"]["columns"].as_array().unwrap();
+    // Four lanes, and the held task still sits in Todo — hold is a badge, not a lane.
+    assert_eq!(columns.len(), 4);
+    assert_eq!(columns[0]["status"], "todo");
+    assert_eq!(columns[0]["tasks"][0]["id"], task_id);
+    assert_eq!(columns[0]["tasks"][0]["holdReason"], "waiting on review");
+    assert_eq!(
+        board["board"]["plans"][0]["holdReason"],
+        "waiting on design"
+    );
+
+    // The paged snapshot projection builds its own plan rows and blocker cards.
+    let snapshot = workspace
+        .invoke("GetWorkspaceSnapshot", &[json!(7), json!(0)])
+        .unwrap();
+    assert_eq!(
+        snapshot["tracking"]["board"]["plans"][0]["holdReason"],
+        "waiting on design"
+    );
+}

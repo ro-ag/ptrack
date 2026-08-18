@@ -120,6 +120,17 @@ _none_\n\
 - #2 init command\n\
 \n"
     );
+    assert_eq!(
+        show_milestone(&held, 1)
+            .expect("milestone exists")
+            .markdown(),
+        "# Milestone #1 Ship beta [open] (due 1969-12-31)\n\
+\n\
+Tasks: 1 done · 2 open\n\
+\n\
+## Plans\n\
+- #1 Build CLI [active] [on hold: budget freeze]\n"
+    );
 }
 
 #[test]

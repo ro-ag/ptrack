@@ -1276,6 +1276,20 @@ function cardElement(task) {
     );
   }
 
+  // Hold is orthogonal to status: the card keeps its lane and gains a badge.
+  // Drag and drop stay enabled — a held task can still change status.
+  if (task.holdReason) {
+    const hold = document.createElement("span");
+    hold.className = "card-hold";
+    hold.textContent = "⏸ On hold";
+    hold.title = task.holdReason;
+    dragZone.append(hold);
+    dragZone.setAttribute(
+      "aria-label",
+      `${dragZone.getAttribute("aria-label")} On hold: ${task.holdReason}.`,
+    );
+  }
+
   if (task.latestNote) {
     const note = document.createElement("p");
     note.className = "latest-note";
@@ -1486,6 +1500,14 @@ function renderPlanList() {
       dot.className = "sidebar-plan-dot";
       dot.setAttribute("aria-hidden", "true");
       item.append(dot);
+    }
+    if (plan.holdReason) {
+      const hold = document.createElement("span");
+      hold.className = "sidebar-plan-hold";
+      hold.textContent = "⏸";
+      hold.setAttribute("aria-hidden", "true");
+      item.append(hold);
+      item.title = `${item.title} · on hold: ${plan.holdReason}`;
     }
     item.addEventListener("click", () => selectPlan(plan.id));
     if (plan.tasksTotal > 0) {

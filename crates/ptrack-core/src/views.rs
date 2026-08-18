@@ -280,8 +280,11 @@ impl MilestoneShow {
         for plan in &self.plans {
             writeln!(
                 &mut output,
-                "- #{} {} [{}]",
-                plan.id, plan.title, plan.status
+                "- #{} {} [{}]{}",
+                plan.id,
+                plan.title,
+                plan.status,
+                hold_marker(plan.hold_reason.as_deref())
             )
             .expect("writing to String cannot fail");
         }
