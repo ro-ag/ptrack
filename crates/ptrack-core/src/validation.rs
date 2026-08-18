@@ -172,7 +172,7 @@ fn validate_hold_reason(
 /// The record validator fires deep inside `encode_record`, so without this the
 /// user would see a field-path message such as
 /// `plan.hold_reason must be nonblank when set`. Both checks share
-/// [`hold_reason_problem`], so anything accepted here is storable.
+/// `hold_reason_problem`, so anything accepted here is storable.
 ///
 /// # Errors
 ///
