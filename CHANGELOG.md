@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-08-18
+
 ### Removed
 - The offline bbolt migration tool (`ptrack-db-import`) and every legacy-
   database refusal. With no projects left on the old format, retired
@@ -634,7 +636,8 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
-[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.24.4...HEAD
+[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.25.0...HEAD
+[0.25.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.25.0
 [0.24.4]: https://github.com/ro-ag/ptrack/releases/tag/v0.24.4
 [0.24.3]: https://github.com/ro-ag/ptrack/releases/tag/v0.24.3
 [0.24.1]: https://github.com/ro-ag/ptrack/releases/tag/v0.24.1
