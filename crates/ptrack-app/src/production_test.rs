@@ -1966,7 +1966,11 @@ fn desktop_authority_accepts_a_new_project_beside_the_global_home() {
 
     let own_root = authority.validate_target(&user_home).unwrap();
     assert_eq!(own_root.kind, ProjectTargetKindV1::RecoveryRequired);
-    assert!(own_root.reason.contains("preexisting project storage"));
+    // Refused by name: the home directory is never a project candidate.
+    assert_eq!(
+        own_root.reason,
+        "the p-track home directory cannot be a project"
+    );
 
     authority
         .initialize(&InitializeProjectRequestV1 {
@@ -3114,5 +3118,42 @@ fn retained_legacy_global_db_does_not_block_new_projects_on_a_bound_runtime() {
         .unwrap();
     assert_eq!(validation["kind"], "new", "validation: {validation}");
     assert_eq!(validation["canonicalRoot"], project.to_str().unwrap());
+    desktop.begin_shutdown().unwrap();
+}
+
+/// `ptrack init` in the home directory: the root's `.ptrack` IS the global
+/// home. That can never be a project — and the refusal must say so, not
+/// misreport it as a recovery case or a colliding database destination.
+#[test]
+fn initializing_the_home_directory_is_refused_by_name() {
+    let temp = Temp::new();
+    let root = temp.0.join("user-home");
+    let home = root.join(".ptrack");
+    fs::create_dir(&root).unwrap();
+    let request = InitRequest {
+        root: Some(root.clone()),
+        goal: String::new(),
+        force: false,
+        no_guide: true,
+    };
+    let mut application = RoutedApplication::new(home.clone(), root.clone(), "test");
+    let error = application.initialize(request).unwrap_err().to_string();
+    assert!(
+        error.contains("the p-track home directory cannot be a project"),
+        "unexpected error: {error}"
+    );
+
+    let desktop = production_desktop_runtime(home, "test", &root, None, 0).unwrap();
+    let validation = desktop
+        .invoke(desktop_request(
+            "ValidateProjectTargetV1",
+            vec![serde_json::json!(root)],
+        ))
+        .unwrap();
+    assert_eq!(validation["kind"], "recovery-required", "{validation}");
+    assert_eq!(
+        validation["reason"], "the p-track home directory cannot be a project",
+        "{validation}"
+    );
     desktop.begin_shutdown().unwrap();
 }
