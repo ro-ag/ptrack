@@ -1777,3 +1777,193 @@ fn convert_births_the_new_plan_claimed_by_the_converter() {
     assert_eq!(born.claim_owner.as_deref(), Some(ACTOR_A));
     assert_eq!(born.claim_epoch, 1);
 }
+
+/// Marks a plan's claim as conflicted. Nothing in the store writes this field
+/// — it is accepted-but-never-written until conflict detection lands — so the
+/// only way to prove the clearing paths handle it is to plant one.
+fn plant_claim_conflict(store: &ProjectStore, plan_id: u64) {
+    store
+        .write(|transaction| {
+            let mut plan: Plan = typed::get_write(transaction, RecordKey::Id(plan_id))?.unwrap();
+            plan.claim_conflict = true;
+            typed::put(transaction, RecordKey::Id(plan_id), &plan)?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn claim_gate_covers_the_compare_and_set_and_cross_plan_paths() {
+    let temp = Temp::new();
+    let path = temp.path("claims-gates.redb");
+    let expected = binding(&path, StoreKind::Project, "project-gates");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+    let source = store.add_plan("source", 0).unwrap();
+    let target = store.add_plan("target", 0).unwrap();
+    let task = store.add_task(source.id, "moving target").unwrap();
+    drop(store);
+
+    let store = reopen_as(&path, "project-gates", Some(actor_a()));
+    store.use_plan(source.id, false).unwrap();
+    drop(store);
+
+    // B owns nothing here: the CAS path is gated like every other content write.
+    let store = reopen_as(&path, "project-gates", Some(actor_b()));
+    let refused = store
+        .compare_and_set_task_status(
+            task.id,
+            source.id,
+            TaskStatus::Todo,
+            task.updated_at,
+            TaskStatus::Doing,
+        )
+        .unwrap_err();
+    assert!(matches!(refused, StoreError::InvalidClaim(_)), "{refused}");
+    // The refusal names the owner the way a person knows them, not by ULID.
+    assert!(refused.to_string().contains("Alice"), "{refused}");
+    assert!(!refused.to_string().contains(ACTOR_A), "{refused}");
+
+    // Only the *source* plan is claimed, and moving out of it is still refused.
+    assert!(matches!(
+        store.set_task_plan(task.id, target.id).unwrap_err(),
+        StoreError::InvalidClaim(_)
+    ));
+    // The open channels leave the claim exactly as they found it.
+    store
+        .set_plan_hold(source.id, Some("waiting on B".to_owned()))
+        .unwrap();
+    store.set_plan_hold(source.id, None).unwrap();
+    let held = store.plan(source.id).unwrap();
+    assert_eq!(held.claim_owner.as_deref(), Some(ACTOR_A));
+    assert_eq!(held.claim_epoch, 1);
+    drop(store);
+
+    // Finishing a *task* is not a plan status change: the claim is untouched.
+    let store = reopen_as(&path, "project-gates", Some(actor_a()));
+    let task = store
+        .compare_and_set_task_status(
+            task.id,
+            source.id,
+            TaskStatus::Todo,
+            task.updated_at,
+            TaskStatus::Done,
+        )
+        .unwrap();
+    assert_eq!(task.status, TaskStatus::Done);
+    assert_eq!(
+        store.plan(source.id).unwrap().claim_owner.as_deref(),
+        Some(ACTOR_A)
+    );
+}
+
+#[test]
+fn claim_epochs_move_only_on_a_real_ownership_change() {
+    let temp = Temp::new();
+    let path = temp.path("claims-epoch.redb");
+    let expected = binding(&path, StoreKind::Project, "project-epoch");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+    let plan = store.add_plan("epochs", 0).unwrap();
+    drop(store);
+
+    let store = reopen_as(&path, "project-epoch", Some(actor_a()));
+    // Stealing a plan nobody holds is an ordinary first claim.
+    store.use_plan(plan.id, true).unwrap();
+    assert_eq!(store.plan(plan.id).unwrap().claim_epoch, 1);
+    // Stealing from yourself changes no ownership, so it bumps nothing.
+    store.use_plan(plan.id, true).unwrap();
+    assert_eq!(store.plan(plan.id).unwrap().claim_epoch, 1);
+    drop(store);
+
+    // An identity-less caller still moves its legacy active plan and leaves
+    // the claim alone, even though its content writes are refused.
+    let store = reopen_as(&path, "project-epoch", None);
+    store.use_plan(plan.id, false).unwrap();
+    assert_eq!(store.meta().unwrap().active_plan, plan.id);
+    let untouched = store.plan(plan.id).unwrap();
+    assert_eq!(untouched.claim_owner.as_deref(), Some(ACTOR_A));
+    assert_eq!(untouched.claim_epoch, 1);
+    // `--steal` is meaningless without an identity to steal for.
+    assert!(matches!(
+        store.use_plan(plan.id, true).unwrap_err(),
+        StoreError::InvalidClaim(_)
+    ));
+    drop(store);
+
+    // Terminal auto-release is a release: a second, explicit one has nothing
+    // left to free.
+    let store = reopen_as(&path, "project-epoch", Some(actor_a()));
+    store.set_plan_status(plan.id, PlanStatus::Done).unwrap();
+    assert!(matches!(
+        store.release_plan(plan.id).unwrap_err(),
+        StoreError::InvalidClaim(_)
+    ));
+}
+
+#[test]
+fn terminal_plans_hold_no_claim_from_any_direction() {
+    let temp = Temp::new();
+    let path = temp.path("claims-terminal-open.redb");
+    let expected = binding(&path, StoreKind::Project, "project-terminal-open");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+    let plan = store.add_plan("finished", 0).unwrap();
+    let done_task = store.add_task(plan.id, "already done").unwrap();
+    store
+        .set_task_status(done_task.id, TaskStatus::Done)
+        .unwrap();
+    drop(store);
+
+    let store = reopen_as(&path, "project-terminal-open", Some(actor_a()));
+    store.use_plan(plan.id, false).unwrap();
+    // A done task births a done plan, and a done plan is born unclaimed.
+    let born = store.convert_task_to_plan(done_task.id).unwrap();
+    assert_eq!(born.status, PlanStatus::Done);
+    assert_eq!(born.claim_owner, None);
+    assert_eq!(born.claim_epoch, 0);
+    store.set_plan_status(plan.id, PlanStatus::Done).unwrap();
+    drop(store);
+
+    // Using or stealing a terminal plan moves the active plan and claims
+    // nothing, so its content stays open to everyone.
+    let store = reopen_as(&path, "project-terminal-open", Some(actor_b()));
+    store.use_plan(plan.id, true).unwrap();
+    assert_eq!(store.plan(plan.id).unwrap().claim_owner, None);
+    assert_eq!(store.snapshot().unwrap().meta.active_plan, plan.id);
+    store
+        .set_plan_title(plan.id, "renamed after the fact")
+        .unwrap();
+    assert_eq!(store.plan(born.id).unwrap().claim_owner, None);
+}
+
+#[test]
+fn a_conflicted_claim_can_still_be_stolen_released_and_finished() {
+    let temp = Temp::new();
+    let path = temp.path("claims-conflict.redb");
+    let expected = binding(&path, StoreKind::Project, "project-conflict");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+    let released = store.add_plan("released", 0).unwrap();
+    let finished = store.add_plan("finished", 0).unwrap();
+    let stolen = store.add_plan("stolen", 0).unwrap();
+    drop(store);
+
+    let store = reopen_as(&path, "project-conflict", Some(actor_a()));
+    for plan in [&released, &finished, &stolen] {
+        store.use_plan(plan.id, false).unwrap();
+        plant_claim_conflict(&store, plan.id);
+    }
+
+    // Every write that clears an owner clears the marker with it; leaving it
+    // behind would make the record fail validation on encode forever.
+    store.release_plan(released.id).unwrap();
+    assert!(!store.plan(released.id).unwrap().claim_conflict);
+    store
+        .set_plan_status(finished.id, PlanStatus::Done)
+        .unwrap();
+    assert!(!store.plan(finished.id).unwrap().claim_conflict);
+    drop(store);
+
+    let store = reopen_as(&path, "project-conflict", Some(actor_b()));
+    store.use_plan(stolen.id, true).unwrap();
+    let taken = store.plan(stolen.id).unwrap();
+    assert_eq!(taken.claim_owner.as_deref(), Some(ACTOR_B));
+    assert!(!taken.claim_conflict);
+}
