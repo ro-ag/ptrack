@@ -11,8 +11,8 @@ interactive matrices.
 
 | OS | Arch | CI runner | Minimum OS / baseline | Webview | Package format | Signing |
 |---|---|---|---|---|---|---|
-| macOS | amd64 | macos-15-intel | 12.0 (`minimumSystemVersion` in `src-tauri/tauri.conf.json`) | wkwebview | Signed, notarized DMG + unsigned CLI tar.gz | Developer ID + notarization (DMG only) |
-| macOS | arm64 | macos-15 | 12.0 | wkwebview | Signed, notarized DMG + unsigned CLI tar.gz | Developer ID + notarization (DMG only) |
+| macOS | amd64 | macos-15-intel | 12.0 (`minimumSystemVersion` in `src-tauri/tauri.conf.json`) | wkwebview | Signed, notarized DMG + signed (not notarized/stapled) CLI tar.gz | Developer ID signing on both packages; notarization + stapling on the DMG only |
+| macOS | arm64 | macos-15 | 12.0 | wkwebview | Signed, notarized DMG + signed (not notarized/stapled) CLI tar.gz | Developer ID signing on both packages; notarization + stapling on the DMG only |
 | Windows | amd64 | windows-2025 | Windows as provided by windows-2025 | webview2 | ZIP | None (unsigned) |
 | Windows | arm64 | windows-11-arm | Windows as provided by windows-11-arm | webview2 | ZIP | None (unsigned) |
 | Linux | amd64 | ubuntu-24.04 | glibc/webkit2gtk as provided by ubuntu-24.04 | webkitgtk | tar.gz | None (unsigned) |
@@ -22,8 +22,9 @@ These six targets are the exact `build` matrix in `.github/workflows/release.yml
 `tools/release_contract.py`'s `package_names()` hardcodes the same two arches
 via `ARCHES = ("amd64", "arm64")`, but emits eight package names, not six: for
 each arch it lists a darwin `.dmg`, a darwin CLI `.tar.gz`, a linux `.tar.gz`,
-and a windows `.zip` (macOS ships two packages per arch — DMG plus the unsigned
-CLI archive — while Windows and Linux ship one each). There is no distro
+and a windows `.zip` (macOS ships two packages per arch — DMG plus the signed
+but not notarized/stapled CLI archive — while Windows and Linux ship one
+each). There is no distro
 matrix pinned for Linux beyond the ubuntu-24.04 runner images; no other libc,
 webview engine, or distro is validated.
 
@@ -37,8 +38,8 @@ GitHub release.
   entitlements from `build/darwin/entitlements.plist`.
 - Notarization: `xcrun notarytool submit --wait` then `xcrun stapler staple`
   and `xcrun stapler validate`.
-- Team pinned: the release job's updater trust check requires
-  `certificate leaf[subject.OU] = "3CAJR4ZDMQ"` on the built DMG.
+- Team pinned: the `build` job's "Verify macOS updater trust contract" step
+  requires `certificate leaf[subject.OU] = "3CAJR4ZDMQ"` on the built DMG.
 - The `build` job's "Require updater-compatible macOS credentials" step
   fails the run closed if `APPLE_CERTIFICATE_BASE64`,
   `APPLE_CERTIFICATE_PASSWORD`, `KEYCHAIN_PASSWORD`, `APPLE_SIGNING_IDENTITY`,
@@ -54,13 +55,17 @@ revision:
    passes: frontend tests/build, `cargo fmt --check`, `cargo test --workspace`,
    `cargo clippy -D warnings`, `cargo doc -D warnings`, and
    `tools.release_contract_test` / `tools.help_check_test` plus
-   `tools/help_check.py all`.
+   `tools/help_check.py all` (this cross-checks the newest CHANGELOG version
+   against the README badges, `tauri.conf.json`, `Cargo.toml`, and the help
+   pages — it does not compare that version against the pushed tag).
 2. **Build succeeds for that target.** The matching row of the `build` job
    compiles, and for macOS also signs and notarizes successfully.
 3. **Release contract validates.** `tools/release_contract.py validate-binary`
    passes at build time (exact version string, correct machine type) and
-   `validate-dist` / `checksums` pass in the `release` job before
-   `gh release create --verify-tag` runs.
+   `validate-dist` / `checksums` pass in the `release` job. Tag↔version
+   equality is enforced separately in that job by `release-notes`, which
+   requires a CHANGELOG `## [X.Y.Z]` section matching the tag-derived
+   version — all before `gh release create --verify-tag` runs.
 4. **checksums.txt present** for every package in the published release.
 5. **Native acceptance evidence exists**, per `.github/workflows/native-acceptance.yml`:
    - Linux and Windows: the `native` job (always runs on `pull_request` and

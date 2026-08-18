@@ -66,27 +66,38 @@ Releases publish via GitHub Actions on tag push only
 
 ## 3. Release contract and artifact validation
 
-- [ ] Run the release contract's own unit tests:
+- [ ] Run the release contract and help-check unit tests (the same pair CI
+      runs in the `test` job):
 
   ```sh
-  python3 -B -m unittest tools.release_contract_test
+  python3 -B -m unittest tools.help_check_test tools.release_contract_test
   ```
 
   Expected: `OK`.
-- [ ] After producing a local dist directory (see section 5), validate it
-      without uploading anything:
+- [ ] `validate-dist` and `checksums` are **CI-only**, not runnable from
+      this checklist's local artifacts: `validate-dist` requires the dist
+      directory to contain exactly all 8 package names across the six
+      release targets (`tools/release_contract.py:141-145`), and
+      `checksums` calls `validate-dist` first. Section 5 below only
+      produces the host machine's own DMG + tar.gz, so both steps fail
+      closed on a local run. They run for real in the `release` job
+      against the complete downloaded artifact set from all six `build`
+      matrix legs:
 
   ```sh
   python3 -B tools/release_contract.py validate-dist  dist <X.Y.Z>
   python3 -B tools/release_contract.py checksums      dist <X.Y.Z>
+  ```
+
+- [ ] `release-notes` only reads `CHANGELOG.md`, so it is runnable locally
+      without a complete dist directory:
+
+  ```sh
   python3 -B tools/release_contract.py release-notes  CHANGELOG.md <X.Y.Z> <destination-file>
   ```
 
-  `validate-dist` checks the dist directory contains exactly the expected
-  package names for the six release targets; `checksums` writes
-  `checksums.txt` next to the packages; `release-notes` extracts the
-  `## [X.Y.Z]` section of `CHANGELOG.md` into `<destination-file>`. None of
-  these three touch GitHub or any remote.
+  It extracts the `## [X.Y.Z]` section of `CHANGELOG.md` into
+  `<destination-file>` and touches nothing on GitHub or any remote.
 - [ ] `validate-binary` runs automatically as part of `make package` (see
       section 5), but can be run standalone against any built binary:
 
@@ -114,16 +125,16 @@ Releases publish via GitHub Actions on tag push only
 
 ## 5. macOS packaging and signing rehearsal (macOS only, local, no upload)
 
-- [ ] Build and package, unsigned:
+- [ ] Package, unsigned:
 
   ```sh
-  make build
   make package
   ```
 
-  `make package` builds an unsigned `.app` and runs `validate-binary`
-  against it automatically; it fails closed if the version or architecture
-  is wrong.
+  `make package` builds an unsigned `.app` (via `tauri build`, which does
+  its own `cargo build` — a preceding `make build` is not needed and its
+  output goes unused) and runs `validate-binary` against it automatically;
+  it fails closed if the version or architecture is wrong.
 - [ ] Produce local artifacts (no upload):
 
   ```sh
@@ -138,6 +149,9 @@ Releases publish via GitHub Actions on tag push only
   make verify-sign    # codesign --verify (re-runnable standalone)
   make signed-dmg     # signed DMG into dist/
   ```
+
+  `make dmg` and `make signed-dmg` write to the same DMG path in `dist/`;
+  running `signed-dmg` after `dmg` overwrites the unsigned one.
 - [ ] Optional, only with a `ptrack-notarize` keychain profile
       (`NOTARY_PROFILE`) available — notarization rehearsal:
 
