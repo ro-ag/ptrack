@@ -1,6 +1,6 @@
 [package]
 name = "ptrack-cli"
-version = "0.24.3"
+version = "0.24.4"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
