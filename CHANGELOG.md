@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.24.4] - 2026-08-17
+
+### Fixed
+- Initializing a home directory as a project is refused by name. `ptrack
+  init` in `~` used to fail with a misleading "database destination already
+  exists" recovery error; both the CLI and the desktop folder picker now
+  answer "the p-track home directory cannot be a project" — and the OS user
+  home is refused even when `PTRACK_HOME` points elsewhere.
+
 ## [0.24.3] - 2026-08-17
 
 ### Fixed
@@ -616,7 +625,8 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
-[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.24.3...HEAD
+[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.24.4...HEAD
+[0.24.4]: https://github.com/ro-ag/ptrack/releases/tag/v0.24.4
 [0.24.3]: https://github.com/ro-ag/ptrack/releases/tag/v0.24.3
 [0.24.1]: https://github.com/ro-ag/ptrack/releases/tag/v0.24.1
 [0.24.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.24.0
