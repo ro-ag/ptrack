@@ -329,6 +329,7 @@ impl ProjectStore {
     pub fn set_active_plan(&self, plan_id: u64) -> StoreResult<()> {
         let now = self.clock.now_local();
         let writer = self.writer_version.clone();
+        let actor = self.actor_id().map(str::to_owned);
         self.write(|transaction| {
             if plan_id != 0
                 && typed::get_write::<Plan>(transaction, RecordKey::Id(plan_id))?.is_none()
@@ -336,7 +337,10 @@ impl ProjectStore {
                 return Err(StoreError::NotFound);
             }
             let mut meta = required_write::<Meta>(transaction, RecordKey::Singleton)?;
-            meta.active_plan = plan_id;
+            match &actor {
+                Some(actor) => upsert_active_plan(&mut meta, actor, plan_id),
+                None => meta.active_plan = plan_id,
+            }
             stamp_meta(&mut meta, now, writer);
             typed::put(transaction, RecordKey::Singleton, &meta)?;
             Ok(())
@@ -488,6 +492,9 @@ impl ProjectStore {
             typed::put(transaction, RecordKey::Id(id), &plan)?;
             before_activate()?;
             meta.active_plan = id;
+            if let Some(actor) = self.actor_id() {
+                upsert_active_plan(&mut meta, actor, id);
+            }
             stamp_meta(&mut meta, now, writer);
             typed::put(transaction, RecordKey::Singleton, &meta)?;
             Ok(plan)
@@ -1290,10 +1297,18 @@ impl ProjectStore {
         })
     }
 
+    /// Reads a consistent snapshot of the project.
+    ///
+    /// `meta.active_plan` in the returned snapshot is the caller's *effective*
+    /// active plan — resolved through the configured actor's per-actor entry
+    /// with legacy-singleton fallback — not the raw stored singleton. Use
+    /// [`ProjectStore::meta`] when the raw stored record is needed.
     pub fn snapshot(&self) -> StoreResult<ProjectSnapshot> {
+        let actor = self.actor_id().map(str::to_owned);
         self.active.store().read(|transaction| {
-            let meta =
+            let mut meta: Meta =
                 typed::get(transaction, RecordKey::Singleton)?.ok_or(StoreError::NotFound)?;
+            meta.active_plan = meta.active_plan_for(actor.as_deref());
             Ok(ProjectSnapshot::new(
                 meta,
                 typed::scan(transaction)?,
@@ -1526,6 +1541,20 @@ fn ensure_actor_registered(
     stamp_meta(&mut meta, now, writer);
     typed::put(transaction, RecordKey::Singleton, &meta)?;
     Ok(())
+}
+
+/// Sets one actor's entry in the per-actor active-plan map, keeping it sorted
+/// strictly ascending by actor ID. `plan_id == 0` records an explicit "none"
+/// rather than removing the entry, so it no longer falls back to the legacy
+/// singleton.
+fn upsert_active_plan(meta: &mut Meta, actor: &str, plan_id: u64) {
+    match meta
+        .active_plans
+        .binary_search_by(|(id, _)| id.as_str().cmp(actor))
+    {
+        Ok(index) => meta.active_plans[index].1 = plan_id,
+        Err(index) => meta.active_plans.insert(index, (actor.to_owned(), plan_id)),
+    }
 }
 
 fn same_instant(left: Timestamp, right: Timestamp) -> bool {

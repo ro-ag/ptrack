@@ -1615,3 +1615,48 @@ fn unset_actor_leaves_records_unattributed() {
     assert_eq!(plan.actor, None);
     assert!(store.meta().unwrap().actors.is_empty());
 }
+
+const ACTOR_B: &str = "01hzvyekq3s7m8w9x0abcdefgj";
+
+fn actor_b() -> ActorIdentity {
+    ActorIdentity {
+        id: ACTOR_B.to_owned(),
+        name: "Bob".to_owned(),
+    }
+}
+
+#[test]
+fn active_plan_is_per_actor_with_legacy_singleton_fallback() {
+    let temp = Temp::new();
+    let path = temp.path("per-actor-active.redb");
+    let expected = binding(&path, StoreKind::Project, "project-per-actor");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+    let one = store.add_plan("plan one", 0).unwrap();
+    let two = store.add_plan("plan two", 0).unwrap();
+
+    // Legacy path: no identity configured writes the singleton.
+    store.set_active_plan(one.id).unwrap();
+    assert_eq!(store.snapshot().unwrap().meta.active_plan, one.id);
+    drop(store);
+
+    // Actor A picks a different plan; only A sees it.
+    let expected = binding(&path, StoreKind::Project, "project-per-actor");
+    let store = ProjectStore::open_existing(&path, &expected, "test")
+        .unwrap()
+        .with_actor(Some(actor_a()));
+    store.set_active_plan(two.id).unwrap();
+    assert_eq!(store.snapshot().unwrap().meta.active_plan, two.id);
+    // The stored singleton is untouched.
+    assert_eq!(store.meta().unwrap().active_plan, one.id);
+    drop(store);
+
+    // Actor B has no entry yet and falls back to the legacy singleton.
+    let expected = binding(&path, StoreKind::Project, "project-per-actor");
+    let store = ProjectStore::open_existing(&path, &expected, "test")
+        .unwrap()
+        .with_actor(Some(actor_b()));
+    assert_eq!(store.snapshot().unwrap().meta.active_plan, one.id);
+    // An explicit zero entry means "none", not "fall back".
+    store.set_active_plan(0).unwrap();
+    assert_eq!(store.snapshot().unwrap().meta.active_plan, 0);
+}
