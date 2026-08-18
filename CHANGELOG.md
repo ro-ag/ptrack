@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.24.2] - 2026-08-17
+
+### Fixed
+- A global home directory carrying group/other permission bits — a restore, a
+  sync, or a copy made under a default umask — no longer locks the runtime out
+  with "global home permissions are not private". The directory is tightened
+  to owner-only on use and re-verified, matching the database-file healing in
+  0.24.1; paths that cannot be tightened still fail closed.
+
 ## [0.24.1] - 2026-08-17
 
 ### Fixed
@@ -603,7 +612,8 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
-[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.24.1...HEAD
+[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.24.2...HEAD
+[0.24.2]: https://github.com/ro-ag/ptrack/releases/tag/v0.24.2
 [0.24.1]: https://github.com/ro-ag/ptrack/releases/tag/v0.24.1
 [0.24.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.24.0
 [0.23.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.23.0

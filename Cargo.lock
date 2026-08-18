@@ -3203,7 +3203,7 @@ dependencies = [
 
 [[package]]
 name = "ptrack-cli"
-version = "0.24.1"
+version = "0.24.2"
 dependencies = [
  "clap",
  "clap_complete",
@@ -3234,7 +3234,7 @@ dependencies = [
 
 [[package]]
 name = "ptrack-desktop"
-version = "0.24.1"
+version = "0.24.2"
 dependencies = [
  "ptrack-app",
  "ptrack-cli",
