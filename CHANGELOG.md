@@ -6,7 +6,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.24.2] - 2026-08-17
+## [0.24.3] - 2026-08-17
 
 ### Fixed
 - Initializing a new project no longer fails with "global runtime state
@@ -616,8 +616,8 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
-[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.24.2...HEAD
-[0.24.2]: https://github.com/ro-ag/ptrack/releases/tag/v0.24.2
+[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.24.3...HEAD
+[0.24.3]: https://github.com/ro-ag/ptrack/releases/tag/v0.24.3
 [0.24.1]: https://github.com/ro-ag/ptrack/releases/tag/v0.24.1
 [0.24.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.24.0
 [0.23.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.23.0
