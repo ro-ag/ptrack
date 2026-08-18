@@ -447,12 +447,28 @@ fn set_private_directory(_: &Path) -> StoreResult<()> {
 #[cfg(unix)]
 fn require_private_directory(path: &Path, label: &str) -> StoreResult<()> {
     use std::os::unix::fs::PermissionsExt;
-    if fs::symlink_metadata(path)?.permissions().mode() & 0o077 != 0 {
-        return Err(StoreError::ActivationBinding(format!(
-            "{label} permissions are not private"
-        )));
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.permissions().mode() & 0o077 == 0 {
+        return Ok(());
     }
-    Ok(())
+    // Leaked group/other bits — a restore, a sync, a copy under a default
+    // umask — are healed by tightening, never refused: removing access cannot
+    // leak anything, while failing closed locked the whole runtime out
+    // (v0.24.x field reports, file and directory alike). The re-read proves
+    // the tightening took effect on a real directory.
+    let healed = !metadata.file_type().is_symlink()
+        && metadata.is_dir()
+        && fs::set_permissions(path, fs::Permissions::from_mode(0o700)).is_ok()
+        && fs::symlink_metadata(path)
+            .map(|current| current.is_dir() && current.permissions().mode() & 0o077 == 0)
+            .unwrap_or(false);
+    if healed {
+        Ok(())
+    } else {
+        Err(StoreError::ActivationBinding(format!(
+            "{label} permissions are not private"
+        )))
+    }
 }
 
 #[cfg(windows)]

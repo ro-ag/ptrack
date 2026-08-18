@@ -44,16 +44,19 @@ fn shared_runtime_leases_exclude_activation_until_all_are_dropped() {
 
 #[cfg(unix)]
 #[test]
-fn unsafe_global_home_and_lock_permissions_fail_closed() {
+fn leaked_global_home_permissions_are_healed_on_use() {
     use std::os::unix::fs::PermissionsExt;
 
+    // A home directory that leaked group/other bits — a restore, a sync, a
+    // copy under a default umask — is tightened to owner-only, never refused:
+    // removing access cannot leak anything, while failing closed locked the
+    // whole runtime out (v0.24.x field reports, file and directory alike).
     let temp = Temp::new();
     fs::set_permissions(&temp.0, fs::Permissions::from_mode(0o755)).unwrap();
-    assert!(
-        acquire_cutover_lock(&temp.0, CutoverLockMode::Shared)
-            .unwrap_err()
-            .to_string()
-            .contains("global home permissions are not private")
+    drop(acquire_cutover_lock(&temp.0, CutoverLockMode::Shared).unwrap());
+    assert_eq!(
+        fs::metadata(&temp.0).unwrap().permissions().mode() & 0o777,
+        0o700
     );
 }
 
