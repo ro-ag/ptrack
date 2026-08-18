@@ -21,6 +21,9 @@ pub struct NextView {
     pub plan_title: String,
     /// Empty when omitted by JSON adapters.
     pub message: String,
+    /// Set when the active plan's own hold is why no task was picked, so a
+    /// consumer never has to parse it back out of `message`.
+    pub plan_hold_reason: Option<String>,
 }
 
 /// Returns the first doing task in the active plan, then the first todo task.
@@ -38,6 +41,7 @@ pub fn next(snapshot: &ProjectSnapshot) -> Result<NextView, ReportError> {
             task: None,
             plan_title: String::new(),
             message: "no active plan (set one with 'ptrack plan use <id>')".to_owned(),
+            plan_hold_reason: None,
         });
     }
     let plan = snapshot
@@ -48,6 +52,7 @@ pub fn next(snapshot: &ProjectSnapshot) -> Result<NextView, ReportError> {
             task: None,
             plan_title: plan.title.clone(),
             message: format!("active plan on hold: {reason}"),
+            plan_hold_reason: Some(reason.clone()),
         });
     }
     let tasks: Vec<_> = snapshot
@@ -63,12 +68,14 @@ pub fn next(snapshot: &ProjectSnapshot) -> Result<NextView, ReportError> {
             task: Some(task_line(task)),
             plan_title: plan.title.clone(),
             message: String::new(),
+            plan_hold_reason: None,
         });
     }
     Ok(NextView {
         task: None,
         plan_title: plan.title.clone(),
         message: "no actionable task in the active plan".to_owned(),
+        plan_hold_reason: None,
     })
 }
 
@@ -397,8 +404,14 @@ impl Board {
                 output.push_str("_none_\n\n");
             } else {
                 for task in tasks {
-                    writeln!(&mut output, "- #{} {}", task.id, task.title)
-                        .expect("writing to String cannot fail");
+                    writeln!(
+                        &mut output,
+                        "- #{} {}{}",
+                        task.id,
+                        task.title,
+                        hold_marker(task.hold_reason.as_deref())
+                    )
+                    .expect("writing to String cannot fail");
                 }
                 output.push('\n');
             }

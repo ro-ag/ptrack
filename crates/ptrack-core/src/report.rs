@@ -4,7 +4,8 @@ use std::fmt::Write as _;
 use crate::{Counts, Issue, Note, ProjectSnapshot, Task, TaskStatus};
 
 const CONTEXT_RECENT_NOTES: usize = 5;
-const CONTEXT_BLOCKED_SHOWN: usize = 8;
+/// Shared cap for every project-wide task list in the digest (blocked, on hold).
+const CONTEXT_LIST_SHOWN: usize = 8;
 const CONTEXT_ISSUES_SHOWN: usize = 8;
 
 /// A report query could not find its required root entity.
@@ -117,23 +118,31 @@ pub fn context(snapshot: &ProjectSnapshot) -> Digest {
                 title: plan.title.clone(),
                 // A held task is not something an agent should pick up, so it
                 // leaves this list and appears in the on-hold bucket instead.
-                open_tasks: snapshot
-                    .tasks_for_plan(plan.id)
-                    .filter(|task| task.status.is_open() && task.hold_reason.is_none())
-                    .map(task_line)
-                    .collect(),
+                // A held *plan* empties the list entirely, matching `next`,
+                // which refuses to pick any task out of a held plan.
+                open_tasks: if plan.hold_reason.is_some() {
+                    Vec::new()
+                } else {
+                    snapshot
+                        .tasks_for_plan(plan.id)
+                        .filter(|task| task.status.is_open() && task.hold_reason.is_none())
+                        .map(task_line)
+                        .collect()
+                },
                 hold_reason: plan.hold_reason.clone(),
             })
     };
 
+    // A held task belongs in the on-hold bucket only: hold is the stronger
+    // "do not pick this up" signal, and listing it twice reads as two items.
     let mut blocked = Vec::new();
     let mut blocked_more = 0;
     for task in snapshot
         .tasks
         .iter()
-        .filter(|task| task.status == TaskStatus::Blocked)
+        .filter(|task| task.status == TaskStatus::Blocked && task.hold_reason.is_none())
     {
-        if blocked.len() < CONTEXT_BLOCKED_SHOWN {
+        if blocked.len() < CONTEXT_LIST_SHOWN {
             blocked.push(task_line(task));
         } else {
             blocked_more += 1;
@@ -147,7 +156,7 @@ pub fn context(snapshot: &ProjectSnapshot) -> Digest {
         .iter()
         .filter(|task| task.hold_reason.is_some())
     {
-        if on_hold.len() < CONTEXT_BLOCKED_SHOWN {
+        if on_hold.len() < CONTEXT_LIST_SHOWN {
             on_hold.push(task_line(task));
         } else {
             on_hold_more += 1;
@@ -222,7 +231,11 @@ fn write_active_plan(output: &mut String, plan: Option<&PlanBrief>) {
     )
     .expect("writing to String cannot fail");
     output.push_str("### Open tasks\n");
-    if plan.open_tasks.is_empty() {
+    if let Some(reason) = plan.hold_reason.as_deref() {
+        // `next` refuses to pick from a held plan, so the digest must not
+        // advertise pick-up candidates either.
+        writeln!(output, "_plan on hold: {reason}_").expect("writing to String cannot fail");
+    } else if plan.open_tasks.is_empty() {
         output.push_str("_none_\n");
     } else {
         for task in &plan.open_tasks {

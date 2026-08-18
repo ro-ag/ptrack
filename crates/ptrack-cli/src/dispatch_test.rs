@@ -3,8 +3,8 @@ use std::path::PathBuf;
 
 use ptrack_app::{
     AppError, AppResult, ApplicationPort, CapabilityCancellation, CapabilityMcpOutcome,
-    GuideAction, HookAction, HookResult, InitRequest, InitResult, Mutation, MutationResult,
-    ProcessOutput,
+    GuideAction, HookAction, HookResult, INVALID_HOLD_PREFIX, InitRequest, InitResult, Mutation,
+    MutationResult, ProcessOutput,
 };
 use ptrack_core::{
     Meta, Plan, PlanStatus, ProjectRef, ProjectSnapshot, Task, TaskStatus, Timestamp,
@@ -72,7 +72,7 @@ impl ApplicationPort for FakeApplication {
                     .ok_or(AppError::NotImplemented("test task"))?;
                 if reason.is_some() && task.status == TaskStatus::Done {
                     return Err(AppError::Message(format!(
-                        "invalid hold mutation: task #{id} is done and cannot be put on hold"
+                        "{INVALID_HOLD_PREFIX}task #{id} is done and cannot be put on hold"
                     )));
                 }
                 task.hold_reason = reason;
@@ -84,6 +84,12 @@ impl ApplicationPort for FakeApplication {
                     .iter_mut()
                     .find(|plan| plan.id == id)
                     .ok_or(AppError::NotImplemented("test plan"))?;
+                if reason.is_some() && plan.status != PlanStatus::Active {
+                    return Err(AppError::Message(format!(
+                        "{INVALID_HOLD_PREFIX}plan #{id} is {} and cannot be put on hold",
+                        plan.status.as_str()
+                    )));
+                }
                 plan.hold_reason = reason;
             }
             _ => return Err(AppError::NotImplemented("test mutation")),
@@ -319,8 +325,27 @@ fn plan_hold_and_resume_round_trip_through_every_surface() {
     let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "next"]);
     assert_eq!(stdout, "active plan on hold: budget freeze\n");
 
+    // Agents read the reason from a field, not by parsing the message prose.
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "next", "--json"]);
+    assert_eq!(
+        stdout,
+        "{\n  \"task\": null,\n  \"plan_title\": \"Build CLI\",\n  \
+         \"message\": \"active plan on hold: budget freeze\",\n  \
+         \"plan_hold_reason\": \"budget freeze\"\n}\n"
+    );
+
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "status"]);
+    assert!(stdout.contains("plans: 1 (1 on hold)\n"));
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "status", "--json"]);
+    assert!(stdout.contains("\"plans_on_hold\": 1"));
+
+    // The digest agrees with `next`: a held plan offers nothing to pick up.
     let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "context"]);
-    assert!(stdout.contains("**#1 Build CLI** [on hold: budget freeze]\n"));
+    assert!(stdout.contains(
+        "**#1 Build CLI** [on hold: budget freeze]\n\n\
+         ### Open tasks\n_plan on hold: budget freeze_\n"
+    ));
+    assert!(!stdout.contains("- [todo] #1 context command"));
 
     let (result, stdout, _) = invoke_with(&mut application, &["ptrack", "plan", "resume", "1"]);
     assert_eq!(result.expect("resume"), RunOutcome::ExitSuccess);
@@ -363,6 +388,18 @@ fn hold_refusals_are_printable_sentences_not_codec_field_paths() {
         assert_eq!(result.expect_err("refused").to_string(), expected);
     }
 
+    // The plan side has its own store refusal, and its own status in the text.
+    let mut done_plan = seeded();
+    done_plan.snapshot.plans[0].status = PlanStatus::Done;
+    let (result, stdout, stderr) =
+        invoke_with(&mut done_plan, &["ptrack", "plan", "hold", "1", "later"]);
+    assert!(stdout.is_empty());
+    assert!(stderr.is_empty());
+    assert_eq!(
+        result.expect_err("refused").to_string(),
+        "plan #1 is done and cannot be put on hold"
+    );
+
     let oversized = "x".repeat(ptrack_core::MAX_HOLD_REASON_BYTES + 1);
     let (result, _, _) = invoke_with(
         &mut application,
@@ -372,6 +409,20 @@ fn hold_refusals_are_printable_sentences_not_codec_field_paths() {
         result.expect_err("oversized").to_string(),
         "the hold reason is 1025 bytes; the limit is 1024"
     );
+}
+
+#[test]
+fn a_hold_reason_is_trimmed_before_it_is_checked_and_stored() {
+    let mut application = seeded();
+    let (result, stdout, _) = invoke_with(
+        &mut application,
+        &["ptrack", "task", "hold", "1", "  waiting  "],
+    );
+    assert_eq!(result.expect("hold"), RunOutcome::ExitSuccess);
+    assert_eq!(stdout, "task #1 on hold: waiting\n");
+
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "task", "list"]);
+    assert!(stdout.contains("context command (plan 1) [on hold: waiting]\n"));
 }
 
 fn invoke(args: &[&str]) -> (Result<RunOutcome, crate::CliError>, String, String) {
@@ -472,7 +523,7 @@ fn status_json_uses_go_key_order_and_html_escaping() {
     assert!(stderr.is_empty());
     assert_eq!(
         stdout,
-        "{\n  \"goal\": \"goal \\u003cx\\u003e\",\n  \"active_plan\": 0,\n  \"active_plan_title\": \"\",\n  \"plans\": 0,\n  \"todo\": 0,\n  \"doing\": 0,\n  \"done\": 0,\n  \"blocked\": 0,\n  \"on_hold\": 0\n}\n"
+        "{\n  \"goal\": \"goal \\u003cx\\u003e\",\n  \"active_plan\": 0,\n  \"active_plan_title\": \"\",\n  \"plans\": 0,\n  \"todo\": 0,\n  \"doing\": 0,\n  \"done\": 0,\n  \"blocked\": 0,\n  \"on_hold\": 0,\n  \"plans_on_hold\": 0\n}\n"
     );
 }
 

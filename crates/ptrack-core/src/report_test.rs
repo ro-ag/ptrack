@@ -44,7 +44,6 @@ Drill deeper: `ptrack next` · `ptrack milestone list` · `ptrack plan show <id>
 #[test]
 fn context_moves_held_tasks_out_of_the_pick_up_list_into_their_own_bucket() {
     let mut snapshot = snapshot();
-    snapshot.plans[0].hold_reason = Some("budget freeze".to_owned());
     snapshot.tasks[1].hold_reason = Some("waiting on review".to_owned());
     let digest = context(&snapshot);
 
@@ -67,10 +66,26 @@ fn context_moves_held_tasks_out_of_the_pick_up_list_into_their_own_bucket() {
             .collect::<Vec<_>>(),
         vec![1]
     );
-    // A hold is orthogonal to status, so a held task keeps its blocked listing.
+
+    let markdown = digest.markdown();
+    assert!(markdown.contains(
+        "## On hold (project-wide)\n- #1 context command (plan 1) [on hold: waiting on review]\n"
+    ));
+    assert!(markdown.contains("4 tasks (1 done · 1 blocked · 3 open · 1 on hold)"));
+}
+
+#[test]
+fn context_lists_a_blocked_and_held_task_only_under_on_hold() {
+    let mut snapshot = snapshot();
+    // Task #3 is blocked; holding it makes the hold the only bucket it belongs
+    // to, since a hold is the stronger "do not pick this up" signal.
+    snapshot.tasks[2].hold_reason = Some("vendor outage".to_owned());
+    let digest = context(&snapshot);
+
+    assert!(digest.blocked.is_empty());
     assert_eq!(
         digest
-            .blocked
+            .on_hold
             .iter()
             .map(|task| task.id)
             .collect::<Vec<_>>(),
@@ -78,12 +93,36 @@ fn context_moves_held_tasks_out_of_the_pick_up_list_into_their_own_bucket() {
     );
 
     let markdown = digest.markdown();
-    assert!(markdown.contains("**#1 Build CLI** [on hold: budget freeze]\n"));
+    assert!(!markdown.contains("## Blocked (project-wide)"));
     assert!(markdown.contains(
-        "## On hold (project-wide)\n- #1 context command (plan 1) [on hold: waiting on review]\n"
+        "## On hold (project-wide)\n- #3 publish release (plan 1) [on hold: vendor outage]\n"
     ));
+}
+
+#[test]
+fn a_held_active_plan_replaces_the_digest_pick_up_list_with_its_reason() {
+    let mut snapshot = snapshot();
+    snapshot.plans[0].hold_reason = Some("budget freeze".to_owned());
+    let digest = context(&snapshot);
+
+    // `next` refuses to pick anything out of a held plan; the digest must not
+    // offer candidates it would refuse.
+    assert!(
+        digest
+            .active_plan
+            .as_ref()
+            .expect("active plan")
+            .open_tasks
+            .is_empty()
+    );
+
+    let markdown = digest.markdown();
+    assert!(markdown.contains(
+        "**#1 Build CLI** [on hold: budget freeze]\n\n\
+         ### Open tasks\n_plan on hold: budget freeze_\n"
+    ));
+    assert!(!markdown.contains("- [doing] #1 context command"));
     assert!(markdown.contains("2 plans (1 done · 1 on hold)"));
-    assert!(markdown.contains("4 tasks (1 done · 1 blocked · 3 open · 1 on hold)"));
 }
 
 #[test]

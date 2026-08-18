@@ -141,6 +141,8 @@ pub struct StatusJson<'a> {
     pub blocked: usize,
     /// Held tasks; orthogonal to the status totals above.
     pub on_hold: usize,
+    /// Held plans; orthogonal to the plan total above.
+    pub plans_on_hold: usize,
 }
 
 #[derive(Serialize)]
@@ -336,6 +338,10 @@ pub struct NextJson<'a> {
     plan_title: &'a str,
     #[serde(skip_serializing_if = "str::is_empty")]
     message: &'a str,
+    /// Present only when the active plan's hold is why no task was picked, so
+    /// a consumer never parses the reason back out of `message`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plan_hold_reason: Option<&'a str>,
 }
 
 impl<'a> From<&'a NextView> for NextJson<'a> {
@@ -344,6 +350,7 @@ impl<'a> From<&'a NextView> for NextJson<'a> {
             task: value.task.as_ref().map(Into::into),
             plan_title: &value.plan_title,
             message: &value.message,
+            plan_hold_reason: value.plan_hold_reason.as_deref(),
         }
     }
 }

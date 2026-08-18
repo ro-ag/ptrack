@@ -4,11 +4,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use ptrack_capability::{BrokerConfig, BrokerServer, BrokerServerConfig, McpCancellation};
 use ptrack_core::{PlanStatus, TaskStatus};
-use ptrack_store::{ActiveBinding, GlobalStore, PinnedProjectDirectory, ProjectStore, StoreKind};
+use ptrack_store::{
+    ActiveBinding, GlobalStore, PinnedProjectDirectory, ProjectStore, StoreError, StoreKind,
+};
 
 use crate::{
-    ApplicationPort, CapabilityMcpOutcome, CapabilitySessionEnvironment, InitRequest,
-    LocalApplication, Mutation, MutationResult, ProjectEndpoint, WorkspaceBindings,
+    AppError, ApplicationPort, CapabilityMcpOutcome, CapabilitySessionEnvironment,
+    INVALID_HOLD_PREFIX, InitRequest, LocalApplication, Mutation, MutationResult, ProjectEndpoint,
+    WorkspaceBindings,
 };
 #[cfg(unix)]
 use crate::{GuideAction, HookAction, HookResult};
@@ -177,7 +180,7 @@ fn hold_mutations_reach_the_store_and_keep_the_underlying_status() {
     assert_eq!(
         error.to_string(),
         format!(
-            "invalid hold mutation: task #{} is done and cannot be put on hold",
+            "{INVALID_HOLD_PREFIX}task #{} is done and cannot be put on hold",
             task.id
         )
     );
@@ -197,6 +200,21 @@ fn hold_mutations_reach_the_store_and_keep_the_underlying_status() {
     let snapshot = application.snapshot().expect("snapshot");
     assert!(snapshot.tasks[0].hold_reason.is_none());
     assert!(snapshot.plans[0].hold_reason.is_none());
+}
+
+/// The CLI strips [`INVALID_HOLD_PREFIX`] off an [`AppError`] to show the
+/// store's own sentence. Pin the constant against the real `StoreError`
+/// rendering so a reworded `Display` fails here instead of leaking the layer
+/// prefix to a person.
+#[test]
+fn the_hold_prefix_constant_is_what_the_store_error_actually_renders() {
+    let error = AppError::from(StoreError::InvalidHold(
+        "task #1 is done and cannot be put on hold".to_owned(),
+    ));
+    assert_eq!(
+        error.to_string().strip_prefix(INVALID_HOLD_PREFIX),
+        Some("task #1 is done and cannot be put on hold")
+    );
 }
 
 #[test]

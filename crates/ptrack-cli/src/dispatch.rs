@@ -296,10 +296,11 @@ fn milestone(
     Ok(RunOutcome::ExitSuccess)
 }
 
-/// Joins and checks a hold reason at the input boundary, so the codec's
-/// field-path message never reaches a person.
+/// Joins, trims, and checks a hold reason at the input boundary, so the codec's
+/// field-path message never reaches a person and `"  waiting  "` stores as
+/// `"waiting"`.
 fn hold_reason(args: &[String]) -> Result<String, CliError> {
-    let reason = args.join(" ");
+    let reason = args.join(" ").trim().to_owned();
     check_hold_reason(&reason).map_err(CliError::message)?;
     Ok(reason)
 }
@@ -310,7 +311,7 @@ fn hold_error(error: ptrack_app::AppError) -> CliError {
     let message = error.to_string();
     CliError::message(
         message
-            .strip_prefix("invalid hold mutation: ")
+            .strip_prefix(ptrack_app::INVALID_HOLD_PREFIX)
             .unwrap_or(&message),
     )
 }
@@ -1013,6 +1014,15 @@ fn board(
     Ok(RunOutcome::ExitSuccess)
 }
 
+/// Renders the ` (N on hold)` status suffix, or nothing when none are held.
+fn held_suffix(count: usize) -> String {
+    if count == 0 {
+        String::new()
+    } else {
+        format!(" ({count} on hold)")
+    }
+}
+
 fn status(
     matches: &ArgMatches,
     application: &mut dyn ApplicationPort,
@@ -1033,7 +1043,16 @@ fn status(
     }
     // A hold is orthogonal to status: a held task still counts under its own
     // status above and again here.
-    let on_hold = snapshot.counts().tasks_on_hold;
+    let on_hold = snapshot
+        .tasks
+        .iter()
+        .filter(|task| task.hold_reason.is_some())
+        .count();
+    let plans_on_hold = snapshot
+        .plans
+        .iter()
+        .filter(|plan| plan.hold_reason.is_some())
+        .count();
     if matches.get_flag("json") {
         output::json(
             io.stdout,
@@ -1047,6 +1066,7 @@ fn status(
                 done,
                 blocked,
                 on_hold,
+                plans_on_hold,
             },
         )?;
     } else {
@@ -1078,16 +1098,21 @@ fn status(
                 }
             ),
         )?;
-        let held = if on_hold == 0 {
-            String::new()
-        } else {
-            format!(" ({on_hold} on hold)")
-        };
         output::line(
             io.stdout,
-            format_args!("tasks: {todo} todo, {doing} doing, {done} done, {blocked} blocked{held}"),
+            format_args!(
+                "tasks: {todo} todo, {doing} doing, {done} done, {blocked} blocked{}",
+                held_suffix(on_hold)
+            ),
         )?;
-        output::line(io.stdout, format_args!("plans: {}", snapshot.plans.len()))?;
+        output::line(
+            io.stdout,
+            format_args!(
+                "plans: {}{}",
+                snapshot.plans.len(),
+                held_suffix(plans_on_hold)
+            ),
+        )?;
     }
     Ok(RunOutcome::ExitSuccess)
 }

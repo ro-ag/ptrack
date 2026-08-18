@@ -66,6 +66,14 @@ fn next_skips_held_tasks_and_stops_at_a_held_active_plan() {
     let view = next(&held_plan).expect("active plan exists");
     assert!(view.task.is_none());
     assert_eq!(view.markdown(), "active plan on hold: budget freeze\n");
+    // The reason is a field, not something a consumer parses out of the prose.
+    assert_eq!(view.plan_hold_reason.as_deref(), Some("budget freeze"));
+    assert!(
+        next(&snapshot())
+            .expect("active plan exists")
+            .plan_hold_reason
+            .is_none()
+    );
 }
 
 #[test]
@@ -94,6 +102,23 @@ Plan: #1 Build CLI [on hold: budget freeze]\n\
 \n\
 ## Notes\n\
 - [handoff] (task #1) resume here\n"
+    );
+    assert_eq!(
+        board_for(&held, 1).expect("plan exists").markdown(),
+        "# Board — #1 Build CLI\n\
+\n\
+## Todo (0)\n\
+_none_\n\
+\n\
+## Doing (1)\n\
+- #1 context command [on hold: waiting on review]\n\
+\n\
+## Blocked (1)\n\
+- #3 publish release\n\
+\n\
+## Done (1)\n\
+- #2 init command\n\
+\n"
     );
 }
 

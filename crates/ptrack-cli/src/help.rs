@@ -515,7 +515,7 @@ fn plan_leaf(name: &str) -> Spec {
         ),
         "resume" => leaf_spec(
             "plan resume <id>",
-            "Take a plan off hold (restores its status)",
+            "Take a plan off hold (clears the hold reason)",
             HELP_ONLY,
         ),
         _ => leaf_spec("plan rename <id> <title...>", "Rename a plan", HELP_ONLY),
@@ -567,7 +567,7 @@ fn task_leaf(name: &str) -> Spec {
         ),
         "resume" => leaf_spec(
             "task resume <id>",
-            "Take a task off hold (restores its status)",
+            "Take a task off hold (clears the hold reason)",
             HELP_ONLY,
         ),
         "rename" => leaf_spec("task rename <id> <title...>", "Rename a task", HELP_ONLY),

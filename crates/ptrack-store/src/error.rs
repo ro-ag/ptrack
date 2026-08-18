@@ -5,6 +5,14 @@ use std::path::PathBuf;
 
 use crate::schema::StoreKind;
 
+/// The layer prefix [`StoreError::InvalidHold`] renders before its detail.
+///
+/// The detail is already a whole sentence ("task #3 is done and cannot be put
+/// on hold"), so presentation layers strip this prefix instead of maintaining a
+/// parallel message table. Exported so no caller has to hardcode a copy that
+/// can drift away from the `Display` below.
+pub const INVALID_HOLD_PREFIX: &str = "invalid hold mutation: ";
+
 /// An error encountered while decoding a persisted record envelope.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EnvelopeError {
@@ -335,7 +343,7 @@ impl fmt::Display for StoreError {
                 write!(formatter, "invalid first-run mutation: {detail}")
             }
             Self::InvalidHold(detail) => {
-                write!(formatter, "invalid hold mutation: {detail}")
+                write!(formatter, "{INVALID_HOLD_PREFIX}{detail}")
             }
             Self::Envelope(error) => error.fmt(formatter),
             Self::Io(error) => error.fmt(formatter),
