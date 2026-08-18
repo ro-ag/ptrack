@@ -74,6 +74,11 @@ fn plan(id: u64) -> RecordEnvelope {
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
         hold_reason: None,
+        actor: None,
+        claim_conflict: false,
+        claim_epoch: 0,
+        claim_owner: None,
+        ulid: None,
     }))
 }
 
@@ -87,6 +92,8 @@ fn task(id: u64) -> RecordEnvelope {
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
         hold_reason: None,
+        actor: None,
+        ulid: None,
     }))
 }
 
@@ -98,6 +105,8 @@ fn note(id: u64) -> RecordEnvelope {
         kind: MemoryKind::Decision,
         body: "note".to_owned(),
         created_at: Timestamp::Zero,
+        actor: None,
+        ulid: None,
     }))
 }
 
@@ -111,6 +120,8 @@ fn issue(id: u64) -> RecordEnvelope {
         task_id: 0,
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
+        actor: None,
+        ulid: None,
     }))
 }
 

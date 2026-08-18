@@ -1,3 +1,5 @@
+use crate::codec::HOLD_REASON_PAYLOAD_SCHEMA;
+use crate::test_support;
 use crate::{
     Capability, CapabilityAuditPolicy, CapabilityKind, CapabilityLimits, CodecError, Digest32,
     GitScope, HttpScope, IssueStatus, MAX_LIST_ITEMS, MAX_PAYLOAD_BYTES, MIN_NATIVE_PAYLOAD_SCHEMA,
@@ -98,6 +100,8 @@ fn golden_meta_bytes_cover_zero_and_fixed_offset_times() {
         },
         format_version: 5,
         last_write_version: "v1".to_owned(),
+        active_plans: Vec::new(),
+        actors: Vec::new(),
     });
     let expected = [
         0, 0, 0, 1, b'g', // goal
@@ -106,7 +110,9 @@ fn golden_meta_bytes_cover_zero_and_fixed_offset_times() {
         0, // zero time
         1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 2, 0xff, 0xff, 0xff, 0xfd, // fixed time
         0, 0, 0, 0, 0, 0, 0, 5, // format version
-        0, 0, 0, 2, b'v', b'1',
+        0, 0, 0, 2, b'v', b'1', // last write version
+        0, 0, 0, 0, // empty per-actor active plans
+        0, 0, 0, 0, // empty actor directory
     ];
     assert_eq!(encode_record(&record).expect("encode"), expected);
     assert_eq!(
@@ -126,10 +132,24 @@ fn plan_golden_bytes_pin_enum_and_signed_order() {
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
         hold_reason: None,
+        actor: None,
+        claim_conflict: false,
+        claim_epoch: 0,
+        claim_owner: None,
+        ulid: None,
     });
     let expected = [
-        0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, b'x', 3, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0,
-        3, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 1, // id
+        0, 0, 0, 1, b'x', // title
+        3,    // archived
+        0, 0, 0, 0, 0, 0, 0, 2, // milestone
+        0, 0, 0, 0, 0, 0, 0, 3, // order
+        0, 0, // zero times
+        0, // no hold reason
+        0, 0, // no actor, no reserved ulid
+        0, // no claim owner
+        0, 0, 0, 0, 0, 0, 0, 0, // claim epoch
+        0, // no claim conflict
     ];
     assert_eq!(encode_record(&record).expect("encode"), expected);
     assert_round_trip(&record);
@@ -191,6 +211,11 @@ fn malformed_and_trailing_payloads_are_rejected() {
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
         hold_reason: None,
+        actor: None,
+        claim_conflict: false,
+        claim_epoch: 0,
+        claim_owner: None,
+        ulid: None,
     });
     let encoded = encode_record(&plan).expect("encode");
     assert!(matches!(
@@ -223,6 +248,11 @@ fn invalid_utf8_enum_and_time_tags_are_rejected() {
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
         hold_reason: None,
+        actor: None,
+        claim_conflict: false,
+        claim_epoch: 0,
+        claim_owner: None,
+        ulid: None,
     }))
     .expect("encode");
     plan[12] = 99;
@@ -259,6 +289,8 @@ fn invalid_bool_option_and_declared_lengths_are_rejected() {
         kind: MemoryKind::Decision,
         body: "x".to_owned(),
         created_at: Timestamp::Zero,
+        actor: None,
+        ulid: None,
     }))
     .expect("encode");
     note[18..22].copy_from_slice(&u32::MAX.to_be_bytes());
@@ -382,32 +414,15 @@ fn go_encoder_golden_payloads_decode_and_reencode_exactly() {
         // re-encodes at the schema it was given.
         let record = decode_record_at_schema(kind, MIN_NATIVE_PAYLOAD_SCHEMA, &payload)
             .expect("decode Go golden payload");
-        match &record {
-            // Plan and Task gained a trailing hold reason at schema 2, so their
-            // schema-1 payloads round-trip byte for byte only at schema 1.
-            NativeRecord::Plan(plan) => {
-                assert_eq!(plan.hold_reason, None);
-                let mut upgraded = payload.clone();
-                upgraded.push(0);
-                assert_eq!(
-                    encode_record(&record).expect("re-encode at schema 2"),
-                    upgraded
-                );
-            }
-            NativeRecord::Task(task) => {
-                assert_eq!(task.hold_reason, None);
-                let mut upgraded = payload.clone();
-                upgraded.push(0);
-                assert_eq!(
-                    encode_record(&record).expect("re-encode at schema 2"),
-                    upgraded
-                );
-            }
-            _ => assert_eq!(
-                encode_record(&record).expect("re-encode Go golden"),
-                payload
-            ),
-        }
+        assert_eq!(
+            encode_record_at_schema(&record, MIN_NATIVE_PAYLOAD_SCHEMA)
+                .expect("re-encode Go golden"),
+            payload
+        );
+        // Every field added since schema 1 is a trailing tail, so upgrading a
+        // golden payload to the native schema only appends to it.
+        let upgraded = encode_record(&record).expect("re-encode at the native schema");
+        assert!(upgraded.starts_with(&payload), "{kind:?}");
     }
 }
 
@@ -422,6 +437,11 @@ fn hold_reason_round_trips_and_pins_its_schema_2_bytes() {
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
         hold_reason: Some("waiting on review".to_owned()),
+        actor: None,
+        claim_conflict: false,
+        claim_epoch: 0,
+        claim_owner: None,
+        ulid: None,
     });
     let mut expected = vec![
         0, 0, 0, 0, 0, 0, 0, 1, // id
@@ -433,7 +453,10 @@ fn hold_reason_round_trips_and_pins_its_schema_2_bytes() {
         1, 0, 0, 0, 17, // hold reason present, 17 bytes
     ];
     expected.extend_from_slice(b"waiting on review");
-    assert_eq!(encode_record(&record).expect("encode"), expected);
+    assert_eq!(
+        encode_record_at_schema(&record, HOLD_REASON_PAYLOAD_SCHEMA).expect("encode"),
+        expected
+    );
     assert_round_trip(&record);
 
     let task = NativeRecord::Task(Task {
@@ -445,6 +468,8 @@ fn hold_reason_round_trips_and_pins_its_schema_2_bytes() {
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
         hold_reason: Some("blocked upstream".to_owned()),
+        actor: None,
+        ulid: None,
     });
     assert_round_trip(&task);
 }
@@ -460,6 +485,11 @@ fn unknown_payload_schemas_fail_closed_before_any_layout_is_assumed() {
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
         hold_reason: None,
+        actor: None,
+        claim_conflict: false,
+        claim_epoch: 0,
+        claim_owner: None,
+        ulid: None,
     });
     let payload = encode_record(&record).expect("encode");
     for schema in [0, NATIVE_PAYLOAD_SCHEMA + 1, u32::MAX] {
@@ -481,8 +511,17 @@ fn a_set_hold_reason_has_no_canonical_schema_1_form() {
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
         hold_reason: None,
+        actor: None,
+        claim_conflict: false,
+        claim_epoch: 0,
+        claim_owner: None,
+        ulid: None,
     };
-    let schema_2 = encode_record(&NativeRecord::Plan(plan.clone())).expect("encode");
+    let schema_2 = encode_record_at_schema(
+        &NativeRecord::Plan(plan.clone()),
+        HOLD_REASON_PAYLOAD_SCHEMA,
+    )
+    .expect("encode");
     // Strip the schema-2 `None` option tag to obtain the schema-1 payload.
     let mut schema_1 = schema_2.clone();
     assert_eq!(schema_1.pop(), Some(0));
@@ -522,6 +561,8 @@ fn a_set_hold_reason_has_no_canonical_schema_1_form() {
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
         hold_reason: Some("blocked upstream".to_owned()),
+        actor: None,
+        ulid: None,
     });
     assert_eq!(
         encode_record_at_schema(&task, MIN_NATIVE_PAYLOAD_SCHEMA),
@@ -539,6 +580,59 @@ fn a_set_hold_reason_has_no_canonical_schema_1_form() {
         Err(CodecError::UnsupportedPayloadSchema(
             NATIVE_PAYLOAD_SCHEMA + 1
         ))
+    );
+}
+
+#[test]
+fn schema_3_fields_round_trip_and_older_schemas_decode_them_empty() {
+    let mut plan = test_support::plan(7, "claimed", PlanStatus::Active, 0, 0);
+    plan.actor = Some("01hzvyekq3s7m8w9x0abcdefgh".to_owned());
+    plan.claim_owner = Some("01hzvyekq3s7m8w9x0abcdefgh".to_owned());
+    plan.claim_epoch = 3;
+    let encoded = encode_record(&NativeRecord::Plan(plan.clone())).unwrap();
+    let decoded = decode_record(RecordKind::Plan, &encoded).unwrap();
+    assert_eq!(decoded, NativeRecord::Plan(plan.clone()));
+
+    // A schema-2 payload for the same logical record decodes with every
+    // schema-3 field at its empty default.
+    let mut unclaimed = plan.clone();
+    unclaimed.actor = None;
+    unclaimed.claim_owner = None;
+    unclaimed.claim_epoch = 0;
+    let schema_2 = encode_record_at_schema(&NativeRecord::Plan(unclaimed.clone()), 2).unwrap();
+    let reread = decode_record_at_schema(RecordKind::Plan, 2, &schema_2).unwrap();
+    assert_eq!(reread, NativeRecord::Plan(unclaimed));
+}
+
+#[test]
+fn set_schema_3_fields_have_no_canonical_older_form() {
+    let mut plan = test_support::plan(7, "claimed", PlanStatus::Active, 0, 0);
+    plan.claim_owner = Some("01hzvyekq3s7m8w9x0abcdefgh".to_owned());
+    plan.claim_epoch = 1;
+    for schema in [1, 2] {
+        assert_eq!(
+            encode_record_at_schema(&NativeRecord::Plan(plan.clone()), schema),
+            Err(CodecError::NonCanonical),
+            "schema {schema}"
+        );
+    }
+}
+
+#[test]
+fn meta_maps_round_trip_at_schema_3() {
+    let mut meta = test_support::meta(2);
+    meta.active_plans = vec![
+        ("01hzvyekq3s7m8w9x0abcdefgh".to_owned(), 4),
+        ("01hzvyekq3s7m8w9x0abcdefgj".to_owned(), 0),
+    ];
+    meta.actors = vec![(
+        "01hzvyekq3s7m8w9x0abcdefgh".to_owned(),
+        "Rodrigo".to_owned(),
+    )];
+    let encoded = encode_record(&NativeRecord::Meta(meta.clone())).unwrap();
+    assert_eq!(
+        decode_record(RecordKind::Meta, &encoded).unwrap(),
+        NativeRecord::Meta(meta)
     );
 }
 

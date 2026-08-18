@@ -239,6 +239,42 @@ pub fn check_identity_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Rejects a set identity-shaped field that is not a well-formed identity ID.
+fn validate_identity_option(
+    value: Option<&String>,
+    field: &'static str,
+) -> Result<(), ValidationError> {
+    match value {
+        Some(id) if !is_identity_id(id) => Err(ValidationError::new(
+            field,
+            "must be a 26-character identity id",
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Rejects an actor-keyed map that is unsorted, duplicated, or not keyed by
+/// well-formed identity IDs.
+fn validate_actor_map_keys<T>(
+    entries: &[(String, T)],
+    field: &'static str,
+) -> Result<(), ValidationError> {
+    for window in entries.windows(2) {
+        if window[0].0 >= window[1].0 {
+            return Err(ValidationError::new(
+                field,
+                "must be sorted strictly ascending by identity id",
+            ));
+        }
+    }
+    for (id, _) in entries {
+        if !is_identity_id(id) {
+            return Err(ValidationError::new(field, "must key by identity ids"));
+        }
+    }
+    Ok(())
+}
+
 impl Validate for Timestamp {
     fn validate(&self) -> Result<(), ValidationError> {
         if let Self::Fixed {
@@ -280,6 +316,20 @@ impl Validate for Meta {
                 "must be a supported legacy format from 0 through 5",
             ));
         }
+        validate_actor_map_keys(&self.active_plans, "meta.active_plans")?;
+        validate_actor_map_keys(&self.actors, "meta.actors")?;
+        // The directory holds names typed by people, so it reuses the same
+        // single-line rule the input boundary applies to a display name.
+        if self
+            .actors
+            .iter()
+            .any(|(_, name)| check_identity_name(name).is_err())
+        {
+            return Err(ValidationError::new(
+                "meta.actors",
+                "must hold bounded single-line names",
+            ));
+        }
         Ok(())
     }
 }
@@ -288,6 +338,8 @@ impl Validate for Milestone {
     fn validate(&self) -> Result<(), ValidationError> {
         require_id(self.id, "milestone.id")?;
         require_nonnegative(self.order, "milestone.order")?;
+        validate_identity_option(self.actor.as_ref(), "milestone.actor")?;
+        validate_identity_option(self.ulid.as_ref(), "milestone.ulid")?;
         validate_times(&[self.due, self.created_at, self.updated_at])
     }
 }
@@ -297,6 +349,9 @@ impl Validate for Plan {
         require_id(self.id, "plan.id")?;
         require_nonnegative(self.order, "plan.order")?;
         validate_hold_reason(self.hold_reason.as_ref(), "plan.hold_reason")?;
+        validate_identity_option(self.actor.as_ref(), "plan.actor")?;
+        validate_identity_option(self.ulid.as_ref(), "plan.ulid")?;
+        validate_identity_option(self.claim_owner.as_ref(), "plan.claim_owner")?;
         validate_times(&[self.created_at, self.updated_at])
     }
 }
@@ -307,6 +362,8 @@ impl Validate for Task {
         require_id(self.plan_id, "task.plan_id")?;
         require_nonnegative(self.order, "task.order")?;
         validate_hold_reason(self.hold_reason.as_ref(), "task.hold_reason")?;
+        validate_identity_option(self.actor.as_ref(), "task.actor")?;
+        validate_identity_option(self.ulid.as_ref(), "task.ulid")?;
         validate_times(&[self.created_at, self.updated_at])
     }
 }
@@ -335,6 +392,8 @@ impl Validate for Note {
                 "must not contain the summary command kind",
             ));
         }
+        validate_identity_option(self.actor.as_ref(), "note.actor")?;
+        validate_identity_option(self.ulid.as_ref(), "note.ulid")?;
         self.created_at.validate()
     }
 }
@@ -342,6 +401,8 @@ impl Validate for Note {
 impl Validate for Issue {
     fn validate(&self) -> Result<(), ValidationError> {
         require_id(self.id, "issue.id")?;
+        validate_identity_option(self.actor.as_ref(), "issue.actor")?;
+        validate_identity_option(self.ulid.as_ref(), "issue.ulid")?;
         validate_times(&[self.created_at, self.updated_at])
     }
 }
@@ -349,6 +410,8 @@ impl Validate for Issue {
 impl Validate for Commit {
     fn validate(&self) -> Result<(), ValidationError> {
         require_id(self.id, "commit.id")?;
+        validate_identity_option(self.actor.as_ref(), "commit.actor")?;
+        validate_identity_option(self.ulid.as_ref(), "commit.ulid")?;
         self.created_at.validate()
     }
 }

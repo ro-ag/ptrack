@@ -277,6 +277,41 @@ pub struct Meta {
     pub updated_at: Timestamp,
     pub format_version: u64,
     pub last_write_version: String,
+    /// Per-actor active plan: identity ID to plan ID, sorted strictly ascending
+    /// by ID. A stored `0` means that actor explicitly has no active plan; an
+    /// absent entry falls back to [`Meta::active_plan`]. Empty for records
+    /// written before payload schema 3.
+    pub active_plans: Vec<(String, u64)>,
+    /// Actor directory: identity ID to last-seen display name, sorted strictly
+    /// ascending by ID. Display-only; nothing resolves permissions through it.
+    /// Empty for records written before payload schema 3.
+    pub actors: Vec<(String, String)>,
+}
+
+impl Meta {
+    /// Returns the effective active plan for one actor: the actor's own entry
+    /// in the per-actor map when present (`0` meaning explicitly none),
+    /// falling back to the legacy project-wide singleton.
+    #[must_use]
+    pub fn active_plan_for(&self, actor: Option<&str>) -> u64 {
+        actor
+            .and_then(|actor| {
+                self.active_plans
+                    .iter()
+                    .find(|(id, _)| id == actor)
+                    .map(|(_, plan)| *plan)
+            })
+            .unwrap_or(self.active_plan)
+    }
+
+    /// Resolves an identity ID to its last-seen display name, if known.
+    #[must_use]
+    pub fn actor_name(&self, actor: &str) -> Option<&str> {
+        self.actors
+            .iter()
+            .find(|(id, _)| id == actor)
+            .map(|(_, name)| name.as_str())
+    }
 }
 
 /// A high-level project checkpoint.
@@ -290,6 +325,11 @@ pub struct Milestone {
     pub order: i64,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+    /// Identity that last mutated this record; `None` is legacy/unattributed.
+    pub actor: Option<String>,
+    /// RESERVED for P3 journals: the entity ULID minted at `share init`. Never
+    /// populated by P1/P2 code.
+    pub ulid: Option<String>,
 }
 
 impl Milestone {
@@ -313,6 +353,19 @@ pub struct Plan {
     pub updated_at: Timestamp,
     /// Single-line reason this plan is on hold, or `None` when it is running.
     pub hold_reason: Option<String>,
+    /// Identity that last mutated this record; `None` is legacy/unattributed.
+    pub actor: Option<String>,
+    /// RESERVED for P3 journals: the entity ULID minted at `share init`. Never
+    /// populated by P1/P2 code.
+    pub ulid: Option<String>,
+    /// Identity holding the hard claim on this plan; `None` when unclaimed.
+    pub claim_owner: Option<String>,
+    /// Incremented by every fresh claim or steal and preserved across a
+    /// release; `0` means never claimed.
+    pub claim_epoch: u64,
+    /// RESERVED for P3b: the deterministic same-epoch conflict marker. Never
+    /// set by P1/P2 code.
+    pub claim_conflict: bool,
 }
 
 impl Plan {
@@ -332,6 +385,11 @@ pub struct Commit {
     pub plan_id: u64,
     pub task_id: u64,
     pub created_at: Timestamp,
+    /// Identity that last mutated this record; `None` is legacy/unattributed.
+    pub actor: Option<String>,
+    /// RESERVED for P3 journals: the entity ULID minted at `share init`. Never
+    /// populated by P1/P2 code.
+    pub ulid: Option<String>,
 }
 
 /// A tracked project issue.
@@ -345,6 +403,11 @@ pub struct Issue {
     pub task_id: u64,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+    /// Identity that last mutated this record; `None` is legacy/unattributed.
+    pub actor: Option<String>,
+    /// RESERVED for P3 journals: the entity ULID minted at `share init`. Never
+    /// populated by P1/P2 code.
+    pub ulid: Option<String>,
 }
 
 /// An actionable item belonging to a plan.
@@ -360,6 +423,11 @@ pub struct Task {
     pub updated_at: Timestamp,
     /// Single-line reason this task is on hold, or `None` when it is running.
     pub hold_reason: Option<String>,
+    /// Identity that last mutated this record; `None` is legacy/unattributed.
+    pub actor: Option<String>,
+    /// RESERVED for P3 journals: the entity ULID minted at `share init`. Never
+    /// populated by P1/P2 code.
+    pub ulid: Option<String>,
 }
 
 impl Task {
@@ -379,6 +447,11 @@ pub struct Note {
     pub kind: MemoryKind,
     pub body: String,
     pub created_at: Timestamp,
+    /// Identity that last mutated this record; `None` is legacy/unattributed.
+    pub actor: Option<String>,
+    /// RESERVED for P3 journals: the entity ULID minted at `share init`. Never
+    /// populated by P1/P2 code.
+    pub ulid: Option<String>,
 }
 
 /// Per-operation resource ceilings for a capability.

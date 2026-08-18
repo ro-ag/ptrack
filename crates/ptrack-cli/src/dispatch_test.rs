@@ -32,6 +32,8 @@ impl Default for FakeApplication {
                     updated_at: Timestamp::Zero,
                     format_version: 5,
                     last_write_version: "test".to_owned(),
+                    active_plans: Vec::new(),
+                    actors: Vec::new(),
                 },
                 Vec::new(),
                 Vec::new(),
@@ -221,6 +223,11 @@ fn seeded() -> FakeApplication {
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
         hold_reason: None,
+        actor: None,
+        claim_conflict: false,
+        claim_epoch: 0,
+        claim_owner: None,
+        ulid: None,
     };
     let task = |id: u64, title: &str, status: TaskStatus| Task {
         id,
@@ -231,6 +238,8 @@ fn seeded() -> FakeApplication {
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
         hold_reason: None,
+        actor: None,
+        ulid: None,
     };
     FakeApplication {
         snapshot: ProjectSnapshot::new(
@@ -242,6 +251,8 @@ fn seeded() -> FakeApplication {
                 updated_at: Timestamp::Zero,
                 format_version: 5,
                 last_write_version: "test".to_owned(),
+                active_plans: Vec::new(),
+                actors: Vec::new(),
             },
             Vec::new(),
             vec![plan],

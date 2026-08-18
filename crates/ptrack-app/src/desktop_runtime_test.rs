@@ -1213,6 +1213,8 @@ fn heatmap_buckets_instants_in_the_host_local_calendar_day() {
             updated_at: Timestamp::Zero,
             format_version: 1,
             last_write_version: String::new(),
+            active_plans: Vec::new(),
+            actors: Vec::new(),
         },
         Vec::new(),
         Vec::new(),
@@ -1225,6 +1227,8 @@ fn heatmap_buckets_instants_in_the_host_local_calendar_day() {
             kind: MemoryKind::Legacy,
             body: "boundary".to_owned(),
             created_at: event,
+            actor: None,
+            ulid: None,
         }],
         vec![Commit {
             id: 1,
@@ -1233,6 +1237,8 @@ fn heatmap_buckets_instants_in_the_host_local_calendar_day() {
             plan_id: 0,
             task_id: 0,
             created_at: event,
+            actor: None,
+            ulid: None,
         }],
     );
     let now = time::OffsetDateTime::from_unix_timestamp(90_000).unwrap();

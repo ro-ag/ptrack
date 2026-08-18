@@ -11,13 +11,15 @@ use crate::{
 /// Stable envelope codec ID for native ptrack positional records.
 pub const NATIVE_CODEC: u16 = 3;
 /// Current schema of native ptrack positional record payloads.
-pub const NATIVE_PAYLOAD_SCHEMA: u32 = 2;
+pub const NATIVE_PAYLOAD_SCHEMA: u32 = 3;
 /// Oldest native payload schema this build still decodes.
 ///
-/// Schema 1 predates the plan and task hold reason. Schema-1 payloads decode
-/// with `hold_reason: None` and are re-encoded at [`NATIVE_PAYLOAD_SCHEMA`] on
-/// their next write, so stored records upgrade lazily and no database is
-/// rewritten on open.
+/// Schema 1 predates the plan and task hold reason, which schema 2 added.
+/// Schema 3 adds actor attribution, reserved entity ULIDs, plan claims, and the
+/// per-actor `Meta` maps. Payloads at either older schema decode with all of
+/// those fields empty and are re-encoded at [`NATIVE_PAYLOAD_SCHEMA`] on their
+/// next write, so stored records upgrade lazily and no database is rewritten on
+/// open.
 pub const MIN_NATIVE_PAYLOAD_SCHEMA: u32 = 1;
 /// Maximum accepted bytes in one native record payload.
 pub const MAX_PAYLOAD_BYTES: usize = 256 * 1024 * 1024;
@@ -178,13 +180,15 @@ pub fn decode_record_at_schema(
     }
     let mut reader = Reader::new(payload);
     let record = match kind {
-        RecordKind::Meta => NativeRecord::Meta(decode_meta(&mut reader)?),
+        RecordKind::Meta => NativeRecord::Meta(decode_meta(&mut reader, payload_schema)?),
         RecordKind::Plan => NativeRecord::Plan(decode_plan(&mut reader, payload_schema)?),
         RecordKind::Task => NativeRecord::Task(decode_task(&mut reader, payload_schema)?),
-        RecordKind::Note => NativeRecord::Note(decode_note(&mut reader)?),
-        RecordKind::Milestone => NativeRecord::Milestone(decode_milestone(&mut reader)?),
-        RecordKind::Issue => NativeRecord::Issue(decode_issue(&mut reader)?),
-        RecordKind::Commit => NativeRecord::Commit(decode_commit(&mut reader)?),
+        RecordKind::Note => NativeRecord::Note(decode_note(&mut reader, payload_schema)?),
+        RecordKind::Milestone => {
+            NativeRecord::Milestone(decode_milestone(&mut reader, payload_schema)?)
+        }
+        RecordKind::Issue => NativeRecord::Issue(decode_issue(&mut reader, payload_schema)?),
+        RecordKind::Commit => NativeRecord::Commit(decode_commit(&mut reader, payload_schema)?),
         RecordKind::Capability => NativeRecord::Capability(decode_capability(&mut reader)?),
         RecordKind::CapabilityAudit => {
             NativeRecord::CapabilityAudit(decode_capability_audit(&mut reader)?)
@@ -210,13 +214,13 @@ pub fn decode_record_at_schema(
 fn encode_unchecked(record: &NativeRecord, payload_schema: u32) -> Result<Vec<u8>, CodecError> {
     let mut writer = Writer::default();
     match record {
-        NativeRecord::Meta(value) => encode_meta(&mut writer, value)?,
+        NativeRecord::Meta(value) => encode_meta(&mut writer, value, payload_schema)?,
         NativeRecord::Plan(value) => encode_plan(&mut writer, value, payload_schema)?,
         NativeRecord::Task(value) => encode_task(&mut writer, value, payload_schema)?,
-        NativeRecord::Note(value) => encode_note(&mut writer, value)?,
-        NativeRecord::Milestone(value) => encode_milestone(&mut writer, value)?,
-        NativeRecord::Issue(value) => encode_issue(&mut writer, value)?,
-        NativeRecord::Commit(value) => encode_commit(&mut writer, value)?,
+        NativeRecord::Note(value) => encode_note(&mut writer, value, payload_schema)?,
+        NativeRecord::Milestone(value) => encode_milestone(&mut writer, value, payload_schema)?,
+        NativeRecord::Issue(value) => encode_issue(&mut writer, value, payload_schema)?,
+        NativeRecord::Commit(value) => encode_commit(&mut writer, value, payload_schema)?,
         NativeRecord::Capability(value) => encode_capability(&mut writer, value)?,
         NativeRecord::CapabilityAudit(value) => encode_capability_audit(&mut writer, value)?,
         NativeRecord::MemoryWriteback(value) => encode_memory_writeback(&mut writer, value)?,
@@ -418,19 +422,7 @@ impl<'a> Reader<'a> {
     }
 
     fn strings(&mut self) -> Result<Vec<String>, CodecError> {
-        let count = usize::try_from(self.u32()?).map_err(|_| CodecError::LengthOverflow)?;
-        if count > MAX_LIST_ITEMS {
-            return Err(CodecError::ListTooLarge {
-                actual: count,
-                maximum: MAX_LIST_ITEMS,
-            });
-        }
-        if count > self.remaining() / 4 {
-            return Err(CodecError::Truncated {
-                needed: count.saturating_mul(4),
-                remaining: self.remaining(),
-            });
-        }
+        let count = self.entry_count(4)?;
         let mut values = Vec::new();
         values
             .try_reserve_exact(count)
@@ -439,6 +431,25 @@ impl<'a> Reader<'a> {
             values.push(self.string()?);
         }
         Ok(values)
+    }
+
+    /// Reads a list length, rejecting counts past the list bound or past what
+    /// the remaining bytes could hold at `minimum_entry_bytes` per entry.
+    fn entry_count(&mut self, minimum_entry_bytes: usize) -> Result<usize, CodecError> {
+        let count = usize::try_from(self.u32()?).map_err(|_| CodecError::LengthOverflow)?;
+        if count > MAX_LIST_ITEMS {
+            return Err(CodecError::ListTooLarge {
+                actual: count,
+                maximum: MAX_LIST_ITEMS,
+            });
+        }
+        if count > self.remaining() / minimum_entry_bytes {
+            return Err(CodecError::Truncated {
+                needed: count.saturating_mul(minimum_entry_bytes),
+                remaining: self.remaining(),
+            });
+        }
+        Ok(count)
     }
 
     fn timestamp(&mut self) -> Result<Timestamp, CodecError> {
@@ -490,18 +501,19 @@ macro_rules! decode_enum {
     };
 }
 
-fn encode_meta(writer: &mut Writer, value: &Meta) -> Result<(), CodecError> {
+fn encode_meta(writer: &mut Writer, value: &Meta, payload_schema: u32) -> Result<(), CodecError> {
     writer.string(&value.goal)?;
     writer.string(&value.summary)?;
     writer.u64(value.active_plan)?;
     writer.timestamp(value.created_at)?;
     writer.timestamp(value.updated_at)?;
     writer.u64(value.format_version)?;
-    writer.string(&value.last_write_version)
+    writer.string(&value.last_write_version)?;
+    encode_meta_maps(writer, value, payload_schema)
 }
 
-fn decode_meta(reader: &mut Reader<'_>) -> Result<Meta, CodecError> {
-    Ok(Meta {
+fn decode_meta(reader: &mut Reader<'_>, payload_schema: u32) -> Result<Meta, CodecError> {
+    let mut meta = Meta {
         goal: reader.string()?,
         summary: reader.string()?,
         active_plan: reader.u64()?,
@@ -509,7 +521,11 @@ fn decode_meta(reader: &mut Reader<'_>) -> Result<Meta, CodecError> {
         updated_at: reader.timestamp()?,
         format_version: reader.u64()?,
         last_write_version: reader.string()?,
-    })
+        active_plans: Vec::new(),
+        actors: Vec::new(),
+    };
+    decode_meta_maps(reader, &mut meta, payload_schema)?;
+    Ok(meta)
 }
 
 /// The payload schema that introduced the plan and task hold reason.
@@ -550,6 +566,139 @@ fn decode_hold_reason(
     }
 }
 
+/// The payload schema that introduced actor attribution, reserved entity
+/// ULIDs, plan claims, and the per-actor Meta maps.
+///
+/// Deliberately an absolute schema number rather than a comparison against
+/// [`NATIVE_PAYLOAD_SCHEMA`], exactly like [`HOLD_REASON_PAYLOAD_SCHEMA`]: a
+/// future bump to 4 must keep writing and reading these fields for schema-3
+/// records.
+pub(crate) const ACTOR_PAYLOAD_SCHEMA: u32 = 3;
+
+/// Writes the trailing actor and reserved-ULID options, present only from
+/// payload schema 3. An older schema has no canonical form for a set value.
+fn encode_actor_ulid(
+    writer: &mut Writer,
+    actor: Option<&String>,
+    ulid: Option<&String>,
+    payload_schema: u32,
+) -> Result<(), CodecError> {
+    if payload_schema >= ACTOR_PAYLOAD_SCHEMA {
+        writer.option(actor, |writer, value| writer.string(value))?;
+        return writer.option(ulid, |writer, value| writer.string(value));
+    }
+    if actor.is_some() || ulid.is_some() {
+        Err(CodecError::NonCanonical)
+    } else {
+        Ok(())
+    }
+}
+
+/// Reads the trailing actor and reserved-ULID options, absent before schema 3.
+fn decode_actor_ulid(
+    reader: &mut Reader<'_>,
+    payload_schema: u32,
+) -> Result<(Option<String>, Option<String>), CodecError> {
+    if payload_schema >= ACTOR_PAYLOAD_SCHEMA {
+        Ok((
+            reader.option(Reader::string)?,
+            reader.option(Reader::string)?,
+        ))
+    } else {
+        Ok((None, None))
+    }
+}
+
+/// Writes the trailing plan claim, present only from payload schema 3.
+fn encode_plan_claim(
+    writer: &mut Writer,
+    value: &Plan,
+    payload_schema: u32,
+) -> Result<(), CodecError> {
+    if payload_schema >= ACTOR_PAYLOAD_SCHEMA {
+        writer.option(value.claim_owner.as_ref(), |writer, owner| {
+            writer.string(owner)
+        })?;
+        writer.u64(value.claim_epoch)?;
+        return writer.bool(value.claim_conflict);
+    }
+    if value.claim_owner.is_some() || value.claim_epoch != 0 || value.claim_conflict {
+        Err(CodecError::NonCanonical)
+    } else {
+        Ok(())
+    }
+}
+
+/// Reads the trailing plan claim, absent before payload schema 3.
+fn decode_plan_claim(
+    reader: &mut Reader<'_>,
+    payload_schema: u32,
+) -> Result<(Option<String>, u64, bool), CodecError> {
+    if payload_schema >= ACTOR_PAYLOAD_SCHEMA {
+        Ok((
+            reader.option(Reader::string)?,
+            reader.u64()?,
+            reader.bool()?,
+        ))
+    } else {
+        Ok((None, 0, false))
+    }
+}
+
+/// Writes the trailing per-actor Meta maps, present only from payload schema 3.
+fn encode_meta_maps(
+    writer: &mut Writer,
+    value: &Meta,
+    payload_schema: u32,
+) -> Result<(), CodecError> {
+    if payload_schema >= ACTOR_PAYLOAD_SCHEMA {
+        if value.active_plans.len() > MAX_LIST_ITEMS || value.actors.len() > MAX_LIST_ITEMS {
+            return Err(CodecError::ListTooLarge {
+                actual: value.active_plans.len().max(value.actors.len()),
+                maximum: MAX_LIST_ITEMS,
+            });
+        }
+        writer.u32(
+            u32::try_from(value.active_plans.len()).map_err(|_| CodecError::LengthOverflow)?,
+        )?;
+        for (actor, plan) in &value.active_plans {
+            writer.string(actor)?;
+            writer.u64(*plan)?;
+        }
+        writer.u32(u32::try_from(value.actors.len()).map_err(|_| CodecError::LengthOverflow)?)?;
+        for (actor, name) in &value.actors {
+            writer.string(actor)?;
+            writer.string(name)?;
+        }
+        return Ok(());
+    }
+    if !value.active_plans.is_empty() || !value.actors.is_empty() {
+        Err(CodecError::NonCanonical)
+    } else {
+        Ok(())
+    }
+}
+
+/// Reads the trailing per-actor Meta maps, absent before payload schema 3.
+fn decode_meta_maps(
+    reader: &mut Reader<'_>,
+    value: &mut Meta,
+    payload_schema: u32,
+) -> Result<(), CodecError> {
+    if payload_schema < ACTOR_PAYLOAD_SCHEMA {
+        return Ok(());
+    }
+    // Each entry costs at least the length prefixes of its parts, matching the
+    // truncation guard the string-list reader uses before it reserves.
+    for _ in 0..reader.entry_count(12)? {
+        value.active_plans.push((reader.string()?, reader.u64()?));
+    }
+    for _ in 0..reader.entry_count(8)? {
+        value.actors.push((reader.string()?, reader.string()?));
+    }
+    Ok(())
+}
+
 fn encode_plan(writer: &mut Writer, value: &Plan, payload_schema: u32) -> Result<(), CodecError> {
     writer.u64(value.id)?;
     writer.string(&value.title)?;
@@ -558,11 +707,18 @@ fn encode_plan(writer: &mut Writer, value: &Plan, payload_schema: u32) -> Result
     writer.i64(value.order)?;
     writer.timestamp(value.created_at)?;
     writer.timestamp(value.updated_at)?;
-    encode_hold_reason(writer, value.hold_reason.as_ref(), payload_schema)
+    encode_hold_reason(writer, value.hold_reason.as_ref(), payload_schema)?;
+    encode_actor_ulid(
+        writer,
+        value.actor.as_ref(),
+        value.ulid.as_ref(),
+        payload_schema,
+    )?;
+    encode_plan_claim(writer, value, payload_schema)
 }
 
 fn decode_plan(reader: &mut Reader<'_>, payload_schema: u32) -> Result<Plan, CodecError> {
-    Ok(Plan {
+    let mut plan = Plan {
         id: reader.u64()?,
         title: reader.string()?,
         status: decode_enum!(reader, PlanStatus, "plan status"),
@@ -571,7 +727,16 @@ fn decode_plan(reader: &mut Reader<'_>, payload_schema: u32) -> Result<Plan, Cod
         created_at: reader.timestamp()?,
         updated_at: reader.timestamp()?,
         hold_reason: decode_hold_reason(reader, payload_schema)?,
-    })
+        actor: None,
+        ulid: None,
+        claim_owner: None,
+        claim_epoch: 0,
+        claim_conflict: false,
+    };
+    (plan.actor, plan.ulid) = decode_actor_ulid(reader, payload_schema)?;
+    (plan.claim_owner, plan.claim_epoch, plan.claim_conflict) =
+        decode_plan_claim(reader, payload_schema)?;
+    Ok(plan)
 }
 
 fn encode_task(writer: &mut Writer, value: &Task, payload_schema: u32) -> Result<(), CodecError> {
@@ -582,11 +747,17 @@ fn encode_task(writer: &mut Writer, value: &Task, payload_schema: u32) -> Result
     writer.i64(value.order)?;
     writer.timestamp(value.created_at)?;
     writer.timestamp(value.updated_at)?;
-    encode_hold_reason(writer, value.hold_reason.as_ref(), payload_schema)
+    encode_hold_reason(writer, value.hold_reason.as_ref(), payload_schema)?;
+    encode_actor_ulid(
+        writer,
+        value.actor.as_ref(),
+        value.ulid.as_ref(),
+        payload_schema,
+    )
 }
 
 fn decode_task(reader: &mut Reader<'_>, payload_schema: u32) -> Result<Task, CodecError> {
-    Ok(Task {
+    let mut task = Task {
         id: reader.u64()?,
         plan_id: reader.u64()?,
         title: reader.string()?,
@@ -595,41 +766,65 @@ fn decode_task(reader: &mut Reader<'_>, payload_schema: u32) -> Result<Task, Cod
         created_at: reader.timestamp()?,
         updated_at: reader.timestamp()?,
         hold_reason: decode_hold_reason(reader, payload_schema)?,
-    })
+        actor: None,
+        ulid: None,
+    };
+    (task.actor, task.ulid) = decode_actor_ulid(reader, payload_schema)?;
+    Ok(task)
 }
 
-fn encode_note(writer: &mut Writer, value: &Note) -> Result<(), CodecError> {
+fn encode_note(writer: &mut Writer, value: &Note, payload_schema: u32) -> Result<(), CodecError> {
     writer.u64(value.id)?;
     encode_enum!(writer, value.target);
     writer.u64(value.target_id)?;
     encode_enum!(writer, value.kind);
     writer.string(&value.body)?;
-    writer.timestamp(value.created_at)
+    writer.timestamp(value.created_at)?;
+    encode_actor_ulid(
+        writer,
+        value.actor.as_ref(),
+        value.ulid.as_ref(),
+        payload_schema,
+    )
 }
 
-fn decode_note(reader: &mut Reader<'_>) -> Result<Note, CodecError> {
-    Ok(Note {
+fn decode_note(reader: &mut Reader<'_>, payload_schema: u32) -> Result<Note, CodecError> {
+    let mut note = Note {
         id: reader.u64()?,
         target: decode_enum!(reader, NoteTarget, "note target"),
         target_id: reader.u64()?,
         kind: decode_enum!(reader, MemoryKind, "memory kind"),
         body: reader.string()?,
         created_at: reader.timestamp()?,
-    })
+        actor: None,
+        ulid: None,
+    };
+    (note.actor, note.ulid) = decode_actor_ulid(reader, payload_schema)?;
+    Ok(note)
 }
 
-fn encode_milestone(writer: &mut Writer, value: &Milestone) -> Result<(), CodecError> {
+fn encode_milestone(
+    writer: &mut Writer,
+    value: &Milestone,
+    payload_schema: u32,
+) -> Result<(), CodecError> {
     writer.u64(value.id)?;
     writer.string(&value.title)?;
     encode_enum!(writer, value.status);
     writer.timestamp(value.due)?;
     writer.i64(value.order)?;
     writer.timestamp(value.created_at)?;
-    writer.timestamp(value.updated_at)
+    writer.timestamp(value.updated_at)?;
+    encode_actor_ulid(
+        writer,
+        value.actor.as_ref(),
+        value.ulid.as_ref(),
+        payload_schema,
+    )
 }
 
-fn decode_milestone(reader: &mut Reader<'_>) -> Result<Milestone, CodecError> {
-    Ok(Milestone {
+fn decode_milestone(reader: &mut Reader<'_>, payload_schema: u32) -> Result<Milestone, CodecError> {
+    let mut milestone = Milestone {
         id: reader.u64()?,
         title: reader.string()?,
         status: decode_enum!(reader, MilestoneStatus, "milestone status"),
@@ -637,10 +832,14 @@ fn decode_milestone(reader: &mut Reader<'_>) -> Result<Milestone, CodecError> {
         order: reader.i64()?,
         created_at: reader.timestamp()?,
         updated_at: reader.timestamp()?,
-    })
+        actor: None,
+        ulid: None,
+    };
+    (milestone.actor, milestone.ulid) = decode_actor_ulid(reader, payload_schema)?;
+    Ok(milestone)
 }
 
-fn encode_issue(writer: &mut Writer, value: &Issue) -> Result<(), CodecError> {
+fn encode_issue(writer: &mut Writer, value: &Issue, payload_schema: u32) -> Result<(), CodecError> {
     writer.u64(value.id)?;
     writer.string(&value.title)?;
     writer.string(&value.body)?;
@@ -648,11 +847,17 @@ fn encode_issue(writer: &mut Writer, value: &Issue) -> Result<(), CodecError> {
     encode_enum!(writer, value.severity);
     writer.u64(value.task_id)?;
     writer.timestamp(value.created_at)?;
-    writer.timestamp(value.updated_at)
+    writer.timestamp(value.updated_at)?;
+    encode_actor_ulid(
+        writer,
+        value.actor.as_ref(),
+        value.ulid.as_ref(),
+        payload_schema,
+    )
 }
 
-fn decode_issue(reader: &mut Reader<'_>) -> Result<Issue, CodecError> {
-    Ok(Issue {
+fn decode_issue(reader: &mut Reader<'_>, payload_schema: u32) -> Result<Issue, CodecError> {
+    let mut issue = Issue {
         id: reader.u64()?,
         title: reader.string()?,
         body: reader.string()?,
@@ -661,27 +866,45 @@ fn decode_issue(reader: &mut Reader<'_>) -> Result<Issue, CodecError> {
         task_id: reader.u64()?,
         created_at: reader.timestamp()?,
         updated_at: reader.timestamp()?,
-    })
+        actor: None,
+        ulid: None,
+    };
+    (issue.actor, issue.ulid) = decode_actor_ulid(reader, payload_schema)?;
+    Ok(issue)
 }
 
-fn encode_commit(writer: &mut Writer, value: &Commit) -> Result<(), CodecError> {
+fn encode_commit(
+    writer: &mut Writer,
+    value: &Commit,
+    payload_schema: u32,
+) -> Result<(), CodecError> {
     writer.u64(value.id)?;
     writer.string(&value.sha)?;
     writer.string(&value.subject)?;
     writer.u64(value.plan_id)?;
     writer.u64(value.task_id)?;
-    writer.timestamp(value.created_at)
+    writer.timestamp(value.created_at)?;
+    encode_actor_ulid(
+        writer,
+        value.actor.as_ref(),
+        value.ulid.as_ref(),
+        payload_schema,
+    )
 }
 
-fn decode_commit(reader: &mut Reader<'_>) -> Result<Commit, CodecError> {
-    Ok(Commit {
+fn decode_commit(reader: &mut Reader<'_>, payload_schema: u32) -> Result<Commit, CodecError> {
+    let mut commit = Commit {
         id: reader.u64()?,
         sha: reader.string()?,
         subject: reader.string()?,
         plan_id: reader.u64()?,
         task_id: reader.u64()?,
         created_at: reader.timestamp()?,
-    })
+        actor: None,
+        ulid: None,
+    };
+    (commit.actor, commit.ulid) = decode_actor_ulid(reader, payload_schema)?;
+    Ok(commit)
 }
 
 fn encode_limits(writer: &mut Writer, value: &CapabilityLimits) -> Result<(), CodecError> {

@@ -64,6 +64,8 @@ fn json_stage_with_format(
         updated_at: Timestamp::Zero,
         format_version,
         last_write_version: "v0.21.0".to_owned(),
+        active_plans: Vec::new(),
+        actors: Vec::new(),
     });
     collections[0].records.push(ImportRecord {
         key: OwnedRecordKey::Singleton,

@@ -138,6 +138,8 @@ impl ProjectStore {
                     updated_at: now,
                     format_version: CURRENT_PROJECT_FORMAT,
                     last_write_version: writer,
+                    active_plans: Vec::new(),
+                    actors: Vec::new(),
                 },
             )?;
             Ok(())
@@ -335,6 +337,8 @@ impl ProjectStore {
                 order,
                 created_at: now,
                 updated_at: now,
+                actor: None,
+                ulid: None,
             };
             typed::put(transaction, RecordKey::Id(id), &value)?;
             Ok(value)
@@ -392,6 +396,11 @@ impl ProjectStore {
                 created_at: now,
                 updated_at: now,
                 hold_reason: None,
+                actor: None,
+                claim_conflict: false,
+                claim_epoch: 0,
+                claim_owner: None,
+                ulid: None,
             };
             typed::put(transaction, RecordKey::Id(id), &value)?;
             Ok(value)
@@ -438,6 +447,11 @@ impl ProjectStore {
                 created_at: now,
                 updated_at: now,
                 hold_reason: None,
+                actor: None,
+                claim_conflict: false,
+                claim_epoch: 0,
+                claim_owner: None,
+                ulid: None,
             };
             typed::put(transaction, RecordKey::Id(id), &plan)?;
             before_activate()?;
@@ -529,6 +543,8 @@ impl ProjectStore {
                 created_at: now,
                 updated_at: now,
                 hold_reason: None,
+                actor: None,
+                ulid: None,
             };
             typed::put(transaction, RecordKey::Id(id), &value)?;
             Ok(value)
@@ -581,6 +597,8 @@ impl ProjectStore {
                 created_at: now,
                 updated_at: now,
                 hold_reason: None,
+                actor: None,
+                ulid: None,
             };
             typed::put(transaction, RecordKey::Id(id), &task)?;
             Ok(task)
@@ -760,6 +778,11 @@ impl ProjectStore {
                 hold_reason: plan_status_can_hold(status)
                     .then_some(task.hold_reason)
                     .flatten(),
+                actor: None,
+                claim_conflict: false,
+                claim_epoch: 0,
+                claim_owner: None,
+                ulid: None,
             };
             typed::put(transaction, RecordKey::Id(plan_id), &plan)?;
             for mut note in typed::scan_write::<Note>(transaction)? {
@@ -805,6 +828,8 @@ impl ProjectStore {
                 kind: MemoryKind::Legacy,
                 body,
                 created_at: now,
+                actor: None,
+                ulid: None,
             };
             typed::put(transaction, RecordKey::Id(id), &note)?;
             Ok(note)
@@ -848,6 +873,8 @@ impl ProjectStore {
                 task_id,
                 created_at: now,
                 updated_at: now,
+                actor: None,
+                ulid: None,
             };
             typed::put(transaction, RecordKey::Id(id), &issue)?;
             Ok(issue)
@@ -909,6 +936,8 @@ impl ProjectStore {
                 plan_id,
                 task_id,
                 created_at: now,
+                actor: None,
+                ulid: None,
             };
             typed::put(transaction, RecordKey::Id(id), &commit)?;
             Ok(commit)
@@ -1199,6 +1228,8 @@ impl ProjectStore {
                     kind: request.kind,
                     body: request.body.clone(),
                     created_at: now,
+                    actor: None,
+                    ulid: None,
                 };
                 typed::put(transaction, RecordKey::Id(id), &note)?;
                 receipt.note_id = id;

@@ -23,6 +23,8 @@ fn model() -> Model {
                 updated_at: Timestamp::Zero,
                 format_version: 4,
                 last_write_version: "test".to_owned(),
+                active_plans: Vec::new(),
+                actors: Vec::new(),
             },
             vec![],
             vec![],
@@ -125,7 +127,7 @@ fn populated_model() -> Model {
             updated_at: stamp(1_700_000_100),
             format_version: 4,
             last_write_version: "test".to_owned(),
-        },
+        active_plans: Vec::new(), actors: Vec::new(),},
         vec![Milestone {
             id: 7,
             title: "Parity".to_owned(),
@@ -134,7 +136,7 @@ fn populated_model() -> Model {
             order: 1,
             created_at: stamp(1_700_000_000),
             updated_at: stamp(1_700_000_100),
-        }],
+        actor: None, ulid: None,}],
         vec![Plan {
             id: 1,
             title: "Rust terminal UI".to_owned(),
@@ -144,7 +146,7 @@ fn populated_model() -> Model {
             created_at: stamp(1_700_000_000),
             updated_at: stamp(1_700_000_100),
             hold_reason: None,
-        }],
+        actor: None, claim_conflict: false, claim_epoch: 0,claim_owner: None, ulid: None,}],
         vec![Task {
             id: 3,
             plan_id: 1,
@@ -154,7 +156,7 @@ fn populated_model() -> Model {
             created_at: stamp(1_700_000_000),
             updated_at: stamp(1_700_000_100),
             hold_reason: None,
-        }],
+        actor: None, ulid: None,}],
         vec![Issue {
             id: 9,
             title: "Narrow view clips".to_owned(),
@@ -164,7 +166,7 @@ fn populated_model() -> Model {
             task_id: 3,
             created_at: stamp(1_700_000_000),
             updated_at: stamp(1_700_000_100),
-        }],
+        actor: None, ulid: None,}],
         vec![
             Note {
                 id: 1,
@@ -173,7 +175,7 @@ fn populated_model() -> Model {
                 kind: MemoryKind::Decision,
                 body: "decision-note".to_owned(),
                 created_at: stamp(1_700_000_001),
-            },
+            actor: None, ulid: None,},
             Note {
                 id: 2,
                 target: NoteTarget::Task,
@@ -181,7 +183,7 @@ fn populated_model() -> Model {
                 kind: MemoryKind::Handoff,
                 body: "This deliberately long Unicode note 界🙂 must wrap inside the detail box so its complete tail remains visible: TAIL".to_owned(),
                 created_at: stamp(1_700_000_002),
-            },
+            actor: None, ulid: None,},
         ],
         vec![
             Commit {
@@ -191,7 +193,7 @@ fn populated_model() -> Model {
                 plan_id: 1,
                 task_id: 3,
                 created_at: stamp(1_700_000_003),
-            },
+            actor: None, ulid: None,},
             Commit {
                 id: 2,
                 sha: "22222222bbbb".to_owned(),
@@ -199,7 +201,7 @@ fn populated_model() -> Model {
                 plan_id: 1,
                 task_id: 3,
                 created_at: stamp(1_700_000_004),
-            },
+            actor: None, ulid: None,},
         ],
     );
     Model::new(snapshot, model().context)
@@ -274,6 +276,11 @@ fn list_window_centers_cursor_truncates_and_fills_selection_row() {
             created_at: Timestamp::Zero,
             updated_at: Timestamp::Zero,
             hold_reason: None,
+            actor: None,
+            claim_conflict: false,
+            claim_epoch: 0,
+            claim_owner: None,
+            ulid: None,
         })
         .collect();
     value.plan_cursor = 12;
@@ -508,6 +515,11 @@ fn inactive_plan_rows_reserve_the_active_star_column() {
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
         hold_reason: None,
+        actor: None,
+        claim_conflict: false,
+        claim_epoch: 0,
+        claim_owner: None,
+        ulid: None,
     });
     value.focus = crate::model::PaneFocus::Tasks;
 

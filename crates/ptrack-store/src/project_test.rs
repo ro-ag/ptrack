@@ -9,7 +9,7 @@ use ptrack_capability_policy::{AuditEvent, confirm_approval, normalize, sanitize
 use ptrack_core::{
     Capability, CapabilityAudit, CapabilityAuditPolicy, CapabilityKind, CapabilityLimits, Digest32,
     GitScope, MIN_NATIVE_PAYLOAD_SCHEMA, MemoryKind, NativeRecord, NoteTarget, Plan, PlanStatus,
-    RecordKind, TaskStatus, Timestamp, decode_record, encode_record,
+    RecordKind, TaskStatus, Timestamp, decode_record, encode_record_at_schema,
 };
 
 use crate::typed;
@@ -1356,18 +1356,23 @@ fn a_database_of_schema_1_records_opens_reads_and_upgrades_on_write() {
     let task = store.add_task(plan.id, "legacy task").unwrap();
 
     // Rewrite both records exactly as a released pre-hold build stored them:
-    // the current layout minus the trailing hold-reason option byte, under
-    // payload schema 1.
+    // the schema-1 layout, under payload schema 1.
     store
         .write(|transaction| {
-            let plan_payload = encode_record(&NativeRecord::Plan(plan.clone())).unwrap();
-            let task_payload = encode_record(&NativeRecord::Task(task.clone())).unwrap();
+            let plan_payload = encode_record_at_schema(
+                &NativeRecord::Plan(plan.clone()),
+                MIN_NATIVE_PAYLOAD_SCHEMA,
+            )
+            .unwrap();
+            let task_payload = encode_record_at_schema(
+                &NativeRecord::Task(task.clone()),
+                MIN_NATIVE_PAYLOAD_SCHEMA,
+            )
+            .unwrap();
             for (collection, id, payload) in [
                 (Collection::Plans, plan.id, plan_payload),
                 (Collection::Tasks, task.id, task_payload),
             ] {
-                let mut payload = payload;
-                assert_eq!(payload.pop(), Some(0));
                 let legacy = RecordEnvelope::new(NATIVE_CODEC, MIN_NATIVE_PAYLOAD_SCHEMA, payload);
                 transaction.put(collection, RecordKey::Id(id), &legacy)?;
             }
@@ -1427,11 +1432,16 @@ fn schema_1_records_read_unheld_upgrade_on_write_and_future_schemas_fail_closed(
         created_at: timestamp(1_700_000_000),
         updated_at: timestamp(1_700_000_000),
         hold_reason: None,
+        actor: None,
+        claim_conflict: false,
+        claim_epoch: 0,
+        claim_owner: None,
+        ulid: None,
     };
-    // An older build stored the current layout minus the trailing hold-reason
-    // option, under payload schema 1.
-    let mut payload = encode_record(&NativeRecord::Plan(plan.clone())).unwrap();
-    assert_eq!(payload.pop(), Some(0));
+    // An older build stored the schema-1 layout, under payload schema 1.
+    let payload =
+        encode_record_at_schema(&NativeRecord::Plan(plan.clone()), MIN_NATIVE_PAYLOAD_SCHEMA)
+            .unwrap();
     let legacy = RecordEnvelope::new(NATIVE_CODEC, MIN_NATIVE_PAYLOAD_SCHEMA, payload);
 
     // It still decodes, and reads as not held.
@@ -1441,7 +1451,7 @@ fn schema_1_records_read_unheld_upgrade_on_write_and_future_schemas_fail_closed(
     // in place without the open path ever touching it.
     let upgraded = typed::encode(&plan).unwrap();
     assert_eq!(upgraded.payload_schema(), NATIVE_PAYLOAD_SCHEMA);
-    assert_eq!(upgraded.payload().len(), legacy.payload().len() + 1);
+    assert!(upgraded.payload().len() > legacy.payload().len());
     assert_eq!(typed::decode::<Plan>(upgraded).unwrap(), plan);
 
     // A schema this build does not know fails closed on read instead of being

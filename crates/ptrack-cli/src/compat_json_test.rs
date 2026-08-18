@@ -51,6 +51,8 @@ fn empty_go_nil_slices_encode_as_null_while_derived_rows_can_remain_arrays() {
             updated_at: ptrack_core::Timestamp::Zero,
             format_version: 5,
             last_write_version: String::new(),
+            active_plans: Vec::new(),
+            actors: Vec::new(),
         },
         Vec::new(),
         Vec::new(),
