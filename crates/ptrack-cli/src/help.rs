@@ -178,10 +178,11 @@ const PLAN_CHILDREN: &[Child] = &[
     child("done", "Mark a plan done"),
     child("hold", "Put a plan on hold with a reason"),
     child("list", "List plans"),
+    child("release", "Release your claim on a plan"),
     child("rename", "Rename a plan"),
     child("resume", "Take a plan off hold"),
     child("show", "Show a plan with its tasks and notes"),
-    child("use", "Set the active plan"),
+    child("use", "Claim a plan and make it your active plan"),
 ];
 const TASK_CHILDREN: &[Child] = &[
     child(
@@ -527,7 +528,22 @@ fn plan_leaf(name: &str) -> Spec {
             "Mark a plan done (clears any hold on it)",
             HELP_ONLY,
         ),
-        "use" => leaf_spec("plan use <id>", "Set the active plan", HELP_ONLY),
+        "use" => leaf_spec(
+            "plan use <id>",
+            "Claim a plan and make it your active plan",
+            &[
+                HELP_FLAG,
+                flag(
+                    "    --steal",
+                    "take over another developer's claim (bumps the claim epoch)",
+                ),
+            ],
+        ),
+        "release" => leaf_spec(
+            "plan release <id>",
+            "Release your claim on a plan",
+            HELP_ONLY,
+        ),
         "hold" => leaf_spec(
             "plan hold <id> <reason...>",
             "Put a plan on hold with a reason (keeps its status)",
@@ -872,7 +888,7 @@ fn group_children(name: &str) -> Option<&'static [&'static str]> {
         "goal" | "summary" | "config" => Some(&["set", "show"]),
         "milestone" => Some(&["add", "done", "due", "list", "open", "rename", "show"]),
         "plan" => Some(&[
-            "add", "done", "hold", "list", "rename", "resume", "show", "use",
+            "add", "done", "hold", "list", "release", "rename", "resume", "show", "use",
         ]),
         "task" => Some(&[
             "add", "block", "convert", "done", "hold", "list", "move", "rename", "resume", "show",

@@ -317,6 +317,17 @@ fn hold_error(error: ptrack_app::AppError) -> CliError {
     )
 }
 
+/// Store claim refusals already read as sentences; drop the layer prefix
+/// rather than restate them, exactly like `hold_error`.
+fn claim_error(error: ptrack_app::AppError) -> CliError {
+    let message = error.to_string();
+    CliError::message(
+        message
+            .strip_prefix(ptrack_app::INVALID_CLAIM_PREFIX)
+            .unwrap_or(&message),
+    )
+}
+
 fn plan(
     command: &str,
     matches: &ArgMatches,
@@ -388,9 +399,22 @@ fn plan(
             })?)?;
         }
         "use" => {
+            let id = parse_u64(first(matches, "id")?)?;
+            let mutation = if matches.get_flag("steal") {
+                Mutation::StealPlan(id)
+            } else {
+                Mutation::SetActivePlan(id)
+            };
+            expect_none(application.mutate(mutation).map_err(claim_error)?)?;
+        }
+        "release" => {
+            let id = parse_u64(first(matches, "id")?)?;
             expect_none(
-                application.mutate(Mutation::SetActivePlan(parse_u64(first(matches, "id")?)?))?,
+                application
+                    .mutate(Mutation::ReleasePlanClaim(id))
+                    .map_err(claim_error)?,
             )?;
+            output::line(io.stdout, format_args!("plan #{id} released"))?;
         }
         "hold" => {
             let args = values(matches, "values");
