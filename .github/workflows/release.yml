@@ -63,7 +63,8 @@ jobs:
           cargo test --workspace --all-targets --no-fail-fast
           cargo clippy --workspace --all-targets -- -D warnings
           RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
-          python3 -B -m unittest tools.release_contract_test
+          python3 -B -m unittest tools.help_check_test tools.release_contract_test
+          python3 -B tools/help_check.py all
 
   build:
     name: build (${{ matrix.archive_os }}/${{ matrix.arch }})
