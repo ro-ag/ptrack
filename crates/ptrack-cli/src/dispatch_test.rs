@@ -6,7 +6,9 @@ use ptrack_app::{
     GuideAction, HookAction, HookResult, InitRequest, InitResult, Mutation, MutationResult,
     ProcessOutput,
 };
-use ptrack_core::{Meta, ProjectRef, ProjectSnapshot, Timestamp};
+use ptrack_core::{
+    Meta, Plan, PlanStatus, ProjectRef, ProjectSnapshot, Task, TaskStatus, Timestamp,
+};
 
 use crate::{Io, RunOutcome, run};
 
@@ -59,6 +61,31 @@ impl ApplicationPort for FakeApplication {
         match mutation {
             Mutation::SetGoal(value) => self.snapshot.meta.goal = value,
             Mutation::SetSummary(value) => self.snapshot.meta.summary = value,
+            // Mirrors ProjectStore::set_task_hold / set_plan_hold closely
+            // enough to exercise the CLI's success and refusal paths.
+            Mutation::SetTaskHold { id, reason } => {
+                let task = self
+                    .snapshot
+                    .tasks
+                    .iter_mut()
+                    .find(|task| task.id == id)
+                    .ok_or(AppError::NotImplemented("test task"))?;
+                if reason.is_some() && task.status == TaskStatus::Done {
+                    return Err(AppError::Message(format!(
+                        "invalid hold mutation: task #{id} is done and cannot be put on hold"
+                    )));
+                }
+                task.hold_reason = reason;
+            }
+            Mutation::SetPlanHold { id, reason } => {
+                let plan = self
+                    .snapshot
+                    .plans
+                    .iter_mut()
+                    .find(|plan| plan.id == id)
+                    .ok_or(AppError::NotImplemented("test plan"))?;
+                plan.hold_reason = reason;
+            }
             _ => return Err(AppError::NotImplemented("test mutation")),
         }
         Ok(MutationResult::None)
@@ -177,6 +204,176 @@ fn capability_mcp_uses_stdin_as_sole_protocol_input_and_emits_no_cli_text() {
     assert!(stderr.is_empty());
 }
 
+/// One active plan with a todo task #1 and a done task #2.
+fn seeded() -> FakeApplication {
+    let plan = Plan {
+        id: 1,
+        title: "Build CLI".to_owned(),
+        status: PlanStatus::Active,
+        milestone_id: 0,
+        order: 1,
+        created_at: Timestamp::Zero,
+        updated_at: Timestamp::Zero,
+        hold_reason: None,
+    };
+    let task = |id: u64, title: &str, status: TaskStatus| Task {
+        id,
+        plan_id: 1,
+        title: title.to_owned(),
+        status,
+        order: i64::try_from(id).expect("small fixture id fits i64"),
+        created_at: Timestamp::Zero,
+        updated_at: Timestamp::Zero,
+        hold_reason: None,
+    };
+    FakeApplication {
+        snapshot: ProjectSnapshot::new(
+            Meta {
+                goal: "ship".to_owned(),
+                summary: String::new(),
+                active_plan: 1,
+                created_at: Timestamp::Zero,
+                updated_at: Timestamp::Zero,
+                format_version: 5,
+                last_write_version: "test".to_owned(),
+            },
+            Vec::new(),
+            vec![plan],
+            vec![
+                task(1, "context command", TaskStatus::Todo),
+                task(2, "init command", TaskStatus::Done),
+            ],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ),
+        ..FakeApplication::default()
+    }
+}
+
+#[test]
+fn task_hold_and_resume_round_trip_through_every_surface() {
+    let mut application = seeded();
+    let (result, stdout, stderr) = invoke_with(
+        &mut application,
+        &["ptrack", "task", "hold", "1", "waiting", "on", "review"],
+    );
+    assert_eq!(result.expect("hold"), RunOutcome::ExitSuccess);
+    assert_eq!(stdout, "task #1 on hold: waiting on review\n");
+    assert!(stderr.is_empty());
+
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "task", "list"]);
+    assert_eq!(
+        stdout,
+        "#1 [todo] context command (plan 1) [on hold: waiting on review]\n\
+         #2 [done] init command (plan 1)\n"
+    );
+
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "task", "list", "--json"]);
+    assert!(stdout.contains("\"hold_reason\": \"waiting on review\""));
+    assert!(stdout.contains("\"hold_reason\": null"));
+
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "task", "show", "1"]);
+    assert!(stdout.starts_with("# Task #1 context command [todo] [on hold: waiting on review]\n"));
+
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "status"]);
+    assert!(stdout.contains("tasks: 1 todo, 0 doing, 1 done, 0 blocked (1 on hold)\n"));
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "status", "--json"]);
+    assert!(stdout.contains("\"on_hold\": 1"));
+
+    // A held task is never the next pick even though it is still todo.
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "next"]);
+    assert_eq!(stdout, "no actionable task in the active plan\n");
+
+    let (result, stdout, _) = invoke_with(&mut application, &["ptrack", "task", "resume", "1"]);
+    assert_eq!(result.expect("resume"), RunOutcome::ExitSuccess);
+    assert_eq!(stdout, "task #1 resumed\n");
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "task", "list"]);
+    assert!(!stdout.contains("on hold"));
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "next"]);
+    assert_eq!(
+        stdout,
+        "next: [todo] #1 context command (plan: Build CLI)\n"
+    );
+}
+
+#[test]
+fn plan_hold_and_resume_round_trip_through_every_surface() {
+    let mut application = seeded();
+    let (result, stdout, _) = invoke_with(
+        &mut application,
+        &["ptrack", "plan", "hold", "1", "budget", "freeze"],
+    );
+    assert_eq!(result.expect("hold"), RunOutcome::ExitSuccess);
+    assert_eq!(stdout, "plan #1 on hold: budget freeze\n");
+
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "plan", "list"]);
+    assert_eq!(stdout, "#1 [active] * Build CLI [on hold: budget freeze]\n");
+
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "plan", "list", "--json"]);
+    assert!(stdout.contains("\"hold_reason\": \"budget freeze\""));
+
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "plan", "show", "1"]);
+    assert!(stdout.starts_with("# Plan #1 Build CLI [active] [on hold: budget freeze]\n"));
+
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "next"]);
+    assert_eq!(stdout, "active plan on hold: budget freeze\n");
+
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "context"]);
+    assert!(stdout.contains("**#1 Build CLI** [on hold: budget freeze]\n"));
+
+    let (result, stdout, _) = invoke_with(&mut application, &["ptrack", "plan", "resume", "1"]);
+    assert_eq!(result.expect("resume"), RunOutcome::ExitSuccess);
+    assert_eq!(stdout, "plan #1 resumed\n");
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "next"]);
+    assert_eq!(
+        stdout,
+        "next: [todo] #1 context command (plan: Build CLI)\n"
+    );
+}
+
+#[test]
+fn hold_refusals_are_printable_sentences_not_codec_field_paths() {
+    let mut application = seeded();
+    for (args, expected) in [
+        (
+            ["ptrack", "task", "hold", "1"].as_slice(),
+            "requires at least 2 arg(s), only received 1",
+        ),
+        (
+            ["ptrack", "task", "hold", "1", "   "].as_slice(),
+            "the hold reason cannot be blank",
+        ),
+        (
+            ["ptrack", "task", "hold", "1", "a\nb"].as_slice(),
+            "the hold reason must be one line without control characters",
+        ),
+        (
+            ["ptrack", "task", "hold", "2", "too late"].as_slice(),
+            "task #2 is done and cannot be put on hold",
+        ),
+        (
+            ["ptrack", "plan", "hold", "1"].as_slice(),
+            "requires at least 2 arg(s), only received 1",
+        ),
+    ] {
+        let (result, stdout, stderr) = invoke_with(&mut application, args);
+        assert!(stdout.is_empty(), "unexpected stdout for {args:?}");
+        assert!(stderr.is_empty(), "unexpected stderr for {args:?}");
+        assert_eq!(result.expect_err("refused").to_string(), expected);
+    }
+
+    let oversized = "x".repeat(ptrack_core::MAX_HOLD_REASON_BYTES + 1);
+    let (result, _, _) = invoke_with(
+        &mut application,
+        &["ptrack", "task", "hold", "1", &oversized],
+    );
+    assert_eq!(
+        result.expect_err("oversized").to_string(),
+        "the hold reason is 1025 bytes; the limit is 1024"
+    );
+}
+
 fn invoke(args: &[&str]) -> (Result<RunOutcome, crate::CliError>, String, String) {
     let mut application = FakeApplication::default();
     invoke_with(&mut application, args)
@@ -252,6 +449,13 @@ fn help_and_unknown_command_match_the_go_process_contract() {
     assert!(stdout.contains("  completion  Generate the autocompletion script"));
     assert!(stderr.is_empty());
 
+    // The hold leaves must be registered in help's own child list too, or the
+    // leaf help silently falls back to its group.
+    let (_, stdout, _) = invoke(&["ptrack", "help", "task", "hold"]);
+    assert!(stdout.starts_with("Put a task on hold with a reason"));
+    let (_, stdout, _) = invoke(&["ptrack", "help", "plan", "resume"]);
+    assert!(stdout.starts_with("Take a plan off hold"));
+
     let (result, stdout, stderr) = invoke(&["ptrack", "milestne"]);
     assert!(stdout.is_empty());
     assert!(stderr.is_empty());
@@ -268,7 +472,7 @@ fn status_json_uses_go_key_order_and_html_escaping() {
     assert!(stderr.is_empty());
     assert_eq!(
         stdout,
-        "{\n  \"goal\": \"goal \\u003cx\\u003e\",\n  \"active_plan\": 0,\n  \"active_plan_title\": \"\",\n  \"plans\": 0,\n  \"todo\": 0,\n  \"doing\": 0,\n  \"done\": 0,\n  \"blocked\": 0\n}\n"
+        "{\n  \"goal\": \"goal \\u003cx\\u003e\",\n  \"active_plan\": 0,\n  \"active_plan_title\": \"\",\n  \"plans\": 0,\n  \"todo\": 0,\n  \"doing\": 0,\n  \"done\": 0,\n  \"blocked\": 0,\n  \"on_hold\": 0\n}\n"
     );
 }
 

@@ -53,6 +53,9 @@ pub struct Digest {
     pub active_plan: Option<PlanBrief>,
     pub blocked: Vec<TaskLine>,
     pub blocked_more: usize,
+    /// Held tasks project-wide, kept out of the active plan's pick-up list.
+    pub on_hold: Vec<TaskLine>,
+    pub on_hold_more: usize,
     pub open_issues: Vec<IssueLine>,
     pub open_issues_more: usize,
     pub recent_notes: Vec<NoteLine>,
@@ -75,6 +78,8 @@ pub struct PlanBrief {
     pub id: u64,
     pub title: String,
     pub open_tasks: Vec<TaskLine>,
+    /// Set while the plan itself is on hold; orthogonal to its status.
+    pub hold_reason: Option<String>,
 }
 
 /// A compact task reference.
@@ -84,6 +89,8 @@ pub struct TaskLine {
     pub plan_id: u64,
     pub title: String,
     pub status: String,
+    /// Set while the task is on hold; orthogonal to its status.
+    pub hold_reason: Option<String>,
 }
 
 /// A compact note reference.
@@ -108,11 +115,14 @@ pub fn context(snapshot: &ProjectSnapshot) -> Digest {
             .map(|plan| PlanBrief {
                 id: plan.id,
                 title: plan.title.clone(),
+                // A held task is not something an agent should pick up, so it
+                // leaves this list and appears in the on-hold bucket instead.
                 open_tasks: snapshot
                     .tasks_for_plan(plan.id)
-                    .filter(|task| task.status.is_open())
+                    .filter(|task| task.status.is_open() && task.hold_reason.is_none())
                     .map(task_line)
                     .collect(),
+                hold_reason: plan.hold_reason.clone(),
             })
     };
 
@@ -127,6 +137,20 @@ pub fn context(snapshot: &ProjectSnapshot) -> Digest {
             blocked.push(task_line(task));
         } else {
             blocked_more += 1;
+        }
+    }
+
+    let mut on_hold = Vec::new();
+    let mut on_hold_more = 0;
+    for task in snapshot
+        .tasks
+        .iter()
+        .filter(|task| task.hold_reason.is_some())
+    {
+        if on_hold.len() < CONTEXT_BLOCKED_SHOWN {
+            on_hold.push(task_line(task));
+        } else {
+            on_hold_more += 1;
         }
     }
 
@@ -150,6 +174,8 @@ pub fn context(snapshot: &ProjectSnapshot) -> Digest {
         active_plan,
         blocked,
         blocked_more,
+        on_hold,
+        on_hold_more,
         open_issues,
         open_issues_more,
         recent_notes: snapshot
@@ -174,6 +200,7 @@ impl Digest {
         output.push_str("\n\n## Active plan\n");
         write_active_plan(&mut output, self.active_plan.as_ref());
         write_blocked(&mut output, &self.blocked, self.blocked_more);
+        write_on_hold(&mut output, &self.on_hold, self.on_hold_more);
         write_open_issues(&mut output, &self.open_issues, self.open_issues_more);
         write_recent_notes(&mut output, &self.recent_notes);
         write_inventory(&mut output, self.inventory);
@@ -186,7 +213,14 @@ fn write_active_plan(output: &mut String, plan: Option<&PlanBrief>) {
         output.push_str("_none_\n\n");
         return;
     };
-    writeln!(output, "**#{} {}**\n", plan.id, plan.title).expect("writing to String cannot fail");
+    writeln!(
+        output,
+        "**#{} {}**{}\n",
+        plan.id,
+        plan.title,
+        hold_marker(plan.hold_reason.as_deref())
+    )
+    .expect("writing to String cannot fail");
     output.push_str("### Open tasks\n");
     if plan.open_tasks.is_empty() {
         output.push_str("_none_\n");
@@ -218,6 +252,29 @@ fn write_blocked(output: &mut String, tasks: &[TaskLine], more: usize) {
             "- … +{more} more (use `ptrack task list --status blocked`)"
         )
         .expect("writing to String cannot fail");
+    }
+    output.push('\n');
+}
+
+fn write_on_hold(output: &mut String, tasks: &[TaskLine], more: usize) {
+    if tasks.is_empty() {
+        return;
+    }
+    output.push_str("## On hold (project-wide)\n");
+    for task in tasks {
+        writeln!(
+            output,
+            "- #{} {} (plan {}){}",
+            task.id,
+            task.title,
+            task.plan_id,
+            hold_marker(task.hold_reason.as_deref())
+        )
+        .expect("writing to String cannot fail");
+    }
+    if more > 0 {
+        writeln!(output, "- … +{more} more (use `ptrack task list`)")
+            .expect("writing to String cannot fail");
     }
     output.push('\n');
 }
@@ -268,15 +325,17 @@ fn write_inventory(output: &mut String, counts: Counts) {
     output.push_str("\n## Inventory\n");
     writeln!(
         output,
-        "{} milestones ({} done) · {} plans ({} done) · {} tasks ({} done · {} blocked · {} open) · {} issues ({} open) · {} notes\n",
+        "{} milestones ({} done) · {} plans ({} done{}) · {} tasks ({} done · {} blocked · {} open{}) · {} issues ({} open) · {} notes\n",
         counts.milestones,
         counts.milestones_done,
         counts.plans,
         counts.plans_done,
+        on_hold_clause(counts.plans_on_hold),
         counts.tasks,
         counts.tasks_done,
         counts.tasks_blocked,
         counts.tasks_open,
+        on_hold_clause(counts.tasks_on_hold),
         counts.issues,
         counts.issues_open,
         counts.notes
@@ -287,6 +346,24 @@ fn write_inventory(output: &mut String, counts: Counts) {
          `ptrack task show <id>` · `ptrack task list --status doing,blocked` · `ptrack issue list` · \
          `ptrack note list` · `ptrack search <term>` · `ptrack board`\n",
     );
+}
+
+/// Renders the shared on-hold marker, or nothing when the value is not held.
+///
+/// Every text surface (context digest, plan/task show, CLI lists) appends this
+/// so one hold looks the same everywhere.
+#[must_use]
+pub fn hold_marker(reason: Option<&str>) -> String {
+    reason.map_or_else(String::new, |reason| format!(" [on hold: {reason}]"))
+}
+
+/// Renders the ` · N on hold` inventory clause, or nothing when none are held.
+fn on_hold_clause(count: usize) -> String {
+    if count == 0 {
+        String::new()
+    } else {
+        format!(" · {count} on hold")
+    }
 }
 
 pub(crate) fn issue_line(issue: &Issue) -> IssueLine {
@@ -305,6 +382,7 @@ pub(crate) fn task_line(task: &Task) -> TaskLine {
         plan_id: task.plan_id,
         title: task.title.clone(),
         status: task.status.as_str().to_owned(),
+        hold_reason: task.hold_reason.clone(),
     }
 }
 

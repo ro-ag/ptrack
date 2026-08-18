@@ -93,14 +93,31 @@ fn snapshot_indexes_filters_recent_notes_and_counts() {
             milestones_done: 0,
             plans: 2,
             plans_done: 1,
+            plans_on_hold: 0,
             tasks: 4,
             tasks_done: 1,
             tasks_blocked: 1,
             tasks_open: 3,
+            tasks_on_hold: 0,
             issues: 2,
             issues_open: 1,
             commits: 1,
             notes: 3,
         }
     );
+}
+
+#[test]
+fn hold_counts_are_orthogonal_to_every_status_total() {
+    let mut snapshot = snapshot();
+    // A held doing task and a held done plan: both keep their status totals.
+    snapshot.tasks[1].hold_reason = Some("waiting on review".to_owned());
+    snapshot.plans[0].hold_reason = Some("paused".to_owned());
+    let counts = snapshot.counts();
+
+    assert_eq!(counts.tasks_on_hold, 1);
+    assert_eq!(counts.plans_on_hold, 1);
+    assert_eq!(counts.tasks_done, 1);
+    assert_eq!(counts.tasks_open, 3);
+    assert_eq!(counts.plans_done, 1);
 }

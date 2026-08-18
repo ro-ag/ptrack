@@ -1,6 +1,6 @@
 use crate::{
     CapabilityAudit, CapabilityKind, Digest32, MAX_HOLD_REASON_BYTES, MemoryKind, Meta,
-    NativeRecord, Note, NoteTarget, PlanStatus, TaskStatus, Timestamp, Validate,
+    NativeRecord, Note, NoteTarget, PlanStatus, TaskStatus, Timestamp, Validate, check_hold_reason,
 };
 
 use super::codec_test::valid_capability;
@@ -198,4 +198,32 @@ fn hold_reason_is_bounded_single_line_text_when_set() {
         task.validate().expect_err("blank hold reason").field(),
         "task.hold_reason"
     );
+}
+
+#[test]
+fn the_input_boundary_check_agrees_with_the_record_validator() {
+    assert_eq!(check_hold_reason("waiting on review"), Ok(()));
+    assert_eq!(
+        check_hold_reason("   "),
+        Err("the hold reason cannot be blank".to_owned())
+    );
+    assert_eq!(
+        check_hold_reason("a\nb"),
+        Err("the hold reason must be one line without control characters".to_owned())
+    );
+    assert_eq!(
+        check_hold_reason(&"x".repeat(MAX_HOLD_REASON_BYTES + 1)),
+        Err(format!(
+            "the hold reason is {} bytes; the limit is {MAX_HOLD_REASON_BYTES}",
+            MAX_HOLD_REASON_BYTES + 1
+        ))
+    );
+
+    // Anything the boundary accepts must also survive the record validator.
+    let mut plan = super::test_support::plan(1, "p", PlanStatus::Active, 0, 0);
+    for reason in ["ok", &"x".repeat(MAX_HOLD_REASON_BYTES), "still ok"] {
+        assert_eq!(check_hold_reason(reason), Ok(()));
+        plan.hold_reason = Some(reason.to_owned());
+        assert!(plan.validate().is_ok());
+    }
 }

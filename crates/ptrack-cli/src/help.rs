@@ -172,8 +172,10 @@ const PLAN_CHILDREN: &[Child] = &[
         "Create a new active plan (optionally under a milestone)",
     ),
     child("done", "Mark a plan done"),
+    child("hold", "Put a plan on hold with a reason"),
     child("list", "List plans"),
     child("rename", "Rename a plan"),
+    child("resume", "Take a plan off hold"),
     child("show", "Show a plan with its tasks and notes"),
     child("use", "Set the active plan"),
 ];
@@ -185,12 +187,14 @@ const TASK_CHILDREN: &[Child] = &[
     child("block", "Mark a task blocked"),
     child("convert", "Convert a task into a plan"),
     child("done", "Mark a task done"),
+    child("hold", "Put a task on hold with a reason"),
     child(
         "list",
         "List tasks (all, or filtered by --plan and/or --status)",
     ),
     child("move", "Move a task to another plan"),
     child("rename", "Rename a task"),
+    child("resume", "Take a task off hold"),
     child("show", "Show a task with its plan and notes"),
     child("start", "Mark a task in progress (doing)"),
 ];
@@ -504,6 +508,16 @@ fn plan_leaf(name: &str) -> Spec {
         ),
         "done" => leaf_spec("plan done <id>", "Mark a plan done", HELP_ONLY),
         "use" => leaf_spec("plan use <id>", "Set the active plan", HELP_ONLY),
+        "hold" => leaf_spec(
+            "plan hold <id> <reason...>",
+            "Put a plan on hold with a reason (keeps its status)",
+            HELP_ONLY,
+        ),
+        "resume" => leaf_spec(
+            "plan resume <id>",
+            "Take a plan off hold (restores its status)",
+            HELP_ONLY,
+        ),
         _ => leaf_spec("plan rename <id> <title...>", "Rename a plan", HELP_ONLY),
     }
 }
@@ -546,6 +560,16 @@ fn task_leaf(name: &str) -> Spec {
         ),
         "done" => leaf_spec("task done <id>", "Mark a task done", HELP_ONLY),
         "block" => leaf_spec("task block <id>", "Mark a task blocked", HELP_ONLY),
+        "hold" => leaf_spec(
+            "task hold <id> <reason...>",
+            "Put a task on hold with a reason (keeps its status)",
+            HELP_ONLY,
+        ),
+        "resume" => leaf_spec(
+            "task resume <id>",
+            "Take a task off hold (restores its status)",
+            HELP_ONLY,
+        ),
         "rename" => leaf_spec("task rename <id> <title...>", "Rename a task", HELP_ONLY),
         "move" => leaf_spec(
             "task move <id> --plan <plan>",
@@ -807,9 +831,12 @@ fn group_children(name: &str) -> Option<&'static [&'static str]> {
     match name {
         "goal" | "summary" => Some(&["set", "show"]),
         "milestone" => Some(&["add", "done", "due", "list", "open", "rename", "show"]),
-        "plan" => Some(&["add", "done", "list", "rename", "show", "use"]),
+        "plan" => Some(&[
+            "add", "done", "hold", "list", "rename", "resume", "show", "use",
+        ]),
         "task" => Some(&[
-            "add", "block", "convert", "done", "list", "move", "rename", "show", "start",
+            "add", "block", "convert", "done", "hold", "list", "move", "rename", "resume", "show",
+            "start",
         ]),
         "issue" => Some(&["add", "close", "list", "open", "rename", "severity", "show"]),
         "note" => Some(&["add", "list"]),

@@ -3,7 +3,7 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ptrack_capability::{BrokerConfig, BrokerServer, BrokerServerConfig, McpCancellation};
-use ptrack_core::PlanStatus;
+use ptrack_core::{PlanStatus, TaskStatus};
 use ptrack_store::{ActiveBinding, GlobalStore, PinnedProjectDirectory, ProjectStore, StoreKind};
 
 use crate::{
@@ -109,6 +109,94 @@ fn operations_reopen_and_drop_the_store() {
         application.snapshot().expect("reload").plans[0].status,
         PlanStatus::Done
     );
+}
+
+#[test]
+fn hold_mutations_reach_the_store_and_keep_the_underlying_status() {
+    let directory = TestDirectory::new("hold");
+    let (mut application, _) = configured(&directory, true);
+    let MutationResult::Plan(plan) = application
+        .mutate(Mutation::AddPlan {
+            title: "one".to_owned(),
+            milestone_id: 0,
+        })
+        .expect("add plan")
+    else {
+        panic!("wrong mutation result");
+    };
+    let MutationResult::Task(task) = application
+        .mutate(Mutation::AddTask {
+            plan_id: plan.id,
+            title: "work".to_owned(),
+        })
+        .expect("add task")
+    else {
+        panic!("wrong mutation result");
+    };
+
+    application
+        .mutate(Mutation::SetTaskStatus {
+            id: task.id,
+            status: TaskStatus::Doing,
+        })
+        .expect("start task");
+    application
+        .mutate(Mutation::SetTaskHold {
+            id: task.id,
+            reason: Some("waiting on review".to_owned()),
+        })
+        .expect("hold task");
+    application
+        .mutate(Mutation::SetPlanHold {
+            id: plan.id,
+            reason: Some("paused".to_owned()),
+        })
+        .expect("hold plan");
+
+    let snapshot = application.snapshot().expect("snapshot");
+    assert_eq!(
+        snapshot.tasks[0].hold_reason.as_deref(),
+        Some("waiting on review")
+    );
+    assert_eq!(snapshot.tasks[0].status, TaskStatus::Doing);
+    assert_eq!(snapshot.plans[0].hold_reason.as_deref(), Some("paused"));
+    assert_eq!(snapshot.plans[0].status, PlanStatus::Active);
+
+    application
+        .mutate(Mutation::SetTaskStatus {
+            id: task.id,
+            status: TaskStatus::Done,
+        })
+        .expect("finish task");
+    let error = application
+        .mutate(Mutation::SetTaskHold {
+            id: task.id,
+            reason: Some("too late".to_owned()),
+        })
+        .expect_err("a done task cannot be put on hold");
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "invalid hold mutation: task #{} is done and cannot be put on hold",
+            task.id
+        )
+    );
+
+    application
+        .mutate(Mutation::SetTaskHold {
+            id: task.id,
+            reason: None,
+        })
+        .expect("resume task");
+    application
+        .mutate(Mutation::SetPlanHold {
+            id: plan.id,
+            reason: None,
+        })
+        .expect("resume plan");
+    let snapshot = application.snapshot().expect("snapshot");
+    assert!(snapshot.tasks[0].hold_reason.is_none());
+    assert!(snapshot.plans[0].hold_reason.is_none());
 }
 
 #[test]

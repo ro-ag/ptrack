@@ -128,6 +128,11 @@ impl ProjectSnapshot {
                 .iter()
                 .filter(|plan| plan.status == PlanStatus::Done)
                 .count(),
+            plans_on_hold: self
+                .plans
+                .iter()
+                .filter(|plan| plan.hold_reason.is_some())
+                .count(),
             tasks: self.tasks.len(),
             tasks_done: self
                 .tasks
@@ -143,6 +148,11 @@ impl ProjectSnapshot {
                 .tasks
                 .iter()
                 .filter(|task| task.status.is_open())
+                .count(),
+            tasks_on_hold: self
+                .tasks
+                .iter()
+                .filter(|task| task.hold_reason.is_some())
                 .count(),
             issues: self.issues.len(),
             issues_open: self

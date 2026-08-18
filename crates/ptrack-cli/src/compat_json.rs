@@ -107,6 +107,7 @@ pub struct PlanRow<'a> {
     pub title: &'a str,
     pub status: &'a str,
     pub active: bool,
+    pub hold_reason: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -115,6 +116,7 @@ pub struct TaskRow<'a> {
     pub plan_id: u64,
     pub title: &'a str,
     pub status: &'a str,
+    pub hold_reason: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -137,6 +139,8 @@ pub struct StatusJson<'a> {
     pub doing: usize,
     pub done: usize,
     pub blocked: usize,
+    /// Held tasks; orthogonal to the status totals above.
+    pub on_hold: usize,
 }
 
 #[derive(Serialize)]
@@ -145,6 +149,7 @@ struct TaskLineJson<'a> {
     plan_id: u64,
     title: &'a str,
     status: &'a str,
+    hold_reason: Option<&'a str>,
 }
 
 impl<'a> From<&'a TaskLine> for TaskLineJson<'a> {
@@ -154,6 +159,7 @@ impl<'a> From<&'a TaskLine> for TaskLineJson<'a> {
             plan_id: value.plan_id,
             title: &value.title,
             status: &value.status,
+            hold_reason: value.hold_reason.as_deref(),
         }
     }
 }
@@ -206,6 +212,7 @@ struct PlanRefJson<'a> {
     id: u64,
     title: &'a str,
     status: &'a str,
+    hold_reason: Option<&'a str>,
 }
 
 impl<'a> From<&'a PlanRef> for PlanRefJson<'a> {
@@ -214,6 +221,7 @@ impl<'a> From<&'a PlanRef> for PlanRefJson<'a> {
             id: value.id,
             title: &value.title,
             status: &value.status,
+            hold_reason: value.hold_reason.as_deref(),
         }
     }
 }
@@ -240,6 +248,7 @@ struct PlanBriefJson<'a> {
     id: u64,
     title: &'a str,
     open_tasks: Option<Vec<TaskLineJson<'a>>>,
+    hold_reason: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -249,10 +258,12 @@ struct CountsJson {
     MilestonesDone: usize,
     Plans: usize,
     PlansDone: usize,
+    PlansOnHold: usize,
     Tasks: usize,
     TasksDone: usize,
     TasksBlocked: usize,
     TasksOpen: usize,
+    TasksOnHold: usize,
     Issues: usize,
     IssuesOpen: usize,
     Commits: usize,
@@ -266,10 +277,12 @@ impl From<Counts> for CountsJson {
             MilestonesDone: value.milestones_done,
             Plans: value.plans,
             PlansDone: value.plans_done,
+            PlansOnHold: value.plans_on_hold,
             Tasks: value.tasks,
             TasksDone: value.tasks_done,
             TasksBlocked: value.tasks_blocked,
             TasksOpen: value.tasks_open,
+            TasksOnHold: value.tasks_on_hold,
             Issues: value.issues,
             IssuesOpen: value.issues_open,
             Commits: value.commits,
@@ -285,6 +298,8 @@ pub struct DigestJson<'a> {
     active_plan: Option<PlanBriefJson<'a>>,
     blocked: Option<Vec<TaskLineJson<'a>>>,
     blocked_more: usize,
+    on_hold: Option<Vec<TaskLineJson<'a>>>,
+    on_hold_more: usize,
     open_issues: Option<Vec<IssueLineJson<'a>>>,
     open_issues_more: usize,
     recent_notes: Option<Vec<NoteLineJson<'a>>>,
@@ -300,9 +315,12 @@ impl<'a> From<&'a Digest> for DigestJson<'a> {
                 id: plan.id,
                 title: &plan.title,
                 open_tasks: nonempty(plan.open_tasks.iter().map(Into::into).collect()),
+                hold_reason: plan.hold_reason.as_deref(),
             }),
             blocked: nonempty(value.blocked.iter().map(Into::into).collect()),
             blocked_more: value.blocked_more,
+            on_hold: nonempty(value.on_hold.iter().map(Into::into).collect()),
+            on_hold_more: value.on_hold_more,
             open_issues: nonempty(value.open_issues.iter().map(Into::into).collect()),
             open_issues_more: value.open_issues_more,
             recent_notes: nonempty(value.recent_notes.iter().map(Into::into).collect()),

@@ -25,10 +25,12 @@ pub use model::{
     NoteTarget, ParseEnumError, Plan, PlanStatus, ProjectRef, RecordKind, Severity, SshScope,
     StoredDate, Task, TaskStatus, Timestamp,
 };
-pub use report::{Digest, IssueLine, NoteLine, PlanBrief, ReportError, TaskLine, context};
+pub use report::{
+    Digest, IssueLine, NoteLine, PlanBrief, ReportError, TaskLine, context, hold_marker,
+};
 pub use search::{SearchView, search};
 pub use snapshot::ProjectSnapshot;
-pub use validation::{MAX_HOLD_REASON_BYTES, Validate, ValidationError};
+pub use validation::{MAX_HOLD_REASON_BYTES, Validate, ValidationError, check_hold_reason};
 pub use views::{
     Board, IssueShow, MilestoneRef, MilestoneShow, NextView, PlanRef, PlanShow, TaskShow,
     board_for, next, show_issue, show_milestone, show_plan, show_task,

@@ -95,27 +95,70 @@ fn require_nonempty(value: &str, field: &'static str) -> Result<(), ValidationEr
     }
 }
 
+/// The ways a hold reason can be unusable, shared by the record validator and
+/// the input-boundary check so the two can never disagree about what is
+/// storable.
+enum HoldReasonProblem {
+    Blank,
+    TooLong,
+    ControlCharacters,
+}
+
+fn hold_reason_problem(reason: &str) -> Option<HoldReasonProblem> {
+    if reason.trim().is_empty() {
+        return Some(HoldReasonProblem::Blank);
+    }
+    if reason.len() > MAX_HOLD_REASON_BYTES {
+        return Some(HoldReasonProblem::TooLong);
+    }
+    if reason.chars().any(char::is_control) {
+        return Some(HoldReasonProblem::ControlCharacters);
+    }
+    None
+}
+
 /// Rejects a set hold reason that is blank, oversized, or not single-line text.
 fn validate_hold_reason(
     value: Option<&String>,
     field: &'static str,
 ) -> Result<(), ValidationError> {
-    let Some(reason) = value else {
-        return Ok(());
-    };
-    if reason.trim().is_empty() {
-        return Err(ValidationError::new(field, "must be nonblank when set"));
-    }
-    if reason.len() > MAX_HOLD_REASON_BYTES {
-        return Err(ValidationError::new(field, "exceeds the hold reason bound"));
-    }
-    if reason.chars().any(char::is_control) {
-        return Err(ValidationError::new(
+    match value.and_then(|reason| hold_reason_problem(reason)) {
+        None => Ok(()),
+        Some(HoldReasonProblem::Blank) => {
+            Err(ValidationError::new(field, "must be nonblank when set"))
+        }
+        Some(HoldReasonProblem::TooLong) => {
+            Err(ValidationError::new(field, "exceeds the hold reason bound"))
+        }
+        Some(HoldReasonProblem::ControlCharacters) => Err(ValidationError::new(
             field,
             "must be single-line text without control characters",
-        ));
+        )),
     }
-    Ok(())
+}
+
+/// Checks a hold reason typed by a person, before it reaches the store.
+///
+/// The record validator fires deep inside `encode_record`, so without this the
+/// user would see a field-path message such as
+/// `plan.hold_reason must be nonblank when set`. Both checks share
+/// [`hold_reason_problem`], so anything accepted here is storable.
+///
+/// # Errors
+///
+/// Returns a printable sentence when the reason cannot be stored.
+pub fn check_hold_reason(reason: &str) -> Result<(), String> {
+    match hold_reason_problem(reason) {
+        None => Ok(()),
+        Some(HoldReasonProblem::Blank) => Err("the hold reason cannot be blank".to_owned()),
+        Some(HoldReasonProblem::TooLong) => Err(format!(
+            "the hold reason is {} bytes; the limit is {MAX_HOLD_REASON_BYTES}",
+            reason.len()
+        )),
+        Some(HoldReasonProblem::ControlCharacters) => {
+            Err("the hold reason must be one line without control characters".to_owned())
+        }
+    }
 }
 
 impl Validate for Timestamp {

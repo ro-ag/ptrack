@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 
-use crate::report::{ReportError, note_line, notes_markdown, task_line};
+use crate::report::{ReportError, hold_marker, note_line, notes_markdown, task_line};
 use crate::{NoteLine, ProjectSnapshot, TaskLine, TaskStatus};
 
 /// A compact plan reference.
@@ -9,6 +9,8 @@ pub struct PlanRef {
     pub id: u64,
     pub title: String,
     pub status: String,
+    /// Set while the plan is on hold; orthogonal to its status.
+    pub hold_reason: Option<String>,
 }
 
 /// The single most actionable task, or an explanation of its absence.
@@ -22,6 +24,9 @@ pub struct NextView {
 }
 
 /// Returns the first doing task in the active plan, then the first todo task.
+///
+/// Held tasks are never selected, and a held active plan short-circuits with a
+/// message naming the reason instead of picking any task at all.
 ///
 /// # Errors
 ///
@@ -38,7 +43,17 @@ pub fn next(snapshot: &ProjectSnapshot) -> Result<NextView, ReportError> {
     let plan = snapshot
         .plan(snapshot.meta.active_plan)
         .ok_or_else(|| ReportError::not_found("plan", snapshot.meta.active_plan))?;
-    let tasks: Vec<_> = snapshot.tasks_for_plan(plan.id).collect();
+    if let Some(reason) = &plan.hold_reason {
+        return Ok(NextView {
+            task: None,
+            plan_title: plan.title.clone(),
+            message: format!("active plan on hold: {reason}"),
+        });
+    }
+    let tasks: Vec<_> = snapshot
+        .tasks_for_plan(plan.id)
+        .filter(|task| task.hold_reason.is_none())
+        .collect();
     let selected = tasks
         .iter()
         .find(|task| task.status == TaskStatus::Doing)
@@ -100,8 +115,11 @@ impl PlanShow {
     #[must_use]
     pub fn markdown(&self) -> String {
         let mut output = format!(
-            "# Plan #{} {} [{}]\n\n## Tasks\n",
-            self.plan.id, self.plan.title, self.plan.status
+            "# Plan #{} {} [{}]{}\n\n## Tasks\n",
+            self.plan.id,
+            self.plan.title,
+            self.plan.status,
+            hold_marker(self.plan.hold_reason.as_deref())
         );
         if self.tasks.is_empty() {
             output.push_str("_none_\n");
@@ -109,8 +127,11 @@ impl PlanShow {
             for task in &self.tasks {
                 writeln!(
                     &mut output,
-                    "- [{}] #{} {}",
-                    task.status, task.id, task.title
+                    "- [{}] #{} {}{}",
+                    task.status,
+                    task.id,
+                    task.title,
+                    hold_marker(task.hold_reason.as_deref())
                 )
                 .expect("writing to String cannot fail");
             }
@@ -153,12 +174,21 @@ impl TaskShow {
     #[must_use]
     pub fn markdown(&self) -> String {
         let mut output = format!(
-            "# Task #{} {} [{}]\n\n",
-            self.task.id, self.task.title, self.task.status
+            "# Task #{} {} [{}]{}\n\n",
+            self.task.id,
+            self.task.title,
+            self.task.status,
+            hold_marker(self.task.hold_reason.as_deref())
         );
         if let Some(plan) = &self.plan {
-            writeln!(&mut output, "Plan: #{} {}\n", plan.id, plan.title)
-                .expect("writing to String cannot fail");
+            writeln!(
+                &mut output,
+                "Plan: #{} {}{}\n",
+                plan.id,
+                plan.title,
+                hold_marker(plan.hold_reason.as_deref())
+            )
+            .expect("writing to String cannot fail");
         }
         output.push_str("## Notes\n");
         output.push_str(&notes_markdown(&self.notes));
@@ -382,5 +412,6 @@ pub(crate) fn plan_ref(plan: &crate::Plan) -> PlanRef {
         id: plan.id,
         title: plan.title.clone(),
         status: plan.status.as_str().to_owned(),
+        hold_reason: plan.hold_reason.clone(),
     }
 }
