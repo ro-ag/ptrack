@@ -191,6 +191,54 @@ pub fn check_hold_reason(reason: &str) -> Result<(), String> {
     }
 }
 
+/// Maximum accepted UTF-8 bytes in a user identity display name.
+///
+/// A display name is a short single-line label rendered next to claims and
+/// attribution markers; it shares the hold-reason forbidden-character set so
+/// the two single-line rules can never diverge.
+pub const MAX_IDENTITY_NAME_BYTES: usize = 64;
+
+/// The presentation sentinel for records whose actor is unset.
+///
+/// Storage keeps `actor: None`; JSON adapters render this sentinel instead of
+/// null so consumers never disambiguate two "absent" spellings. It can never
+/// collide with a real actor: [`is_identity_id`] rejects it.
+pub const LEGACY_ACTOR: &str = "legacy";
+
+const IDENTITY_ID_ALPHABET: &[u8; 32] = b"0123456789abcdefghjkmnpqrstvwxyz";
+
+/// Reports whether a value is a well-formed 26-character lowercase
+/// Crockford-base32 identity ID (the exact shape `ptrack config set user`
+/// mints, also used by the reserved entity ULID fields).
+#[must_use]
+pub fn is_identity_id(value: &str) -> bool {
+    value.len() == 26
+        && value
+            .bytes()
+            .all(|byte| IDENTITY_ID_ALPHABET.contains(&byte))
+}
+
+/// Checks a display name typed by a person, before it reaches storage.
+///
+/// # Errors
+///
+/// Returns a printable sentence when the name cannot be stored.
+pub fn check_identity_name(name: &str) -> Result<(), String> {
+    if name.trim().is_empty() {
+        return Err("the user name cannot be blank".to_owned());
+    }
+    if name.len() > MAX_IDENTITY_NAME_BYTES {
+        return Err(format!(
+            "the user name is {} bytes; the limit is {MAX_IDENTITY_NAME_BYTES}",
+            name.len()
+        ));
+    }
+    if name.chars().any(is_forbidden_control) {
+        return Err("the user name must be one line without control characters".to_owned());
+    }
+    Ok(())
+}
+
 impl Validate for Timestamp {
     fn validate(&self) -> Result<(), ValidationError> {
         if let Self::Fixed {

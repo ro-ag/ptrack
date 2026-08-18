@@ -31,7 +31,10 @@ pub use report::{
 };
 pub use search::{SearchView, search};
 pub use snapshot::ProjectSnapshot;
-pub use validation::{MAX_HOLD_REASON_BYTES, Validate, ValidationError, check_hold_reason};
+pub use validation::{
+    LEGACY_ACTOR, MAX_HOLD_REASON_BYTES, MAX_IDENTITY_NAME_BYTES, Validate, ValidationError,
+    check_hold_reason, check_identity_name, is_identity_id,
+};
 pub use views::{
     Board, IssueShow, MilestoneRef, MilestoneShow, NextView, PlanRef, PlanShow, TaskShow,
     board_for, next, show_issue, show_milestone, show_plan, show_task,

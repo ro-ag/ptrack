@@ -1,6 +1,7 @@
 use crate::{
-    CapabilityAudit, CapabilityKind, Digest32, MAX_HOLD_REASON_BYTES, MemoryKind, Meta,
-    NativeRecord, Note, NoteTarget, PlanStatus, TaskStatus, Timestamp, Validate, check_hold_reason,
+    CapabilityAudit, CapabilityKind, Digest32, MAX_HOLD_REASON_BYTES, MAX_IDENTITY_NAME_BYTES,
+    MemoryKind, Meta, NativeRecord, Note, NoteTarget, PlanStatus, TaskStatus, Timestamp, Validate,
+    check_hold_reason, check_identity_name, is_identity_id,
 };
 
 use super::codec_test::valid_capability;
@@ -280,4 +281,32 @@ fn the_input_boundary_check_agrees_with_the_record_validator() {
         plan.hold_reason = Some(reason.to_owned());
         assert!(plan.validate().is_ok());
     }
+}
+
+#[test]
+fn identity_ids_are_26_char_lowercase_crockford_base32() {
+    assert!(is_identity_id("01hzvyekq3s7m8w9x0abcdefgh"));
+    assert!(!is_identity_id(""));
+    assert!(!is_identity_id("legacy"));
+    assert!(!is_identity_id("01HZVYEKQ3S7M8W9X0ABCDEFGH")); // uppercase
+    assert!(!is_identity_id("01hzvyekq3s7m8w9x0abcdefg")); // 25 chars
+    assert!(!is_identity_id("01hzvyekq3s7m8w9x0abcdefghi")); // 27 chars
+    assert!(!is_identity_id("01hzvyekq3s7m8w9x0abcdefgi")); // 'i' excluded
+    assert!(!is_identity_id("01hzvyekq3s7m8w9x0abcdefgl")); // 'l' excluded
+    assert!(!is_identity_id("01hzvyekq3s7m8w9x0abcdefgo")); // 'o' excluded
+    assert!(!is_identity_id("01hzvyekq3s7m8w9x0abcdefgu")); // 'u' excluded
+}
+
+#[test]
+fn identity_names_are_bounded_single_line_text() {
+    assert_eq!(check_identity_name("Rodrigo"), Ok(()));
+    assert_eq!(
+        check_identity_name(&"x".repeat(MAX_IDENTITY_NAME_BYTES)),
+        Ok(())
+    );
+    assert!(check_identity_name("").is_err());
+    assert!(check_identity_name("   ").is_err());
+    assert!(check_identity_name(&"x".repeat(MAX_IDENTITY_NAME_BYTES + 1)).is_err());
+    assert!(check_identity_name("two\nlines").is_err());
+    assert!(check_identity_name("bidi\u{202e}trick").is_err());
 }
