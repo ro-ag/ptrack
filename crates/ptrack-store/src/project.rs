@@ -51,7 +51,7 @@ pub struct MemoryWriteResult {
 }
 
 /// What a plan delete destroys (tasks, notes), unlinks (commit records), and
-/// detaches (issues). Returned by both the read-only preview and the delete
+/// touches (issues). Returned by both the read-only preview and the delete
 /// itself so every surface prints the same facts.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlanDeleteSummary {
@@ -60,8 +60,10 @@ pub struct PlanDeleteSummary {
     pub tasks: usize,
     pub notes: usize,
     pub commits_unlinked: usize,
-    /// `(issue id, issue title)` for every issue whose task link is zeroed.
-    pub detached_issues: Vec<(u64, String)>,
+    /// `(issue id, issue title)` for every issue linked to one of the plan's
+    /// tasks: detached by `delete_plan` (task link zeroed, issue survives),
+    /// deleted by `delete_plan_for_move` (issue moves with its task instead).
+    pub issues: Vec<(u64, String)>,
 }
 
 /// Typed, activation-bound project storage.
@@ -684,13 +686,14 @@ impl ProjectStore {
         self.read(|transaction| {
             let plan: Plan =
                 typed::get(transaction, RecordKey::Id(plan_id))?.ok_or(StoreError::NotFound)?;
-            Ok(cascade_summary(
+            Ok(compute_cascade(
                 &plan,
                 &typed::scan::<Task>(transaction)?,
                 &typed::scan::<Note>(transaction)?,
                 &typed::scan::<Issue>(transaction)?,
                 &typed::scan::<Commit>(transaction)?,
-            ))
+            )
+            .summary)
         })
     }
 
@@ -726,26 +729,37 @@ impl ProjectStore {
             let notes = typed::scan_write::<Note>(transaction)?;
             let issues = typed::scan_write::<Issue>(transaction)?;
             let commits = typed::scan_write::<Commit>(transaction)?;
-            let summary = cascade_summary(&plan, &tasks, &notes, &issues, &commits);
-            let task_ids: BTreeSet<u64> = tasks
-                .iter()
-                .filter(|task| task.plan_id == plan_id)
-                .map(|task| task.id)
-                .collect();
-            for task in &tasks {
-                if task.plan_id == plan_id {
-                    transaction.delete(Collection::Tasks, RecordKey::Id(task.id))?;
+            let cascade = compute_cascade(&plan, &tasks, &notes, &issues, &commits);
+
+            for &task_id in &cascade.tasks {
+                transaction.delete(Collection::Tasks, RecordKey::Id(task_id))?;
+            }
+            for &note_id in &cascade.notes {
+                transaction.delete(Collection::Notes, RecordKey::Id(note_id))?;
+            }
+            // A deleted note's memory-writeback receipt would otherwise dangle:
+            // replaying its request_id looks up the note by id and returns a
+            // bare NotFound instead of behaving like a fresh request.
+            let doomed_notes: BTreeSet<u64> = cascade.notes.iter().copied().collect();
+            let mut dangling_receipts = Vec::new();
+            for (key, envelope) in transaction.scan(Collection::MemoryWritebacks)? {
+                let crate::OwnedRecordKey::Bytes(key) = key else {
+                    return Err(StoreError::InvalidManifest(
+                        "memory receipt key is not bytes".to_owned(),
+                    ));
+                };
+                let receipt = typed::decode::<MemoryWritebackRecord>(envelope)?;
+                if receipt.note_id != 0 && doomed_notes.contains(&receipt.note_id) {
+                    dangling_receipts.push(key);
                 }
             }
-            for note in &notes {
-                let dead = (note.target == NoteTarget::Plan && note.target_id == plan_id)
-                    || (note.target == NoteTarget::Task && task_ids.contains(&note.target_id));
-                if dead {
-                    transaction.delete(Collection::Notes, RecordKey::Id(note.id))?;
-                }
+            for key in dangling_receipts {
+                transaction.delete(Collection::MemoryWritebacks, RecordKey::Bytes(&key))?;
             }
+
+            let doomed_issues: BTreeSet<u64> = cascade.issues.iter().copied().collect();
             for mut issue in issues {
-                if task_ids.contains(&issue.task_id) {
+                if doomed_issues.contains(&issue.id) {
                     if detach_issues {
                         issue.task_id = 0;
                         issue.updated_at = now;
@@ -755,17 +769,21 @@ impl ProjectStore {
                     }
                 }
             }
+
+            let doomed_tasks: BTreeSet<u64> = cascade.tasks.iter().copied().collect();
+            let doomed_commits: BTreeSet<u64> = cascade.commits.iter().copied().collect();
             for mut commit in commits {
-                if commit.plan_id == plan_id || task_ids.contains(&commit.task_id) {
+                if doomed_commits.contains(&commit.id) {
                     if commit.plan_id == plan_id {
                         commit.plan_id = 0;
                     }
-                    if task_ids.contains(&commit.task_id) {
+                    if doomed_tasks.contains(&commit.task_id) {
                         commit.task_id = 0;
                     }
                     typed::put(transaction, RecordKey::Id(commit.id), &commit)?;
                 }
             }
+            let summary = cascade.summary;
             let mut meta = required_write::<Meta>(transaction, RecordKey::Singleton)?;
             if meta.active_plan == plan_id {
                 meta.active_plan = 0;
@@ -1808,40 +1826,63 @@ fn plan_status_can_hold(status: PlanStatus) -> bool {
     status == PlanStatus::Active
 }
 
+/// The delete cascade's doomed-record ids, alongside the printed summary —
+/// computed together from one predicate per collection so the write path
+/// never re-derives (and risks desyncing from) what the summary already
+/// decided.
+struct Cascade {
+    summary: PlanDeleteSummary,
+    tasks: Vec<u64>,
+    notes: Vec<u64>,
+    issues: Vec<u64>,
+    commits: Vec<u64>,
+}
+
 /// Computes the delete cascade facts from full-collection scans. Pure so the
 /// read-only preview and the write-path delete can never disagree.
-fn cascade_summary(
+fn compute_cascade(
     plan: &Plan,
     tasks: &[Task],
     notes: &[Note],
     issues: &[Issue],
     commits: &[Commit],
-) -> PlanDeleteSummary {
+) -> Cascade {
     let task_ids: BTreeSet<u64> = tasks
         .iter()
         .filter(|task| task.plan_id == plan.id)
         .map(|task| task.id)
         .collect();
-    PlanDeleteSummary {
-        plan_id: plan.id,
-        title: plan.title.clone(),
-        tasks: task_ids.len(),
-        notes: notes
-            .iter()
-            .filter(|note| {
-                (note.target == NoteTarget::Plan && note.target_id == plan.id)
-                    || (note.target == NoteTarget::Task && task_ids.contains(&note.target_id))
-            })
-            .count(),
-        commits_unlinked: commits
-            .iter()
-            .filter(|commit| commit.plan_id == plan.id || task_ids.contains(&commit.task_id))
-            .count(),
-        detached_issues: issues
-            .iter()
-            .filter(|issue| task_ids.contains(&issue.task_id))
-            .map(|issue| (issue.id, issue.title.clone()))
-            .collect(),
+    let doomed_notes: Vec<u64> = notes
+        .iter()
+        .filter(|note| {
+            (note.target == NoteTarget::Plan && note.target_id == plan.id)
+                || (note.target == NoteTarget::Task && task_ids.contains(&note.target_id))
+        })
+        .map(|note| note.id)
+        .collect();
+    let doomed_issues: Vec<(u64, String)> = issues
+        .iter()
+        .filter(|issue| task_ids.contains(&issue.task_id))
+        .map(|issue| (issue.id, issue.title.clone()))
+        .collect();
+    let doomed_commits: Vec<u64> = commits
+        .iter()
+        .filter(|commit| commit.plan_id == plan.id || task_ids.contains(&commit.task_id))
+        .map(|commit| commit.id)
+        .collect();
+    Cascade {
+        summary: PlanDeleteSummary {
+            plan_id: plan.id,
+            title: plan.title.clone(),
+            tasks: task_ids.len(),
+            notes: doomed_notes.len(),
+            commits_unlinked: doomed_commits.len(),
+            issues: doomed_issues.clone(),
+        },
+        tasks: task_ids.into_iter().collect(),
+        notes: doomed_notes,
+        issues: doomed_issues.into_iter().map(|(id, _)| id).collect(),
+        commits: doomed_commits,
     }
 }
 

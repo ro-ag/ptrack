@@ -2005,10 +2005,7 @@ fn delete_plan_cascades_tasks_notes_detaches_issues_and_zeroes_commits() {
     assert_eq!(summary.tasks, 1);
     assert_eq!(summary.notes, 2);
     assert_eq!(summary.commits_unlinked, 1);
-    assert_eq!(
-        summary.detached_issues,
-        vec![(issue.id, "crash on save".to_owned())]
-    );
+    assert_eq!(summary.issues, vec![(issue.id, "crash on save".to_owned())]);
 
     // Sweep every collection: nothing references the dead plan or its task.
     let snapshot = store.snapshot().unwrap();
@@ -2103,7 +2100,7 @@ fn delete_plan_for_move_deletes_linked_issues_instead_of_detaching() {
 
     let summary = store.delete_plan_for_move(plan.id).unwrap();
     assert_eq!(
-        summary.detached_issues,
+        summary.issues,
         vec![(issue.id, "follows its task".to_owned())]
     );
     let snapshot = store.snapshot().unwrap();
@@ -2128,7 +2125,7 @@ fn plan_delete_preview_counts_without_mutating() {
 
     let summary = store.plan_delete_preview(plan.id).unwrap();
     assert_eq!((summary.tasks, summary.notes), (1, 1));
-    assert_eq!(summary.detached_issues.len(), 1);
+    assert_eq!(summary.issues.len(), 1);
     assert_eq!(summary.commits_unlinked, 0);
     // Nothing changed.
     assert_eq!(store.snapshot().unwrap().tasks.len(), 1);
@@ -2136,4 +2133,111 @@ fn plan_delete_preview_counts_without_mutating() {
         store.plan_delete_preview(9999),
         Err(StoreError::NotFound)
     ));
+}
+
+#[test]
+fn delete_plan_removes_dangling_memory_writeback_receipts() {
+    let temp = Temp::new();
+    let path = temp.path("memory-delete.redb");
+    let store = ProjectStore::create_new_with_clock(
+        &path,
+        binding(&path, StoreKind::Project, "memory-delete-1"),
+        "test",
+        clock(),
+    )
+    .unwrap();
+    let plan = store.add_plan("Doomed", 0).unwrap();
+    let request = MemoryWriteRequest {
+        request_id: "req-memory-1".to_owned(),
+        kind: MemoryKind::Decision,
+        body: "remember this".to_owned(),
+        target: NoteTarget::Plan,
+        target_id: plan.id,
+        plan_id: plan.id,
+        workspace_generation: 7,
+        session_id: "session".to_owned(),
+        association_revision: 1,
+    };
+    let result = store.write_memory(request.clone()).unwrap();
+    assert!(!result.replayed);
+    let note_id = result.note.unwrap().id;
+
+    let receipt_present = |store: &ProjectStore| {
+        store
+            .read(|transaction| {
+                Ok(transaction
+                    .get(
+                        Collection::MemoryWritebacks,
+                        RecordKey::Bytes(b"req-memory-1"),
+                    )?
+                    .is_some())
+            })
+            .unwrap()
+    };
+    assert!(receipt_present(&store));
+
+    store.delete_plan(plan.id).unwrap();
+    assert!(!receipt_present(&store));
+    assert!(
+        store
+            .snapshot()
+            .unwrap()
+            .notes
+            .iter()
+            .all(|note| note.id != note_id)
+    );
+
+    // With the receipt gone, replaying the same request_id is a fresh
+    // request rather than the old bare NotFound from a receipt pointing at
+    // a deleted note: validation reports the plan target itself is gone.
+    assert!(matches!(
+        store.write_memory(request),
+        Err(StoreError::InvalidMemoryWriteback(_))
+    ));
+}
+
+#[test]
+fn delete_plan_leaves_a_surviving_plans_issue_untouched() {
+    let temp = Temp::new();
+    let store = ProjectStore::create_new_with_clock(
+        temp.path("isolation.redb"),
+        binding(
+            &temp.path("isolation.redb"),
+            StoreKind::Project,
+            "isolation-1",
+        ),
+        "test",
+        clock(),
+    )
+    .unwrap();
+    let doomed = store.add_plan("Doomed", 0).unwrap();
+    let survivor = store.add_plan("Survivor", 0).unwrap();
+    let doomed_task = store.add_task(doomed.id, "dies").unwrap();
+    let kept_task = store.add_task(survivor.id, "lives").unwrap();
+    let doomed_issue = store
+        .add_issue("dies with its task", "", None, doomed_task.id)
+        .unwrap();
+    let kept_issue = store
+        .add_issue("belongs to survivor", "", None, kept_task.id)
+        .unwrap();
+
+    let summary = store.delete_plan(doomed.id).unwrap();
+    assert_eq!(
+        summary.issues,
+        vec![(doomed_issue.id, doomed_issue.title.clone())]
+    );
+
+    let snapshot = store.snapshot().unwrap();
+    let untouched = snapshot
+        .issues
+        .iter()
+        .find(|issue| issue.id == kept_issue.id)
+        .unwrap();
+    assert_eq!(untouched.task_id, kept_task.id);
+    let detached = snapshot
+        .issues
+        .iter()
+        .find(|issue| issue.id == doomed_issue.id)
+        .unwrap();
+    assert_eq!(detached.task_id, 0);
 }
