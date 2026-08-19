@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  clampMenuPosition,
   deleteConfirmationText,
   planMenuItems,
   transferSubmitDisabled,
@@ -11,6 +12,26 @@ describe("plan lifecycle menu", () => {
     const items = planMenuItems();
     expect(items.map((item) => item.action)).toEqual(["rename", "move", "copy", "delete"]);
     expect(items.filter((item) => item.destructive).map((item) => item.action)).toEqual(["delete"]);
+  });
+});
+
+describe("context menu position clamp", () => {
+  const menu = { width: 140, height: 110 };
+  const viewport = { width: 1280, height: 800 };
+  it("leaves an in-bounds position alone", () => {
+    expect(clampMenuPosition({ x: 300, y: 200 }, menu, viewport)).toEqual({ x: 300, y: 200 });
+  });
+  it("pulls a bottom-edge menu fully on screen", () => {
+    expect(clampMenuPosition({ x: 110, y: 760 }, menu, viewport)).toEqual({ x: 110, y: 682 });
+  });
+  it("pulls a right-edge menu fully on screen", () => {
+    expect(clampMenuPosition({ x: 1250, y: 200 }, menu, viewport)).toEqual({ x: 1132, y: 200 });
+  });
+  it("never clamps above the top-left margin", () => {
+    expect(clampMenuPosition({ x: 0, y: 0 }, { width: 2000, height: 2000 }, viewport)).toEqual({
+      x: 8,
+      y: 8,
+    });
   });
 });
 
