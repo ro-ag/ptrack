@@ -45,9 +45,18 @@ jobs:
       - name: Install Linux desktop libraries
         shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes libgtk-3-dev libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev librsvg2-dev patchelf
+          # Mirror stalls have hung this step past the job timeout; bound and retry.
+          for attempt in 1 2 3; do
+            if sudo timeout 300 apt-get -o Acquire::Retries=3 update \
+              && sudo timeout 600 apt-get -o Acquire::Retries=3 install --yes \
+                libgtk-3-dev libwebkit2gtk-4.1-dev \
+                libayatana-appindicator3-dev librsvg2-dev patchelf; then
+              exit 0
+            fi
+            echo "apt attempt ${attempt} failed; retrying" >&2
+            sleep 20
+          done
+          exit 1
 
       - name: Install and test frontend
         working-directory: frontend
@@ -141,9 +150,18 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes libgtk-3-dev libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev librsvg2-dev patchelf
+          # Mirror stalls have hung this step past the job timeout; bound and retry.
+          for attempt in 1 2 3; do
+            if sudo timeout 300 apt-get -o Acquire::Retries=3 update \
+              && sudo timeout 600 apt-get -o Acquire::Retries=3 install --yes \
+                libgtk-3-dev libwebkit2gtk-4.1-dev \
+                libayatana-appindicator3-dev librsvg2-dev patchelf; then
+              exit 0
+            fi
+            echo "apt attempt ${attempt} failed; retrying" >&2
+            sleep 20
+          done
+          exit 1
 
       - name: Build Linux binary
         if: runner.os == 'Linux'
