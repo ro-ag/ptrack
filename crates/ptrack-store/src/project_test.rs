@@ -2541,6 +2541,16 @@ fn cross_store_import_copies_subtree_and_leaves_source_unchanged() {
         .unwrap();
     assert_eq!(
         snapshot
+            .notes
+            .iter()
+            .find(|n| n.target == NoteTarget::Task)
+            .unwrap()
+            .target_id,
+        moved_task.id
+    );
+    assert_eq!(snapshot.notes.len(), 1);
+    assert_eq!(
+        snapshot
             .issues
             .iter()
             .filter(|i| i.task_id == moved_task.id)
@@ -2560,6 +2570,8 @@ fn cross_store_import_copies_subtree_and_leaves_source_unchanged() {
     let source_snapshot = source.snapshot().unwrap();
     assert!(source_snapshot.plans.iter().any(|p| p.id == plan.id));
     assert_eq!(source_snapshot.tasks.len(), 1);
+    assert_eq!(source_snapshot.notes.len(), 1);
+    assert_eq!(source_snapshot.issues.len(), 1);
     assert_eq!(source_snapshot.commits.len(), 1);
 }
 
