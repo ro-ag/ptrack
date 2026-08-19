@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-08-19
+
 ### Added
 - Plan lifecycle operations. `ptrack plan delete <id> --force` permanently
   removes a plan and cascades in one transaction: its tasks and every note
@@ -707,7 +709,8 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
-[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.27.0...HEAD
+[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.28.0...HEAD
+[0.28.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.28.0
 [0.27.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.27.0
 [0.26.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.26.0
 [0.25.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.25.0
