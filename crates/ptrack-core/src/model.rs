@@ -366,6 +366,8 @@ pub struct Plan {
     /// RESERVED for P3b: the deterministic same-epoch conflict marker. Never
     /// set by P1/P2 code.
     pub claim_conflict: bool,
+    /// IDs of the plans this plan depends on. Always acyclic and duplicate-free.
+    pub deps: Vec<u64>,
 }
 
 impl Plan {
@@ -428,6 +430,9 @@ pub struct Task {
     /// RESERVED for P3 journals: the entity ULID minted at `share init`. Never
     /// populated by P1/P2 code.
     pub ulid: Option<String>,
+    /// IDs of the tasks this task depends on, possibly in other plans of the
+    /// same project. Always acyclic and duplicate-free.
+    pub deps: Vec<u64>,
 }
 
 impl Task {

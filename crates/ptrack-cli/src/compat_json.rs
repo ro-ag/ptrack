@@ -1,7 +1,7 @@
 use ptrack_core::{
-    Board, Commit, Counts, Digest, Issue, IssueLine, IssueShow, Milestone, MilestoneRef,
-    MilestoneShow, NextView, NoteLine, PlanRef, PlanShow, ProjectRef, SearchView, TaskLine,
-    TaskShow, Timestamp,
+    Board, Commit, Counts, DepSkip, DepWait, Digest, Issue, IssueLine, IssueShow, Milestone,
+    MilestoneRef, MilestoneShow, NextView, NoteLine, PlanRef, PlanShow, ProjectRef, SearchView,
+    TaskLine, TaskShow, Timestamp,
 };
 use serde::Serialize;
 
@@ -125,6 +125,14 @@ pub struct TaskRow<'a> {
     /// Identity that last mutated this record; [`ptrack_core::LEGACY_ACTOR`]
     /// when unset.
     pub actor: &'a str,
+}
+
+/// One `plan dep list` / `task dep list` entry: the record being depended on.
+#[derive(Serialize)]
+pub struct DepRow<'a> {
+    pub id: u64,
+    pub title: &'a str,
+    pub status: &'a str,
 }
 
 #[derive(Serialize)]
@@ -264,6 +272,22 @@ struct PlanBriefJson<'a> {
     title: &'a str,
     open_tasks: Option<Vec<TaskLineJson<'a>>>,
     hold_reason: Option<&'a str>,
+    waiting_on: Option<&'a [u64]>,
+}
+
+#[derive(Serialize)]
+struct DepWaitJson<'a> {
+    task: TaskLineJson<'a>,
+    waiting_on: &'a [u64],
+}
+
+impl<'a> From<&'a DepWait> for DepWaitJson<'a> {
+    fn from(value: &'a DepWait) -> Self {
+        Self {
+            task: (&value.task).into(),
+            waiting_on: &value.waiting_on,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -315,6 +339,8 @@ pub struct DigestJson<'a> {
     blocked_more: usize,
     on_hold: Option<Vec<TaskLineJson<'a>>>,
     on_hold_more: usize,
+    waiting_on_deps: Option<Vec<DepWaitJson<'a>>>,
+    waiting_on_deps_more: usize,
     open_issues: Option<Vec<IssueLineJson<'a>>>,
     open_issues_more: usize,
     recent_notes: Option<Vec<NoteLineJson<'a>>>,
@@ -331,11 +357,14 @@ impl<'a> From<&'a Digest> for DigestJson<'a> {
                 title: &plan.title,
                 open_tasks: nonempty(plan.open_tasks.iter().map(Into::into).collect()),
                 hold_reason: plan.hold_reason.as_deref(),
+                waiting_on: nonempty_ids(&plan.waiting_on),
             }),
             blocked: nonempty(value.blocked.iter().map(Into::into).collect()),
             blocked_more: value.blocked_more,
             on_hold: nonempty(value.on_hold.iter().map(Into::into).collect()),
             on_hold_more: value.on_hold_more,
+            waiting_on_deps: nonempty(value.waiting_on_deps.iter().map(Into::into).collect()),
+            waiting_on_deps_more: value.waiting_on_deps_more,
             open_issues: nonempty(value.open_issues.iter().map(Into::into).collect()),
             open_issues_more: value.open_issues_more,
             recent_notes: nonempty(value.recent_notes.iter().map(Into::into).collect()),
@@ -355,6 +384,28 @@ pub struct NextJson<'a> {
     /// a consumer never parses the reason back out of `message`.
     #[serde(skip_serializing_if = "Option::is_none")]
     plan_hold_reason: Option<&'a str>,
+    /// Present only when the active plan's open plan-deps are why no task was
+    /// picked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plan_waiting_on: Option<&'a [u64]>,
+    /// Present only when candidates were passed over because of open deps.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    skipped: Option<Vec<DepSkipJson<'a>>>,
+}
+
+#[derive(Serialize)]
+struct DepSkipJson<'a> {
+    task_id: u64,
+    waiting_on: &'a [u64],
+}
+
+impl<'a> From<&'a DepSkip> for DepSkipJson<'a> {
+    fn from(value: &'a DepSkip) -> Self {
+        Self {
+            task_id: value.task_id,
+            waiting_on: &value.waiting_on,
+        }
+    }
 }
 
 impl<'a> From<&'a NextView> for NextJson<'a> {
@@ -364,6 +415,8 @@ impl<'a> From<&'a NextView> for NextJson<'a> {
             plan_title: &value.plan_title,
             message: &value.message,
             plan_hold_reason: value.plan_hold_reason.as_deref(),
+            plan_waiting_on: nonempty_ids(&value.plan_waiting_on),
+            skipped: nonempty(value.skipped.iter().map(Into::into).collect()),
         }
     }
 }
@@ -519,6 +572,10 @@ pub fn raw_or_null<T>(values: Vec<T>) -> Option<Vec<T>> {
 
 fn nonempty<T>(values: Vec<T>) -> Option<Vec<T>> {
     (!values.is_empty()).then_some(values)
+}
+
+fn nonempty_ids(ids: &[u64]) -> Option<&[u64]> {
+    (!ids.is_empty()).then_some(ids)
 }
 
 #[must_use]

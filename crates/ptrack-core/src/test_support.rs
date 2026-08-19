@@ -56,6 +56,7 @@ pub(crate) fn plan(
         claim_epoch: 0,
         claim_owner: None,
         ulid: None,
+        deps: Vec::new(),
     }
 }
 
@@ -71,6 +72,7 @@ pub(crate) fn task(id: u64, plan_id: u64, title: &str, status: TaskStatus, order
         hold_reason: None,
         actor: None,
         ulid: None,
+        deps: Vec::new(),
     }
 }
 

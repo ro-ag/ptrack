@@ -5,6 +5,7 @@
 //! policy normalization before enabling or using a decoded capability.
 
 mod codec;
+mod deps;
 mod guide;
 mod model;
 mod report;
@@ -18,6 +19,7 @@ pub use codec::{
     NATIVE_CODEC, NATIVE_PAYLOAD_SCHEMA, decode_record, decode_record_at_schema, encode_record,
     encode_record_at_schema,
 };
+pub use deps::would_create_cycle;
 pub use guide::{GUIDE_BEGIN, GUIDE_END, guide_block, guide_body, render_guide, upsert_guide};
 pub use model::{
     CAPABILITY_MODEL_VERSION, Capability, CapabilityAudit, CapabilityAuditPolicy, CapabilityKind,
@@ -27,8 +29,8 @@ pub use model::{
     StoredDate, Task, TaskStatus, Timestamp,
 };
 pub use report::{
-    Digest, IssueLine, NoteLine, PlanBrief, ReportError, TaskLine, claim_marker, context,
-    hold_marker,
+    DepWait, Digest, IssueLine, NoteLine, PlanBrief, ReportError, TaskLine, claim_marker, context,
+    hold_marker, open_plan_deps, open_task_deps,
 };
 pub use search::{SearchView, search};
 pub use snapshot::ProjectSnapshot;
@@ -37,12 +39,14 @@ pub use validation::{
     check_hold_reason, check_identity_name, is_identity_id,
 };
 pub use views::{
-    Board, IssueShow, MilestoneRef, MilestoneShow, NextView, PlanRef, PlanShow, TaskShow,
+    Board, DepSkip, IssueShow, MilestoneRef, MilestoneShow, NextView, PlanRef, PlanShow, TaskShow,
     board_for, next, show_issue, show_milestone, show_plan, show_task,
 };
 
 #[cfg(test)]
 mod codec_test;
+#[cfg(test)]
+mod deps_test;
 #[cfg(test)]
 mod guide_test;
 #[cfg(test)]

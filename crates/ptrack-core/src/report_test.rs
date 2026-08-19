@@ -126,6 +126,46 @@ fn a_held_active_plan_replaces_the_digest_pick_up_list_with_its_reason() {
 }
 
 #[test]
+fn context_lists_tasks_waiting_on_open_deps_with_their_blockers() {
+    let mut snapshot = snapshot();
+    // Doing task #1 now waits on blocked task #3; openness is computed, so
+    // the stored statuses of both stay exactly as persisted.
+    snapshot.tasks[1].deps = vec![3];
+    let digest = context(&snapshot);
+
+    assert_eq!(digest.waiting_on_deps.len(), 1);
+    assert_eq!(digest.waiting_on_deps[0].task.id, 1);
+    assert_eq!(digest.waiting_on_deps[0].waiting_on, vec![3]);
+    assert_eq!(digest.waiting_on_deps_more, 0);
+    assert_eq!(
+        snapshot.task(1).expect("task exists").status,
+        TaskStatus::Doing
+    );
+
+    assert!(digest.markdown().contains(
+        "## Waiting on dependencies (project-wide)\n\
+         - #1 context command (plan 1) [waiting on #3]\n"
+    ));
+}
+
+#[test]
+fn a_dep_blocked_active_plan_replaces_the_pick_up_list_like_a_hold() {
+    let mut snapshot = snapshot();
+    snapshot.plans[1].status = PlanStatus::Active;
+    snapshot.plans[0].deps = vec![2];
+    let digest = context(&snapshot);
+
+    let brief = digest.active_plan.as_ref().expect("active plan");
+    assert_eq!(brief.waiting_on, vec![2]);
+    assert!(brief.open_tasks.is_empty());
+    assert!(
+        digest
+            .markdown()
+            .contains("### Open tasks\n_plan waiting on #2_\n")
+    );
+}
+
+#[test]
 fn context_bounds_project_wide_lists_and_uses_newest_notes() {
     let tasks = (1..=10)
         .map(|id| {

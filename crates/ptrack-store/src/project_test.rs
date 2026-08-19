@@ -1518,6 +1518,7 @@ fn schema_1_records_read_unheld_upgrade_on_write_and_future_schemas_fail_closed(
         claim_epoch: 0,
         claim_owner: None,
         ulid: None,
+        deps: Vec::new(),
     };
     // An older build stored the schema-1 layout, under payload schema 1.
     let payload =
@@ -2645,4 +2646,166 @@ fn move_crash_window_leaves_a_visible_duplicate_and_loses_nothing() {
             .iter()
             .any(|p| p.id == arrived.id)
     );
+}
+
+fn dep_store(temp: &Temp, name: &str) -> ProjectStore {
+    let path = temp.path(name);
+    ProjectStore::create_new_with_clock(
+        &path,
+        binding(&path, StoreKind::Project, name),
+        "test",
+        clock(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn task_dep_edges_reject_unknown_self_duplicate_and_cycles() {
+    let temp = Temp::new();
+    let store = dep_store(&temp, "task-deps.redb");
+    let plan = store.add_plan("P1", 0).unwrap();
+    let other = store.add_plan("P2", 0).unwrap();
+    let a = store.add_task(plan.id, "a").unwrap();
+    let b = store.add_task(plan.id, "b").unwrap();
+    let c = store.add_task(plan.id, "c").unwrap();
+    let cross = store.add_task(other.id, "cross-plan").unwrap();
+
+    store.add_task_dep(a.id, b.id).unwrap();
+    let duplicate = store.add_task_dep(a.id, b.id).unwrap_err();
+    assert!(
+        duplicate.to_string().contains("already depends"),
+        "{duplicate}"
+    );
+    let selfish = store.add_task_dep(a.id, a.id).unwrap_err();
+    assert!(selfish.to_string().contains("cannot depend on itself"));
+    let unknown_target = store.add_task_dep(a.id, 999).unwrap_err();
+    assert!(
+        unknown_target
+            .to_string()
+            .contains("task #999 does not exist")
+    );
+    let unknown_source = store.add_task_dep(999, a.id).unwrap_err();
+    assert!(
+        unknown_source
+            .to_string()
+            .contains("task #999 does not exist")
+    );
+
+    // Direct cycle: a -> b already exists, so b -> a must be refused.
+    let direct = store.add_task_dep(b.id, a.id).unwrap_err();
+    assert!(direct.to_string().contains("dependency cycle"), "{direct}");
+    // Transitive cycle: a -> b -> c, so c -> a must be refused.
+    store.add_task_dep(b.id, c.id).unwrap();
+    let transitive = store.add_task_dep(c.id, a.id).unwrap_err();
+    assert!(transitive.to_string().contains("dependency cycle"));
+
+    // A cross-plan edge within the project is a normal edge.
+    store.add_task_dep(a.id, cross.id).unwrap();
+    assert_eq!(store.task(a.id).unwrap().deps, vec![b.id, cross.id]);
+
+    store.remove_task_dep(a.id, b.id).unwrap();
+    assert_eq!(store.task(a.id).unwrap().deps, vec![cross.id]);
+    let missing = store.remove_task_dep(a.id, b.id).unwrap_err();
+    assert!(missing.to_string().contains("does not depend on"));
+}
+
+#[test]
+fn plan_dep_edges_reject_unknown_self_duplicate_and_cycles() {
+    let temp = Temp::new();
+    let store = dep_store(&temp, "plan-deps.redb");
+    let p1 = store.add_plan("P1", 0).unwrap();
+    let p2 = store.add_plan("P2", 0).unwrap();
+    let p3 = store.add_plan("P3", 0).unwrap();
+
+    store.add_plan_dep(p2.id, p1.id).unwrap();
+    store.add_plan_dep(p3.id, p2.id).unwrap();
+    let transitive = store.add_plan_dep(p1.id, p3.id).unwrap_err();
+    assert!(transitive.to_string().contains("dependency cycle"));
+    let direct = store.add_plan_dep(p1.id, p2.id).unwrap_err();
+    assert!(direct.to_string().contains("dependency cycle"));
+    let selfish = store.add_plan_dep(p1.id, p1.id).unwrap_err();
+    assert!(selfish.to_string().contains("cannot depend on itself"));
+    let duplicate = store.add_plan_dep(p2.id, p1.id).unwrap_err();
+    assert!(duplicate.to_string().contains("already depends"));
+    let unknown = store.add_plan_dep(p2.id, 999).unwrap_err();
+    assert!(unknown.to_string().contains("plan #999 does not exist"));
+
+    store.remove_plan_dep(p2.id, p1.id).unwrap();
+    assert!(store.plan(p2.id).unwrap().deps.is_empty());
+    let missing = store.remove_plan_dep(p2.id, p1.id).unwrap_err();
+    assert!(missing.to_string().contains("does not depend on"));
+}
+
+#[test]
+fn deleting_a_plan_strips_every_dependency_reference() {
+    let temp = Temp::new();
+    let store = dep_store(&temp, "delete-deps.redb");
+    let doomed = store.add_plan("Doomed", 0).unwrap();
+    let survivor = store.add_plan("Survivor", 0).unwrap();
+    let doomed_task = store.add_task(doomed.id, "dies with the plan").unwrap();
+    let surviving_task = store.add_task(survivor.id, "keeps living").unwrap();
+    store.add_plan_dep(survivor.id, doomed.id).unwrap();
+    store
+        .add_task_dep(surviving_task.id, doomed_task.id)
+        .unwrap();
+
+    store.delete_plan(doomed.id).unwrap();
+    assert!(store.plan(survivor.id).unwrap().deps.is_empty());
+    assert!(store.task(surviving_task.id).unwrap().deps.is_empty());
+}
+
+#[test]
+fn converting_a_task_strips_dependencies_on_it() {
+    let temp = Temp::new();
+    let store = dep_store(&temp, "convert-deps.redb");
+    let plan = store.add_plan("P", 0).unwrap();
+    let promoted = store.add_task(plan.id, "becomes a plan").unwrap();
+    let dependent = store.add_task(plan.id, "depended on it").unwrap();
+    store.add_task_dep(dependent.id, promoted.id).unwrap();
+
+    store.convert_task_to_plan(promoted.id).unwrap();
+    assert!(store.task(dependent.id).unwrap().deps.is_empty());
+}
+
+#[test]
+fn import_remaps_subtree_deps_and_drops_targets_missing_from_the_destination() {
+    let temp = Temp::new();
+    let store = dep_store(&temp, "import-deps.redb");
+    let outside_plan = store.add_plan("Outside", 0).unwrap();
+    let outside_task = store.add_task(outside_plan.id, "outside").unwrap();
+    let plan = store.add_plan("Travelling", 0).unwrap();
+    let t1 = store.add_task(plan.id, "t1").unwrap();
+    let t2 = store.add_task(plan.id, "t2").unwrap();
+    store.add_plan_dep(plan.id, outside_plan.id).unwrap();
+    // t1 -> t2 is a forward reference inside the subtree's export order, and
+    // t2 -> outside leaves the subtree entirely.
+    store.add_task_dep(t1.id, t2.id).unwrap();
+    store.add_task_dep(t2.id, outside_task.id).unwrap();
+    let subtree = store.export_plan_subtree(plan.id).unwrap();
+
+    // Same-store copy: intra-subtree edges remap to the reminted IDs and
+    // edges out of the subtree survive because their targets still exist.
+    let copy = store.import_plan_subtree(&subtree, None).unwrap();
+    assert_eq!(copy.deps, vec![outside_plan.id]);
+    let snapshot = store.snapshot().unwrap();
+    let copied: Vec<_> = snapshot
+        .tasks
+        .iter()
+        .filter(|task| task.plan_id == copy.id)
+        .collect();
+    let copied_t1 = copied.iter().find(|task| task.title == "t1").unwrap();
+    let copied_t2 = copied.iter().find(|task| task.title == "t2").unwrap();
+    assert_eq!(copied_t1.deps, vec![copied_t2.id]);
+    assert_eq!(copied_t2.deps, vec![outside_task.id]);
+
+    // Cross-store move: every edge pointing outside the subtree is dropped,
+    // while intra-subtree edges still remap.
+    let target = dep_store(&temp, "import-deps-target.redb");
+    let landed = target.import_plan_subtree(&subtree, None).unwrap();
+    assert!(landed.deps.is_empty());
+    let landed_tasks = target.snapshot().unwrap().tasks;
+    let landed_t1 = landed_tasks.iter().find(|task| task.title == "t1").unwrap();
+    let landed_t2 = landed_tasks.iter().find(|task| task.title == "t2").unwrap();
+    assert_eq!(landed_t1.deps, vec![landed_t2.id]);
+    assert!(landed_t2.deps.is_empty());
 }

@@ -583,6 +583,14 @@ button:disabled {
   line-height: 1;
 }
 
+/* Chain marker for a plan waiting on open deps; the IDs are the row's tooltip. */
+.sidebar-plan-deps {
+  flex: 0 0 auto;
+  color: var(--info);
+  font-size: 0.6875rem;
+  line-height: 1;
+}
+
 /* Accent marker for the project's active plan. */
 .sidebar-plan-dot {
   width: 7px;
@@ -2515,6 +2523,21 @@ textarea::placeholder {
   border-radius: 999px;
   color: var(--hold);
   background: rgba(var(--hold-rgb), 0.09);
+  padding: 2px 7px;
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+/* Open dependency edges work like hold: the card keeps its lane and gains
+   this badge, and the blocking IDs live in the badge's tooltip. */
+.card-deps {
+  align-self: flex-start;
+  margin-top: var(--space-050);
+  border: 1px solid color-mix(in srgb, var(--info) 40%, transparent);
+  border-radius: 999px;
+  color: var(--info);
+  background: color-mix(in srgb, var(--info) 9%, transparent);
   padding: 2px 7px;
   font-size: 0.625rem;
   font-weight: 700;

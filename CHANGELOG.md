@@ -6,6 +6,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Plan and task dependency edges. `ptrack task dep add <id> <dep-id>` records
+  that a task waits on another task — across plans within the project — and
+  `ptrack plan dep add` does the same between plans. `dep remove` deletes an
+  edge, and `dep list <id>` (with `--json`) shows what a record depends on,
+  each entry marked open or done. Self-dependencies, duplicates, unknown
+  targets, and cycles are refused with a clear error. `ptrack next` now skips
+  tasks whose dependencies are still open and says why (`skipped: #1 (waiting
+  on #3)`, or `active plan waiting on #2` when the plan itself waits), and
+  `ptrack context` gains a project-wide "Waiting on dependencies" section.
+  A dependency never rewrites the dependent's status: openness is computed at
+  read time, so holding or blocking a target changes nothing on the records
+  that wait on it. Deleting a plan or task strips its ID from every dependency
+  list; plan move and copy remap dependencies inside the moved subtree and
+  drop edges whose target stays behind. The Desktop GUI marks cards and
+  sidebar plans waiting on open dependencies with a ⛓ badge (the blocking IDs
+  are the tooltip), the TUI board prefixes such cards with ⛓, and the TUI item
+  views list each dependency as open or done. Payload schema bumps 3 → 4:
+  older databases read fine and upgrade on their next write.
+
 ## [0.28.1] - 2026-08-19
 
 ### Fixed

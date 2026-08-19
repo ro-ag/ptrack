@@ -19,9 +19,9 @@ use ptrack_core::{
 };
 
 use crate::compat_json::{
-    BoardJson, CommitJson, ConfigUserJson, DigestJson, IssueJson, IssueShowJson, MilestoneJson,
-    MilestoneShowJson, NextJson, NoteRow, PlanRow, PlanShowJson, ProjectJson, SearchJson,
-    StatusJson, TaskRow, TaskShowJson, raw_or_null, timestamp,
+    BoardJson, CommitJson, ConfigUserJson, DepRow, DigestJson, IssueJson, IssueShowJson,
+    MilestoneJson, MilestoneShowJson, NextJson, NoteRow, PlanRow, PlanShowJson, ProjectJson,
+    SearchJson, StatusJson, TaskRow, TaskShowJson, raw_or_null, timestamp,
 };
 use crate::error::CliError;
 use crate::output;
@@ -109,6 +109,8 @@ fn dispatch(
         ["summary", "show"] => show_meta(true, application, io),
         ["summary", "set"] => set_meta(true, leaf, application),
         ["milestone", command] => milestone(command, leaf, application, io),
+        ["plan", "dep", command] => plan_dep(command, leaf, application, io),
+        ["task", "dep", command] => task_dep(command, leaf, application, io),
         ["plan", command] => plan(command, leaf, application, io),
         ["task", command] => task(command, leaf, application, io),
         ["issue", command] => issue(command, leaf, application, io),
@@ -552,6 +554,137 @@ fn plan(
             )?;
         }
         _ => return Err(CliError::message("internal plan dispatch mismatch")),
+    }
+    Ok(RunOutcome::ExitSuccess)
+}
+
+fn plan_dep(
+    command: &str,
+    matches: &ArgMatches,
+    application: &mut dyn ApplicationPort,
+    io: &mut Io<'_>,
+) -> Result<RunOutcome, CliError> {
+    match command {
+        "add" | "remove" => {
+            let args = values(matches, "values");
+            let id = parse_u64(&args[0])?;
+            let dep_id = parse_u64(&args[1])?;
+            let mutation = if command == "add" {
+                Mutation::AddPlanDep { id, dep_id }
+            } else {
+                Mutation::RemovePlanDep { id, dep_id }
+            };
+            expect_none(application.mutate(mutation).map_err(claim_error)?)?;
+            if command == "add" {
+                output::line(
+                    io.stdout,
+                    format_args!("plan #{id} depends on plan #{dep_id}"),
+                )?;
+            } else {
+                output::line(
+                    io.stdout,
+                    format_args!("plan #{id} no longer depends on plan #{dep_id}"),
+                )?;
+            }
+        }
+        "list" => {
+            let id = parse_u64(first(matches, "id")?)?;
+            let snapshot = application.snapshot()?;
+            let plan = snapshot
+                .plan(id)
+                .ok_or_else(|| CliError::message("not found"))?;
+            let deps: Vec<_> = plan
+                .deps
+                .iter()
+                .filter_map(|dep| snapshot.plan(*dep))
+                .collect();
+            if matches.get_flag("json") {
+                let rows: Vec<_> = deps
+                    .iter()
+                    .map(|dep| DepRow {
+                        id: dep.id,
+                        title: &dep.title,
+                        status: dep.status.as_str(),
+                    })
+                    .collect();
+                output::json(io.stdout, &rows)?;
+            } else {
+                for dep in deps {
+                    output::line(
+                        io.stdout,
+                        format_args!("#{} [{}] {}", dep.id, dep.status, dep.title),
+                    )?;
+                }
+            }
+        }
+        _ => return Err(CliError::message("internal plan dep dispatch mismatch")),
+    }
+    Ok(RunOutcome::ExitSuccess)
+}
+
+fn task_dep(
+    command: &str,
+    matches: &ArgMatches,
+    application: &mut dyn ApplicationPort,
+    io: &mut Io<'_>,
+) -> Result<RunOutcome, CliError> {
+    match command {
+        "add" | "remove" => {
+            let args = values(matches, "values");
+            let id = parse_u64(&args[0])?;
+            let dep_id = parse_u64(&args[1])?;
+            let mutation = if command == "add" {
+                Mutation::AddTaskDep { id, dep_id }
+            } else {
+                Mutation::RemoveTaskDep { id, dep_id }
+            };
+            expect_none(application.mutate(mutation).map_err(claim_error)?)?;
+            if command == "add" {
+                output::line(
+                    io.stdout,
+                    format_args!("task #{id} depends on task #{dep_id}"),
+                )?;
+            } else {
+                output::line(
+                    io.stdout,
+                    format_args!("task #{id} no longer depends on task #{dep_id}"),
+                )?;
+            }
+        }
+        "list" => {
+            let id = parse_u64(first(matches, "id")?)?;
+            let snapshot = application.snapshot()?;
+            let task = snapshot
+                .task(id)
+                .ok_or_else(|| CliError::message("not found"))?;
+            let deps: Vec<_> = task
+                .deps
+                .iter()
+                .filter_map(|dep| snapshot.task(*dep))
+                .collect();
+            if matches.get_flag("json") {
+                let rows: Vec<_> = deps
+                    .iter()
+                    .map(|dep| DepRow {
+                        id: dep.id,
+                        title: &dep.title,
+                        status: dep.status.as_str(),
+                    })
+                    .collect();
+                output::json(io.stdout, &rows)?;
+            } else {
+                for dep in deps {
+                    output::line(
+                        io.stdout,
+                        format_args!(
+                            "#{} [{}] {} (plan {})",
+                            dep.id, dep.status, dep.title, dep.plan_id
+                        ),
+                    )?;
+                }
+            }
+        }
+        _ => return Err(CliError::message("internal task dep dispatch mismatch")),
     }
     Ok(RunOutcome::ExitSuccess)
 }

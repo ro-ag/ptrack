@@ -1,7 +1,7 @@
 use std::fmt;
 use std::fmt::Write as _;
 
-use crate::{Counts, Issue, Note, ProjectSnapshot, Task, TaskStatus};
+use crate::{Counts, Issue, Note, Plan, PlanStatus, ProjectSnapshot, Task, TaskStatus};
 
 const CONTEXT_RECENT_NOTES: usize = 5;
 /// Shared cap for every project-wide task list in the digest (blocked, on hold).
@@ -57,10 +57,20 @@ pub struct Digest {
     /// Held tasks project-wide, kept out of the active plan's pick-up list.
     pub on_hold: Vec<TaskLine>,
     pub on_hold_more: usize,
+    /// Open, unheld tasks waiting only on open dependencies, with the blockers.
+    pub waiting_on_deps: Vec<DepWait>,
+    pub waiting_on_deps_more: usize,
     pub open_issues: Vec<IssueLine>,
     pub open_issues_more: usize,
     pub recent_notes: Vec<NoteLine>,
     pub inventory: Counts,
+}
+
+/// A task plus the open dependency IDs still blocking it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DepWait {
+    pub task: TaskLine,
+    pub waiting_on: Vec<u64>,
 }
 
 /// A compact issue reference.
@@ -81,6 +91,9 @@ pub struct PlanBrief {
     pub open_tasks: Vec<TaskLine>,
     /// Set while the plan itself is on hold; orthogonal to its status.
     pub hold_reason: Option<String>,
+    /// Open plan IDs this plan waits on; nonempty empties `open_tasks`,
+    /// matching `next`, which refuses to pick from a dep-blocked plan.
+    pub waiting_on: Vec<u64>,
 }
 
 /// A compact task reference.
@@ -111,16 +124,16 @@ pub fn context(snapshot: &ProjectSnapshot) -> Digest {
     let active_plan = if snapshot.meta.active_plan == 0 {
         None
     } else {
-        snapshot
-            .plan(snapshot.meta.active_plan)
-            .map(|plan| PlanBrief {
+        snapshot.plan(snapshot.meta.active_plan).map(|plan| {
+            let waiting_on = open_plan_deps(snapshot, plan);
+            PlanBrief {
                 id: plan.id,
                 title: plan.title.clone(),
                 // A held task is not something an agent should pick up, so it
                 // leaves this list and appears in the on-hold bucket instead.
-                // A held *plan* empties the list entirely, matching `next`,
-                // which refuses to pick any task out of a held plan.
-                open_tasks: if plan.hold_reason.is_some() {
+                // A held or dep-blocked *plan* empties the list entirely,
+                // matching `next`, which refuses to pick any task out of it.
+                open_tasks: if plan.hold_reason.is_some() || !waiting_on.is_empty() {
                     Vec::new()
                 } else {
                     snapshot
@@ -130,7 +143,9 @@ pub fn context(snapshot: &ProjectSnapshot) -> Digest {
                         .collect()
                 },
                 hold_reason: plan.hold_reason.clone(),
-            })
+                waiting_on,
+            }
+        })
     };
 
     // A held task belongs in the on-hold bucket only: hold is the stronger
@@ -163,6 +178,30 @@ pub fn context(snapshot: &ProjectSnapshot) -> Digest {
         }
     }
 
+    // A held task belongs in the on-hold bucket only, matching the blocked
+    // list above; openness of a dependency is computed here, never written
+    // back to the dependent's stored status.
+    let mut waiting_on_deps = Vec::new();
+    let mut waiting_on_deps_more = 0;
+    for task in snapshot
+        .tasks
+        .iter()
+        .filter(|task| task.status.is_open() && task.hold_reason.is_none())
+    {
+        let waiting_on = open_task_deps(snapshot, task);
+        if waiting_on.is_empty() {
+            continue;
+        }
+        if waiting_on_deps.len() < CONTEXT_LIST_SHOWN {
+            waiting_on_deps.push(DepWait {
+                task: task_line(task),
+                waiting_on,
+            });
+        } else {
+            waiting_on_deps_more += 1;
+        }
+    }
+
     let mut open_issues = Vec::new();
     let mut open_issues_more = 0;
     for issue in snapshot
@@ -185,6 +224,8 @@ pub fn context(snapshot: &ProjectSnapshot) -> Digest {
         blocked_more,
         on_hold,
         on_hold_more,
+        waiting_on_deps,
+        waiting_on_deps_more,
         open_issues,
         open_issues_more,
         recent_notes: snapshot
@@ -210,6 +251,11 @@ impl Digest {
         write_active_plan(&mut output, self.active_plan.as_ref());
         write_blocked(&mut output, &self.blocked, self.blocked_more);
         write_on_hold(&mut output, &self.on_hold, self.on_hold_more);
+        write_waiting_on_deps(
+            &mut output,
+            &self.waiting_on_deps,
+            self.waiting_on_deps_more,
+        );
         write_open_issues(&mut output, &self.open_issues, self.open_issues_more);
         write_recent_notes(&mut output, &self.recent_notes);
         write_inventory(&mut output, self.inventory);
@@ -235,6 +281,10 @@ fn write_active_plan(output: &mut String, plan: Option<&PlanBrief>) {
         // `next` refuses to pick from a held plan, so the digest must not
         // advertise pick-up candidates either.
         writeln!(output, "_plan on hold: {reason}_").expect("writing to String cannot fail");
+    } else if !plan.waiting_on.is_empty() {
+        // Likewise for a plan whose own dependencies are still open.
+        writeln!(output, "_plan waiting on {}_", id_list(&plan.waiting_on))
+            .expect("writing to String cannot fail");
     } else if plan.open_tasks.is_empty() {
         output.push_str("_none_\n");
     } else {
@@ -282,6 +332,29 @@ fn write_on_hold(output: &mut String, tasks: &[TaskLine], more: usize) {
             task.title,
             task.plan_id,
             hold_marker(task.hold_reason.as_deref())
+        )
+        .expect("writing to String cannot fail");
+    }
+    if more > 0 {
+        writeln!(output, "- … +{more} more (use `ptrack task list`)")
+            .expect("writing to String cannot fail");
+    }
+    output.push('\n');
+}
+
+fn write_waiting_on_deps(output: &mut String, entries: &[DepWait], more: usize) {
+    if entries.is_empty() {
+        return;
+    }
+    output.push_str("## Waiting on dependencies (project-wide)\n");
+    for entry in entries {
+        writeln!(
+            output,
+            "- #{} {} (plan {}) [waiting on {}]",
+            entry.task.id,
+            entry.task.title,
+            entry.task.plan_id,
+            id_list(&entry.waiting_on)
         )
         .expect("writing to String cannot fail");
     }
@@ -387,6 +460,48 @@ fn on_hold_clause(count: usize) -> String {
     } else {
         format!(" · {count} on hold")
     }
+}
+
+/// Renders IDs as `#1, #3` for waiting-on markers, shared by every text
+/// surface that names dependency blockers.
+pub(crate) fn id_list(ids: &[u64]) -> String {
+    ids.iter()
+        .map(|id| format!("#{id}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Returns the IDs of `task`'s dependencies that are still open.
+///
+/// Openness is computed here, never propagated: a dependency counts as open
+/// whenever its stored status is anything but done (hold and blocked
+/// included), and the dependent's own stored status is untouched.
+#[must_use]
+pub fn open_task_deps(snapshot: &ProjectSnapshot, task: &Task) -> Vec<u64> {
+    task.deps
+        .iter()
+        .copied()
+        .filter(|&id| {
+            snapshot
+                .task(id)
+                .is_some_and(|dep| dep.status != TaskStatus::Done)
+        })
+        .collect()
+}
+
+/// Returns the IDs of `plan`'s dependencies that are still open, under the
+/// same computed-openness rule as [`open_task_deps`].
+#[must_use]
+pub fn open_plan_deps(snapshot: &ProjectSnapshot, plan: &Plan) -> Vec<u64> {
+    plan.deps
+        .iter()
+        .copied()
+        .filter(|&id| {
+            snapshot
+                .plan(id)
+                .is_some_and(|dep| dep.status != PlanStatus::Done)
+        })
+        .collect()
 }
 
 pub(crate) fn issue_line(issue: &Issue) -> IssueLine {

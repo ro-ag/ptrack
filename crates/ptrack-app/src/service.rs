@@ -176,6 +176,16 @@ pub enum Mutation {
         id: u64,
         title: String,
     },
+    /// Records that plan `id` depends on plan `dep_id`.
+    AddPlanDep {
+        id: u64,
+        dep_id: u64,
+    },
+    /// Removes the plan `id` -> `dep_id` dependency edge.
+    RemovePlanDep {
+        id: u64,
+        dep_id: u64,
+    },
     AddTask {
         plan_id: u64,
         title: String,
@@ -196,6 +206,16 @@ pub enum Mutation {
     SetTaskPlan {
         id: u64,
         plan_id: u64,
+    },
+    /// Records that task `id` depends on task `dep_id`.
+    AddTaskDep {
+        id: u64,
+        dep_id: u64,
+    },
+    /// Removes the task `id` -> `dep_id` dependency edge.
+    RemoveTaskDep {
+        id: u64,
+        dep_id: u64,
     },
     ConvertTaskToPlan(u64),
     AddIssue {
@@ -787,6 +807,14 @@ impl ApplicationPort for LocalApplication {
                     store.set_plan_title(id, title)?;
                     MutationResult::None
                 }
+                Mutation::AddPlanDep { id, dep_id } => {
+                    store.add_plan_dep(id, dep_id)?;
+                    MutationResult::None
+                }
+                Mutation::RemovePlanDep { id, dep_id } => {
+                    store.remove_plan_dep(id, dep_id)?;
+                    MutationResult::None
+                }
                 Mutation::AddTask { plan_id, title } => {
                     MutationResult::Task(store.add_task(plan_id, title)?)
                 }
@@ -804,6 +832,14 @@ impl ApplicationPort for LocalApplication {
                 }
                 Mutation::SetTaskPlan { id, plan_id } => {
                     store.set_task_plan(id, plan_id)?;
+                    MutationResult::None
+                }
+                Mutation::AddTaskDep { id, dep_id } => {
+                    store.add_task_dep(id, dep_id)?;
+                    MutationResult::None
+                }
+                Mutation::RemoveTaskDep { id, dep_id } => {
+                    store.remove_task_dep(id, dep_id)?;
                     MutationResult::None
                 }
                 Mutation::ConvertTaskToPlan(id) => {

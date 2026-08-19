@@ -79,7 +79,8 @@ pub fn root() -> Command {
             .mut_subcommand("copy", |c| {
                 c.arg(positional("id", 1))
                     .args([option("to"), option("as")])
-            }),
+            })
+            .subcommand(dep_group()),
         )
         .subcommand(
             group(
@@ -103,7 +104,8 @@ pub fn root() -> Command {
             .mut_subcommand("move", |c| c.arg(positional("id", 1)).arg(option("plan")))
             .mut_subcommand("convert", |c| c.alias("promote").arg(positional("id", 1)))
             .mut_subcommand("hold", |c| c.arg(positional("values", 2..)))
-            .mut_subcommand("resume", |c| c.arg(positional("id", 1))),
+            .mut_subcommand("resume", |c| c.arg(positional("id", 1)))
+            .subcommand(dep_group()),
         )
         .subcommand(
             group(
@@ -178,6 +180,15 @@ pub fn root() -> Command {
             }),
         )
         .subcommand(leaf("version"))
+}
+
+/// The `dep` subtree shared by `plan` and `task`: add/remove take the two
+/// edge endpoints, list takes the record whose dependencies to print.
+fn dep_group() -> Command {
+    group("dep", &["add", "remove", "list"])
+        .mut_subcommand("add", |c| c.arg(positional("values", 2)))
+        .mut_subcommand("remove", |c| c.arg(positional("values", 2)))
+        .mut_subcommand("list", |c| c.arg(positional("id", 1)).arg(flag("json")))
 }
 
 fn group(name: &'static str, children: &[&'static str]) -> Command {

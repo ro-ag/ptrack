@@ -8,6 +8,7 @@ use ptrack_core::{
     CAPABILITY_MODEL_VERSION, Capability, CapabilityAudit, Commit, Counts, Digest32, Issue,
     IssueStatus, MemoryKind, MemoryWritebackRecord, Meta, Milestone, MilestoneStatus, Note,
     NoteTarget, Plan, PlanStatus, ProjectSnapshot, Severity, Task, TaskStatus, Timestamp,
+    would_create_cycle,
 };
 
 use crate::typed::{self, StoredRecord};
@@ -555,6 +556,7 @@ impl ProjectStore {
                 claim_epoch: 0,
                 claim_owner: None,
                 ulid: None,
+                deps: Vec::new(),
             };
             typed::put(transaction, RecordKey::Id(id), &value)?;
             Ok(value)
@@ -606,6 +608,7 @@ impl ProjectStore {
                 claim_epoch: 0,
                 claim_owner: None,
                 ulid: None,
+                deps: Vec::new(),
             };
             typed::put(transaction, RecordKey::Id(id), &plan)?;
             before_activate()?;
@@ -688,6 +691,65 @@ impl ProjectStore {
             plan.updated_at = now;
             plan.stamp_actor(self.actor_id());
             typed::put(transaction, RecordKey::Id(id), &plan)?;
+            Ok(())
+        })
+    }
+
+    /// Records that `plan_id` depends on `dep_plan_id`. Claim-gated on the
+    /// mutated plan. Rejects an unknown source or target, a self-dependency, a
+    /// duplicate edge, and an edge that would close a dependency cycle.
+    pub fn add_plan_dep(&self, plan_id: u64, dep_plan_id: u64) -> StoreResult<()> {
+        let now = self.clock.now_local();
+        let actor = self.actor_id().map(str::to_owned);
+        self.write(|transaction| {
+            if plan_id == dep_plan_id {
+                return Err(StoreError::InvalidDependency(format!(
+                    "plan #{plan_id} cannot depend on itself"
+                )));
+            }
+            let mut plan = require_dep_record::<Plan>(transaction, plan_id, "plan")?;
+            require_claim_access(transaction, &plan, actor.as_deref())?;
+            require_dep_record::<Plan>(transaction, dep_plan_id, "plan")?;
+            if plan.deps.contains(&dep_plan_id) {
+                return Err(StoreError::InvalidDependency(format!(
+                    "plan #{plan_id} already depends on plan #{dep_plan_id}"
+                )));
+            }
+            let graph: BTreeMap<u64, Vec<u64>> = typed::scan_write::<Plan>(transaction)?
+                .into_iter()
+                .map(|plan| (plan.id, plan.deps))
+                .collect();
+            if would_create_cycle(&graph, plan_id, dep_plan_id) {
+                return Err(StoreError::InvalidDependency(format!(
+                    "plan #{plan_id} depending on plan #{dep_plan_id} would create a \
+                     dependency cycle"
+                )));
+            }
+            plan.deps.push(dep_plan_id);
+            plan.updated_at = now;
+            plan.stamp_actor(actor.as_deref());
+            typed::put(transaction, RecordKey::Id(plan_id), &plan)?;
+            Ok(())
+        })
+    }
+
+    /// Removes the `plan_id` -> `dep_plan_id` dependency edge. Claim-gated on
+    /// the mutated plan. Rejects an unknown source and a missing edge.
+    pub fn remove_plan_dep(&self, plan_id: u64, dep_plan_id: u64) -> StoreResult<()> {
+        let now = self.clock.now_local();
+        let actor = self.actor_id().map(str::to_owned);
+        self.write(|transaction| {
+            let mut plan = require_dep_record::<Plan>(transaction, plan_id, "plan")?;
+            require_claim_access(transaction, &plan, actor.as_deref())?;
+            if !plan.deps.contains(&dep_plan_id) {
+                return Err(StoreError::InvalidDependency(format!(
+                    "plan #{plan_id} does not depend on plan #{dep_plan_id}"
+                )));
+            }
+            plan.deps.retain(|&dep| dep != dep_plan_id);
+            plan.updated_at = now;
+            plan.stamp_actor(actor.as_deref());
+            typed::put(transaction, RecordKey::Id(plan_id), &plan)?;
             Ok(())
         })
     }
@@ -795,6 +857,24 @@ impl ProjectStore {
                     typed::put(transaction, RecordKey::Id(commit.id), &commit)?;
                 }
             }
+            // A deleted record leaves no dangling dependency edges behind:
+            // surviving tasks drop every doomed task, and surviving plans drop
+            // the doomed plan.
+            for mut survivor in typed::scan_write::<Task>(transaction)? {
+                if survivor.deps.iter().any(|dep| doomed_tasks.contains(dep)) {
+                    survivor.deps.retain(|dep| !doomed_tasks.contains(dep));
+                    survivor.updated_at = now;
+                    typed::put(transaction, RecordKey::Id(survivor.id), &survivor)?;
+                }
+            }
+            for mut survivor in typed::scan_write::<Plan>(transaction)? {
+                if survivor.id != plan_id && survivor.deps.contains(&plan_id) {
+                    survivor.deps.retain(|&dep| dep != plan_id);
+                    survivor.updated_at = now;
+                    typed::put(transaction, RecordKey::Id(survivor.id), &survivor)?;
+                }
+            }
+
             let summary = cascade.summary;
             let mut meta = required_write::<Meta>(transaction, RecordKey::Singleton)?;
             if meta.active_plan == plan_id {
@@ -859,6 +939,17 @@ impl ProjectStore {
         let now = self.clock.now_local();
         let actor = self.actor_id().map(str::to_owned);
         self.write(|transaction| {
+            // Dependency targets are kept only when they exist in this store
+            // before the import: a same-store copy keeps its edges, while a
+            // cross-store move drops every edge pointing outside the subtree.
+            let known_plans: BTreeSet<u64> = typed::scan_write::<Plan>(transaction)?
+                .into_iter()
+                .map(|plan| plan.id)
+                .collect();
+            let known_tasks: BTreeSet<u64> = typed::scan_write::<Task>(transaction)?
+                .into_iter()
+                .map(|task| task.id)
+                .collect();
             let order = count_write::<Plan>(transaction)?;
             let plan_id = transaction.next_id(Collection::Plans)?;
             let plan = Plan {
@@ -875,18 +966,39 @@ impl ProjectStore {
                 claim_epoch: 0,
                 claim_owner: None,
                 ulid: None,
+                deps: subtree
+                    .plan
+                    .deps
+                    .iter()
+                    .copied()
+                    .filter(|dep| known_plans.contains(dep))
+                    .collect(),
             };
             typed::put(transaction, RecordKey::Id(plan_id), &plan)?;
             let first_task_order = count_write::<Task>(transaction)?;
+            // IDs are minted for the whole subtree first so a task dependency
+            // on a later subtree task still remaps.
             let mut task_map = BTreeMap::new();
+            for task in &subtree.tasks {
+                task_map.insert(task.id, transaction.next_id(Collection::Tasks)?);
+            }
             for (task_order, task) in (first_task_order..).zip(&subtree.tasks) {
-                let id = transaction.next_id(Collection::Tasks)?;
-                task_map.insert(task.id, id);
+                let id = task_map[&task.id];
                 let mut copy = task.clone();
                 copy.id = id;
                 copy.plan_id = plan_id;
                 copy.order = task_order;
                 copy.ulid = None;
+                copy.deps = task
+                    .deps
+                    .iter()
+                    .filter_map(|dep| {
+                        task_map
+                            .get(dep)
+                            .copied()
+                            .or_else(|| known_tasks.contains(dep).then_some(*dep))
+                    })
+                    .collect();
                 typed::put(transaction, RecordKey::Id(id), &copy)?;
             }
             let mapped_task = |source: u64| -> StoreResult<u64> {
@@ -972,6 +1084,7 @@ impl ProjectStore {
                 hold_reason: None,
                 actor: self.actor_id().map(str::to_owned),
                 ulid: None,
+                deps: Vec::new(),
             };
             typed::put(transaction, RecordKey::Id(id), &value)?;
             Ok(value)
@@ -1027,6 +1140,7 @@ impl ProjectStore {
                 hold_reason: None,
                 actor: self.actor_id().map(str::to_owned),
                 ulid: None,
+                deps: Vec::new(),
             };
             typed::put(transaction, RecordKey::Id(id), &task)?;
             Ok(task)
@@ -1193,6 +1307,69 @@ impl ProjectStore {
         })
     }
 
+    /// Records that `task_id` depends on `dep_task_id`. Cross-plan edges
+    /// within the project are allowed. Claim-gated on the mutated task's
+    /// owning plan. Rejects an unknown source or target, a self-dependency, a
+    /// duplicate edge, and an edge that would close a dependency cycle.
+    pub fn add_task_dep(&self, task_id: u64, dep_task_id: u64) -> StoreResult<()> {
+        let now = self.clock.now_local();
+        let actor = self.actor_id().map(str::to_owned);
+        self.write(|transaction| {
+            if task_id == dep_task_id {
+                return Err(StoreError::InvalidDependency(format!(
+                    "task #{task_id} cannot depend on itself"
+                )));
+            }
+            let mut task = require_dep_record::<Task>(transaction, task_id, "task")?;
+            let plan = required_write::<Plan>(transaction, RecordKey::Id(task.plan_id))?;
+            require_claim_access(transaction, &plan, actor.as_deref())?;
+            require_dep_record::<Task>(transaction, dep_task_id, "task")?;
+            if task.deps.contains(&dep_task_id) {
+                return Err(StoreError::InvalidDependency(format!(
+                    "task #{task_id} already depends on task #{dep_task_id}"
+                )));
+            }
+            let graph: BTreeMap<u64, Vec<u64>> = typed::scan_write::<Task>(transaction)?
+                .into_iter()
+                .map(|task| (task.id, task.deps))
+                .collect();
+            if would_create_cycle(&graph, task_id, dep_task_id) {
+                return Err(StoreError::InvalidDependency(format!(
+                    "task #{task_id} depending on task #{dep_task_id} would create a \
+                     dependency cycle"
+                )));
+            }
+            task.deps.push(dep_task_id);
+            task.updated_at = now;
+            task.stamp_actor(actor.as_deref());
+            typed::put(transaction, RecordKey::Id(task_id), &task)?;
+            Ok(())
+        })
+    }
+
+    /// Removes the `task_id` -> `dep_task_id` dependency edge. Claim-gated on
+    /// the mutated task's owning plan. Rejects an unknown source and a missing
+    /// edge.
+    pub fn remove_task_dep(&self, task_id: u64, dep_task_id: u64) -> StoreResult<()> {
+        let now = self.clock.now_local();
+        let actor = self.actor_id().map(str::to_owned);
+        self.write(|transaction| {
+            let mut task = require_dep_record::<Task>(transaction, task_id, "task")?;
+            let plan = required_write::<Plan>(transaction, RecordKey::Id(task.plan_id))?;
+            require_claim_access(transaction, &plan, actor.as_deref())?;
+            if !task.deps.contains(&dep_task_id) {
+                return Err(StoreError::InvalidDependency(format!(
+                    "task #{task_id} does not depend on task #{dep_task_id}"
+                )));
+            }
+            task.deps.retain(|&dep| dep != dep_task_id);
+            task.updated_at = now;
+            task.stamp_actor(actor.as_deref());
+            typed::put(transaction, RecordKey::Id(task_id), &task)?;
+            Ok(())
+        })
+    }
+
     pub fn convert_task_to_plan(&self, id: u64) -> StoreResult<Plan> {
         let now = self.clock.now_local();
         self.write(|transaction| {
@@ -1229,6 +1406,7 @@ impl ProjectStore {
                     .then(|| self.actor_id().map(str::to_owned))
                     .flatten(),
                 ulid: None,
+                deps: Vec::new(),
             };
             typed::put(transaction, RecordKey::Id(plan_id), &plan)?;
             for mut note in typed::scan_write::<Note>(transaction)? {
@@ -1250,6 +1428,15 @@ impl ProjectStore {
                     issue.task_id = 0;
                     issue.updated_at = now;
                     typed::put(transaction, RecordKey::Id(issue.id), &issue)?;
+                }
+            }
+            // The converted task is gone: no surviving task may still depend
+            // on it.
+            for mut survivor in typed::scan_write::<Task>(transaction)? {
+                if survivor.deps.contains(&id) {
+                    survivor.deps.retain(|&dep| dep != id);
+                    survivor.updated_at = now;
+                    typed::put(transaction, RecordKey::Id(survivor.id), &survivor)?;
                 }
             }
             transaction.delete(Collection::Tasks, RecordKey::Id(id))?;
@@ -1946,6 +2133,17 @@ fn required_write<R: StoredRecord>(
 
 fn require_id_write<R: StoredRecord>(transaction: &WriteTransaction, id: u64) -> StoreResult<()> {
     required_write::<R>(transaction, RecordKey::Id(id)).map(|_| ())
+}
+
+/// Loads one endpoint of a dependency edge, naming the missing record in the
+/// refusal instead of returning a bare not-found.
+fn require_dep_record<R: StoredRecord>(
+    transaction: &WriteTransaction,
+    id: u64,
+    kind: &str,
+) -> StoreResult<R> {
+    typed::get_write(transaction, RecordKey::Id(id))?
+        .ok_or_else(|| StoreError::InvalidDependency(format!("{kind} #{id} does not exist")))
 }
 
 fn count_write<R: StoredRecord>(transaction: &WriteTransaction) -> StoreResult<i64> {

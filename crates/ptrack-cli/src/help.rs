@@ -183,6 +183,7 @@ const PLAN_CHILDREN: &[Child] = &[
         "delete",
         "Permanently delete a plan and its tasks and notes",
     ),
+    child("dep", "Manage plan dependency edges"),
     child("done", "Mark a plan done"),
     child("hold", "Put a plan on hold with a reason"),
     child("list", "List plans"),
@@ -200,6 +201,7 @@ const TASK_CHILDREN: &[Child] = &[
     ),
     child("block", "Mark a task blocked"),
     child("convert", "Convert a task into a plan"),
+    child("dep", "Manage task dependency edges"),
     child("done", "Mark a task done"),
     child("hold", "Put a task on hold with a reason"),
     child(
@@ -211,6 +213,14 @@ const TASK_CHILDREN: &[Child] = &[
     child("resume", "Take a task off hold"),
     child("show", "Show a task with its plan and notes"),
     child("start", "Mark a task in progress (doing)"),
+];
+const DEP_CHILDREN: &[Child] = &[
+    child(
+        "add",
+        "Add a dependency edge (the first id waits on the second)",
+    ),
+    child("list", "List what a record depends on"),
+    child("remove", "Remove a dependency edge"),
 ];
 const ISSUE_CHILDREN: &[Child] = &[
     child("add", "Create a new open issue"),
@@ -474,6 +484,18 @@ fn specification(path: &[String]) -> Spec {
             "Set the summary text (args joined with spaces)",
             HELP_ONLY,
         ),
+        [group @ ("plan" | "task"), "dep"] => Spec {
+            use_line: format!("{group} dep"),
+            text: match *group {
+                "plan" => "Manage plan dependency edges",
+                _ => "Manage task dependency edges",
+            },
+            aliases: Vec::new(),
+            children: DEP_CHILDREN,
+            flags: HELP_ONLY.to_vec(),
+            group: true,
+        },
+        [group @ ("plan" | "task"), "dep", leaf] => dep_leaf(group, leaf),
         ["milestone", leaf] => milestone_leaf(leaf),
         ["plan", leaf] => plan_leaf(leaf),
         ["task", leaf] => task_leaf(leaf),
@@ -485,6 +507,26 @@ fn specification(path: &[String]) -> Spec {
         ["capability", leaf] => capability_leaf(leaf),
         [leaf] => root_leaf(leaf),
         _ => group_spec("ptrack", ROOT_LONG, ROOT_CHILDREN),
+    }
+}
+
+fn dep_leaf(group: &str, name: &str) -> Spec {
+    match name {
+        "add" => leaf_spec(
+            &format!("{group} dep add <id> <dep-id>"),
+            "Add a dependency edge (the first id waits on the second)",
+            HELP_ONLY,
+        ),
+        "list" => leaf_spec(
+            &format!("{group} dep list <id>"),
+            "List what a record depends on",
+            JSON_FLAGS,
+        ),
+        _ => leaf_spec(
+            &format!("{group} dep remove <id> <dep-id>"),
+            "Remove a dependency edge",
+            HELP_ONLY,
+        ),
     }
 }
 
@@ -910,6 +952,13 @@ fn resolve(path: &[String]) -> &[String] {
     if group.is_none() && path.len() > 1 {
         return &path[..1];
     }
+    // `dep` is a nested group: keep a known third component, drop the rest.
+    if path.len() > 2 && path[1] == "dep" {
+        if matches!(path[2].as_str(), "add" | "remove" | "list") {
+            return &path[..3];
+        }
+        return &path[..2];
+    }
     path
 }
 
@@ -935,12 +984,12 @@ fn group_children(name: &str) -> Option<&'static [&'static str]> {
         "goal" | "summary" | "config" => Some(&["set", "show"]),
         "milestone" => Some(&["add", "done", "due", "list", "open", "rename", "show"]),
         "plan" => Some(&[
-            "add", "copy", "delete", "done", "hold", "list", "move", "release", "rename", "resume",
-            "show", "use",
+            "add", "copy", "delete", "dep", "done", "hold", "list", "move", "release", "rename",
+            "resume", "show", "use",
         ]),
         "task" => Some(&[
-            "add", "block", "convert", "done", "hold", "list", "move", "rename", "resume", "show",
-            "start",
+            "add", "block", "convert", "dep", "done", "hold", "list", "move", "rename", "resume",
+            "show", "start",
         ]),
         "issue" => Some(&["add", "close", "list", "open", "rename", "severity", "show"]),
         "note" => Some(&["add", "list"]),

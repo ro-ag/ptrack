@@ -41,14 +41,14 @@ const GROUPS: &[(&str, &[&str])] = &[
         "plan",
         &[
             "add", "list", "show", "done", "use", "release", "rename", "hold", "resume", "delete",
-            "move", "copy",
+            "move", "copy", "dep",
         ],
     ),
     (
         "task",
         &[
             "add", "list", "show", "start", "done", "block", "rename", "move", "convert", "hold",
-            "resume",
+            "resume", "dep",
         ],
     ),
     (
@@ -195,6 +195,18 @@ pub fn preflight(mut argv: Vec<String>) -> Result<Preflight, CliError> {
             };
         }
         path.push(child.to_owned());
+        // `dep` is itself a group one level down under plan/task.
+        if child == "dep" {
+            let Some(sub) = argv.get(2) else {
+                return Ok(Preflight::Help(path));
+            };
+            if matches!(sub.as_str(), "-h" | "--help")
+                || !matches!(sub.as_str(), "add" | "remove" | "list")
+            {
+                return Ok(Preflight::Help(path));
+            }
+            path.push(sub.clone());
+        }
     }
     if argv
         .iter()
@@ -303,6 +315,7 @@ fn flag_names(path: &[String]) -> BTreeSet<(&'static str, bool)> {
         ["task", "list"] => &[("plan", true), ("status", true), ("json", false)],
         ["task", "show"] => &[("json", false)],
         ["task", "move"] => &[("plan", true)],
+        ["plan" | "task", "dep", "list"] => &[("json", false)],
         ["issue", "add"] => &[("severity", true), ("task", true), ("body", true)],
         ["issue", "list"] => &[("status", true), ("json", false)],
         ["issue", "show"] => &[("json", false)],

@@ -20,7 +20,7 @@ use ptrack_capability_policy::{
 };
 use ptrack_core::{
     Capability, CapabilityKind, Commit, Issue, IssueStatus, MemoryKind, Meta, Note, NoteTarget,
-    Plan, ProjectSnapshot, Task, TaskStatus, Timestamp,
+    Plan, ProjectSnapshot, Task, TaskStatus, Timestamp, open_plan_deps, open_task_deps,
 };
 use ptrack_store::{
     FIRST_RUN_TITLE_MAX_BYTES, GlobalStore, MemoryWriteRequest, ProjectStore, StoreError,
@@ -2504,6 +2504,10 @@ impl BoundDesktopWorkspace {
                         .claim_owner
                         .as_deref()
                         .map(|owner| snapshot.meta.actor_name(owner).unwrap_or(owner).to_owned()),
+                    // Openness against the bounded snapshot: a dep plan not
+                    // in this page counts as satisfied, matching the core
+                    // missing-target rule.
+                    deps_open: open_plan_deps(&snapshot, plan),
                 }
             })
             .collect();
@@ -2533,10 +2537,15 @@ impl BoundDesktopWorkspace {
             open_issues: counts.issues_open,
         };
         let activity_total = notes.total.saturating_add(commits.total);
+        let blocker_cards = blockers
+            .items
+            .iter()
+            .map(|task| snapshot_blocker_card(&snapshot, task))
+            .collect();
         Ok(SnapshotTrackingCapture {
             snapshot,
             board,
-            blockers: blockers.items.iter().map(snapshot_blocker_card).collect(),
+            blockers: blocker_cards,
             bounds: SnapshotTrackingBounds {
                 plans: plans.total,
                 tasks: tasks.total,
@@ -4271,6 +4280,10 @@ struct PlanSummaryView {
     /// are mutated through the CLI only, exactly like holds.
     #[serde(skip_serializing_if = "Option::is_none")]
     claimed_by: Option<String>,
+    /// Plan-dep IDs still open, computed snapshot-side so the frontend never
+    /// re-derives openness. Empty (and omitted) when nothing blocks the plan.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    deps_open: Vec<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -4290,6 +4303,14 @@ struct TaskView {
     hold_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     linked_runtime: Option<TaskLinkedRuntimeSummaryView>,
+    /// All declared task-dep IDs, in stored order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    deps: Vec<u64>,
+    /// The subset of `deps` still open, computed snapshot-side so the
+    /// frontend never re-derives openness. Deps are orthogonal to status:
+    /// the card keeps its column and only gains a badge.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    deps_open: Vec<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
@@ -4389,7 +4410,7 @@ struct IssueView {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct BoardView {
+pub(super) struct BoardView {
     project_name: String,
     goal: String,
     summary: String,
@@ -4403,7 +4424,7 @@ struct BoardView {
 }
 
 #[allow(clippy::too_many_lines)]
-fn board_view(
+pub(super) fn board_view(
     snapshot: &ProjectSnapshot,
     project_name: String,
     requested_plan: u64,
@@ -4478,6 +4499,8 @@ fn board_view(
                     latest_note: latest_notes.get(&task.id).cloned().unwrap_or_default(),
                     hold_reason: task.hold_reason.clone(),
                     linked_runtime: None,
+                    deps: task.deps.clone(),
+                    deps_open: open_task_deps(snapshot, task),
                 })
                 .collect(),
         })
@@ -4507,6 +4530,7 @@ fn board_view(
                     .claim_owner
                     .as_deref()
                     .map(|owner| snapshot.meta.actor_name(owner).unwrap_or(owner).to_owned()),
+                deps_open: open_plan_deps(snapshot, plan),
             }
         })
         .collect();
@@ -4569,6 +4593,7 @@ fn snapshot_board_view(
                     .claim_owner
                     .as_deref()
                     .map(|owner| snapshot.meta.actor_name(owner).unwrap_or(owner).to_owned()),
+                deps_open: open_plan_deps(snapshot, plan),
             }
         })
         .collect();
@@ -4709,10 +4734,12 @@ fn task_card(snapshot: &ProjectSnapshot, task: &Task) -> TaskView {
             .map_or_else(String::new, |note| note.body.clone()),
         hold_reason: task.hold_reason.clone(),
         linked_runtime: None,
+        deps: task.deps.clone(),
+        deps_open: open_task_deps(snapshot, task),
     }
 }
 
-fn snapshot_blocker_card(task: &Task) -> TaskView {
+fn snapshot_blocker_card(snapshot: &ProjectSnapshot, task: &Task) -> TaskView {
     TaskView {
         id: task.id,
         title: task.title.clone(),
@@ -4724,6 +4751,8 @@ fn snapshot_blocker_card(task: &Task) -> TaskView {
         latest_note: String::new(),
         hold_reason: task.hold_reason.clone(),
         linked_runtime: None,
+        deps: task.deps.clone(),
+        deps_open: open_task_deps(snapshot, task),
     }
 }
 

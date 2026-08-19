@@ -31,6 +31,13 @@ a reason, independently of its status: `ptrack task hold <id> \"waiting on revie
 / `ptrack task resume <id>` (same for `plan hold|resume`). Completing the item\n\
 clears its hold too. Do not pick up a held item; `ptrack next` skips them.\n\
 \n\
+**Ordering work.** When one item must wait for another, record the edge:\n\
+`ptrack task dep add <id> <dep-id>` (the first id waits on the second; tasks\n\
+in different plans are fine, and `plan dep add` does the same between plans).\n\
+`ptrack next` skips dep-blocked tasks and names the blockers; `ptrack context`\n\
+lists waiting work separately. `dep remove` deletes an edge, `dep list <id>`\n\
+shows them. Self-deps, duplicates, and cycles are refused.\n\
+\n\
 **Working with other developers.** Configure your identity once per machine:\n\
 `ptrack config set user \"<your name>\"` (a stable ID is minted the first time;\n\
 renaming later keeps it). `ptrack plan use <id>` then claims the plan for you\n\

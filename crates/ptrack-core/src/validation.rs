@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::OnceLock;
 
@@ -275,6 +276,25 @@ fn validate_actor_map_keys<T>(
     Ok(())
 }
 
+/// Rejects a dependency list holding a zero ID, a self-reference, or a
+/// duplicate edge. Acyclicity across records is the store's invariant; a
+/// single record can only vouch for its own list.
+fn validate_deps(id: u64, deps: &[u64], field: &'static str) -> Result<(), ValidationError> {
+    let mut seen = BTreeSet::new();
+    for &dep in deps {
+        if dep == 0 {
+            return Err(ValidationError::new(field, "must hold nonzero ids"));
+        }
+        if dep == id {
+            return Err(ValidationError::new(field, "must not reference itself"));
+        }
+        if !seen.insert(dep) {
+            return Err(ValidationError::new(field, "must not repeat an id"));
+        }
+    }
+    Ok(())
+}
+
 impl Validate for Timestamp {
     fn validate(&self) -> Result<(), ValidationError> {
         if let Self::Fixed {
@@ -352,6 +372,7 @@ impl Validate for Plan {
         validate_identity_option(self.actor.as_ref(), "plan.actor")?;
         validate_identity_option(self.ulid.as_ref(), "plan.ulid")?;
         validate_identity_option(self.claim_owner.as_ref(), "plan.claim_owner")?;
+        validate_deps(self.id, &self.deps, "plan.deps")?;
         // Claim consistency: every owner arrived through a claim that bumped
         // the epoch, and the conflict marker only annotates a live claim. A
         // release clears the owner and keeps the epoch, so a nonzero epoch
@@ -380,6 +401,7 @@ impl Validate for Task {
         validate_hold_reason(self.hold_reason.as_ref(), "task.hold_reason")?;
         validate_identity_option(self.actor.as_ref(), "task.actor")?;
         validate_identity_option(self.ulid.as_ref(), "task.ulid")?;
+        validate_deps(self.id, &self.deps, "task.deps")?;
         validate_times(&[self.created_at, self.updated_at])
     }
 }
