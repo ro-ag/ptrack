@@ -944,6 +944,7 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "WriteTerminalMemoryV2",
         ]
     );
+    assert!(commands.windows(2).all(|w| w[0] < w[1]), "not sorted");
 
     let runtime = DesktopRuntime::new(DesktopRuntimeConfig::unavailable("test"));
     assert_eq!(
@@ -3266,7 +3267,21 @@ fn bounded_workspace_snapshot_follows_the_per_actor_active_plan() {
 #[test]
 fn desktop_plan_lifecycle_commands_rename_preview_delete_and_copy_within() {
     let directory = TestDirectory::new("plan-lifecycle-commands");
-    let workspace = bound_workspace(&directory); // seeded: plan "Desktop" + task + note
+    let (bindings, _task_id) = bound_bindings(&directory); // seeded: plan "Desktop" + task + note
+    let root = bindings.project.as_ref().unwrap().root.clone();
+    let global =
+        GlobalStore::open_existing(&bindings.global_database, &bindings.global_binding).unwrap();
+    global.register_project("Desktop", &root).unwrap();
+    drop(global);
+    let workspace = BoundDesktopWorkspace::new(
+        7,
+        0,
+        bindings.clone(),
+        Box::new(LocalApplication::new(bindings)),
+        None,
+        None,
+        None,
+    );
     let plan_id = 1_u64;
 
     // Rename.
@@ -3307,6 +3322,7 @@ fn desktop_plan_lifecycle_commands_rename_preview_delete_and_copy_within() {
         .invoke("DeletePlanV1", &[json!(7), json!(plan_id), json!(true)])
         .unwrap();
     assert_eq!(deleted["preview"], json!(false));
+    assert_eq!(deleted["summary"]["tasks"], json!(1));
     let missing = workspace
         .invoke("DeletePlanV1", &[json!(7), json!(plan_id), json!(false)])
         .unwrap_err();
@@ -3320,6 +3336,21 @@ fn desktop_plan_lifecycle_commands_rename_preview_delete_and_copy_within() {
         )
         .unwrap_err();
     assert!(unknown.to_string().contains("ptrack projects"));
+
+    // Move targeting the current project itself surfaces the in-place guard
+    // ("rename it in place with 'ptrack plan rename'"), not a transfer.
+    let same_project = workspace
+        .invoke(
+            "MovePlanV1",
+            &[
+                json!(7),
+                json!(plan_id),
+                json!(root.to_string_lossy().into_owned()),
+                json!(""),
+            ],
+        )
+        .unwrap_err();
+    assert!(same_project.to_string().contains("current project"));
 
     // ListProjectsV1 answers with the registry (possibly empty in this harness).
     let projects = workspace.invoke("ListProjectsV1", &[json!(7)]).unwrap();
