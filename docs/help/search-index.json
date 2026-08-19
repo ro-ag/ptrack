@@ -34,7 +34,7 @@
       "title": "Reference",
       "summary": "Look up CLI commands, TUI keys, desktop shortcuts, and project search behavior.",
       "headings": ["CLI", "TUI", "Desktop shortcuts", "Project search"],
-      "keywords": ["command", "keyboard", "palette", "shortcut"],
+      "keywords": ["command", "keyboard", "palette", "shortcut", "config", "claims", "identity", "steal", "release"],
       "url": "reference/"
     },
     {

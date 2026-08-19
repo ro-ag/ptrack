@@ -88,6 +88,8 @@
 
           <p>A hold is separate from status. <code>plan hold</code> and <code>task hold</code> pause an item with a reason, and <code>resume</code> clears it — as does completing the item, since a done task or a done or archived plan clears its hold automatically. The item keeps its own status, so <code>task list --status</code> still filters on <code>todo</code>, <code>doing</code>, <code>done</code>, and <code>blocked</code> only. Held work is skipped by <code>next</code>, listed separately by <code>context</code>, and marked in every read surface.</p>
 
+          <p>Multiple developers on one shared database coordinate through identities and claims. <code>config set user &lt;name&gt;</code> mints a stable per-machine identity once (the name is mutable metadata). <code>plan use</code> claims the plan for the caller and makes it that caller's active plan — the active plan is per-developer, and a machine without a configured identity keeps the old project-wide behavior. Content changes to a plan claimed by someone else are refused; holds, notes, and issue links stay open to everyone as the cross-developer channel. <code>plan release</code> frees a claim, finishing a plan releases it automatically, and <code>plan use --steal</code> takes over a claim (each claim or steal bumps the plan's claim epoch). Claim owners are shown in <code>plan list</code>, the TUI, and the desktop sidebar.</p>
+
           <h2 id="json-output">JSON output</h2>
           <p><code>--json</code> is command-specific, not a global promise. It is documented for only these read commands:</p>
           <ul>

@@ -6,6 +6,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Multi-developer groundwork on a single shared database. `ptrack config set
+  user <name>` mints a stable per-machine identity once (rename any time, the
+  ID never changes), every mutation is stamped with the acting identity, and
+  the active plan becomes per-developer (machines without a configured
+  identity keep the old project-wide active plan). `ptrack plan use` now
+  claims the plan for the caller: content changes to a plan claimed by someone
+  else are refused, while holds, notes, and issue links stay open to everyone.
+  `ptrack plan release` frees a claim, finishing a plan releases it
+  automatically, and `ptrack plan use --steal` takes over a claim. Claim
+  owners are shown in `plan list`, plan JSON, the TUI, and the desktop
+  sidebar (display-only; claim changes are CLI-only).
+
+### Changed
+- **Compatibility: upgrade every installed copy of p-track.** The first write
+  from this version stamps the project or global database with payload schema
+  3, which also reserves the record fields the upcoming git-synced
+  multi-developer mode needs (entity ULIDs and claim-conflict markers).
+  Older p-track builds accept only schemas 1 and 2 and refuse the whole
+  database fail-closed with `invalid database manifest: collection plans
+  requires codec 3 schema 1..=2, found codec 3 schema 3` or the equivalent
+  for another collection. Nothing is damaged and no data is lost. Databases
+  written by 0.25 or 0.26 open unchanged and upgrade lazily per record.
+
 ## [0.26.0] - 2026-08-18
 
 ### Added
