@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-08-18
+
 ### Added
 - Multi-developer groundwork on a single shared database. `ptrack config set
   user <name>` mints a stable per-machine identity once (rename any time, the
@@ -684,7 +686,8 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
-[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.26.0...HEAD
+[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.27.0...HEAD
+[0.27.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.27.0
 [0.26.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.26.0
 [0.25.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.25.0
 [0.24.4]: https://github.com/ro-ag/ptrack/releases/tag/v0.24.4
