@@ -114,6 +114,7 @@ import {
   registerNativeMenuActions,
 } from "./workspace/native-menu";
 import {
+  clampMenuPosition,
   deleteConfirmationText,
   planMenuItems,
   transferSubmitDisabled,
@@ -2602,8 +2603,7 @@ function openPlanContextMenu(plan, titleElement, invoker, position) {
   const menu = document.createElement("div");
   menu.className = "context-menu";
   menu.setAttribute("role", "menu");
-  menu.style.left = `${Math.round(position.x)}px`;
-  menu.style.top = `${Math.round(position.y)}px`;
+  menu.style.visibility = "hidden";
   planMenuItems().forEach((item) => {
     const button = document.createElement("button");
     button.type = "button";
@@ -2619,6 +2619,15 @@ function openPlanContextMenu(plan, titleElement, invoker, position) {
     menu.append(button);
   });
   document.body.append(menu);
+  const bounds = menu.getBoundingClientRect();
+  const clamped = clampMenuPosition(
+    position,
+    { width: bounds.width, height: bounds.height },
+    { width: window.innerWidth, height: window.innerHeight },
+  );
+  menu.style.left = `${Math.round(clamped.x)}px`;
+  menu.style.top = `${Math.round(clamped.y)}px`;
+  menu.style.visibility = "";
   planContextMenu = menu;
   planContextMenuReturnFocus = invoker instanceof HTMLElement ? invoker : null;
   requestAnimationFrame(() => {
@@ -2633,7 +2642,12 @@ function openPlanContextMenu(plan, titleElement, invoker, position) {
     closePlanContextMenu();
   };
   const onFocusOut = (event) => {
-    if (event.relatedTarget && menu.contains(event.relatedTarget)) return;
+    // WKWebView never focuses a button on mousedown, so clicking a menu item
+    // blurs the focused item with a null relatedTarget; closing here would
+    // remove the menu before its click ever dispatches. Outside clicks are
+    // covered by the document listener below.
+    if (!event.relatedTarget) return;
+    if (menu.contains(event.relatedTarget)) return;
     closePlanContextMenu();
   };
   // Deferred so the click/contextmenu event that opened the menu doesn't

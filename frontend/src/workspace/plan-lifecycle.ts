@@ -16,6 +16,23 @@ export function planMenuItems(): PlanMenuItem[] {
   ];
 }
 
+/**
+ * Keeps the context menu inside the viewport: a menu opened near the bottom
+ * of the sidebar would otherwise render its destructive Delete item
+ * off-screen and unreachable.
+ */
+export function clampMenuPosition(
+  position: { x: number; y: number },
+  menu: { width: number; height: number },
+  viewport: { width: number; height: number },
+  margin = 8,
+): { x: number; y: number } {
+  return {
+    x: Math.max(margin, Math.min(position.x, viewport.width - menu.width - margin)),
+    y: Math.max(margin, Math.min(position.y, viewport.height - menu.height - margin)),
+  };
+}
+
 export interface DeletePreviewSummary {
   planId: number;
   title: string;
