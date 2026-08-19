@@ -2058,6 +2058,19 @@ select option {
 .sidebar-plan-menu svg {
   display: block;
   fill: currentColor;
+  transition: transform 200ms var(--ease);
+}
+
+.plan-menu-trigger:hover svg,
+.plan-menu-trigger:focus-visible svg,
+.sidebar-plan-menu:hover svg,
+.sidebar-plan-menu:focus-visible svg {
+  transform: rotate(60deg);
+}
+
+.plan-menu-trigger:active svg,
+.sidebar-plan-menu:active svg {
+  transform: rotate(90deg) scale(0.9);
 }
 
 .plan-menu-trigger svg {
