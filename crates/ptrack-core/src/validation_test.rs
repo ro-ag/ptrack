@@ -414,3 +414,36 @@ fn plan_claims_must_be_internally_consistent() {
         "plan.claim_conflict"
     );
 }
+
+#[test]
+fn deps_must_be_nonzero_unique_and_never_self_referential() {
+    let mut plan = super::test_support::plan(1, "p", PlanStatus::Active, 0, 0);
+    plan.deps = vec![2, 3];
+    assert!(plan.validate().is_ok());
+    plan.deps = vec![0];
+    assert_eq!(
+        plan.validate().expect_err("zero dep").reason(),
+        "must hold nonzero ids"
+    );
+    plan.deps = vec![1];
+    assert_eq!(
+        plan.validate().expect_err("self dep").reason(),
+        "must not reference itself"
+    );
+    plan.deps = vec![2, 3, 2];
+    assert_eq!(
+        plan.validate().expect_err("duplicate dep").field(),
+        "plan.deps"
+    );
+
+    let mut task = super::test_support::task(1, 2, "t", TaskStatus::Todo, 0);
+    task.deps = vec![4];
+    assert!(task.validate().is_ok());
+    task.deps = vec![1];
+    assert_eq!(task.validate().expect_err("self dep").field(), "task.deps");
+    task.deps = vec![4, 4];
+    assert_eq!(
+        task.validate().expect_err("duplicate dep").reason(),
+        "must not repeat an id"
+    );
+}

@@ -12,14 +12,15 @@ pub const LEGACY_CODEC_RAW: u16 = 2;
 /// Stable codec identifier for canonical native ptrack positional records.
 pub const NATIVE_CODEC: u16 = 3;
 /// Current payload schema for canonical native ptrack positional records.
-pub const NATIVE_PAYLOAD_SCHEMA: u32 = 3;
+pub const NATIVE_PAYLOAD_SCHEMA: u32 = 4;
 /// Oldest native payload schema this build still reads, imports, and stores.
 ///
 /// Databases written before the plan and task hold reason carry schema-1
 /// records; databases written before actor attribution, reserved entity ULIDs,
-/// plan claims, and the per-actor `Meta` maps carry schema-2 records. Both stay
-/// readable and upgrade lazily on their next write; nothing rewrites them on
-/// open.
+/// plan claims, and the per-actor `Meta` maps carry schema-2 records; databases
+/// written before plan and task dependency edges carry schema-3 records. All
+/// stay readable and upgrade lazily on their next write; nothing rewrites them
+/// on open.
 pub const MIN_NATIVE_PAYLOAD_SCHEMA: u32 = 1;
 
 /// A versioned wrapper around an opaque persisted model payload.

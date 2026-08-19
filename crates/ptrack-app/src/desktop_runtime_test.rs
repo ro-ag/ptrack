@@ -11,7 +11,8 @@ use ptrack_agent::{
     RegistrationKind, RunState, RuntimeAssociation,
 };
 use ptrack_core::{
-    Commit, IssueStatus, MemoryKind, Meta, Note, NoteTarget, ProjectSnapshot, Severity, Timestamp,
+    Commit, IssueStatus, MemoryKind, Meta, Note, NoteTarget, Plan, PlanStatus, ProjectSnapshot,
+    Severity, Task, TaskStatus, Timestamp,
 };
 use ptrack_store::{ActiveBinding, GlobalStore, ProjectStore, StoreKind};
 use ptrack_terminal::{Manager, TerminalAssociationPointer};
@@ -22,7 +23,7 @@ use super::desktop_runtime::{
     DesktopRuntimeConfig, DesktopWorkspace, DesktopWorkspaceFactory,
     RecentProjectOpenAuthorizationV1, RecentProjectRegistryCommitV1, RecentProjectRegistryStatusV1,
     RecentProjectsProvider, ResetApplicationStateResultV1, WorkspaceProject, WorkspaceStatus,
-    agent_intelligence_for_task_result, allowed_desktop_commands, apply_preferences,
+    agent_intelligence_for_task_result, allowed_desktop_commands, apply_preferences, board_view,
     capture_git_snapshot_with, confirm_linked_launch, heatmap_at, project_storage,
     record_last_project_in, reset_application_records, watch_workspace_data,
 };
@@ -1255,6 +1256,87 @@ fn heatmap_buckets_instants_in_the_host_local_calendar_day() {
         days.last().unwrap(),
         &json!({ "date": "1970-01-01", "count": 2 })
     );
+}
+
+#[test]
+fn board_view_carries_dep_edges_and_their_computed_open_subset() {
+    fn plan(id: u64, status: PlanStatus, deps: Vec<u64>) -> Plan {
+        Plan {
+            id,
+            title: format!("Plan {id}"),
+            status,
+            milestone_id: 0,
+            order: 0,
+            created_at: Timestamp::Zero,
+            updated_at: Timestamp::Zero,
+            hold_reason: None,
+            actor: None,
+            ulid: None,
+            claim_owner: None,
+            claim_epoch: 0,
+            claim_conflict: false,
+            deps,
+        }
+    }
+    fn task(id: u64, status: TaskStatus, deps: Vec<u64>) -> Task {
+        Task {
+            id,
+            plan_id: 1,
+            title: format!("Task {id}"),
+            status,
+            order: 0,
+            created_at: Timestamp::Zero,
+            updated_at: Timestamp::Zero,
+            hold_reason: None,
+            actor: None,
+            ulid: None,
+            deps,
+        }
+    }
+    let snapshot = ProjectSnapshot::new(
+        Meta {
+            goal: String::new(),
+            summary: String::new(),
+            active_plan: 1,
+            created_at: Timestamp::Zero,
+            updated_at: Timestamp::Zero,
+            format_version: 1,
+            last_write_version: String::new(),
+            active_plans: Vec::new(),
+            actors: Vec::new(),
+        },
+        Vec::new(),
+        vec![
+            plan(1, PlanStatus::Active, vec![2, 3]),
+            plan(2, PlanStatus::Active, Vec::new()),
+            plan(3, PlanStatus::Done, Vec::new()),
+        ],
+        vec![
+            task(1, TaskStatus::Todo, vec![2, 3]),
+            task(2, TaskStatus::Todo, Vec::new()),
+            task(3, TaskStatus::Done, Vec::new()),
+        ],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
+    let board =
+        serde_json::to_value(board_view(&snapshot, "example".to_owned(), 1).unwrap()).unwrap();
+
+    // Task 1 lists both edges; only the not-done target stays in the open subset.
+    let card = &board["columns"][0]["tasks"][0];
+    assert_eq!(card["id"], 1);
+    assert_eq!(card["deps"], json!([2, 3]));
+    assert_eq!(card["depsOpen"], json!([2]));
+    // Dep-free records omit the fields entirely.
+    let bare = &board["columns"][0]["tasks"][1];
+    assert_eq!(bare["id"], 2);
+    assert!(bare.get("deps").is_none(), "{bare}");
+    assert!(bare.get("depsOpen").is_none(), "{bare}");
+
+    // Plan 1 waits only on the still-active plan 2.
+    assert_eq!(board["plans"][0]["depsOpen"], json!([2]));
+    assert!(board["plans"][1].get("depsOpen").is_none(), "{board}");
 }
 
 #[test]

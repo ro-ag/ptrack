@@ -79,6 +79,7 @@ fn plan(id: u64) -> RecordEnvelope {
         claim_epoch: 0,
         claim_owner: None,
         ulid: None,
+        deps: Vec::new(),
     }))
 }
 
@@ -94,6 +95,7 @@ fn task(id: u64) -> RecordEnvelope {
         hold_reason: None,
         actor: None,
         ulid: None,
+        deps: Vec::new(),
     }))
 }
 

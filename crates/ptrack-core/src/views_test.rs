@@ -1,7 +1,7 @@
 use crate::test_support::{issue, meta, plan, snapshot, task};
 use crate::{
-    IssueStatus, PlanStatus, ProjectSnapshot, ReportError, Severity, TaskStatus, Timestamp,
-    board_for, next, show_issue, show_milestone, show_plan, show_task,
+    DepSkip, IssueStatus, PlanStatus, ProjectSnapshot, ReportError, Severity, TaskStatus,
+    Timestamp, board_for, next, show_issue, show_milestone, show_plan, show_task,
 };
 
 #[test]
@@ -74,6 +74,126 @@ fn next_skips_held_tasks_and_stops_at_a_held_active_plan() {
             .plan_hold_reason
             .is_none()
     );
+}
+
+/// One active plan with the given tasks; keeps dep tests free of fixture noise.
+fn plan_snapshot(tasks: Vec<crate::Task>) -> ProjectSnapshot {
+    ProjectSnapshot::new(
+        meta(1),
+        Vec::new(),
+        vec![plan(1, "Build CLI", PlanStatus::Active, 0, 1)],
+        tasks,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    )
+}
+
+#[test]
+fn next_skips_a_dep_blocked_task_and_names_its_blockers() {
+    let mut first = task(1, 1, "write docs", TaskStatus::Todo, 1);
+    first.deps = vec![3];
+    let snapshot = plan_snapshot(vec![
+        first,
+        task(2, 1, "ship crate", TaskStatus::Todo, 2),
+        task(3, 1, "cut release", TaskStatus::Blocked, 3),
+    ]);
+    let view = next(&snapshot).expect("active plan exists");
+    assert_eq!(view.task.as_ref().map(|task| task.id), Some(2));
+    assert_eq!(
+        view.skipped,
+        vec![DepSkip {
+            task_id: 1,
+            waiting_on: vec![3],
+        }]
+    );
+    assert_eq!(
+        view.markdown(),
+        "next: [todo] #2 ship crate (plan: Build CLI)\nskipped: #1 (waiting on #3)\n"
+    );
+}
+
+#[test]
+fn next_reports_nothing_actionable_when_every_candidate_waits_on_deps() {
+    let mut only = task(1, 1, "write docs", TaskStatus::Todo, 1);
+    only.deps = vec![2, 3];
+    let snapshot = plan_snapshot(vec![
+        only,
+        task(2, 1, "ship crate", TaskStatus::Blocked, 2),
+        task(3, 1, "cut release", TaskStatus::Blocked, 3),
+    ]);
+    let view = next(&snapshot).expect("active plan exists");
+    assert!(view.task.is_none());
+    assert_eq!(
+        view.markdown(),
+        "no actionable task in the active plan\nskipped: #1 (waiting on #2, #3)\n"
+    );
+}
+
+#[test]
+fn a_task_becomes_actionable_once_its_dep_target_is_done() {
+    let mut first = task(1, 1, "write docs", TaskStatus::Todo, 1);
+    first.deps = vec![3];
+    let snapshot = plan_snapshot(vec![first, task(3, 1, "cut release", TaskStatus::Done, 3)]);
+    let view = next(&snapshot).expect("active plan exists");
+    assert_eq!(view.task.as_ref().map(|task| task.id), Some(1));
+    assert!(view.skipped.is_empty());
+    assert_eq!(
+        view.markdown(),
+        "next: [todo] #1 write docs (plan: Build CLI)\n"
+    );
+}
+
+#[test]
+fn open_plan_deps_block_every_task_of_the_active_plan() {
+    let mut active = plan(1, "Build CLI", PlanStatus::Active, 0, 1);
+    active.deps = vec![2];
+    let mut snapshot = ProjectSnapshot::new(
+        meta(1),
+        Vec::new(),
+        vec![active, plan(2, "Foundations", PlanStatus::Active, 0, 2)],
+        vec![task(1, 1, "ready todo", TaskStatus::Todo, 1)],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
+    let view = next(&snapshot).expect("active plan exists");
+    assert!(view.task.is_none());
+    assert_eq!(view.plan_waiting_on, vec![2]);
+    assert_eq!(view.markdown(), "active plan waiting on #2\n");
+
+    // Finishing the dep plan unblocks the active plan's tasks.
+    snapshot.plans[1].status = PlanStatus::Done;
+    let view = next(&snapshot).expect("active plan exists");
+    assert_eq!(view.task.as_ref().map(|task| task.id), Some(1));
+    assert!(view.plan_waiting_on.is_empty());
+}
+
+#[test]
+fn a_held_or_blocked_dep_target_counts_open_without_status_propagation() {
+    let mut dependent = task(1, 1, "write docs", TaskStatus::Todo, 1);
+    dependent.deps = vec![2, 3];
+    let mut held_target = task(2, 1, "ship crate", TaskStatus::Todo, 2);
+    held_target.hold_reason = Some("waiting on review".to_owned());
+    let snapshot = plan_snapshot(vec![
+        dependent,
+        held_target,
+        task(3, 1, "cut release", TaskStatus::Blocked, 3),
+    ]);
+    let view = next(&snapshot).expect("active plan exists");
+    assert!(view.task.is_none());
+    assert_eq!(
+        view.skipped,
+        vec![DepSkip {
+            task_id: 1,
+            waiting_on: vec![2, 3],
+        }]
+    );
+    // Openness is computed in the view only: the dependent's stored status is
+    // untouched by its held and blocked targets.
+    let stored = snapshot.task(1).expect("task exists");
+    assert_eq!(stored.status, TaskStatus::Todo);
+    assert!(stored.hold_reason.is_none());
 }
 
 #[test]

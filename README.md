@@ -426,6 +426,22 @@ agent does not pick it up. `resume` clears the hold, and so does completing the
 item: a task marked `done`, or a plan marked done or archived, drops its hold
 automatically. Holds are set from the CLI; the interfaces display them.
 
+Order between items is recorded as dependency edges:
+
+```sh
+ptrack task dep add 12 9   # task 12 waits on task 9 (tasks may be in different plans)
+ptrack plan dep add 4 2    # plan 4 waits on plan 2
+```
+
+`dep remove` deletes an edge, and `dep list <id>` (with `--json`) shows what a
+record depends on, each entry marked open or done. Self-dependencies,
+duplicates, unknown targets, and cycles are refused. Like a hold, a dependency
+never rewrites the dependent's status — openness is computed when read.
+`ptrack next` skips tasks with open dependencies and reports why (`skipped:
+#12 (waiting on #9)`), and `ptrack context` lists waiting work in a separate
+section. Cards waiting on open dependencies carry a ⛓ marker in the dashboard
+and Desktop.
+
 ## Agent workflow
 
 A fresh agent—including a replacement using another supported agent tool—starts
@@ -516,8 +532,8 @@ Put `#<task-id>` in a commit message to link the commit to that task.
 | `ptrack summary show\|set S` | Show or update the rolling project summary. |
 | `ptrack config set user <name>\|show` | Set or show the per-machine identity used to claim plans. |
 | `ptrack milestone add\|list\|show\|done\|open\|due\|rename` | Manage checkpoints that group plans. |
-| `ptrack plan add\|list\|show\|done\|use\|release\|rename\|delete\|move\|copy\|hold\|resume` | Manage plans; `delete <id> --force` cascades to tasks and notes (issues detach, commit records survive unlinked); `move <id> --to <project>` relocates a plan subtree (copy-first, never lossy; `--as` renames on arrival); `copy` duplicates one (needs `--as` without `--to`). |
-| `ptrack task add\|list\|show\|start\|done\|block\|rename\|move\|convert\|hold\|resume` | Manage tasks; move them between plans, convert them into plans, or put one on hold with a reason. |
+| `ptrack plan add\|list\|show\|done\|use\|release\|rename\|delete\|move\|copy\|dep\|hold\|resume` | Manage plans; `delete <id> --force` cascades to tasks and notes (issues detach, commit records survive unlinked); `move <id> --to <project>` relocates a plan subtree (copy-first, never lossy; `--as` renames on arrival); `copy` duplicates one (needs `--as` without `--to`); `dep add\|remove\|list` makes one plan wait on another. |
+| `ptrack task add\|list\|show\|start\|done\|block\|rename\|move\|convert\|dep\|hold\|resume` | Manage tasks; move them between plans, convert them into plans, put one on hold with a reason, or make one wait on another with `dep add\|remove\|list`. |
 | `ptrack issue add\|list\|show\|close\|open\|severity\|rename` | Track issues and bugs, optionally linked to tasks. |
 | `ptrack note add\|list` | Attach or list project, plan, and task notes. |
 | `ptrack commit add\|list\|show\|record` | Browse the recorded git audit trail; `show` prints the diff. |

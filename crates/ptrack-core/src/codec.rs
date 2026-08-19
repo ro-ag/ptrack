@@ -11,15 +11,15 @@ use crate::{
 /// Stable envelope codec ID for native ptrack positional records.
 pub const NATIVE_CODEC: u16 = 3;
 /// Current schema of native ptrack positional record payloads.
-pub const NATIVE_PAYLOAD_SCHEMA: u32 = 3;
+pub const NATIVE_PAYLOAD_SCHEMA: u32 = 4;
 /// Oldest native payload schema this build still decodes.
 ///
 /// Schema 1 predates the plan and task hold reason, which schema 2 added.
 /// Schema 3 adds actor attribution, reserved entity ULIDs, plan claims, and the
-/// per-actor `Meta` maps. Payloads at either older schema decode with all of
-/// those fields empty and are re-encoded at [`NATIVE_PAYLOAD_SCHEMA`] on their
-/// next write, so stored records upgrade lazily and no database is rewritten on
-/// open.
+/// per-actor `Meta` maps. Schema 4 adds plan and task dependency edges.
+/// Payloads at any older schema decode with all of those fields empty and are
+/// re-encoded at [`NATIVE_PAYLOAD_SCHEMA`] on their next write, so stored
+/// records upgrade lazily and no database is rewritten on open.
 pub const MIN_NATIVE_PAYLOAD_SCHEMA: u32 = 1;
 /// Maximum accepted bytes in one native record payload.
 pub const MAX_PAYLOAD_BYTES: usize = 256 * 1024 * 1024;
@@ -699,6 +699,53 @@ fn decode_meta_maps(
     Ok(())
 }
 
+/// The payload schema that introduced plan and task dependency edges.
+///
+/// Deliberately an absolute schema number rather than a comparison against
+/// [`NATIVE_PAYLOAD_SCHEMA`], exactly like [`HOLD_REASON_PAYLOAD_SCHEMA`]: a
+/// future bump to 5 must keep writing and reading the dependency list for
+/// schema-4 records.
+pub(crate) const DEPS_PAYLOAD_SCHEMA: u32 = 4;
+
+/// Writes the trailing dependency-edge list, present only from payload schema
+/// 4. An older schema has no canonical form for a nonempty list, so encoding
+/// one there is rejected rather than silently dropped.
+fn encode_deps(writer: &mut Writer, deps: &[u64], payload_schema: u32) -> Result<(), CodecError> {
+    if payload_schema >= DEPS_PAYLOAD_SCHEMA {
+        if deps.len() > MAX_LIST_ITEMS {
+            return Err(CodecError::ListTooLarge {
+                actual: deps.len(),
+                maximum: MAX_LIST_ITEMS,
+            });
+        }
+        writer.u32(u32::try_from(deps.len()).map_err(|_| CodecError::LengthOverflow)?)?;
+        for dep in deps {
+            writer.u64(*dep)?;
+        }
+        return Ok(());
+    }
+    if deps.is_empty() {
+        Ok(())
+    } else {
+        Err(CodecError::NonCanonical)
+    }
+}
+
+/// Reads the trailing dependency-edge list, absent before payload schema 4.
+fn decode_deps(reader: &mut Reader<'_>, payload_schema: u32) -> Result<Vec<u64>, CodecError> {
+    if payload_schema < DEPS_PAYLOAD_SCHEMA {
+        return Ok(Vec::new());
+    }
+    let count = reader.entry_count(8)?;
+    let mut deps = Vec::new();
+    deps.try_reserve_exact(count)
+        .map_err(|_| CodecError::LengthOverflow)?;
+    for _ in 0..count {
+        deps.push(reader.u64()?);
+    }
+    Ok(deps)
+}
+
 fn encode_plan(writer: &mut Writer, value: &Plan, payload_schema: u32) -> Result<(), CodecError> {
     writer.u64(value.id)?;
     writer.string(&value.title)?;
@@ -714,7 +761,8 @@ fn encode_plan(writer: &mut Writer, value: &Plan, payload_schema: u32) -> Result
         value.ulid.as_ref(),
         payload_schema,
     )?;
-    encode_plan_claim(writer, value, payload_schema)
+    encode_plan_claim(writer, value, payload_schema)?;
+    encode_deps(writer, &value.deps, payload_schema)
 }
 
 fn decode_plan(reader: &mut Reader<'_>, payload_schema: u32) -> Result<Plan, CodecError> {
@@ -732,10 +780,12 @@ fn decode_plan(reader: &mut Reader<'_>, payload_schema: u32) -> Result<Plan, Cod
         claim_owner: None,
         claim_epoch: 0,
         claim_conflict: false,
+        deps: Vec::new(),
     };
     (plan.actor, plan.ulid) = decode_actor_ulid(reader, payload_schema)?;
     (plan.claim_owner, plan.claim_epoch, plan.claim_conflict) =
         decode_plan_claim(reader, payload_schema)?;
+    plan.deps = decode_deps(reader, payload_schema)?;
     Ok(plan)
 }
 
@@ -753,7 +803,8 @@ fn encode_task(writer: &mut Writer, value: &Task, payload_schema: u32) -> Result
         value.actor.as_ref(),
         value.ulid.as_ref(),
         payload_schema,
-    )
+    )?;
+    encode_deps(writer, &value.deps, payload_schema)
 }
 
 fn decode_task(reader: &mut Reader<'_>, payload_schema: u32) -> Result<Task, CodecError> {
@@ -768,8 +819,10 @@ fn decode_task(reader: &mut Reader<'_>, payload_schema: u32) -> Result<Task, Cod
         hold_reason: decode_hold_reason(reader, payload_schema)?,
         actor: None,
         ulid: None,
+        deps: Vec::new(),
     };
     (task.actor, task.ulid) = decode_actor_ulid(reader, payload_schema)?;
+    task.deps = decode_deps(reader, payload_schema)?;
     Ok(task)
 }
 

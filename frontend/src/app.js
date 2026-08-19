@@ -1317,6 +1317,20 @@ function cardElement(task) {
     );
   }
 
+  // Open deps are orthogonal to status too: the card keeps its lane and gains
+  // a badge; the blocking IDs are the badge's tooltip.
+  if (task.depsOpen?.length) {
+    const deps = document.createElement("span");
+    deps.className = "card-deps";
+    deps.textContent = "⛓ Waiting";
+    deps.title = `Waiting on ${task.depsOpen.map((id) => `#${id}`).join(", ")}`;
+    dragZone.append(deps);
+    dragZone.setAttribute(
+      "aria-label",
+      `${dragZone.getAttribute("aria-label")} ${deps.title}.`,
+    );
+  }
+
   if (task.latestNote) {
     const note = document.createElement("p");
     note.className = "latest-note";
@@ -1546,6 +1560,14 @@ function renderPlanList() {
       claim.setAttribute("aria-hidden", "true");
       item.append(claim);
       item.title = `${item.title} · claimed by ${plan.claimedBy}`;
+    }
+    if (plan.depsOpen?.length) {
+      const deps = document.createElement("span");
+      deps.className = "sidebar-plan-deps";
+      deps.textContent = "⛓";
+      deps.setAttribute("aria-hidden", "true");
+      item.append(deps);
+      item.title = `${item.title} · waiting on ${plan.depsOpen.map((id) => `#${id}`).join(", ")}`;
     }
     item.addEventListener("click", () => selectPlan(plan.id));
     item.addEventListener("keydown", (event) => {

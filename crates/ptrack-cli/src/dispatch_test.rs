@@ -9,6 +9,7 @@ use ptrack_app::{
 };
 use ptrack_core::{
     Meta, Plan, PlanStatus, ProjectRef, ProjectSnapshot, Task, TaskStatus, Timestamp,
+    would_create_cycle,
 };
 
 use crate::{Io, RunOutcome, run};
@@ -68,6 +69,8 @@ impl ApplicationPort for FakeApplication {
         Ok(self.snapshot.clone())
     }
 
+    // One flat arm per faked mutation, mirroring the real dispatch.
+    #[allow(clippy::too_many_lines)]
     fn mutate(&mut self, mutation: Mutation) -> AppResult<MutationResult> {
         match mutation {
             Mutation::SetGoal(value) => self.snapshot.meta.goal = value,
@@ -102,6 +105,83 @@ impl ApplicationPort for FakeApplication {
                     )));
                 }
                 plan.hold_reason = reason;
+            }
+            // Mirrors ProjectStore::add_task_dep / add_plan_dep refusals
+            // (unknown id, self-dep, duplicate, cycle) closely enough to
+            // exercise the CLI's success and error paths.
+            Mutation::AddTaskDep { id, dep_id } => {
+                let refused = add_dep_refusal(
+                    "task",
+                    id,
+                    dep_id,
+                    &self
+                        .snapshot
+                        .tasks
+                        .iter()
+                        .map(|task| (task.id, task.deps.clone()))
+                        .collect(),
+                );
+                if let Some(error) = refused {
+                    return Err(error);
+                }
+                let task = self
+                    .snapshot
+                    .tasks
+                    .iter_mut()
+                    .find(|task| task.id == id)
+                    .expect("checked above");
+                task.deps.push(dep_id);
+            }
+            Mutation::RemoveTaskDep { id, dep_id } => {
+                let task = self
+                    .snapshot
+                    .tasks
+                    .iter_mut()
+                    .find(|task| task.id == id)
+                    .ok_or_else(|| dep_error(format!("task #{id} does not exist")))?;
+                if !task.deps.contains(&dep_id) {
+                    return Err(dep_error(format!(
+                        "task #{id} does not depend on task #{dep_id}"
+                    )));
+                }
+                task.deps.retain(|&dep| dep != dep_id);
+            }
+            Mutation::AddPlanDep { id, dep_id } => {
+                let refused = add_dep_refusal(
+                    "plan",
+                    id,
+                    dep_id,
+                    &self
+                        .snapshot
+                        .plans
+                        .iter()
+                        .map(|plan| (plan.id, plan.deps.clone()))
+                        .collect(),
+                );
+                if let Some(error) = refused {
+                    return Err(error);
+                }
+                let plan = self
+                    .snapshot
+                    .plans
+                    .iter_mut()
+                    .find(|plan| plan.id == id)
+                    .expect("checked above");
+                plan.deps.push(dep_id);
+            }
+            Mutation::RemovePlanDep { id, dep_id } => {
+                let plan = self
+                    .snapshot
+                    .plans
+                    .iter_mut()
+                    .find(|plan| plan.id == id)
+                    .ok_or_else(|| dep_error(format!("plan #{id} does not exist")))?;
+                if !plan.deps.contains(&dep_id) {
+                    return Err(dep_error(format!(
+                        "plan #{id} does not depend on plan #{dep_id}"
+                    )));
+                }
+                plan.deps.retain(|&dep| dep != dep_id);
             }
             Mutation::SetActivePlan(id) => self.snapshot.meta.active_plan = id,
             Mutation::StealPlan(_) => self.claim_owner = Some("fake-actor"),
@@ -180,6 +260,38 @@ impl ApplicationPort for FakeApplication {
         input.read_to_end(&mut self.mcp_input)?;
         Ok(CapabilityMcpOutcome::Complete)
     }
+}
+
+fn dep_error(detail: impl std::fmt::Display) -> AppError {
+    AppError::Message(format!("invalid dependency mutation: {detail}"))
+}
+
+/// Store-mirrored refusal checks shared by the task and plan dep fakes.
+fn add_dep_refusal(
+    kind: &str,
+    id: u64,
+    dep_id: u64,
+    graph: &std::collections::BTreeMap<u64, Vec<u64>>,
+) -> Option<AppError> {
+    if id == dep_id {
+        return Some(dep_error(format!("{kind} #{id} cannot depend on itself")));
+    }
+    for endpoint in [id, dep_id] {
+        if !graph.contains_key(&endpoint) {
+            return Some(dep_error(format!("{kind} #{endpoint} does not exist")));
+        }
+    }
+    if graph.get(&id).is_some_and(|deps| deps.contains(&dep_id)) {
+        return Some(dep_error(format!(
+            "{kind} #{id} already depends on {kind} #{dep_id}"
+        )));
+    }
+    if would_create_cycle(graph, id, dep_id) {
+        return Some(dep_error(format!(
+            "{kind} #{id} depending on {kind} #{dep_id} would create a dependency cycle"
+        )));
+    }
+    None
 }
 
 #[test]
@@ -270,6 +382,7 @@ fn seeded() -> FakeApplication {
         claim_epoch: 0,
         claim_owner: None,
         ulid: None,
+        deps: Vec::new(),
     };
     let task = |id: u64, title: &str, status: TaskStatus| Task {
         id,
@@ -282,6 +395,7 @@ fn seeded() -> FakeApplication {
         hold_reason: None,
         actor: None,
         ulid: None,
+        deps: Vec::new(),
     };
     FakeApplication {
         snapshot: ProjectSnapshot::new(
@@ -407,6 +521,233 @@ fn plan_hold_and_resume_round_trip_through_every_surface() {
     assert_eq!(
         stdout,
         "next: [todo] #1 context command (plan: Build CLI)\n"
+    );
+}
+
+#[test]
+fn dep_blocked_tasks_surface_in_next_and_context_on_both_formats() {
+    let mut application = seeded();
+    // Task #1 (todo) now waits on a fresh open task #3.
+    application.snapshot.tasks[0].deps = vec![3];
+    application.snapshot.tasks.push(Task {
+        id: 3,
+        plan_id: 1,
+        title: "publish docs".to_owned(),
+        status: TaskStatus::Todo,
+        order: 3,
+        created_at: Timestamp::Zero,
+        updated_at: Timestamp::Zero,
+        hold_reason: None,
+        actor: None,
+        ulid: None,
+        deps: Vec::new(),
+    });
+
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "next"]);
+    assert_eq!(
+        stdout,
+        "next: [todo] #3 publish docs (plan: Build CLI)\nskipped: #1 (waiting on #3)\n"
+    );
+
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "next", "--json"]);
+    assert!(stdout.contains("\"skipped\""));
+    assert!(stdout.contains("\"task_id\": 1"));
+    assert!(stdout.contains("\"waiting_on\""));
+
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "context"]);
+    assert!(stdout.contains(
+        "## Waiting on dependencies (project-wide)\n\
+         - #1 context command (plan 1) [waiting on #3]\n"
+    ));
+
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "context", "--json"]);
+    assert!(stdout.contains("\"waiting_on_deps\""));
+    assert!(stdout.contains("\"waiting_on\": [\n        3\n      ]"));
+}
+
+#[test]
+fn task_dep_add_list_remove_round_trip_on_both_formats() {
+    let mut application = seeded();
+    let (result, stdout, stderr) = invoke_with(
+        &mut application,
+        &["ptrack", "task", "dep", "add", "1", "2"],
+    );
+    assert_eq!(result.expect("add"), RunOutcome::ExitSuccess);
+    assert_eq!(stdout, "task #1 depends on task #2\n");
+    assert!(stderr.is_empty());
+
+    let (result, stdout, _) =
+        invoke_with(&mut application, &["ptrack", "task", "dep", "list", "1"]);
+    assert_eq!(result.expect("list"), RunOutcome::ExitSuccess);
+    assert_eq!(stdout, "#2 [done] init command (plan 1)\n");
+
+    let (result, stdout, _) = invoke_with(
+        &mut application,
+        &["ptrack", "task", "dep", "list", "1", "--json"],
+    );
+    assert_eq!(result.expect("list json"), RunOutcome::ExitSuccess);
+    assert_eq!(
+        stdout,
+        "[\n  {\n    \"id\": 2,\n    \"title\": \"init command\",\n    \"status\": \"done\"\n  }\n]\n"
+    );
+
+    let (result, stdout, _) = invoke_with(
+        &mut application,
+        &["ptrack", "task", "dep", "remove", "1", "2"],
+    );
+    assert_eq!(result.expect("remove"), RunOutcome::ExitSuccess);
+    assert_eq!(stdout, "task #1 no longer depends on task #2\n");
+
+    let (result, stdout, _) =
+        invoke_with(&mut application, &["ptrack", "task", "dep", "list", "1"]);
+    assert_eq!(result.expect("empty list"), RunOutcome::ExitSuccess);
+    assert!(stdout.is_empty());
+}
+
+#[test]
+fn plan_dep_add_list_remove_round_trip_on_both_formats() {
+    let mut application = seeded();
+    application.snapshot.plans.push(Plan {
+        id: 2,
+        title: "Ship docs".to_owned(),
+        status: PlanStatus::Done,
+        milestone_id: 0,
+        order: 2,
+        created_at: Timestamp::Zero,
+        updated_at: Timestamp::Zero,
+        hold_reason: None,
+        actor: None,
+        claim_conflict: false,
+        claim_epoch: 0,
+        claim_owner: None,
+        ulid: None,
+        deps: Vec::new(),
+    });
+
+    let (result, stdout, stderr) = invoke_with(
+        &mut application,
+        &["ptrack", "plan", "dep", "add", "1", "2"],
+    );
+    assert_eq!(result.expect("add"), RunOutcome::ExitSuccess);
+    assert_eq!(stdout, "plan #1 depends on plan #2\n");
+    assert!(stderr.is_empty());
+
+    let (result, stdout, _) =
+        invoke_with(&mut application, &["ptrack", "plan", "dep", "list", "1"]);
+    assert_eq!(result.expect("list"), RunOutcome::ExitSuccess);
+    assert_eq!(stdout, "#2 [done] Ship docs\n");
+
+    let (result, stdout, _) = invoke_with(
+        &mut application,
+        &["ptrack", "plan", "dep", "list", "1", "--json"],
+    );
+    assert_eq!(result.expect("list json"), RunOutcome::ExitSuccess);
+    assert_eq!(
+        stdout,
+        "[\n  {\n    \"id\": 2,\n    \"title\": \"Ship docs\",\n    \"status\": \"done\"\n  }\n]\n"
+    );
+
+    let (result, stdout, _) = invoke_with(
+        &mut application,
+        &["ptrack", "plan", "dep", "remove", "1", "2"],
+    );
+    assert_eq!(result.expect("remove"), RunOutcome::ExitSuccess);
+    assert_eq!(stdout, "plan #1 no longer depends on plan #2\n");
+
+    let (result, stdout, _) =
+        invoke_with(&mut application, &["ptrack", "plan", "dep", "list", "1"]);
+    assert_eq!(result.expect("empty list"), RunOutcome::ExitSuccess);
+    assert!(stdout.is_empty());
+}
+
+#[test]
+fn task_dep_refusals_surface_the_store_sentences() {
+    let mut application = seeded();
+    let (result, _, _) = invoke_with(
+        &mut application,
+        &["ptrack", "task", "dep", "add", "1", "2"],
+    );
+    result.expect("seed edge");
+
+    for (args, expected) in [
+        (
+            ["ptrack", "task", "dep", "add", "2", "1"].as_slice(),
+            "invalid dependency mutation: task #2 depending on task #1 would create a dependency cycle",
+        ),
+        (
+            ["ptrack", "task", "dep", "add", "1", "1"].as_slice(),
+            "invalid dependency mutation: task #1 cannot depend on itself",
+        ),
+        (
+            ["ptrack", "task", "dep", "add", "1", "99"].as_slice(),
+            "invalid dependency mutation: task #99 does not exist",
+        ),
+        (
+            ["ptrack", "task", "dep", "add", "1", "2"].as_slice(),
+            "invalid dependency mutation: task #1 already depends on task #2",
+        ),
+        (
+            ["ptrack", "task", "dep", "remove", "1", "99"].as_slice(),
+            "invalid dependency mutation: task #1 does not depend on task #99",
+        ),
+        (
+            ["ptrack", "task", "dep", "list", "99"].as_slice(),
+            "not found",
+        ),
+    ] {
+        let (result, stdout, stderr) = invoke_with(&mut application, args);
+        assert!(stdout.is_empty(), "unexpected stdout for {args:?}");
+        assert!(stderr.is_empty(), "unexpected stderr for {args:?}");
+        assert_eq!(result.expect_err("refused").to_string(), expected);
+    }
+}
+
+#[test]
+fn plan_dep_refusals_surface_the_store_sentences() {
+    let mut application = seeded();
+    for (args, expected) in [
+        (
+            ["ptrack", "plan", "dep", "add", "1", "1"].as_slice(),
+            "invalid dependency mutation: plan #1 cannot depend on itself",
+        ),
+        (
+            ["ptrack", "plan", "dep", "add", "1", "99"].as_slice(),
+            "invalid dependency mutation: plan #99 does not exist",
+        ),
+        (
+            ["ptrack", "plan", "dep", "remove", "1", "99"].as_slice(),
+            "invalid dependency mutation: plan #1 does not depend on plan #99",
+        ),
+        (
+            ["ptrack", "plan", "dep", "list", "99"].as_slice(),
+            "not found",
+        ),
+    ] {
+        let (result, stdout, stderr) = invoke_with(&mut application, args);
+        assert!(stdout.is_empty(), "unexpected stdout for {args:?}");
+        assert!(stderr.is_empty(), "unexpected stderr for {args:?}");
+        assert_eq!(result.expect_err("refused").to_string(), expected);
+    }
+}
+
+#[test]
+fn dep_help_and_arg_count_errors_are_coherent() {
+    let (result, stdout, _) = invoke(&["ptrack", "task", "dep", "--help"]);
+    assert_eq!(result.expect("group help"), RunOutcome::ExitSuccess);
+    assert!(stdout.starts_with("Manage task dependency edges"));
+    assert!(stdout.contains("  ptrack task dep [command]"));
+    assert!(stdout.contains("  add"));
+    assert!(stdout.contains("  list"));
+    assert!(stdout.contains("  remove"));
+
+    let (_, stdout, _) = invoke(&["ptrack", "help", "plan", "dep", "add"]);
+    assert!(stdout.starts_with("Add a dependency edge"));
+    assert!(stdout.contains("  ptrack plan dep add <id> <dep-id> [flags]"));
+
+    let (result, _, _) = invoke(&["ptrack", "task", "dep", "add", "1"]);
+    assert_eq!(
+        result.expect_err("arity").to_string(),
+        "accepts 2 arg(s), received 1"
     );
 }
 

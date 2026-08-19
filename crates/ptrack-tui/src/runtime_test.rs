@@ -120,6 +120,7 @@ fn snapshot(status: TaskStatus) -> ProjectSnapshot {
             claim_epoch: 0,
             claim_owner: None,
             ulid: None,
+            deps: Vec::new(),
         }],
         vec![Task {
             id: 2,
@@ -132,6 +133,7 @@ fn snapshot(status: TaskStatus) -> ProjectSnapshot {
             hold_reason: None,
             actor: None,
             ulid: None,
+            deps: Vec::new(),
         }],
         vec![],
         vec![],

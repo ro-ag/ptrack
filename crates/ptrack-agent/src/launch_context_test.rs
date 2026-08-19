@@ -116,6 +116,7 @@ fn plan(id: u64) -> Plan {
         claim_epoch: 0,
         claim_owner: None,
         ulid: None,
+        deps: Vec::new(),
     }
 }
 
@@ -131,6 +132,7 @@ fn task(id: u64, plan_id: u64) -> Task {
         hold_reason: None,
         actor: None,
         ulid: None,
+        deps: Vec::new(),
     }
 }
 

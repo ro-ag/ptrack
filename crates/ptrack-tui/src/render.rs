@@ -7,7 +7,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use ptrack_core::{
     Counts, Issue, IssueStatus, MemoryKind, MilestoneStatus, PlanStatus, Severity, TaskStatus,
-    Timestamp,
+    Timestamp, open_plan_deps, open_task_deps,
 };
 
 use crate::model::{BOARD_STATUSES, BOARD_TITLES, DetailTarget, Model, PaneFocus, TAB_NAMES, Tab};
@@ -450,7 +450,8 @@ fn draw_board(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             .map(|(index, task)| {
                 selected(
                     &format!(
-                        "{}#{} {}",
+                        "{}{}#{} {}",
+                        chain_mark(!open_task_deps(&model.snapshot, task).is_empty()),
                         hold_mark(task.hold_reason.as_deref()),
                         task.id,
                         task.title
@@ -910,6 +911,10 @@ fn detail_content(model: &Model) -> (String, Vec<Line<'static>>) {
             if let Some(reason) = task.hold_reason.as_deref() {
                 rows.push(line_kv("On hold", &format!("⏸ {reason}")));
             }
+            if !task.deps.is_empty() {
+                let open = open_task_deps(&model.snapshot, task);
+                rows.push(line_kv("Deps", &deps_line(&task.deps, &open)));
+            }
             if let Some(plan) = model.snapshot.plan(task.plan_id) {
                 rows.push(line_kv("Plan", &format!("#{} {}", plan.id, plan.title)));
             }
@@ -977,6 +982,10 @@ fn detail_content(model: &Model) -> (String, Vec<Line<'static>>) {
             ];
             if let Some(reason) = plan.hold_reason.as_deref() {
                 rows.push(line_kv("On hold", &format!("⏸ {reason}")));
+            }
+            if !plan.deps.is_empty() {
+                let open = open_plan_deps(&model.snapshot, plan);
+                rows.push(line_kv("Deps", &deps_line(&plan.deps, &open)));
             }
             if let Some(owner) = plan.claim_owner.as_deref() {
                 let name = model.snapshot.meta.actor_name(owner).unwrap_or(owner);
@@ -1821,6 +1830,25 @@ fn hold_mark(reason: Option<&str>) -> &'static str {
 
 fn hold_span(reason: Option<&str>) -> Span<'static> {
     Span::styled(hold_mark(reason), Style::default().fg(AMBER))
+}
+
+/// Compact chain marker for a task or plan with open dependencies. Like hold,
+/// deps are orthogonal to status: the row keeps its column and only gains the
+/// badge; the dependency IDs are spelled out in the item view.
+fn chain_mark(open: bool) -> &'static str {
+    if open { "⛓ " } else { "" }
+}
+
+/// Renders declared dependencies as `#3 (open), #7 (done)`; a dep is open
+/// exactly when it appears in `open`, the snapshot-computed open subset.
+fn deps_line(deps: &[u64], open: &[u64]) -> String {
+    deps.iter()
+        .map(|id| {
+            let state = if open.contains(id) { "open" } else { "done" };
+            format!("#{id} ({state})")
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Claim marker naming the identity holding a plan's claim, or nothing when

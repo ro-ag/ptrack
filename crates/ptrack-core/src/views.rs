@@ -1,6 +1,9 @@
 use std::fmt::Write as _;
 
-use crate::report::{ReportError, claim_marker, hold_marker, note_line, notes_markdown, task_line};
+use crate::report::{
+    ReportError, claim_marker, hold_marker, id_list, note_line, notes_markdown, open_plan_deps,
+    open_task_deps, task_line,
+};
 use crate::{NoteLine, ProjectSnapshot, TaskLine, TaskStatus};
 
 /// A compact plan reference.
@@ -29,12 +32,28 @@ pub struct NextView {
     /// Set when the active plan's own hold is why no task was picked, so a
     /// consumer never has to parse it back out of `message`.
     pub plan_hold_reason: Option<String>,
+    /// Open plan IDs the active plan waits on; nonempty when those deps are
+    /// why no task was picked.
+    pub plan_waiting_on: Vec<u64>,
+    /// Candidates passed over only because their task-deps are still open.
+    pub skipped: Vec<DepSkip>,
+}
+
+/// A candidate task passed over because its dependencies are still open.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DepSkip {
+    pub task_id: u64,
+    /// The open dependency IDs blocking the task, in stored order.
+    pub waiting_on: Vec<u64>,
 }
 
 /// Returns the first doing task in the active plan, then the first todo task.
 ///
 /// Held tasks are never selected, and a held active plan short-circuits with a
-/// message naming the reason instead of picking any task at all.
+/// message naming the reason instead of picking any task at all. Open
+/// dependencies work the same way, computed rather than stored: a plan waiting
+/// on open plan-deps short-circuits, and a task waiting on open task-deps is
+/// passed over and reported in `skipped`.
 ///
 /// # Errors
 ///
@@ -47,6 +66,8 @@ pub fn next(snapshot: &ProjectSnapshot) -> Result<NextView, ReportError> {
             plan_title: String::new(),
             message: "no active plan (set one with 'ptrack plan use <id>')".to_owned(),
             plan_hold_reason: None,
+            plan_waiting_on: Vec::new(),
+            skipped: Vec::new(),
         });
     }
     let plan = snapshot
@@ -58,12 +79,37 @@ pub fn next(snapshot: &ProjectSnapshot) -> Result<NextView, ReportError> {
             plan_title: plan.title.clone(),
             message: format!("active plan on hold: {reason}"),
             plan_hold_reason: Some(reason.clone()),
+            plan_waiting_on: Vec::new(),
+            skipped: Vec::new(),
         });
     }
-    let tasks: Vec<_> = snapshot
+    let plan_waiting_on = open_plan_deps(snapshot, plan);
+    if !plan_waiting_on.is_empty() {
+        return Ok(NextView {
+            task: None,
+            plan_title: plan.title.clone(),
+            message: format!("active plan waiting on {}", id_list(&plan_waiting_on)),
+            plan_hold_reason: None,
+            plan_waiting_on,
+            skipped: Vec::new(),
+        });
+    }
+    let mut tasks = Vec::new();
+    let mut skipped = Vec::new();
+    for task in snapshot
         .tasks_for_plan(plan.id)
         .filter(|task| task.hold_reason.is_none())
-        .collect();
+    {
+        let waiting_on = open_task_deps(snapshot, task);
+        if waiting_on.is_empty() {
+            tasks.push(task);
+        } else if matches!(task.status, TaskStatus::Doing | TaskStatus::Todo) {
+            skipped.push(DepSkip {
+                task_id: task.id,
+                waiting_on,
+            });
+        }
+    }
     let selected = tasks
         .iter()
         .find(|task| task.status == TaskStatus::Doing)
@@ -74,6 +120,8 @@ pub fn next(snapshot: &ProjectSnapshot) -> Result<NextView, ReportError> {
             plan_title: plan.title.clone(),
             message: String::new(),
             plan_hold_reason: None,
+            plan_waiting_on: Vec::new(),
+            skipped,
         });
     }
     Ok(NextView {
@@ -81,20 +129,33 @@ pub fn next(snapshot: &ProjectSnapshot) -> Result<NextView, ReportError> {
         plan_title: plan.title.clone(),
         message: "no actionable task in the active plan".to_owned(),
         plan_hold_reason: None,
+        plan_waiting_on: Vec::new(),
+        skipped,
     })
 }
 
 impl NextView {
-    /// Renders the exact Go-compatible next-task Markdown.
+    /// Renders the exact Go-compatible next-task Markdown, plus one
+    /// `skipped:` line per dep-blocked candidate.
     #[must_use]
     pub fn markdown(&self) -> String {
-        let Some(task) = &self.task else {
-            return format!("{}\n", self.message);
+        let mut output = match &self.task {
+            Some(task) => format!(
+                "next: [{}] #{} {} (plan: {})\n",
+                task.status, task.id, task.title, self.plan_title
+            ),
+            None => format!("{}\n", self.message),
         };
-        format!(
-            "next: [{}] #{} {} (plan: {})\n",
-            task.status, task.id, task.title, self.plan_title
-        )
+        for skip in &self.skipped {
+            writeln!(
+                &mut output,
+                "skipped: #{} (waiting on {})",
+                skip.task_id,
+                id_list(&skip.waiting_on)
+            )
+            .expect("writing to String cannot fail");
+        }
+        output
     }
 }
 

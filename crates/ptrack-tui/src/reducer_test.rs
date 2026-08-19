@@ -77,6 +77,7 @@ fn overview_task_note_falls_back_to_the_current_plan() {
         claim_epoch: 0,
         claim_owner: None,
         ulid: None,
+        deps: Vec::new(),
     });
     value.welcome = false;
     value.focus = PaneFocus::Tasks;
@@ -114,6 +115,7 @@ fn detail_scroll_is_bounded_to_the_last_full_viewport() {
         claim_epoch: 0,
         claim_owner: None,
         ulid: None,
+        deps: Vec::new(),
     });
     value.welcome = false;
     value.detail = Some(DetailTarget::Plan(1));
@@ -144,6 +146,7 @@ fn board_column_change_is_deferred_until_the_mutation_and_reload_succeed() {
         claim_epoch: 0,
         claim_owner: None,
         ulid: None,
+        deps: Vec::new(),
     });
     value.snapshot.tasks.push(Task {
         id: 2,
@@ -156,6 +159,7 @@ fn board_column_change_is_deferred_until_the_mutation_and_reload_succeed() {
         hold_reason: None,
         actor: None,
         ulid: None,
+        deps: Vec::new(),
     });
     value.welcome = false;
     value.tab = Tab::Board;

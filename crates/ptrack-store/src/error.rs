@@ -179,6 +179,9 @@ pub enum StoreError {
     /// A claim-gated mutation was attempted against a plan claimed by someone
     /// else, or a claim operation was invalid for the caller's identity.
     InvalidClaim(String),
+    /// A dependency-edge mutation named a missing record, a self-dependency,
+    /// a duplicate or absent edge, or an edge that would close a cycle.
+    InvalidDependency(String),
     /// A stored record envelope was invalid.
     Envelope(EnvelopeError),
     /// A filesystem operation failed.
@@ -360,6 +363,9 @@ impl fmt::Display for StoreError {
             }
             Self::InvalidClaim(detail) => {
                 write!(formatter, "{INVALID_CLAIM_PREFIX}{detail}")
+            }
+            Self::InvalidDependency(detail) => {
+                write!(formatter, "invalid dependency mutation: {detail}")
             }
             Self::Envelope(error) => error.fmt(formatter),
             Self::Io(error) => error.fmt(formatter),

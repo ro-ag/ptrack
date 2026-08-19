@@ -146,6 +146,7 @@ fn populated_model() -> Model {
             created_at: stamp(1_700_000_000),
             updated_at: stamp(1_700_000_100),
             hold_reason: None,
+                                                                                             deps: Vec::new(),
         actor: None, claim_conflict: false, claim_epoch: 0,claim_owner: None, ulid: None,}],
         vec![Task {
             id: 3,
@@ -156,6 +157,7 @@ fn populated_model() -> Model {
             created_at: stamp(1_700_000_000),
             updated_at: stamp(1_700_000_100),
             hold_reason: None,
+                                    deps: Vec::new(),
         actor: None, ulid: None,}],
         vec![Issue {
             id: 9,
@@ -281,6 +283,7 @@ fn list_window_centers_cursor_truncates_and_fills_selection_row() {
             claim_epoch: 0,
             claim_owner: None,
             ulid: None,
+            deps: Vec::new(),
         })
         .collect();
     value.plan_cursor = 12;
@@ -520,6 +523,7 @@ fn inactive_plan_rows_reserve_the_active_star_column() {
         claim_epoch: 0,
         claim_owner: None,
         ulid: None,
+        deps: Vec::new(),
     });
     value.focus = crate::model::PaneFocus::Tasks;
 
@@ -583,6 +587,51 @@ fn held_plans_and_tasks_keep_their_column_and_gain_a_pause_marker() {
         plan_detail.contains("⏸ #3 Render every screen"),
         "{plan_detail}"
     );
+}
+
+#[test]
+fn open_dep_tasks_gain_a_chain_marker_and_details_spell_the_edges_out() {
+    let mut value = populated_model();
+    value.welcome = false;
+    let mut dep = value.snapshot.tasks[0].clone();
+    dep.id = 4;
+    dep.title = "Dep target".to_owned();
+    dep.status = TaskStatus::Todo;
+    value.snapshot.tasks.push(dep);
+    value.snapshot.tasks[0].deps = vec![4];
+    let mut dep_plan = value.snapshot.plans[0].clone();
+    dep_plan.id = 2;
+    dep_plan.title = "Upstream plan".to_owned();
+    dep_plan.status = PlanStatus::Done;
+    value.snapshot.plans.push(dep_plan);
+    value.snapshot.plans[0].deps = vec![2];
+
+    // The board card gains the chain marker while its dep is open, in its
+    // own status column — deps never move a card or add a lane.
+    value.tab = Tab::Board;
+    let board = rendered(&value, 120, 30);
+    assert!(board.contains("⛓ #3 Render every screen"), "{board}");
+
+    // The item view spells every edge out with its computed state.
+    value.tab = Tab::Overview;
+    value.detail = Some(DetailTarget::Task(3));
+    let task_detail = rendered(&value, 100, 30);
+    assert!(task_detail.contains("Deps      #4 (open)"), "{task_detail}");
+
+    value.detail = Some(DetailTarget::Plan(1));
+    let plan_detail = rendered(&value, 100, 30);
+    assert!(plan_detail.contains("Deps      #2 (done)"), "{plan_detail}");
+
+    // A satisfied dep drops the marker but stays listed in the item view.
+    value.snapshot.tasks[1].status = TaskStatus::Done;
+    value.detail = None;
+    value.tab = Tab::Board;
+    let board = rendered(&value, 120, 30);
+    assert!(!board.contains('⛓'), "{board}");
+    value.tab = Tab::Overview;
+    value.detail = Some(DetailTarget::Task(3));
+    let task_detail = rendered(&value, 100, 30);
+    assert!(task_detail.contains("Deps      #4 (done)"), "{task_detail}");
 }
 
 const ACTOR_A: &str = "01hzvyekq3s7m8w9x0abcdefgh";

@@ -141,6 +141,7 @@ fn record(collection: Collection, key: OwnedRecordKey, payload: &[u8]) -> Import
                 hold_reason: None,
                 actor: None,
                 ulid: None,
+                deps: Vec::new(),
             }))
             .unwrap()
         }

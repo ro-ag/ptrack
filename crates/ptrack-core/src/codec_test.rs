@@ -1,4 +1,4 @@
-use crate::codec::HOLD_REASON_PAYLOAD_SCHEMA;
+use crate::codec::{ACTOR_PAYLOAD_SCHEMA, HOLD_REASON_PAYLOAD_SCHEMA};
 use crate::test_support;
 use crate::{
     Capability, CapabilityAuditPolicy, CapabilityKind, CapabilityLimits, CodecError, Digest32,
@@ -137,6 +137,7 @@ fn plan_golden_bytes_pin_enum_and_signed_order() {
         claim_epoch: 0,
         claim_owner: None,
         ulid: None,
+        deps: Vec::new(),
     });
     let expected = [
         0, 0, 0, 0, 0, 0, 0, 1, // id
@@ -150,6 +151,7 @@ fn plan_golden_bytes_pin_enum_and_signed_order() {
         0, // no claim owner
         0, 0, 0, 0, 0, 0, 0, 0, // claim epoch
         0, // no claim conflict
+        0, 0, 0, 0, // empty dependency list
     ];
     assert_eq!(encode_record(&record).expect("encode"), expected);
     assert_round_trip(&record);
@@ -216,6 +218,7 @@ fn malformed_and_trailing_payloads_are_rejected() {
         claim_epoch: 0,
         claim_owner: None,
         ulid: None,
+        deps: Vec::new(),
     });
     let encoded = encode_record(&plan).expect("encode");
     assert!(matches!(
@@ -253,6 +256,7 @@ fn invalid_utf8_enum_and_time_tags_are_rejected() {
         claim_epoch: 0,
         claim_owner: None,
         ulid: None,
+        deps: Vec::new(),
     }))
     .expect("encode");
     plan[12] = 99;
@@ -442,6 +446,7 @@ fn hold_reason_round_trips_and_pins_its_schema_2_bytes() {
         claim_epoch: 0,
         claim_owner: None,
         ulid: None,
+        deps: Vec::new(),
     });
     let mut expected = vec![
         0, 0, 0, 0, 0, 0, 0, 1, // id
@@ -470,6 +475,7 @@ fn hold_reason_round_trips_and_pins_its_schema_2_bytes() {
         hold_reason: Some("blocked upstream".to_owned()),
         actor: None,
         ulid: None,
+        deps: Vec::new(),
     });
     assert_round_trip(&task);
 }
@@ -490,6 +496,7 @@ fn unknown_payload_schemas_fail_closed_before_any_layout_is_assumed() {
         claim_epoch: 0,
         claim_owner: None,
         ulid: None,
+        deps: Vec::new(),
     });
     let payload = encode_record(&record).expect("encode");
     for schema in [0, NATIVE_PAYLOAD_SCHEMA + 1, u32::MAX] {
@@ -516,6 +523,7 @@ fn a_set_hold_reason_has_no_canonical_schema_1_form() {
         claim_epoch: 0,
         claim_owner: None,
         ulid: None,
+        deps: Vec::new(),
     };
     let schema_2 = encode_record_at_schema(
         &NativeRecord::Plan(plan.clone()),
@@ -563,6 +571,7 @@ fn a_set_hold_reason_has_no_canonical_schema_1_form() {
         hold_reason: Some("blocked upstream".to_owned()),
         actor: None,
         ulid: None,
+        deps: Vec::new(),
     });
     assert_eq!(
         encode_record_at_schema(&task, MIN_NATIVE_PAYLOAD_SCHEMA),
@@ -616,6 +625,57 @@ fn set_schema_3_fields_have_no_canonical_older_form() {
             "schema {schema}"
         );
     }
+}
+
+#[test]
+fn deps_round_trip_and_pin_their_schema_4_suffix() {
+    // A schema-3 payload decodes with empty deps, and re-encoding it at
+    // schema 4 appends exactly the empty-list count to the schema-3 bytes.
+    let mut plan = test_support::plan(1, "x", PlanStatus::Active, 0, 0);
+    let schema_3 =
+        encode_record_at_schema(&NativeRecord::Plan(plan.clone()), ACTOR_PAYLOAD_SCHEMA).unwrap();
+    let decoded = decode_record_at_schema(RecordKind::Plan, ACTOR_PAYLOAD_SCHEMA, &schema_3)
+        .expect("schema 3 decode");
+    let NativeRecord::Plan(ref reread) = decoded else {
+        panic!("expected a plan");
+    };
+    assert_eq!(reread.deps, Vec::<u64>::new());
+    let mut upgraded = schema_3.clone();
+    upgraded.extend_from_slice(&[0, 0, 0, 0]); // empty dependency list
+    assert_eq!(encode_record(&decoded).expect("schema 4 encode"), upgraded);
+
+    // Set deps occupy exactly the appended suffix and survive a round trip.
+    plan.deps = vec![2, 3];
+    let encoded = encode_record(&NativeRecord::Plan(plan.clone())).expect("encode");
+    let mut expected = schema_3;
+    expected.extend_from_slice(&[0, 0, 0, 2]);
+    expected.extend_from_slice(&2u64.to_be_bytes());
+    expected.extend_from_slice(&3u64.to_be_bytes());
+    assert_eq!(encoded, expected);
+    assert_round_trip(&NativeRecord::Plan(plan));
+
+    let mut task = test_support::task(4, 1, "t", TaskStatus::Todo, 0);
+    task.deps = vec![9];
+    assert_round_trip(&NativeRecord::Task(task));
+}
+
+#[test]
+fn set_deps_have_no_canonical_older_form() {
+    let mut plan = test_support::plan(1, "x", PlanStatus::Active, 0, 0);
+    plan.deps = vec![2];
+    for schema in [1, 2, 3] {
+        assert_eq!(
+            encode_record_at_schema(&NativeRecord::Plan(plan.clone()), schema),
+            Err(CodecError::NonCanonical),
+            "schema {schema}"
+        );
+    }
+    let mut task = test_support::task(4, 1, "t", TaskStatus::Todo, 0);
+    task.deps = vec![1];
+    assert_eq!(
+        encode_record_at_schema(&NativeRecord::Task(task), ACTOR_PAYLOAD_SCHEMA),
+        Err(CodecError::NonCanonical)
+    );
 }
 
 #[test]
