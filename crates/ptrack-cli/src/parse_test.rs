@@ -35,3 +35,51 @@ fn aliases_and_cobra_group_fallbacks_are_preserved() {
         .expect("goal defaults to show");
     assert_eq!(result, Preflight::GroupDefault(vec!["goal".to_owned()]));
 }
+
+#[test]
+fn plan_lifecycle_leaves_validate_flags_and_arg_counts() {
+    let error =
+        preflight(vec!["ptrack".into(), "plan".into(), "delete".into()]).expect_err("missing id");
+    assert_eq!(error.to_string(), "accepts 1 arg(s), received 0");
+    let result = preflight(vec![
+        "ptrack".into(),
+        "plan".into(),
+        "delete".into(),
+        "3".into(),
+        "--force".into(),
+    ])
+    .expect("delete parses");
+    assert!(matches!(result, Preflight::Run { path, .. } if path == ["plan", "delete"]));
+    let result = preflight(vec![
+        "ptrack".into(),
+        "plan".into(),
+        "move".into(),
+        "3".into(),
+        "--to".into(),
+        "beta".into(),
+    ])
+    .expect("move parses");
+    assert!(matches!(result, Preflight::Run { path, .. } if path == ["plan", "move"]));
+    let error = preflight(vec![
+        "ptrack".into(),
+        "plan".into(),
+        "move".into(),
+        "3".into(),
+        "--bogus".into(),
+        "x".into(),
+    ])
+    .expect_err("unknown flag");
+    assert_eq!(error.to_string(), "unknown flag: --bogus");
+    let result = preflight(vec![
+        "ptrack".into(),
+        "plan".into(),
+        "copy".into(),
+        "3".into(),
+        "--to".into(),
+        "beta".into(),
+        "--as".into(),
+        "New".into(),
+    ])
+    .expect("copy parses");
+    assert!(matches!(result, Preflight::Run { path, .. } if path == ["plan", "copy"]));
+}

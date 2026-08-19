@@ -516,7 +516,7 @@ Put `#<task-id>` in a commit message to link the commit to that task.
 | `ptrack summary show\|set S` | Show or update the rolling project summary. |
 | `ptrack config set user <name>\|show` | Set or show the per-machine identity used to claim plans. |
 | `ptrack milestone add\|list\|show\|done\|open\|due\|rename` | Manage checkpoints that group plans. |
-| `ptrack plan add\|list\|show\|done\|use\|release\|rename\|hold\|resume` | Manage plans; `show` includes tasks and notes; `use <id>` claims it (`--steal` to take over), `release <id>` frees a claim; `hold <id> <reason…>` pauses one. |
+| `ptrack plan add\|list\|show\|done\|use\|release\|rename\|delete\|move\|copy\|hold\|resume` | Manage plans; `delete <id> --force` cascades to tasks and notes (issues detach, commit records survive unlinked); `move <id> --to <project>` relocates a plan subtree (copy-first, never lossy; `--as` renames on arrival); `copy` duplicates one (needs `--as` without `--to`). |
 | `ptrack task add\|list\|show\|start\|done\|block\|rename\|move\|convert\|hold\|resume` | Manage tasks; move them between plans, convert them into plans, or put one on hold with a reason. |
 | `ptrack issue add\|list\|show\|close\|open\|severity\|rename` | Track issues and bugs, optionally linked to tasks. |
 | `ptrack note add\|list` | Attach or list project, plan, and task notes. |

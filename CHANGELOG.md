@@ -6,6 +6,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Plan lifecycle operations. `ptrack plan delete <id> --force` permanently
+  removes a plan and cascades in one transaction: its tasks and every note
+  on the plan or its tasks are deleted, linked issues survive with the task
+  link cleared (each one is
+  listed), commit records survive as audit trail with their references
+  zeroed, and every active-plan pointer that named the plan resets. Without
+  `--force` the command only prints what would be destroyed. `ptrack plan
+  move <id> --to <project>` relocates a plan subtree to another registered
+  project — the copy commits in the target before the source delete runs, so
+  a crash can only ever leave a visible duplicate, never a loss; the plan
+  arrives unclaimed, holds travel, and the milestone link is dropped.
+  `ptrack plan copy <id> [--to <project>] --as "<title>"` duplicates a
+  subtree with freshly minted IDs (`--as` required when copying within the
+  same project). All three respect plan claims. The Desktop GUI gains its
+  first plan-level content mutations: a plan context menu (sidebar and board
+  header) with Rename (inline), Delete (with a cascade preview), and
+  Move/Copy behind a project picker, over five new bridge commands
+  (`RenamePlanV1`, `DeletePlanV1`, `MovePlanV1`, `CopyPlanV1`,
+  `ListProjectsV1`).
+
 ## [0.27.0] - 2026-08-18
 
 ### Added

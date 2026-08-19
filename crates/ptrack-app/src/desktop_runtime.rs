@@ -40,8 +40,9 @@ use crate::preferences::{PreferencesDocumentV1, preferences, reset_preferences, 
 use crate::terminal_windows::{TerminalWindowTab, TerminalWindows};
 use crate::{
     ActiveRuntime, AgentRuntimeService, AppError, AppResult, ApplicationPort,
-    LaunchedEventAuthority, LinkedAgentRuntimeHooks, Mutation, MutationResult, ProjectEndpoint,
-    TerminalRuntime, WorkspaceBindings,
+    LaunchedEventAuthority, LinkedAgentRuntimeHooks, Mutation, MutationResult,
+    PlanLifecycleOutcome, PlanLifecycleRequest, ProjectEndpoint, TerminalRuntime,
+    WorkspaceBindings,
 };
 
 const MAX_COMMAND_BYTES: usize = 1024 * 1024;
@@ -69,7 +70,7 @@ const WORKSPACE_OPERATION_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub const FIRST_RUN_GOAL_MAX_BYTES: usize = 4_096;
 
-const COMMANDS: [&str; 88] = [
+const COMMANDS: [&str; 93] = [
     "AcknowledgeAgentHandoffV2",
     "AddTask",
     "AddTaskNote",
@@ -86,10 +87,12 @@ const COMMANDS: [&str; 88] = [
     "CloseProject",
     "CloseTerminal",
     "CloseTerminalV2",
+    "CopyPlanV1",
     "CreateFirstPlanV1",
     "CreateFirstTaskV1",
     "CreateTerminal",
     "CreateTerminalV2",
+    "DeletePlanV1",
     "DisableCapabilityV2",
     "DismissAgentWorkflowV2",
     "DownloadUpdate",
@@ -120,6 +123,8 @@ const COMMANDS: [&str; 88] = [
     "InitializeProjectV1",
     "InstallShellCommand",
     "LaunchLinkedAgentV2",
+    "ListProjectsV1",
+    "MovePlanV1",
     "MoveTask",
     "MoveTaskV2",
     "MoveTaskV3",
@@ -135,6 +140,7 @@ const COMMANDS: [&str; 88] = [
     "PreviewProjectGuideV1",
     "PreviewTerminalWritebackV2",
     "RemoveCapabilityV2",
+    "RenamePlanV1",
     "RenameTask",
     "RenameTaskV2",
     "ResetApplicationState",
@@ -160,7 +166,7 @@ const COMMANDS: [&str; 88] = [
     "WriteTerminalMemoryV2",
 ];
 
-/// Exact current 88-method desktop bridge command allowlist.
+/// Exact current 93-method desktop bridge command allowlist.
 #[must_use]
 pub const fn allowed_desktop_commands() -> &'static [&'static str] {
     &COMMANDS
@@ -3358,6 +3364,94 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
                     Ok(Value::Null)
                 }
             }
+            "RenamePlanV1" => {
+                require_argument_count(method, arguments, 3)?;
+                let generation = u64_arg(arguments, 0)?;
+                self.require_generation(generation)?;
+                let title =
+                    trimmed_nonempty(string_arg(arguments, 2)?, "plan title cannot be empty")?;
+                lock(&self.application).mutate(Mutation::SetPlanTitle {
+                    id: u64_arg(arguments, 1)?,
+                    title,
+                })?;
+                Ok(json!({ "generation": self.generation }))
+            }
+            "DeletePlanV1" => {
+                require_argument_count(method, arguments, 3)?;
+                let generation = u64_arg(arguments, 0)?;
+                self.require_generation(generation)?;
+                let plan_id = u64_arg(arguments, 1)?;
+                let request = if bool_arg(arguments, 2)? {
+                    PlanLifecycleRequest::Delete { plan_id }
+                } else {
+                    PlanLifecycleRequest::DeletePreview { plan_id }
+                };
+                let outcome = lock(&self.application).plan_lifecycle(request)?;
+                let (summary, preview) = match outcome {
+                    PlanLifecycleOutcome::Preview(summary) => (summary, true),
+                    PlanLifecycleOutcome::Deleted(summary) => (summary, false),
+                    PlanLifecycleOutcome::Transferred(_) => {
+                        return Err(unavailable("plan delete result"));
+                    }
+                };
+                Ok(json!({
+                    "generation": self.generation,
+                    "preview": preview,
+                    "summary": delete_summary_json(&summary),
+                }))
+            }
+            "MovePlanV1" => {
+                require_argument_count(method, arguments, 4)?;
+                let generation = u64_arg(arguments, 0)?;
+                self.require_generation(generation)?;
+                let outcome =
+                    lock(&self.application).plan_lifecycle(PlanLifecycleRequest::Move {
+                        plan_id: u64_arg(arguments, 1)?,
+                        to: string_arg(arguments, 2)?.to_owned(),
+                        rename: optional_string(string_arg(arguments, 3)?),
+                    })?;
+                let PlanLifecycleOutcome::Transferred(summary) = outcome else {
+                    return Err(unavailable("plan move result"));
+                };
+                Ok(
+                    json!({ "generation": self.generation, "summary": transfer_summary_json(&summary) }),
+                )
+            }
+            "CopyPlanV1" => {
+                require_argument_count(method, arguments, 4)?;
+                let generation = u64_arg(arguments, 0)?;
+                self.require_generation(generation)?;
+                let outcome =
+                    lock(&self.application).plan_lifecycle(PlanLifecycleRequest::Copy {
+                        plan_id: u64_arg(arguments, 1)?,
+                        to: optional_string(string_arg(arguments, 2)?),
+                        rename: optional_string(string_arg(arguments, 3)?),
+                    })?;
+                let PlanLifecycleOutcome::Transferred(summary) = outcome else {
+                    return Err(unavailable("plan copy result"));
+                };
+                Ok(
+                    json!({ "generation": self.generation, "summary": transfer_summary_json(&summary) }),
+                )
+            }
+            "ListProjectsV1" => {
+                require_argument_count(method, arguments, 1)?;
+                let generation = u64_arg(arguments, 0)?;
+                self.require_generation(generation)?;
+                let projects = lock(&self.application).projects()?;
+                let current = self.endpoint.root.to_string_lossy().into_owned();
+                Ok(json!({
+                    "generation": self.generation,
+                    "projects": projects
+                        .iter()
+                        .map(|project| json!({
+                            "name": project.name,
+                            "path": project.path,
+                            "current": project.path == current,
+                        }))
+                        .collect::<Vec<_>>(),
+                }))
+            }
             "AddTaskNote" | "AddTaskNoteV2" => {
                 let (generation, offset) = if method == "AddTaskNoteV2" {
                     (u64_arg(arguments, 0)?, 1)
@@ -5629,6 +5723,46 @@ fn trimmed_nonempty(value: &str, error: &str) -> AppResult<String> {
     } else {
         Ok(value.to_owned())
     }
+}
+
+/// Treats an empty or blank bridge string argument as "not provided".
+fn optional_string(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_owned())
+    }
+}
+
+fn delete_summary_json(summary: &ptrack_store::PlanDeleteSummary) -> Value {
+    json!({
+        "planId": summary.plan_id,
+        "title": summary.title,
+        "tasks": summary.tasks,
+        "notes": summary.notes,
+        "commits": summary.commits_unlinked,
+        "detachedIssues": summary
+            .issues
+            .iter()
+            .map(|(id, title)| json!({ "id": id, "title": title }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn transfer_summary_json(summary: &crate::PlanTransferSummary) -> Value {
+    json!({
+        "sourcePlanId": summary.source_plan_id,
+        "newPlanId": summary.new_plan_id,
+        "title": summary.title,
+        "sourceProject": summary.source_project,
+        "targetProject": summary.target_project,
+        "moved": summary.moved,
+        "tasks": summary.tasks,
+        "notes": summary.notes,
+        "issues": summary.issues,
+        "commits": summary.commits,
+    })
 }
 
 fn first_run_title(value: &str, kind: &str) -> AppResult<String> {

@@ -4,7 +4,8 @@ use std::path::PathBuf;
 use ptrack_app::{
     ActorIdentity, AppError, AppResult, ApplicationPort, CapabilityCancellation,
     CapabilityMcpOutcome, GuideAction, HookAction, HookResult, INVALID_CLAIM_PREFIX,
-    INVALID_HOLD_PREFIX, InitRequest, InitResult, Mutation, MutationResult, ProcessOutput,
+    INVALID_HOLD_PREFIX, InitRequest, InitResult, Mutation, MutationResult, PlanDeleteSummary,
+    PlanLifecycleOutcome, PlanLifecycleRequest, PlanTransferSummary, ProcessOutput,
 };
 use ptrack_core::{
     Meta, Plan, PlanStatus, ProjectRef, ProjectSnapshot, Task, TaskStatus, Timestamp,
@@ -20,6 +21,8 @@ struct FakeApplication {
     mcp_input: Vec<u8>,
     identity: Option<ActorIdentity>,
     claim_owner: Option<&'static str>,
+    lifecycle_requests: Vec<PlanLifecycleRequest>,
+    lifecycle_results: Vec<AppResult<PlanLifecycleOutcome>>,
 }
 
 impl Default for FakeApplication {
@@ -50,6 +53,8 @@ impl Default for FakeApplication {
             mcp_input: Vec::new(),
             identity: None,
             claim_owner: None,
+            lifecycle_requests: Vec::new(),
+            lifecycle_results: Vec::new(),
         }
     }
 }
@@ -111,6 +116,16 @@ impl ApplicationPort for FakeApplication {
             _ => return Err(AppError::NotImplemented("test mutation")),
         }
         Ok(MutationResult::None)
+    }
+
+    fn plan_lifecycle(&mut self, request: PlanLifecycleRequest) -> AppResult<PlanLifecycleOutcome> {
+        self.lifecycle_requests.push(request);
+        // `match`, not `unwrap_or_else`: clippy rejects the lazy closure here,
+        // and `unwrap_or` would build the fallback error on every call.
+        match self.lifecycle_results.pop() {
+            Some(result) => result,
+            None => Err(AppError::NotImplemented("test plan lifecycle")),
+        }
     }
 
     fn projects(&mut self) -> AppResult<Vec<ProjectRef>> {
@@ -451,6 +466,135 @@ fn plan_show_json_carries_the_claim_owner_and_its_resolved_name_when_claimed() {
     let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "plan", "show", "1", "--json"]);
     assert!(stdout.contains("\"claimed_by\": \"01hzvyekq3s7m8w9x0abcdefgh\""));
     assert!(stdout.contains("\"claimed_by_name\": \"Alice\""));
+}
+
+#[test]
+fn plan_delete_without_force_prints_preview_and_refuses() {
+    let mut application = FakeApplication::default();
+    application
+        .lifecycle_results
+        .push(Ok(PlanLifecycleOutcome::Preview(PlanDeleteSummary {
+            plan_id: 3,
+            title: "Doomed".to_owned(),
+            tasks: 2,
+            notes: 1,
+            commits_unlinked: 4,
+            issues: vec![(7, "crash on save".to_owned())],
+        })));
+    let (result, stdout, _stderr) =
+        invoke_with(&mut application, &["ptrack", "plan", "delete", "3"]);
+    assert_eq!(
+        application.lifecycle_requests,
+        vec![PlanLifecycleRequest::DeletePreview { plan_id: 3 }]
+    );
+    assert!(
+        stdout.contains(
+            "plan #3 \"Doomed\": 2 task(s), 1 note(s), 1 issue link(s), 4 commit record(s)"
+        )
+    );
+    assert!(stdout.contains("would detach issue #7 \"crash on save\""));
+    assert!(result.unwrap_err().to_string().contains("--force"));
+}
+
+#[test]
+fn plan_delete_with_force_deletes_and_prints_the_same_summary() {
+    let mut application = FakeApplication::default();
+    application
+        .lifecycle_results
+        .push(Ok(PlanLifecycleOutcome::Deleted(PlanDeleteSummary {
+            plan_id: 3,
+            title: "Doomed".to_owned(),
+            tasks: 2,
+            notes: 1,
+            commits_unlinked: 0,
+            issues: vec![(7, "crash on save".to_owned())],
+        })));
+    let (result, stdout, _stderr) = invoke_with(
+        &mut application,
+        &["ptrack", "plan", "delete", "3", "--force"],
+    );
+    result.unwrap();
+    assert_eq!(
+        application.lifecycle_requests,
+        vec![PlanLifecycleRequest::Delete { plan_id: 3 }]
+    );
+    assert!(stdout.contains("detached issue #7 \"crash on save\""));
+    assert!(stdout.contains("plan #3 deleted"));
+}
+
+#[test]
+fn plan_move_requires_to_and_prints_both_projects_and_the_new_id() {
+    let mut application = FakeApplication::default();
+    let (missing, _stdout, _stderr) =
+        invoke_with(&mut application, &["ptrack", "plan", "move", "3"]);
+    assert!(missing.unwrap_err().to_string().contains("--to"));
+    assert!(application.lifecycle_requests.is_empty());
+
+    application
+        .lifecycle_results
+        .push(Ok(PlanLifecycleOutcome::Transferred(PlanTransferSummary {
+            source_plan_id: 3,
+            new_plan_id: 9,
+            title: "Landed".to_owned(),
+            source_project: "alpha".to_owned(),
+            target_project: "beta".to_owned(),
+            moved: true,
+            tasks: 2,
+            notes: 1,
+            issues: 1,
+            commits: 4,
+        })));
+    let (result, stdout, _stderr) = invoke_with(
+        &mut application,
+        &[
+            "ptrack", "plan", "move", "3", "--to", "beta", "--as", "Landed",
+        ],
+    );
+    result.unwrap();
+    assert_eq!(
+        application.lifecycle_requests,
+        vec![PlanLifecycleRequest::Move {
+            plan_id: 3,
+            to: "beta".to_owned(),
+            rename: Some("Landed".to_owned()),
+        }]
+    );
+    assert!(stdout.contains(
+        "moved plan #3 from alpha to beta: now plan #9 \"Landed\" (2 tasks, 1 notes, 1 issues, 4 commits carried from source)"
+    ));
+}
+
+#[test]
+fn plan_copy_passes_optional_target_and_rename_through() {
+    let mut application = FakeApplication::default();
+    application
+        .lifecycle_results
+        .push(Ok(PlanLifecycleOutcome::Transferred(PlanTransferSummary {
+            source_plan_id: 3,
+            new_plan_id: 12,
+            title: "Second".to_owned(),
+            source_project: "alpha".to_owned(),
+            target_project: "alpha".to_owned(),
+            moved: false,
+            tasks: 0,
+            notes: 0,
+            issues: 0,
+            commits: 0,
+        })));
+    let (result, stdout, _stderr) = invoke_with(
+        &mut application,
+        &["ptrack", "plan", "copy", "3", "--as", "Second"],
+    );
+    result.unwrap();
+    assert_eq!(
+        application.lifecycle_requests,
+        vec![PlanLifecycleRequest::Copy {
+            plan_id: 3,
+            to: None,
+            rename: Some("Second".to_owned()),
+        }]
+    );
+    assert!(stdout.contains("copied plan #3 to alpha: new plan #12 \"Second\""));
 }
 
 #[test]

@@ -18,7 +18,8 @@ use ptrack_core::{
     ProjectRef, ProjectSnapshot, Severity, Task, TaskStatus, Timestamp, render_guide,
 };
 use ptrack_store::{
-    ActiveBinding, ActorIdentity, GlobalStore, PinnedProjectDirectory, ProjectStore,
+    ActiveBinding, ActorIdentity, GlobalStore, PinnedProjectDirectory, PlanDeleteSummary,
+    ProjectStore,
 };
 
 const NO_PROJECT: &str = "no ptrack project found (run 'ptrack init')";
@@ -239,6 +240,51 @@ pub enum MutationResult {
     Commit(Commit),
 }
 
+/// A plan lifecycle operation: destructive delete, or a transfer of the whole
+/// plan subtree into another project (or back into this one, as a copy).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PlanLifecycleRequest {
+    DeletePreview {
+        plan_id: u64,
+    },
+    Delete {
+        plan_id: u64,
+    },
+    Move {
+        plan_id: u64,
+        to: String,
+        rename: Option<String>,
+    },
+    Copy {
+        plan_id: u64,
+        to: Option<String>,
+        rename: Option<String>,
+    },
+}
+
+/// What a completed move or copy actually carried, for the receipt a caller
+/// prints.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlanTransferSummary {
+    pub source_plan_id: u64,
+    pub new_plan_id: u64,
+    pub title: String,
+    pub source_project: String,
+    pub target_project: String,
+    pub moved: bool,
+    pub tasks: usize,
+    pub notes: usize,
+    pub issues: usize,
+    pub commits: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PlanLifecycleOutcome {
+    Preview(PlanDeleteSummary),
+    Deleted(PlanDeleteSummary),
+    Transferred(PlanTransferSummary),
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GuideAction {
     Print,
@@ -281,6 +327,7 @@ pub trait ApplicationPort {
     fn initialize(&mut self, request: InitRequest) -> AppResult<InitResult>;
     fn snapshot(&mut self) -> AppResult<ProjectSnapshot>;
     fn mutate(&mut self, mutation: Mutation) -> AppResult<MutationResult>;
+    fn plan_lifecycle(&mut self, request: PlanLifecycleRequest) -> AppResult<PlanLifecycleOutcome>;
     fn projects(&mut self) -> AppResult<Vec<ProjectRef>>;
     fn identity(&mut self) -> AppResult<Option<ActorIdentity>>;
     fn set_identity(&mut self, name: &str) -> AppResult<ActorIdentity>;
@@ -313,6 +360,13 @@ impl ApplicationPort for UnavailableApplication {
     }
 
     fn mutate(&mut self, _mutation: Mutation) -> AppResult<MutationResult> {
+        Err(unavailable())
+    }
+
+    fn plan_lifecycle(
+        &mut self,
+        _request: PlanLifecycleRequest,
+    ) -> AppResult<PlanLifecycleOutcome> {
         Err(unavailable())
     }
 
@@ -449,6 +503,158 @@ impl LocalApplication {
             .and_then(|value| value.to_str())
             .unwrap_or_default();
         let _ = store.register_project(name, &endpoint.root);
+    }
+
+    /// Finds a registered target project by name or path, exactly as
+    /// `ptrack projects` prints them. Registry-only: no marker resolution here,
+    /// so "is this the current project?" can be answered without an active
+    /// runtime lookup.
+    ///
+    /// A path wins outright. Names are directory basenames and therefore not
+    /// unique, so an ambiguous name is refused rather than resolved by
+    /// registry order — silently picking the most recently seen `web` would
+    /// land a destructive move in a project the caller never named.
+    fn lookup_registered_project(&self, to: &str) -> AppResult<ProjectRef> {
+        let projects = self.with_global(|store| Ok(store.projects()?))?;
+        if let Some(exact) = projects
+            .iter()
+            .find(|project| Path::new(&project.path) == Path::new(to))
+        {
+            return Ok(exact.clone());
+        }
+        let mut by_name = projects.into_iter().filter(|project| project.name == to);
+        let first = by_name.next().ok_or_else(|| {
+            AppError::Message(format!(
+                "unknown target project {to:?}; run 'ptrack projects' for registered names and paths"
+            ))
+        })?;
+        let mut paths = vec![first.path.clone()];
+        paths.extend(by_name.map(|project| project.path));
+        if paths.len() == 1 {
+            return Ok(first);
+        }
+        Err(AppError::Message(format!(
+            "target project {to:?} is ambiguous ({}); name it by path",
+            paths.join(", ")
+        )))
+    }
+
+    /// Resolves a registered project to an openable endpoint through the
+    /// active-generation marker. Only called for a project other than the
+    /// current one.
+    fn endpoint_for_registered(&self, project: &ProjectRef) -> AppResult<ProjectEndpoint> {
+        let runtime =
+            crate::ActiveRuntime::load(&self.bindings.global_home, &self.bindings.writer_version)?
+                .ok_or_else(|| {
+                    AppError::Message("active runtime binding is unavailable".to_owned())
+                })?;
+        let bindings = runtime
+            .bindings_for_exact_root(Path::new(&project.path))
+            .map_err(|error| match error {
+                AppError::NoProject => AppError::Message(format!(
+                    "target project {} has no active database binding; run 'ptrack init' inside it once",
+                    project.path
+                )),
+                // A stale registry row whose directory moved or vanished
+                // surfaces as a bare io error otherwise, naming nothing.
+                other => AppError::Message(format!(
+                    "cannot resolve target project {}: {other}",
+                    project.path
+                )),
+            })?;
+        bindings.project.ok_or(AppError::NoProject)
+    }
+
+    fn transfer_plan(
+        &self,
+        plan_id: u64,
+        to: Option<&str>,
+        rename: Option<String>,
+        is_move: bool,
+    ) -> AppResult<PlanLifecycleOutcome> {
+        let source = self.project()?.clone();
+        let target_ref = to
+            .map(|to| self.lookup_registered_project(to))
+            .transpose()?;
+        let same_project = target_ref
+            .as_ref()
+            .is_none_or(|project| Path::new(&project.path) == source.root.as_path());
+        if is_move && same_project {
+            return Err(AppError::Message(
+                "target project is the current project; rename it in place with 'ptrack plan rename'"
+                    .to_owned(),
+            ));
+        }
+        if !is_move && same_project && rename.is_none() {
+            return Err(AppError::Message(
+                "copying into the same project requires --as <new title>".to_owned(),
+            ));
+        }
+        let target = if same_project {
+            None
+        } else {
+            Some(
+                self.endpoint_for_registered(
+                    target_ref
+                        .as_ref()
+                        .expect("cross-project transfer has a registry entry"),
+                )?,
+            )
+        };
+        let actor = self.with_global(crate::identity::load_identity)?;
+        let writer_version = self.bindings.writer_version.clone();
+        let source_label = project_label(&source.root);
+        self.with_project(|store| {
+            let subtree = store.export_plan_subtree(plan_id)?;
+            let (tasks, notes, issues, commits) = (
+                subtree.tasks.len(),
+                subtree.notes.len(),
+                subtree.issues.len(),
+                subtree.commits.len(),
+            );
+            let (new_plan, target_label) = if same_project {
+                (
+                    store.import_plan_subtree(&subtree, rename)?,
+                    source_label.clone(),
+                )
+            } else {
+                let endpoint = target.as_ref().expect("cross-project transfer has a target");
+                let target_store = ProjectStore::open_existing(
+                    &endpoint.database,
+                    &endpoint.binding,
+                    &writer_version,
+                )
+                .map_err(|error| target_open_error(&endpoint.root, &error))?
+                .with_actor(actor.clone());
+                let plan = target_store.import_plan_subtree(&subtree, rename)?;
+                drop(target_store);
+                (plan, project_label(&endpoint.root))
+            };
+            if is_move {
+                // Only after the target transaction has committed. Issues that
+                // traveled are deleted here, not detached — they follow their
+                // task. A failure here leaves a visible duplicate rather than a
+                // lost plan, so the refusal has to name both sides.
+                store.delete_plan_for_move(plan_id).map_err(|error| {
+                    AppError::Message(format!(
+                        "plan #{plan_id} was copied into {target_label} as #{} but could not be removed from {source_label}: {error}; the plan now exists in both projects — remove the source copy with 'ptrack plan delete'",
+                        new_plan.id
+                    ))
+                })?;
+            }
+            Ok(PlanLifecycleOutcome::Transferred(PlanTransferSummary {
+                source_plan_id: plan_id,
+                new_plan_id: new_plan.id,
+                title: new_plan.title,
+                source_project: source_label.clone(),
+                target_project: target_label,
+                moved: is_move,
+                tasks,
+                notes,
+                issues,
+                commits,
+            }))
+        })
     }
 
     fn verified_root(&self) -> AppResult<PathBuf> {
@@ -635,6 +841,29 @@ impl ApplicationPort for LocalApplication {
             };
             Ok(result)
         })
+    }
+
+    fn plan_lifecycle(&mut self, request: PlanLifecycleRequest) -> AppResult<PlanLifecycleOutcome> {
+        match request {
+            PlanLifecycleRequest::DeletePreview { plan_id } => self.with_project(|store| {
+                Ok(PlanLifecycleOutcome::Preview(
+                    store.plan_delete_preview(plan_id)?,
+                ))
+            }),
+            PlanLifecycleRequest::Delete { plan_id } => self.with_project(|store| {
+                Ok(PlanLifecycleOutcome::Deleted(store.delete_plan(plan_id)?))
+            }),
+            PlanLifecycleRequest::Move {
+                plan_id,
+                to,
+                rename,
+            } => self.transfer_plan(plan_id, Some(&to), rename, true),
+            PlanLifecycleRequest::Copy {
+                plan_id,
+                to,
+                rename,
+            } => self.transfer_plan(plan_id, to.as_deref(), rename, false),
+        }
     }
 
     fn projects(&mut self) -> AppResult<Vec<ProjectRef>> {
@@ -1267,6 +1496,33 @@ fn strip_hook(content: &str) -> String {
         (_, true) => format!("{before}\n"),
         _ => format!("{before}\n{after}"),
     }
+}
+
+/// A registered project's short display label: its directory name, falling
+/// back to the whole path when it has none.
+fn project_label(root: &Path) -> String {
+    root.file_name()
+        .and_then(|name| name.to_str())
+        .map_or_else(|| root.display().to_string(), str::to_owned)
+}
+
+/// Fail-closed target-open refusal: the store's own manifest/schema message,
+/// plus the upgrade hint the spec requires when the target was written by a
+/// newer build.
+pub(crate) fn target_open_error(root: &Path, error: &ptrack_store::StoreError) -> AppError {
+    let hint = if matches!(
+        error,
+        ptrack_store::StoreError::UnsupportedSchemaVersion { .. }
+            | ptrack_store::StoreError::InvalidManifest(_)
+    ) {
+        "; upgrade ptrack for that project and try again"
+    } else {
+        ""
+    };
+    AppError::Message(format!(
+        "cannot open target project {}: {error}{hint}",
+        root.display()
+    ))
 }
 
 #[allow(dead_code)]

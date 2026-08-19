@@ -37,6 +37,9 @@
   --done: #5fff87;
   --doing-rgb: 255, 215, 95;
   --blocked-rgb: 255, 95, 135;
+  /* Darker than --blocked: white text on --blocked itself is ~2.9:1 in this
+     theme, below WCAG AA (4.5:1). Solid destructive fills use this instead. */
+  --blocked-strong: #c22a5a;
   --info: #5fafff;
   --issue-chip: #ff9db5;
   --hold: #ffab5f;
@@ -136,6 +139,8 @@
   --done: #16a34a;
   --doing-rgb: 161, 98, 7;
   --blocked-rgb: 214, 51, 99;
+  /* Already ~4.65:1 with white text — no separate darkening needed here. */
+  --blocked-strong: #d63363;
   --info: #1d6fc5;
   --issue-chip: #c2255c;
   --hold: #b45309;
@@ -586,6 +591,34 @@ button:disabled {
   border-radius: 50%;
   background: var(--accent);
   box-shadow: 0 0 10px rgba(var(--accent-rgb), 0.45);
+}
+
+/* Overflow trigger for the plan context menu (rename/move/copy/delete). */
+.sidebar-plan-menu {
+  min-height: 0;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 5px;
+  color: var(--faint);
+  background: transparent;
+  box-shadow: none;
+  padding: 2px 4px;
+  font-size: 0.75rem;
+  line-height: 1;
+  opacity: 0;
+}
+
+.sidebar-plan:hover .sidebar-plan-menu,
+.sidebar-plan:focus-within .sidebar-plan-menu,
+.sidebar-plan-menu:focus-visible {
+  opacity: 1;
+}
+
+.sidebar-plan-menu:hover,
+.sidebar-plan-menu:focus-visible {
+  color: var(--text);
+  background: var(--fill-strong);
+  box-shadow: none;
 }
 
 
@@ -2000,6 +2033,27 @@ select option {
   white-space: nowrap;
 }
 
+/* Opens the same plan context menu as the sidebar row's "⋯" trigger. */
+.plan-menu-trigger {
+  min-height: 0;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 6px;
+  color: var(--muted);
+  background: transparent;
+  box-shadow: none;
+  padding: 2px 6px;
+  font-size: 0.875rem;
+  line-height: 1;
+}
+
+.plan-menu-trigger:hover,
+.plan-menu-trigger:focus-visible {
+  color: var(--text);
+  background: var(--fill-strong);
+  box-shadow: none;
+}
+
 .progress-label {
   flex: 0 0 auto;
   color: var(--muted);
@@ -3161,6 +3215,96 @@ button.modal-backdrop:active {
   justify-content: flex-end;
   gap: var(--space-100);
   margin-top: var(--space-250);
+}
+
+/* -------------------------------------------------------- plan lifecycle */
+
+.context-menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 180px;
+  display: grid;
+  gap: 2px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--dialog-sheen), var(--dialog-bg);
+  padding: 4px;
+  box-shadow: var(--highlight-inset), var(--shadow-2);
+  animation: dialog-in 200ms var(--ease);
+}
+
+.context-menu button {
+  min-height: 0;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text);
+  background: none;
+  box-shadow: none;
+  padding: 6px var(--space-100);
+  font-weight: 600;
+  text-align: left;
+}
+
+.context-menu button:hover,
+.context-menu button:focus-visible {
+  background: var(--fill-strong);
+  box-shadow: none;
+}
+
+.context-menu-destructive {
+  color: var(--blocked);
+}
+
+#plan-dialog .dialog {
+  width: min(420px, 100%);
+}
+
+#plan-dialog-project,
+#plan-dialog-title {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--text);
+  background: var(--control-solid-bg);
+  padding: 6px var(--space-100);
+  margin-bottom: var(--space-150);
+}
+
+.plan-dialog-error {
+  margin: 0 0 var(--space-150);
+  color: var(--blocked);
+  font-size: 0.8125rem;
+  white-space: pre-wrap;
+}
+
+.dialog-danger {
+  border-color: rgba(var(--blocked-rgb), 0.6);
+  color: #fff;
+  background: var(--blocked-strong);
+}
+
+/* No brightness/filter lightening on hover: it pushes the fill back toward
+   --blocked, which fails WCAG AA (4.5:1) against white text in dark theme. */
+.dialog-danger:hover {
+  border-color: rgba(var(--blocked-rgb), 0.9);
+  background: var(--blocked-strong);
+  box-shadow:
+    var(--highlight-inset),
+    var(--shadow-button),
+    0 6px 22px rgba(var(--blocked-rgb), 0.32);
+}
+
+.plan-rename-input {
+  width: 100%;
+  min-height: 0;
+  border: 1px solid rgba(var(--accent-rgb), 0.55);
+  border-radius: 6px;
+  color: inherit;
+  background: var(--input-bg-focus);
+  box-shadow: none;
+  padding: 1px 4px;
+  font: inherit;
 }
 
 .agent-launch-dialog select {

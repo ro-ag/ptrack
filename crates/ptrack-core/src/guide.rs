@@ -16,7 +16,7 @@ resume after a previous session grew too large.\n\
 log, open issues), then keep it current:\n\
 - Goal: `ptrack goal set \"north star\"`\n\
 - Milestones (checkpoints): `ptrack milestone add \"v1.0\" [--due YYYY-MM-DD]`\n\
-- Plans (workstreams): `ptrack plan add \"...\" [--milestone N]`, then `ptrack plan use N` (also claims it)\n\
+- Plans (workstreams): `ptrack plan add \"...\" [--milestone N]`, then `ptrack plan use N` (also claims it). Junk plans are removed with `ptrack plan delete <id> --force` (preview first without `--force`), and work that belongs elsewhere moves with `ptrack plan move <id> --to <project>`.\n\
 - Tasks with status: `ptrack task add \"...\" [--plan N]` then `task start` (in progress) / `task done` / `task block` (todo = pending)\n\
 - Issues (bugs/problems): `ptrack issue add \"...\" [--severity high] [--task N]`\n\
 - Decisions: `ptrack note add \"...\" [--task N | --plan N]`\n\

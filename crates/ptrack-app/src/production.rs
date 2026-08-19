@@ -40,15 +40,15 @@ use crate::{
     ForgetRecentProjectResultV1, GuideAction, HookAction, HookResult, InitRequest, InitResult,
     InitializationCheckpointV1, InitializationOutcomeV1, InitializationStatusV1,
     InitializeProjectRequestV1, LocalApplication, Mutation, MutationResult,
-    PendingInitializationV1, ProcessOutput, ProductionTerminalIdentityAuthority, ProjectEndpoint,
-    ProjectGuideChoiceV1, ProjectGuideFileActionV1, ProjectGuidePreviewRequestV1,
-    ProjectGuidePreviewV1, ProjectTargetKindV1, ProjectTargetValidationV1,
-    RecentProjectAvailabilityV1, RecentProjectOpenAuthorizationV1, RecentProjectRegistryCommitV1,
-    RecentProjectRegistryStatusV1, RecentProjectResolutionV1, RecentProjectV1,
-    RecentProjectsProvider, RecentProjectsV1, ResolvedRecentProjectV1, TerminalAgentAuthority,
-    TerminalEventSink, TerminalIdentityAuthority, TerminalRuntime, TerminalRuntimeConfig,
-    UnavailableUpdateService, UpdateEventSink, UpdateRuntime, UpdateState, WorkspaceBindings,
-    WorkspaceProject,
+    PendingInitializationV1, PlanLifecycleOutcome, PlanLifecycleRequest, ProcessOutput,
+    ProductionTerminalIdentityAuthority, ProjectEndpoint, ProjectGuideChoiceV1,
+    ProjectGuideFileActionV1, ProjectGuidePreviewRequestV1, ProjectGuidePreviewV1,
+    ProjectTargetKindV1, ProjectTargetValidationV1, RecentProjectAvailabilityV1,
+    RecentProjectOpenAuthorizationV1, RecentProjectRegistryCommitV1, RecentProjectRegistryStatusV1,
+    RecentProjectResolutionV1, RecentProjectV1, RecentProjectsProvider, RecentProjectsV1,
+    ResolvedRecentProjectV1, TerminalAgentAuthority, TerminalEventSink, TerminalIdentityAuthority,
+    TerminalRuntime, TerminalRuntimeConfig, UnavailableUpdateService, UpdateEventSink,
+    UpdateRuntime, UpdateState, WorkspaceBindings, WorkspaceProject,
 };
 
 const RECOVERY_REQUIRED: &str = "runtime recovery is required";
@@ -427,6 +427,10 @@ impl ApplicationPort for RoutedApplication {
 
     fn mutate(&mut self, mutation: Mutation) -> AppResult<MutationResult> {
         self.local()?.mutate(mutation)
+    }
+
+    fn plan_lifecycle(&mut self, request: PlanLifecycleRequest) -> AppResult<PlanLifecycleOutcome> {
+        self.local()?.plan_lifecycle(request)
     }
 
     fn projects(&mut self) -> AppResult<Vec<ProjectRef>> {

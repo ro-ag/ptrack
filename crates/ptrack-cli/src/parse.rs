@@ -40,7 +40,8 @@ const GROUPS: &[(&str, &[&str])] = &[
     (
         "plan",
         &[
-            "add", "list", "show", "done", "use", "release", "rename", "hold", "resume",
+            "add", "list", "show", "done", "use", "release", "rename", "hold", "resume", "delete",
+            "move", "copy",
         ],
     ),
     (
@@ -296,6 +297,8 @@ fn flag_names(path: &[String]) -> BTreeSet<(&'static str, bool)> {
         ["plan", "add"] => &[("milestone", true)],
         ["plan", "list" | "show"] => &[("json", false)],
         ["plan", "use"] => &[("steal", false)],
+        ["plan", "delete"] => &[("force", false)],
+        ["plan", "move" | "copy"] => &[("to", true), ("as", true)],
         ["task", "add"] => &[("plan", true)],
         ["task", "list"] => &[("plan", true), ("status", true), ("json", false)],
         ["task", "show"] => &[("json", false)],

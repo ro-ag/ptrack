@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
@@ -48,6 +48,34 @@ pub struct MemoryWriteResult {
     pub note: Option<Note>,
     pub summary: String,
     pub replayed: bool,
+}
+
+/// What a plan delete destroys (tasks, notes), unlinks (commit records), and
+/// touches (issues). Returned by both the read-only preview and the delete
+/// itself so every surface prints the same facts.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlanDeleteSummary {
+    pub plan_id: u64,
+    pub title: String,
+    pub tasks: usize,
+    pub notes: usize,
+    pub commits_unlinked: usize,
+    /// `(issue id, issue title)` for every issue linked to one of the plan's
+    /// tasks: detached by `delete_plan` (task link zeroed, issue survives),
+    /// deleted by `delete_plan_for_move` (issue moves with its task instead).
+    pub issues: Vec<(u64, String)>,
+}
+
+/// One plan with every record that belongs to it, in memory, ready to be
+/// inserted into any project store with freshly minted IDs. Not a stored
+/// record shape — a carrier between two stores in one process.
+#[derive(Clone, Debug)]
+pub struct PlanSubtree {
+    pub plan: Plan,
+    pub tasks: Vec<Task>,
+    pub notes: Vec<Note>,
+    pub issues: Vec<Issue>,
+    pub commits: Vec<Commit>,
 }
 
 /// Typed, activation-bound project storage.
@@ -661,6 +689,267 @@ impl ProjectStore {
             plan.stamp_actor(self.actor_id());
             typed::put(transaction, RecordKey::Id(id), &plan)?;
             Ok(())
+        })
+    }
+
+    /// Read-only preview of exactly what [`ProjectStore::delete_plan`] would
+    /// destroy. Ungated: looking is free, only deleting is claim-gated.
+    pub fn plan_delete_preview(&self, plan_id: u64) -> StoreResult<PlanDeleteSummary> {
+        self.read(|transaction| {
+            let plan: Plan =
+                typed::get(transaction, RecordKey::Id(plan_id))?.ok_or(StoreError::NotFound)?;
+            Ok(compute_cascade(
+                &plan,
+                &typed::scan::<Task>(transaction)?,
+                &typed::scan::<Note>(transaction)?,
+                &typed::scan::<Issue>(transaction)?,
+                &typed::scan::<Commit>(transaction)?,
+            )
+            .summary)
+        })
+    }
+
+    /// Permanently deletes a plan and cascades in one write transaction: its
+    /// tasks and their notes are deleted, linked issues survive with their task
+    /// link zeroed, commit records survive with plan/task references zeroed, and
+    /// every active-plan pointer (per-actor map and legacy singleton) that named
+    /// the plan is reset to 0. Claim-gated: deleting a plan claimed by someone
+    /// else is refused; the deleter's own claim dies with the plan.
+    pub fn delete_plan(&self, plan_id: u64) -> StoreResult<PlanDeleteSummary> {
+        self.delete_plan_inner(plan_id, true)
+    }
+
+    /// The move-phase variant of the delete cascade: identical, except linked
+    /// issues are deleted rather than detached — the move already duplicated
+    /// them into the target, and an issue follows its task.
+    pub fn delete_plan_for_move(&self, plan_id: u64) -> StoreResult<PlanDeleteSummary> {
+        self.delete_plan_inner(plan_id, false)
+    }
+
+    fn delete_plan_inner(
+        &self,
+        plan_id: u64,
+        detach_issues: bool,
+    ) -> StoreResult<PlanDeleteSummary> {
+        let now = self.clock.now_local();
+        let writer = self.writer_version.clone();
+        let actor = self.actor_id().map(str::to_owned);
+        self.write(|transaction| {
+            let plan = required_write::<Plan>(transaction, RecordKey::Id(plan_id))?;
+            require_claim_access(transaction, &plan, actor.as_deref())?;
+            let tasks = typed::scan_write::<Task>(transaction)?;
+            let notes = typed::scan_write::<Note>(transaction)?;
+            let issues = typed::scan_write::<Issue>(transaction)?;
+            let commits = typed::scan_write::<Commit>(transaction)?;
+            let cascade = compute_cascade(&plan, &tasks, &notes, &issues, &commits);
+
+            for &task_id in &cascade.tasks {
+                transaction.delete(Collection::Tasks, RecordKey::Id(task_id))?;
+            }
+            for &note_id in &cascade.notes {
+                transaction.delete(Collection::Notes, RecordKey::Id(note_id))?;
+            }
+            // A deleted note's memory-writeback receipt would otherwise dangle:
+            // replaying its request_id looks up the note by id and returns a
+            // bare NotFound instead of behaving like a fresh request.
+            let doomed_notes: BTreeSet<u64> = cascade.notes.iter().copied().collect();
+            let mut dangling_receipts = Vec::new();
+            for (key, envelope) in transaction.scan(Collection::MemoryWritebacks)? {
+                let crate::OwnedRecordKey::Bytes(key) = key else {
+                    return Err(StoreError::InvalidManifest(
+                        "memory receipt key is not bytes".to_owned(),
+                    ));
+                };
+                let receipt = typed::decode::<MemoryWritebackRecord>(envelope)?;
+                if receipt.note_id != 0 && doomed_notes.contains(&receipt.note_id) {
+                    dangling_receipts.push(key);
+                }
+            }
+            for key in dangling_receipts {
+                transaction.delete(Collection::MemoryWritebacks, RecordKey::Bytes(&key))?;
+            }
+
+            let doomed_issues: BTreeSet<u64> = cascade.issues.iter().copied().collect();
+            for mut issue in issues {
+                if doomed_issues.contains(&issue.id) {
+                    if detach_issues {
+                        issue.task_id = 0;
+                        issue.updated_at = now;
+                        typed::put(transaction, RecordKey::Id(issue.id), &issue)?;
+                    } else {
+                        transaction.delete(Collection::Issues, RecordKey::Id(issue.id))?;
+                    }
+                }
+            }
+
+            let doomed_tasks: BTreeSet<u64> = cascade.tasks.iter().copied().collect();
+            let doomed_commits: BTreeSet<u64> = cascade.commits.iter().copied().collect();
+            for mut commit in commits {
+                if doomed_commits.contains(&commit.id) {
+                    if commit.plan_id == plan_id {
+                        commit.plan_id = 0;
+                    }
+                    if doomed_tasks.contains(&commit.task_id) {
+                        commit.task_id = 0;
+                    }
+                    typed::put(transaction, RecordKey::Id(commit.id), &commit)?;
+                }
+            }
+            let summary = cascade.summary;
+            let mut meta = required_write::<Meta>(transaction, RecordKey::Singleton)?;
+            if meta.active_plan == plan_id {
+                meta.active_plan = 0;
+            }
+            for entry in &mut meta.active_plans {
+                if entry.1 == plan_id {
+                    entry.1 = 0;
+                }
+            }
+            stamp_meta(&mut meta, now, writer);
+            typed::put(transaction, RecordKey::Singleton, &meta)?;
+            transaction.delete(Collection::Plans, RecordKey::Id(plan_id))?;
+            Ok(summary)
+        })
+    }
+
+    /// Collects a plan and everything that travels with it: its tasks, notes on
+    /// the plan or its tasks, issues linked to its tasks, and commit records
+    /// referencing the plan or its tasks — selected by the very predicates the
+    /// delete preview and the delete cascade use, so a move can never export one
+    /// set and delete another. Claim-gated like every other content operation on
+    /// a plan.
+    ///
+    /// Read-only in effect, but it runs in the write funnel to reuse the single
+    /// claim gate, so it costs what a write costs: it takes the exclusive writer
+    /// lock (and can therefore return [`StoreError::Busy`]), and the funnel
+    /// registers the configured actor in the `Meta` directory — stamping
+    /// `Meta.updated_at` whenever that entry is new or renamed.
+    pub fn export_plan_subtree(&self, plan_id: u64) -> StoreResult<PlanSubtree> {
+        let actor = self.actor_id().map(str::to_owned);
+        self.write(|transaction| {
+            let plan = required_write::<Plan>(transaction, RecordKey::Id(plan_id))?;
+            require_claim_access(transaction, &plan, actor.as_deref())?;
+            let tasks = typed::scan_write::<Task>(transaction)?;
+            let notes = typed::scan_write::<Note>(transaction)?;
+            let issues = typed::scan_write::<Issue>(transaction)?;
+            let commits = typed::scan_write::<Commit>(transaction)?;
+            let cascade = compute_cascade(&plan, &tasks, &notes, &issues, &commits);
+            Ok(PlanSubtree {
+                plan,
+                tasks: pick(tasks, &cascade.tasks, |task| task.id),
+                notes: pick(notes, &cascade.notes, |note| note.id),
+                issues: pick(issues, &cascade.issues, |issue| issue.id),
+                commits: pick(commits, &cascade.commits, |commit| commit.id),
+            })
+        })
+    }
+
+    /// Inserts an exported subtree into this store in one write transaction,
+    /// reminting sequential IDs and remapping every reference. The plan arrives
+    /// unclaimed (owner `None`, epoch 0), its milestone link is dropped (a
+    /// milestone is a source-project grouping), hold reasons travel, and `title`
+    /// replaces the plan title at insert time. A commit whose sha this store
+    /// already holds is left alone rather than duplicated — a sha is a commit's
+    /// natural key, so a same-store copy shares the source's commit records.
+    pub fn import_plan_subtree(
+        &self,
+        subtree: &PlanSubtree,
+        title: Option<String>,
+    ) -> StoreResult<Plan> {
+        let now = self.clock.now_local();
+        let actor = self.actor_id().map(str::to_owned);
+        self.write(|transaction| {
+            let order = count_write::<Plan>(transaction)?;
+            let plan_id = transaction.next_id(Collection::Plans)?;
+            let plan = Plan {
+                id: plan_id,
+                title: title.clone().unwrap_or_else(|| subtree.plan.title.clone()),
+                status: subtree.plan.status,
+                milestone_id: 0,
+                order,
+                created_at: subtree.plan.created_at,
+                updated_at: now,
+                hold_reason: subtree.plan.hold_reason.clone(),
+                actor: actor.clone(),
+                claim_conflict: false,
+                claim_epoch: 0,
+                claim_owner: None,
+                ulid: None,
+            };
+            typed::put(transaction, RecordKey::Id(plan_id), &plan)?;
+            let first_task_order = count_write::<Task>(transaction)?;
+            let mut task_map = BTreeMap::new();
+            for (task_order, task) in (first_task_order..).zip(&subtree.tasks) {
+                let id = transaction.next_id(Collection::Tasks)?;
+                task_map.insert(task.id, id);
+                let mut copy = task.clone();
+                copy.id = id;
+                copy.plan_id = plan_id;
+                copy.order = task_order;
+                copy.ulid = None;
+                typed::put(transaction, RecordKey::Id(id), &copy)?;
+            }
+            let mapped_task = |source: u64| -> StoreResult<u64> {
+                task_map.get(&source).copied().ok_or_else(|| {
+                    StoreError::InvalidImport(
+                        "imported subtree references a task outside the subtree".to_owned(),
+                    )
+                })
+            };
+            for note in &subtree.notes {
+                let id = transaction.next_id(Collection::Notes)?;
+                let mut copy = note.clone();
+                copy.id = id;
+                copy.target_id = match note.target {
+                    NoteTarget::Plan => plan_id,
+                    NoteTarget::Task => mapped_task(note.target_id)?,
+                    // Never exported: a project note belongs to no plan's
+                    // subtree, and its target id means nothing in this store.
+                    NoteTarget::Project => {
+                        return Err(StoreError::InvalidImport(
+                            "imported subtree carries a project-scoped note".to_owned(),
+                        ));
+                    }
+                };
+                copy.ulid = None;
+                typed::put(transaction, RecordKey::Id(id), &copy)?;
+            }
+            for issue in &subtree.issues {
+                let id = transaction.next_id(Collection::Issues)?;
+                let mut copy = issue.clone();
+                copy.id = id;
+                copy.task_id = mapped_task(issue.task_id)?;
+                copy.ulid = None;
+                typed::put(transaction, RecordKey::Id(id), &copy)?;
+            }
+            // A sha is a commit's natural key — `add_commit` returns the record
+            // that already holds it. Minting a second record for a sha this
+            // store already has would leave later links landing on whichever
+            // one scans first, so an existing sha is left exactly as it is.
+            let existing_shas: BTreeSet<String> = typed::scan_write::<Commit>(transaction)?
+                .into_iter()
+                .map(|commit| commit.sha)
+                .collect();
+            for commit in &subtree.commits {
+                if existing_shas.contains(&commit.sha) {
+                    continue;
+                }
+                let id = transaction.next_id(Collection::Commits)?;
+                let mut copy = commit.clone();
+                copy.id = id;
+                copy.task_id = task_map.get(&commit.task_id).copied().unwrap_or(0);
+                // A commit selected through one of the subtree's tasks belongs
+                // to the arriving plan even when its source plan link named
+                // another plan entirely.
+                copy.plan_id = if copy.task_id != 0 || commit.plan_id == subtree.plan.id {
+                    plan_id
+                } else {
+                    0
+                };
+                copy.ulid = None;
+                typed::put(transaction, RecordKey::Id(id), &copy)?;
+            }
+            Ok(plan)
         })
     }
 
@@ -1688,6 +1977,76 @@ fn normalize_hold_reason(reason: Option<String>) -> Option<String> {
 /// [`ProjectStore::set_plan_hold`] refuses to create.
 fn plan_status_can_hold(status: PlanStatus) -> bool {
     status == PlanStatus::Active
+}
+
+/// The delete cascade's doomed-record ids, alongside the printed summary —
+/// computed together from one predicate per collection so the write path
+/// never re-derives (and risks desyncing from) what the summary already
+/// decided.
+struct Cascade {
+    summary: PlanDeleteSummary,
+    tasks: Vec<u64>,
+    notes: Vec<u64>,
+    issues: Vec<u64>,
+    commits: Vec<u64>,
+}
+
+/// Computes the delete cascade facts from full-collection scans. Pure so the
+/// read-only preview and the write-path delete can never disagree.
+fn compute_cascade(
+    plan: &Plan,
+    tasks: &[Task],
+    notes: &[Note],
+    issues: &[Issue],
+    commits: &[Commit],
+) -> Cascade {
+    let task_ids: BTreeSet<u64> = tasks
+        .iter()
+        .filter(|task| task.plan_id == plan.id)
+        .map(|task| task.id)
+        .collect();
+    let doomed_notes: Vec<u64> = notes
+        .iter()
+        .filter(|note| {
+            (note.target == NoteTarget::Plan && note.target_id == plan.id)
+                || (note.target == NoteTarget::Task && task_ids.contains(&note.target_id))
+        })
+        .map(|note| note.id)
+        .collect();
+    let doomed_issues: Vec<(u64, String)> = issues
+        .iter()
+        .filter(|issue| task_ids.contains(&issue.task_id))
+        .map(|issue| (issue.id, issue.title.clone()))
+        .collect();
+    let doomed_commits: Vec<u64> = commits
+        .iter()
+        .filter(|commit| commit.plan_id == plan.id || task_ids.contains(&commit.task_id))
+        .map(|commit| commit.id)
+        .collect();
+    Cascade {
+        summary: PlanDeleteSummary {
+            plan_id: plan.id,
+            title: plan.title.clone(),
+            tasks: task_ids.len(),
+            notes: doomed_notes.len(),
+            commits_unlinked: doomed_commits.len(),
+            issues: doomed_issues.clone(),
+        },
+        tasks: task_ids.into_iter().collect(),
+        notes: doomed_notes,
+        issues: doomed_issues.into_iter().map(|(id, _)| id).collect(),
+        commits: doomed_commits,
+    }
+}
+
+/// Keeps exactly the records a [`Cascade`] chose, so the subtree export selects
+/// through the same predicates the preview and the delete already agreed on.
+fn pick<R>(records: Vec<R>, chosen: &[u64], id: impl Fn(&R) -> u64) -> Vec<R> {
+    let chosen: BTreeSet<u64> = chosen.iter().copied().collect();
+    records
+        .into_iter()
+        .filter(|record| chosen.contains(&id(record)))
+        .collect()
 }
 
 /// Reports whether a task in this status may carry a hold reason. A done task

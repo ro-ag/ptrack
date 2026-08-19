@@ -132,7 +132,9 @@ pub enum StoreError {
     },
     /// A collection has exhausted its 64-bit sequence space.
     SequenceOverflow { collection: &'static str },
-    /// A staged legacy import was incomplete or internally inconsistent.
+    /// An import was incomplete or internally inconsistent: a staged legacy
+    /// database, or an in-process plan subtree carrying a reference it does not
+    /// own.
     InvalidImport(String),
     /// A staged legacy import exceeded a fixed resource bound.
     ImportLimitExceeded {

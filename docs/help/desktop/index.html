@@ -81,6 +81,7 @@
           </ul>
           <p>The plan list shows each plan's ID, title, progress, and an indicator for the CLI active plan. Selecting a row loads that plan's Board snapshot only. The sidebar can be hidden or resized; the Board and terminal panels have independent visibility controls while Board is selected.</p>
           <p>The terminal is not a fourth primary view. It is a dock inside Board, so moving to Overview or Capabilities hides the dock without closing its sessions.</p>
+          <p>Each plan has a context menu, opened from the sidebar row or the Board header title (both carry a &#8942; trigger, and right-click also opens it). <strong>Rename</strong> edits the title inline. <strong>Delete</strong> asks for a preview first — the exact tasks, notes, issue links, and commit records that will be affected — before offering a destructive confirmation; linked issues detach rather than delete, and commit records survive as an unlinked audit trail. <strong>Move</strong> and <strong>Copy</strong> open a dialog with a project picker fed by the registered-projects list; picking the current project for a move is refused (rename in place instead), and a same-project copy needs a new title. Any refusal from the store — a claimed plan, an unopenable target — is shown verbatim in the dialog rather than paraphrased.</p>
 
           <h2 id="board">Use the Board</h2>
           <p>The Board groups the selected plan's tasks into <strong>Todo</strong>, <strong>Doing</strong>, <strong>Blocked</strong>, and <strong>Done</strong> lanes. Its header shows plan progress, provides an add-task field, and can launch an installed agent for the selected plan.</p>
@@ -181,7 +182,7 @@
               </thead>
               <tbody>
                 <tr><td>Project chooser</td><td>Open a recent or different project.</td><td>Leaving active resources requires a fresh confirmation.</td></tr>
-                <tr><td>Plan list</td><td>Choose the Board snapshot to view.</td><td>Selection does not change the CLI active plan.</td></tr>
+                <tr><td>Plan list</td><td>Choose the Board snapshot to view; its context menu renames, deletes, moves, or copies the plan.</td><td>Selection does not change the CLI active plan.</td></tr>
                 <tr><td>Board</td><td>Add, inspect, rename, move, and link task work.</td><td>The terminal is a Board dock.</td></tr>
                 <tr><td>Task drawer</td><td>Review status, runtime, notes, commits, and issues.</td><td>Memory writeback previews its destination.</td></tr>
                 <tr><td>Overview</td><td>Read project memory, progress, repository, and coordination signals.</td><td>Snapshot bounds remain visible.</td></tr>

@@ -175,9 +175,18 @@ const PLAN_CHILDREN: &[Child] = &[
         "add",
         "Create a new active plan (optionally under a milestone)",
     ),
+    child(
+        "copy",
+        "Copy a plan subtree into another project or duplicate it here",
+    ),
+    child(
+        "delete",
+        "Permanently delete a plan and its tasks and notes",
+    ),
     child("done", "Mark a plan done"),
     child("hold", "Put a plan on hold with a reason"),
     child("list", "List plans"),
+    child("move", "Move a plan subtree to another registered project"),
     child("release", "Release your claim on a plan"),
     child("rename", "Rename a plan"),
     child("resume", "Take a plan off hold"),
@@ -554,7 +563,45 @@ fn plan_leaf(name: &str) -> Spec {
             "Take a plan off hold (clears the hold reason)",
             HELP_ONLY,
         ),
-        _ => leaf_spec("plan rename <id> <title...>", "Rename a plan", HELP_ONLY),
+        "rename" => leaf_spec("plan rename <id> <title...>", "Rename a plan", HELP_ONLY),
+        "delete" => leaf_spec(
+            "plan delete <id>",
+            "Permanently delete a plan, its tasks, and their notes (issues detach, commits keep an unlinked audit record)",
+            &[
+                flag(
+                    "    --force",
+                    "actually delete; without it the command only prints what would be destroyed",
+                ),
+                HELP_FLAG,
+            ],
+        ),
+        "move" => leaf_spec(
+            "plan move <id> --to <project>",
+            "Move a plan subtree to another registered project (arrives unclaimed; --as renames on arrival)",
+            &[
+                flag("    --as string", "rename the plan on arrival"),
+                HELP_FLAG,
+                flag(
+                    "    --to string",
+                    "target project name or path as shown by 'ptrack projects' (required)",
+                ),
+            ],
+        ),
+        _ => leaf_spec(
+            "plan copy <id>",
+            "Copy a plan subtree into another project, or duplicate it here (--as required without --to)",
+            &[
+                flag(
+                    "    --as string",
+                    "title for the copy (required when copying within this project)",
+                ),
+                HELP_FLAG,
+                flag(
+                    "    --to string",
+                    "target project name or path (default: this project)",
+                ),
+            ],
+        ),
     }
 }
 
@@ -888,7 +935,8 @@ fn group_children(name: &str) -> Option<&'static [&'static str]> {
         "goal" | "summary" | "config" => Some(&["set", "show"]),
         "milestone" => Some(&["add", "done", "due", "list", "open", "rename", "show"]),
         "plan" => Some(&[
-            "add", "done", "hold", "list", "release", "rename", "resume", "show", "use",
+            "add", "copy", "delete", "done", "hold", "list", "move", "release", "rename", "resume",
+            "show", "use",
         ]),
         "task" => Some(&[
             "add", "block", "convert", "done", "hold", "list", "move", "rename", "resume", "show",

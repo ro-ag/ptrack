@@ -482,6 +482,13 @@
                   <p class="eyebrow">Current plan</p>
                   <div class="title-row">
                     <h2 id="plan-title" tabindex="-1">Loading board…</h2>
+                    <button
+                      type="button"
+                      id="plan-title-menu"
+                      class="plan-menu-trigger"
+                      aria-label="Plan actions"
+                      aria-haspopup="menu"
+                    >⋯</button>
                     <span id="plan-progress-label" class="progress-label"></span>
                   </div>
                   <div class="progress-track" aria-hidden="true">
@@ -1261,6 +1268,30 @@
             Cancel
           </button>
           <button id="dialog-submit" type="submit">Save changes</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="plan-dialog" class="modal" hidden>
+      <div class="modal-backdrop" data-close-plan-dialog></div>
+      <form
+        id="plan-dialog-form"
+        class="dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="plan-dialog-heading"
+      >
+        <p class="eyebrow" id="plan-dialog-eyebrow"></p>
+        <h2 id="plan-dialog-heading"></h2>
+        <p id="plan-dialog-body" class="dialog-help"></p>
+        <label id="plan-dialog-project-label" for="plan-dialog-project">Target project</label>
+        <select id="plan-dialog-project"></select>
+        <label id="plan-dialog-title-label" for="plan-dialog-title">New title (optional)</label>
+        <input id="plan-dialog-title" type="text" autocomplete="off" />
+        <p id="plan-dialog-error" class="plan-dialog-error" role="alert" hidden></p>
+        <div class="dialog-actions">
+          <button type="button" id="plan-dialog-cancel" class="button-secondary" data-close-plan-dialog>Cancel</button>
+          <button type="submit" id="plan-dialog-submit">OK</button>
         </div>
       </form>
     </div>

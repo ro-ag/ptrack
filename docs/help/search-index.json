@@ -13,7 +13,7 @@
       "title": "Desktop",
       "summary": "See durable plan status beside registered agent activity, repository evidence, terminals, and capabilities.",
       "headings": ["Board", "Task drawer", "Overview", "Project switching", "Settings", "Startup and restore", "Reset actions"],
-      "keywords": ["gui", "workspace", "kanban", "sidebar", "agent activity", "plan status", "repository", "settings", "preferences", "appearance", "density", "startup", "restore last project", "window position", "layout", "reset window layout", "reset application state"],
+      "keywords": ["gui", "workspace", "kanban", "sidebar", "agent activity", "plan status", "repository", "settings", "preferences", "appearance", "density", "startup", "restore last project", "window position", "layout", "reset window layout", "reset application state", "plan context menu", "rename plan", "delete plan", "move plan", "copy plan"],
       "url": "desktop/"
     },
     {
@@ -34,7 +34,7 @@
       "title": "Reference",
       "summary": "Look up CLI commands, TUI keys, desktop shortcuts, and project search behavior.",
       "headings": ["CLI", "TUI", "Desktop shortcuts", "Project search"],
-      "keywords": ["command", "keyboard", "palette", "shortcut", "config", "claims", "identity", "steal", "release"],
+      "keywords": ["command", "keyboard", "palette", "shortcut", "config", "claims", "identity", "steal", "release", "plan delete", "plan move", "plan copy", "cascade", "milestone drop"],
       "url": "reference/"
     },
     {
