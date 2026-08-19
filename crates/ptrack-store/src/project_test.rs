@@ -2496,3 +2496,146 @@ fn import_plan_subtree_lands_in_a_second_store_stamped_with_its_own_actor() {
     assert_eq!(origin.plans.len(), 1);
     assert_eq!(origin.tasks.len(), 1);
 }
+
+#[test]
+fn cross_store_import_copies_subtree_and_leaves_source_unchanged() {
+    let temp = Temp::new();
+    let source = ProjectStore::create_new_with_clock(
+        temp.path("src.redb"),
+        binding(&temp.path("src.redb"), StoreKind::Project, "xsrc-1"),
+        "test",
+        clock(),
+    )
+    .unwrap();
+    let target = ProjectStore::create_new_with_clock(
+        temp.path("dst.redb"),
+        binding(&temp.path("dst.redb"), StoreKind::Project, "xdst-1"),
+        "test",
+        clock(),
+    )
+    .unwrap();
+    // Pre-existing target content so reminted IDs collide if remapping is wrong.
+    let existing = target.add_plan("Existing", 0).unwrap();
+    target.add_task(existing.id, "existing task").unwrap();
+
+    let plan = source.add_plan("Traveler", 0).unwrap();
+    let task = source.add_task(plan.id, "travel task").unwrap();
+    source.add_note(NoteTarget::Task, task.id, "note").unwrap();
+    source.add_issue("travel bug", "", None, task.id).unwrap();
+    source
+        .add_commit("ddd444", "travel commit", plan.id, task.id)
+        .unwrap();
+
+    let subtree = source.export_plan_subtree(plan.id).unwrap();
+    let arrived = target.import_plan_subtree(&subtree, None).unwrap();
+    assert_eq!(arrived.title, "Traveler");
+    assert_eq!(arrived.claim_owner, None);
+    assert_eq!(arrived.claim_epoch, 0);
+
+    // Target integrity: every imported reference resolves inside the target.
+    let snapshot = target.snapshot().unwrap();
+    let moved_task = snapshot
+        .tasks
+        .iter()
+        .find(|t| t.plan_id == arrived.id)
+        .unwrap();
+    assert_eq!(
+        snapshot
+            .issues
+            .iter()
+            .filter(|i| i.task_id == moved_task.id)
+            .count(),
+        1
+    );
+    assert_eq!(
+        snapshot
+            .commits
+            .iter()
+            .filter(|c| c.plan_id == arrived.id && c.task_id == moved_task.id)
+            .count(),
+        1
+    );
+
+    // Source unchanged on copy.
+    let source_snapshot = source.snapshot().unwrap();
+    assert!(source_snapshot.plans.iter().any(|p| p.id == plan.id));
+    assert_eq!(source_snapshot.tasks.len(), 1);
+    assert_eq!(source_snapshot.commits.len(), 1);
+}
+
+/// Move is implemented as export + import + delete-the-source, run as three
+/// separate transactions (two stores can never share one). If the process
+/// dies between the target commit and the source delete, both sides are left
+/// fully intact: a visible duplicate, never data loss. Recovery is manual —
+/// whoever notices runs `delete_plan` on the side that shouldn't have
+/// survived. This test proves that crash window is safe and recoverable
+/// rather than corrupting either store.
+///
+/// Note on memory-writeback receipts: `delete_plan_for_move` prunes any
+/// dangling `MemoryWritebacks` receipts in the source so a replayed
+/// `request_id` there behaves like a fresh request. `PlanSubtree` does not
+/// carry those receipts to the target — they are per-store idempotency
+/// state, and replaying the same memory `request_id` against a different
+/// project after a move is out of scope for this contract.
+#[test]
+fn move_crash_window_leaves_a_visible_duplicate_and_loses_nothing() {
+    let temp = Temp::new();
+    let source = ProjectStore::create_new_with_clock(
+        temp.path("crash-src.redb"),
+        binding(
+            &temp.path("crash-src.redb"),
+            StoreKind::Project,
+            "crash-src-1",
+        ),
+        "test",
+        clock(),
+    )
+    .unwrap();
+    let target = ProjectStore::create_new_with_clock(
+        temp.path("crash-dst.redb"),
+        binding(
+            &temp.path("crash-dst.redb"),
+            StoreKind::Project,
+            "crash-dst-1",
+        ),
+        "test",
+        clock(),
+    )
+    .unwrap();
+    let plan = source.add_plan("Half-moved", 0).unwrap();
+    source.add_task(plan.id, "t").unwrap();
+
+    // Phase 1 committed on the target; the process "crashes" before phase 2.
+    let subtree = source.export_plan_subtree(plan.id).unwrap();
+    let arrived = target.import_plan_subtree(&subtree, None).unwrap();
+
+    // Both sides are fully readable: a duplicate, never a loss.
+    assert!(
+        source
+            .snapshot()
+            .unwrap()
+            .plans
+            .iter()
+            .any(|p| p.id == plan.id)
+    );
+    assert!(
+        target
+            .snapshot()
+            .unwrap()
+            .plans
+            .iter()
+            .any(|p| p.id == arrived.id)
+    );
+
+    // Manual cleanup with plan delete on whichever side is unwanted completes the move.
+    source.delete_plan(plan.id).unwrap();
+    assert!(source.snapshot().unwrap().plans.is_empty());
+    assert!(
+        target
+            .snapshot()
+            .unwrap()
+            .plans
+            .iter()
+            .any(|p| p.id == arrived.id)
+    );
+}
