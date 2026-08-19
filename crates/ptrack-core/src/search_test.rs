@@ -21,6 +21,25 @@ fn search_markdown_carries_the_same_hold_marker_as_every_other_surface() {
 }
 
 #[test]
+fn search_markdown_carries_the_claim_marker_on_plan_rows() {
+    let mut claimed = snapshot();
+    claimed.plans[0].claim_owner = Some("01hzvyekq3s7m8w9x0abcdefgh".to_owned());
+    claimed
+        .meta
+        .actors
+        .push(("01hzvyekq3s7m8w9x0abcdefgh".to_owned(), "Alice".to_owned()));
+
+    assert_eq!(
+        search(&claimed, "cli").markdown(),
+        "# Search: \"cli\"\n\
+\n\
+## Plans\n\
+- #1 Build CLI [active] [claimed: Alice]\n\
+\n"
+    );
+}
+
+#[test]
 fn search_matches_exact_fields_case_insensitively_in_snapshot_order() {
     let snapshot = snapshot();
     let commands = search(&snapshot, "COMMAND");

@@ -468,10 +468,15 @@ ptrack task show 12
 git status --short
 ```
 
-Plans have no exclusive agent owner. The CLI active plan is a project-wide
-default, so use explicit plan and task IDs when multiple agents are working and
-run `ptrack plan use <id>` only when you intend to change that shared default.
-Task ownership shown in Desktop is advisory, not a lock.
+Once a per-machine identity is configured with `ptrack config set user
+<name>`, `ptrack plan use <id>` claims the plan for you and sets your own
+active plan; content changes to a plan claimed by someone else are refused
+until they release it (`ptrack plan release <id>`) or you take it over
+(`ptrack plan use <id> --steal`). Holds, notes, and issue links stay open to
+everyone regardless of claim. Machines with no configured identity keep the
+old behavior: a single project-wide active plan, so use explicit plan and
+task IDs when multiple agents are working. Task ownership shown in Desktop is
+advisory, not a lock.
 
 This workflow transfers durable goals, plans, tasks, notes, summaries, and
 recorded commit context. It does not transfer a provider transcript, hidden
@@ -509,8 +514,9 @@ Put `#<task-id>` in a commit message to link the commit to that task.
 | `ptrack guide [--print]` | Install, refresh, or print the agent guide. |
 | `ptrack goal show\|set S` | Show or update the north-star goal. |
 | `ptrack summary show\|set S` | Show or update the rolling project summary. |
+| `ptrack config set user <name>\|show` | Set or show the per-machine identity used to claim plans. |
 | `ptrack milestone add\|list\|show\|done\|open\|due\|rename` | Manage checkpoints that group plans. |
-| `ptrack plan add\|list\|show\|done\|use\|rename\|hold\|resume` | Manage plans; `show` includes tasks and notes; `hold <id> <reason…>` pauses one. |
+| `ptrack plan add\|list\|show\|done\|use\|release\|rename\|hold\|resume` | Manage plans; `show` includes tasks and notes; `use <id>` claims it (`--steal` to take over), `release <id>` frees a claim; `hold <id> <reason…>` pauses one. |
 | `ptrack task add\|list\|show\|start\|done\|block\|rename\|move\|convert\|hold\|resume` | Manage tasks; move them between plans, convert them into plans, or put one on hold with a reason. |
 | `ptrack issue add\|list\|show\|close\|open\|severity\|rename` | Track issues and bugs, optionally linked to tasks. |
 | `ptrack note add\|list` | Attach or list project, plan, and task notes. |

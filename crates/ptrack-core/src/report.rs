@@ -370,6 +370,16 @@ pub fn hold_marker(reason: Option<&str>) -> String {
     reason.map_or_else(String::new, |reason| format!(" [on hold: {reason}]"))
 }
 
+/// Renders the shared claim marker, or nothing when the plan is unclaimed.
+///
+/// Every text surface that renders a `PlanRef` (plan show, task show,
+/// milestone show, search) appends this after the hold marker, so a claim
+/// looks the same everywhere a plan reference appears.
+#[must_use]
+pub fn claim_marker(owner: Option<&str>) -> String {
+    owner.map_or_else(String::new, |owner| format!(" [claimed: {owner}]"))
+}
+
 /// Renders the ` · N on hold` inventory clause, or nothing when none are held.
 fn on_hold_clause(count: usize) -> String {
     if count == 0 {

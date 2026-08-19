@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use ptrack_core::{
     Meta, NativeRecord, ProjectRef, RecordKind, Task, TaskStatus, Timestamp, decode_record,
-    decode_record_at_schema, encode_record,
+    decode_record_at_schema, encode_record, encode_record_at_schema,
 };
 
 use super::{
@@ -121,6 +121,8 @@ fn record(collection: Collection, key: OwnedRecordKey, payload: &[u8]) -> Import
             updated_at: Timestamp::Zero,
             format_version: 5,
             last_write_version: "v0.21.0".to_owned(),
+            active_plans: Vec::new(),
+            actors: Vec::new(),
         }))
         .unwrap(),
         Collection::Tasks => {
@@ -137,6 +139,8 @@ fn record(collection: Collection, key: OwnedRecordKey, payload: &[u8]) -> Import
                 created_at: Timestamp::Zero,
                 updated_at: Timestamp::Zero,
                 hold_reason: None,
+                actor: None,
+                ulid: None,
             }))
             .unwrap()
         }
@@ -173,11 +177,14 @@ fn archives_written_at_the_previous_payload_schema_still_import() {
     let path = directory.path("legacy-schema.redb");
     let mut data = complete_import(StoreKind::Project);
 
-    // A schema-1 task payload is the current layout minus the trailing
-    // hold-reason option byte.
+    // A schema-1 task payload carries the layout that predates every trailing
+    // field added since.
     let mut legacy = record(Collection::Tasks, OwnedRecordKey::Id(3), b"legacy task");
-    let mut payload = legacy.envelope.payload().to_vec();
-    assert_eq!(payload.pop(), Some(0));
+    let payload = encode_record_at_schema(
+        &decode_record(RecordKind::Task, legacy.envelope.payload()).unwrap(),
+        MIN_NATIVE_PAYLOAD_SCHEMA,
+    )
+    .unwrap();
     legacy.envelope = RecordEnvelope::new(
         Collection::Tasks.accepted_codec(),
         MIN_NATIVE_PAYLOAD_SCHEMA,

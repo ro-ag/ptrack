@@ -2,9 +2,9 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use ptrack_app::{
-    AppError, AppResult, ApplicationPort, CapabilityCancellation, CapabilityMcpOutcome,
-    GuideAction, HookAction, HookResult, INVALID_HOLD_PREFIX, InitRequest, InitResult, Mutation,
-    MutationResult, ProcessOutput,
+    ActorIdentity, AppError, AppResult, ApplicationPort, CapabilityCancellation,
+    CapabilityMcpOutcome, GuideAction, HookAction, HookResult, INVALID_CLAIM_PREFIX,
+    INVALID_HOLD_PREFIX, InitRequest, InitResult, Mutation, MutationResult, ProcessOutput,
 };
 use ptrack_core::{
     Meta, Plan, PlanStatus, ProjectRef, ProjectSnapshot, Task, TaskStatus, Timestamp,
@@ -18,6 +18,8 @@ struct FakeApplication {
     capability_result: Option<AppResult<Vec<u8>>>,
     capability_calls: Vec<(String, String)>,
     mcp_input: Vec<u8>,
+    identity: Option<ActorIdentity>,
+    claim_owner: Option<&'static str>,
 }
 
 impl Default for FakeApplication {
@@ -32,6 +34,8 @@ impl Default for FakeApplication {
                     updated_at: Timestamp::Zero,
                     format_version: 5,
                     last_write_version: "test".to_owned(),
+                    active_plans: Vec::new(),
+                    actors: Vec::new(),
                 },
                 Vec::new(),
                 Vec::new(),
@@ -44,6 +48,8 @@ impl Default for FakeApplication {
             capability_result: None,
             capability_calls: Vec::new(),
             mcp_input: Vec::new(),
+            identity: None,
+            claim_owner: None,
         }
     }
 }
@@ -92,6 +98,16 @@ impl ApplicationPort for FakeApplication {
                 }
                 plan.hold_reason = reason;
             }
+            Mutation::SetActivePlan(id) => self.snapshot.meta.active_plan = id,
+            Mutation::StealPlan(_) => self.claim_owner = Some("fake-actor"),
+            Mutation::ReleasePlanClaim(id) => {
+                if self.claim_owner.is_none() {
+                    return Err(AppError::Message(format!(
+                        "{INVALID_CLAIM_PREFIX}plan #{id} is not claimed"
+                    )));
+                }
+                self.claim_owner = None;
+            }
             _ => return Err(AppError::NotImplemented("test mutation")),
         }
         Ok(MutationResult::None)
@@ -99,6 +115,19 @@ impl ApplicationPort for FakeApplication {
 
     fn projects(&mut self) -> AppResult<Vec<ProjectRef>> {
         Ok(Vec::new())
+    }
+
+    fn identity(&mut self) -> AppResult<Option<ActorIdentity>> {
+        Ok(self.identity.clone())
+    }
+
+    fn set_identity(&mut self, name: &str) -> AppResult<ActorIdentity> {
+        let identity = ActorIdentity {
+            id: "00000000000000000000000000".to_owned(),
+            name: name.trim().to_owned(),
+        };
+        self.identity = Some(identity.clone());
+        Ok(identity)
     }
 
     fn backup(&mut self) -> AppResult<PathBuf> {
@@ -221,6 +250,11 @@ fn seeded() -> FakeApplication {
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
         hold_reason: None,
+        actor: None,
+        claim_conflict: false,
+        claim_epoch: 0,
+        claim_owner: None,
+        ulid: None,
     };
     let task = |id: u64, title: &str, status: TaskStatus| Task {
         id,
@@ -231,6 +265,8 @@ fn seeded() -> FakeApplication {
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
         hold_reason: None,
+        actor: None,
+        ulid: None,
     };
     FakeApplication {
         snapshot: ProjectSnapshot::new(
@@ -242,6 +278,8 @@ fn seeded() -> FakeApplication {
                 updated_at: Timestamp::Zero,
                 format_version: 5,
                 last_write_version: "test".to_owned(),
+                active_plans: Vec::new(),
+                actors: Vec::new(),
             },
             Vec::new(),
             vec![plan],
@@ -355,6 +393,70 @@ fn plan_hold_and_resume_round_trip_through_every_surface() {
         stdout,
         "next: [todo] #1 context command (plan: Build CLI)\n"
     );
+}
+
+#[test]
+fn plan_use_claims_a_plan_and_release_gives_it_back() {
+    let mut application = seeded();
+
+    // Releasing an unclaimed plan surfaces the store's own sentence, prefix stripped.
+    let (result, stdout, stderr) =
+        invoke_with(&mut application, &["ptrack", "plan", "release", "1"]);
+    assert!(stdout.is_empty());
+    assert!(stderr.is_empty());
+    assert_eq!(
+        result.expect_err("unclaimed").to_string(),
+        "plan #1 is not claimed"
+    );
+
+    // Plain `plan use` sets the active plan but claims nothing.
+    let (result, stdout, _) = invoke_with(&mut application, &["ptrack", "plan", "use", "1"]);
+    assert_eq!(result.expect("use"), RunOutcome::ExitSuccess);
+    assert!(stdout.is_empty());
+    assert_eq!(application.snapshot.meta.active_plan, 1);
+    assert!(application.claim_owner.is_none());
+
+    // `--steal` dispatches Mutation::StealPlan and claims the plan.
+    let (result, stdout, _) =
+        invoke_with(&mut application, &["ptrack", "plan", "use", "1", "--steal"]);
+    assert_eq!(result.expect("steal"), RunOutcome::ExitSuccess);
+    assert!(stdout.is_empty());
+    assert_eq!(application.claim_owner, Some("fake-actor"));
+
+    // Releasing a claimed plan succeeds and prints a confirmation.
+    let (result, stdout, _) = invoke_with(&mut application, &["ptrack", "plan", "release", "1"]);
+    assert_eq!(result.expect("release"), RunOutcome::ExitSuccess);
+    assert_eq!(stdout, "plan #1 released\n");
+    assert!(application.claim_owner.is_none());
+}
+
+#[test]
+fn plan_show_json_carries_null_claim_and_omits_the_name_when_unclaimed() {
+    let mut application = seeded();
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "plan", "show", "1", "--json"]);
+    assert!(stdout.contains("\"claimed_by\": null"));
+    assert!(!stdout.contains("claimed_by_name"));
+}
+
+#[test]
+fn plan_show_json_carries_the_claim_owner_and_its_resolved_name_when_claimed() {
+    let mut application = seeded();
+    application.snapshot.plans[0].claim_owner = Some("01hzvyekq3s7m8w9x0abcdefgh".to_owned());
+    application
+        .snapshot
+        .meta
+        .actors
+        .push(("01hzvyekq3s7m8w9x0abcdefgh".to_owned(), "Alice".to_owned()));
+
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "plan", "show", "1", "--json"]);
+    assert!(stdout.contains("\"claimed_by\": \"01hzvyekq3s7m8w9x0abcdefgh\""));
+    assert!(stdout.contains("\"claimed_by_name\": \"Alice\""));
+}
+
+#[test]
+fn help_plan_release_renders() {
+    let (_, stdout, _) = invoke(&["ptrack", "help", "plan", "release"]);
+    assert!(stdout.starts_with("Release your claim on a plan"));
 }
 
 #[test]
@@ -560,4 +662,47 @@ fn due_parse_errors_wrap_the_exact_go_time_parse_error() {
         assert!(stderr.is_empty());
         assert_eq!(result.expect_err("invalid due").to_string(), expected);
     }
+}
+
+#[test]
+fn config_show_before_set_reports_no_user() {
+    let (result, stdout, stderr) = invoke(&["ptrack", "config", "show"]);
+    assert_eq!(result.expect("config show"), RunOutcome::ExitSuccess);
+    assert_eq!(
+        stdout,
+        "no user configured (run 'ptrack config set user <name>')\n"
+    );
+    assert!(stderr.is_empty());
+}
+
+#[test]
+fn config_set_user_mints_an_identity_and_show_json_reflects_it() {
+    let mut application = FakeApplication::default();
+    let (result, stdout, stderr) = invoke_with(
+        &mut application,
+        &["ptrack", "config", "set", "user", "Rodrigo"],
+    );
+    assert_eq!(result.expect("config set"), RunOutcome::ExitSuccess);
+    assert_eq!(stdout, "user Rodrigo (00000000000000000000000000)\n");
+    assert!(stderr.is_empty());
+
+    let (result, stdout, stderr) =
+        invoke_with(&mut application, &["ptrack", "config", "show", "--json"]);
+    assert_eq!(result.expect("config show json"), RunOutcome::ExitSuccess);
+    assert_eq!(
+        stdout,
+        "{\n  \"id\": \"00000000000000000000000000\",\n  \"name\": \"Rodrigo\"\n}\n"
+    );
+    assert!(stderr.is_empty());
+}
+
+#[test]
+fn config_set_rejects_an_unknown_key() {
+    let (result, stdout, stderr) = invoke(&["ptrack", "config", "set", "badkey", "x"]);
+    assert_eq!(
+        result.expect_err("unknown config key").to_string(),
+        "unknown config key \"badkey\" (want \"user\")"
+    );
+    assert!(stdout.is_empty());
+    assert!(stderr.is_empty());
 }

@@ -12,15 +12,15 @@ use ptrack_app::{
     ApplicationPort, GuideAction, HookAction, HookResult, InitRequest, Mutation, MutationResult,
 };
 use ptrack_core::{
-    IssueStatus, MilestoneStatus, NoteTarget, PlanStatus, Severity, TaskStatus, Timestamp,
-    board_for, check_hold_reason, context, hold_marker, next, search, show_issue, show_milestone,
-    show_plan, show_task,
+    IssueStatus, LEGACY_ACTOR, MilestoneStatus, NoteTarget, PlanStatus, Severity, TaskStatus,
+    Timestamp, board_for, check_hold_reason, claim_marker, context, hold_marker, next, search,
+    show_issue, show_milestone, show_plan, show_task,
 };
 
 use crate::compat_json::{
-    BoardJson, CommitJson, DigestJson, IssueJson, IssueShowJson, MilestoneJson, MilestoneShowJson,
-    NextJson, NoteRow, PlanRow, PlanShowJson, ProjectJson, SearchJson, StatusJson, TaskRow,
-    TaskShowJson, raw_or_null, timestamp,
+    BoardJson, CommitJson, ConfigUserJson, DigestJson, IssueJson, IssueShowJson, MilestoneJson,
+    MilestoneShowJson, NextJson, NoteRow, PlanRow, PlanShowJson, ProjectJson, SearchJson,
+    StatusJson, TaskRow, TaskShowJson, raw_or_null, timestamp,
 };
 use crate::error::CliError;
 use crate::output;
@@ -113,6 +113,7 @@ fn dispatch(
         ["issue", command] => issue(command, leaf, application, io),
         ["note", command] => note(command, leaf, application, io),
         ["commit", command] => commit(command, leaf, application, io),
+        ["config", command] => config(command, leaf, application, io),
         ["hook", command] => hook(command, application, io),
         ["context"] => context_command(leaf, application, io),
         ["guide"] => guide(leaf, application, io),
@@ -316,6 +317,17 @@ fn hold_error(error: ptrack_app::AppError) -> CliError {
     )
 }
 
+/// Store claim refusals already read as sentences; drop the layer prefix
+/// rather than restate them, exactly like `hold_error`.
+fn claim_error(error: ptrack_app::AppError) -> CliError {
+    let message = error.to_string();
+    CliError::message(
+        message
+            .strip_prefix(ptrack_app::INVALID_CLAIM_PREFIX)
+            .unwrap_or(&message),
+    )
+}
+
 fn plan(
     command: &str,
     matches: &ArgMatches,
@@ -349,6 +361,8 @@ fn plan(
                         status: plan.status.as_str(),
                         active: plan.id == snapshot.meta.active_plan,
                         hold_reason: plan.hold_reason.as_deref(),
+                        claimed_by: plan.claim_owner.as_deref(),
+                        actor: plan.actor.as_deref().unwrap_or(LEGACY_ACTOR),
                     })
                     .collect();
                 output::json(io.stdout, &rows)?;
@@ -362,11 +376,16 @@ fn plan(
                     output::line(
                         io.stdout,
                         format_args!(
-                            "#{} [{}] {mark} {}{}",
+                            "#{} [{}] {mark} {}{}{}",
                             plan.id,
                             plan.status,
                             plan.title,
-                            hold_marker(plan.hold_reason.as_deref())
+                            hold_marker(plan.hold_reason.as_deref()),
+                            claim_marker(
+                                plan.claim_owner
+                                    .as_deref()
+                                    .map(|owner| snapshot.meta.actor_name(owner).unwrap_or(owner))
+                            )
                         ),
                     )?;
                 }
@@ -387,9 +406,22 @@ fn plan(
             })?)?;
         }
         "use" => {
+            let id = parse_u64(first(matches, "id")?)?;
+            let mutation = if matches.get_flag("steal") {
+                Mutation::StealPlan(id)
+            } else {
+                Mutation::SetActivePlan(id)
+            };
+            expect_none(application.mutate(mutation).map_err(claim_error)?)?;
+        }
+        "release" => {
+            let id = parse_u64(first(matches, "id")?)?;
             expect_none(
-                application.mutate(Mutation::SetActivePlan(parse_u64(first(matches, "id")?)?))?,
+                application
+                    .mutate(Mutation::ReleasePlanClaim(id))
+                    .map_err(claim_error)?,
             )?;
+            output::line(io.stdout, format_args!("plan #{id} released"))?;
         }
         "hold" => {
             let args = values(matches, "values");
@@ -471,6 +503,7 @@ fn task(
                         title: &task.title,
                         status: task.status.as_str(),
                         hold_reason: task.hold_reason.as_deref(),
+                        actor: task.actor.as_deref().unwrap_or(LEGACY_ACTOR),
                     })
                     .collect();
                 output::json(io.stdout, &rows)?;
@@ -871,6 +904,48 @@ fn commit(
             }
         }
         _ => return Err(CliError::message("internal commit dispatch mismatch")),
+    }
+    Ok(RunOutcome::ExitSuccess)
+}
+
+fn config(
+    command: &str,
+    matches: &ArgMatches,
+    application: &mut dyn ApplicationPort,
+    io: &mut Io<'_>,
+) -> Result<RunOutcome, CliError> {
+    match command {
+        "set" => {
+            let args = values(matches, "values");
+            if args[0] != "user" {
+                return Err(CliError::message(format!(
+                    "unknown config key {:?} (want \"user\")",
+                    args[0]
+                )));
+            }
+            let identity = application.set_identity(&args[1..].join(" "))?;
+            output::line(
+                io.stdout,
+                format_args!("user {} ({})", identity.name, identity.id),
+            )?;
+        }
+        "show" => {
+            let identity = application.identity()?;
+            if matches.get_flag("json") {
+                output::json(io.stdout, &ConfigUserJson::from(identity.as_ref()))?;
+            } else if let Some(identity) = identity {
+                output::line(
+                    io.stdout,
+                    format_args!("user {} ({})", identity.name, identity.id),
+                )?;
+            } else {
+                output::line(
+                    io.stdout,
+                    "no user configured (run 'ptrack config set user <name>')",
+                )?;
+            }
+        }
+        _ => return Err(CliError::message("internal config dispatch mismatch")),
     }
     Ok(RunOutcome::ExitSuccess)
 }

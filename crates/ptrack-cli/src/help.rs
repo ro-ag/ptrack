@@ -112,6 +112,10 @@ const ROOT_CHILDREN: &[Child] = &[
         "Generate the autocompletion script for the specified shell",
     ),
     child(
+        "config",
+        "Show or set the machine-wide ptrack user identity",
+    ),
+    child(
         "context",
         "Print the bounded restore digest (Markdown by default, --json for JSON)",
     ),
@@ -174,10 +178,11 @@ const PLAN_CHILDREN: &[Child] = &[
     child("done", "Mark a plan done"),
     child("hold", "Put a plan on hold with a reason"),
     child("list", "List plans"),
+    child("release", "Release your claim on a plan"),
     child("rename", "Rename a plan"),
     child("resume", "Take a plan off hold"),
     child("show", "Show a plan with its tasks and notes"),
-    child("use", "Set the active plan"),
+    child("use", "Claim a plan and make it your active plan"),
 ];
 const TASK_CHILDREN: &[Child] = &[
     child(
@@ -225,6 +230,13 @@ const COMMIT_CHILDREN: &[Child] = &[
         "Record HEAD from a git hook (parses #<id> from the subject)",
     ),
     child("show", "Show a tracked commit's diff (via git show)"),
+];
+const CONFIG_CHILDREN: &[Child] = &[
+    child(
+        "set",
+        "Set a config value ('user <name>' mints your identity once)",
+    ),
+    child("show", "Print the configured user identity"),
 ];
 const HOOK_CHILDREN: &[Child] = &[
     child(
@@ -387,7 +399,7 @@ fn specification(path: &[String]) -> Spec {
         ),
         [
             group @ ("goal" | "summary" | "milestone" | "plan" | "task" | "issue" | "note"
-            | "commit" | "hook" | "capability"),
+            | "commit" | "config" | "hook" | "capability"),
         ] => {
             let (text, children) = match *group {
                 "goal" => ("Show or set the project's north-star goal", GOAL_CHILDREN),
@@ -403,6 +415,10 @@ fn specification(path: &[String]) -> Spec {
                 "commit" => (
                     "Track git commits in the project audit trail",
                     COMMIT_CHILDREN,
+                ),
+                "config" => (
+                    "Show or set the machine-wide ptrack user identity",
+                    CONFIG_CHILDREN,
                 ),
                 "hook" => (
                     "Manage the git post-commit hook that auto-records commits",
@@ -455,6 +471,7 @@ fn specification(path: &[String]) -> Spec {
         ["issue", leaf] => issue_leaf(leaf),
         ["note", leaf] => note_leaf(leaf),
         ["commit", leaf] => commit_leaf(leaf),
+        ["config", leaf] => config_leaf(leaf),
         ["hook", leaf] => hook_leaf(leaf),
         ["capability", leaf] => capability_leaf(leaf),
         [leaf] => root_leaf(leaf),
@@ -511,7 +528,22 @@ fn plan_leaf(name: &str) -> Spec {
             "Mark a plan done (clears any hold on it)",
             HELP_ONLY,
         ),
-        "use" => leaf_spec("plan use <id>", "Set the active plan", HELP_ONLY),
+        "use" => leaf_spec(
+            "plan use <id>",
+            "Claim a plan and make it your active plan",
+            &[
+                HELP_FLAG,
+                flag(
+                    "    --steal",
+                    "take over another developer's claim (bumps the claim epoch)",
+                ),
+            ],
+        ),
+        "release" => leaf_spec(
+            "plan release <id>",
+            "Release your claim on a plan",
+            HELP_ONLY,
+        ),
         "hold" => leaf_spec(
             "plan hold <id> <reason...>",
             "Put a plan on hold with a reason (keeps its status)",
@@ -706,6 +738,22 @@ fn commit_leaf(name: &str) -> Spec {
     }
 }
 
+fn config_leaf(name: &str) -> Spec {
+    if name == "set" {
+        leaf_spec(
+            "config set user <name...>",
+            "Set a config value ('user <name>' mints your identity once)",
+            HELP_ONLY,
+        )
+    } else {
+        leaf_spec(
+            "config show",
+            "Print the configured user identity",
+            JSON_FLAGS,
+        )
+    }
+}
+
 fn hook_leaf(name: &str) -> Spec {
     match name {
         "install" => leaf_spec(
@@ -837,10 +885,10 @@ fn known_root(name: &str) -> bool {
 
 fn group_children(name: &str) -> Option<&'static [&'static str]> {
     match name {
-        "goal" | "summary" => Some(&["set", "show"]),
+        "goal" | "summary" | "config" => Some(&["set", "show"]),
         "milestone" => Some(&["add", "done", "due", "list", "open", "rename", "show"]),
         "plan" => Some(&[
-            "add", "done", "hold", "list", "rename", "resume", "show", "use",
+            "add", "done", "hold", "list", "release", "rename", "resume", "show", "use",
         ]),
         "task" => Some(&[
             "add", "block", "convert", "done", "hold", "list", "move", "rename", "resume", "show",

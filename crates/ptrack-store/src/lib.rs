@@ -38,7 +38,9 @@ pub use envelope::{
     LEGACY_CODEC_GO_GOB, LEGACY_CODEC_RAW, MIN_NATIVE_PAYLOAD_SCHEMA, NATIVE_CODEC,
     NATIVE_PAYLOAD_SCHEMA, RECORD_ENVELOPE_VERSION, RecordEnvelope,
 };
-pub use error::{EnvelopeError, INVALID_HOLD_PREFIX, StoreError, StoreResult};
+pub use error::{
+    EnvelopeError, INVALID_CLAIM_PREFIX, INVALID_HOLD_PREFIX, StoreError, StoreResult,
+};
 pub use global::{GlobalStore, ProjectRegistryCasResult};
 pub use import::{
     IMPORT_BUNDLE_VERSION, JSON_STAGE_VERSION, JsonStageProvenance, MAX_IMPORT_BYTES,
@@ -50,8 +52,9 @@ pub use import::{
     ImportReport, JsonStageImportData,
 };
 pub use project::{
-    CAPABILITY_AUDIT_GLOBAL_LIMIT, CURRENT_PROJECT_FORMAT, FIRST_RUN_TITLE_MAX_BYTES,
-    MEMORY_WRITEBACK_REPLAY_LIMIT, MemoryWriteRequest, MemoryWriteResult, ProjectStore,
+    ActorIdentity, CAPABILITY_AUDIT_GLOBAL_LIMIT, CURRENT_PROJECT_FORMAT,
+    FIRST_RUN_TITLE_MAX_BYTES, MEMORY_WRITEBACK_REPLAY_LIMIT, MemoryWriteRequest,
+    MemoryWriteResult, ProjectStore,
 };
 pub use quarantine::{QuarantineReason, QuarantinedLegacyRecord};
 pub use runtime_binding::{

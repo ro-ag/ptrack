@@ -17,7 +17,9 @@ use ptrack_core::{
     Commit, Issue, IssueStatus, Milestone, MilestoneStatus, Note, NoteTarget, Plan, PlanStatus,
     ProjectRef, ProjectSnapshot, Severity, Task, TaskStatus, Timestamp, render_guide,
 };
-use ptrack_store::{ActiveBinding, GlobalStore, PinnedProjectDirectory, ProjectStore};
+use ptrack_store::{
+    ActiveBinding, ActorIdentity, GlobalStore, PinnedProjectDirectory, ProjectStore,
+};
 
 const NO_PROJECT: &str = "no ptrack project found (run 'ptrack init')";
 const HOOK_BEGIN: &str = "# ptrack:begin";
@@ -165,6 +167,10 @@ pub enum Mutation {
         reason: Option<String>,
     },
     SetActivePlan(u64),
+    /// Takes over a plan claimed by someone else and makes it active.
+    StealPlan(u64),
+    /// Gives up the caller's own claim on a plan.
+    ReleasePlanClaim(u64),
     SetPlanTitle {
         id: u64,
         title: String,
@@ -276,6 +282,8 @@ pub trait ApplicationPort {
     fn snapshot(&mut self) -> AppResult<ProjectSnapshot>;
     fn mutate(&mut self, mutation: Mutation) -> AppResult<MutationResult>;
     fn projects(&mut self) -> AppResult<Vec<ProjectRef>>;
+    fn identity(&mut self) -> AppResult<Option<ActorIdentity>>;
+    fn set_identity(&mut self, name: &str) -> AppResult<ActorIdentity>;
     fn backup(&mut self) -> AppResult<PathBuf>;
     fn guide(&mut self, action: GuideAction) -> AppResult<(String, Vec<PathBuf>)>;
     fn hook(&mut self, action: HookAction) -> AppResult<HookResult>;
@@ -309,6 +317,14 @@ impl ApplicationPort for UnavailableApplication {
     }
 
     fn projects(&mut self) -> AppResult<Vec<ProjectRef>> {
+        Err(unavailable())
+    }
+
+    fn identity(&mut self) -> AppResult<Option<ActorIdentity>> {
+        Err(unavailable())
+    }
+
+    fn set_identity(&mut self, _name: &str) -> AppResult<ActorIdentity> {
         Err(unavailable())
     }
 
@@ -395,11 +411,13 @@ impl LocalApplication {
         operation: impl FnOnce(&ProjectStore) -> AppResult<R>,
     ) -> AppResult<R> {
         let endpoint = self.project()?;
+        let actor = self.with_global(crate::identity::load_identity)?;
         let store = ProjectStore::open_existing(
             &endpoint.database,
             &endpoint.binding,
             &self.bindings.writer_version,
-        )?;
+        )?
+        .with_actor(actor);
         let result = operation(&store);
         drop(store);
         if result.is_ok() {
@@ -551,6 +569,14 @@ impl ApplicationPort for LocalApplication {
                     store.set_active_plan(id)?;
                     MutationResult::None
                 }
+                Mutation::StealPlan(id) => {
+                    store.use_plan(id, true)?;
+                    MutationResult::None
+                }
+                Mutation::ReleasePlanClaim(id) => {
+                    store.release_plan(id)?;
+                    MutationResult::None
+                }
                 Mutation::SetPlanTitle { id, title } => {
                     store.set_plan_title(id, title)?;
                     MutationResult::None
@@ -613,6 +639,14 @@ impl ApplicationPort for LocalApplication {
 
     fn projects(&mut self) -> AppResult<Vec<ProjectRef>> {
         self.with_global(|store| Ok(store.projects()?))
+    }
+
+    fn identity(&mut self) -> AppResult<Option<ActorIdentity>> {
+        self.with_global(crate::identity::load_identity)
+    }
+
+    fn set_identity(&mut self, name: &str) -> AppResult<ActorIdentity> {
+        self.with_global(|store| crate::identity::set_identity_name(store, name))
     }
 
     fn backup(&mut self) -> AppResult<PathBuf> {

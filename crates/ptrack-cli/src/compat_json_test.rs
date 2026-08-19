@@ -1,7 +1,7 @@
 use serde::Serialize;
 
 use crate::compat_json::timestamp;
-use crate::compat_json::{DigestJson, raw_or_null};
+use crate::compat_json::{DigestJson, PlanRow, raw_or_null};
 
 #[derive(Serialize)]
 struct Escaped<'a> {
@@ -51,6 +51,8 @@ fn empty_go_nil_slices_encode_as_null_while_derived_rows_can_remain_arrays() {
             updated_at: ptrack_core::Timestamp::Zero,
             format_version: 5,
             last_write_version: String::new(),
+            active_plans: Vec::new(),
+            actors: Vec::new(),
         },
         Vec::new(),
         Vec::new(),
@@ -72,4 +74,32 @@ fn empty_go_nil_slices_encode_as_null_while_derived_rows_can_remain_arrays() {
         serde_json::to_string(&Vec::<u8>::new()).expect("derived list"),
         "[]"
     );
+}
+
+#[test]
+fn plan_row_emits_null_claim_and_a_legacy_actor_sentinel() {
+    let unclaimed = PlanRow {
+        id: 1,
+        title: "Build CLI",
+        status: "active",
+        active: true,
+        hold_reason: None,
+        claimed_by: None,
+        actor: "legacy",
+    };
+    let encoded = serde_json::to_string(&unclaimed).expect("plan row json");
+    assert!(encoded.contains("\"claimed_by\":null"));
+    assert!(encoded.contains("\"actor\":\"legacy\""));
+
+    let claimed = PlanRow {
+        id: 1,
+        title: "Build CLI",
+        status: "active",
+        active: true,
+        hold_reason: None,
+        claimed_by: Some("01hzvyekq3s7m8w9x0abcdefgh"),
+        actor: "01hzvyekq3s7m8w9x0abcdefgh",
+    };
+    let encoded = serde_json::to_string(&claimed).expect("plan row json");
+    assert!(encoded.contains("\"claimed_by\":\"01hzvyekq3s7m8w9x0abcdefgh\""));
 }

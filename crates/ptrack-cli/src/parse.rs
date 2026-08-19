@@ -15,6 +15,7 @@ pub const ROOT_COMMANDS: &[&str] = &[
     "issue",
     "note",
     "commit",
+    "config",
     "hook",
     "context",
     "guide",
@@ -39,7 +40,7 @@ const GROUPS: &[(&str, &[&str])] = &[
     (
         "plan",
         &[
-            "add", "list", "show", "done", "use", "rename", "hold", "resume",
+            "add", "list", "show", "done", "use", "release", "rename", "hold", "resume",
         ],
     ),
     (
@@ -55,6 +56,7 @@ const GROUPS: &[(&str, &[&str])] = &[
     ),
     ("note", &["add", "list"]),
     ("commit", &["add", "record", "list", "show"]),
+    ("config", &["set", "show"]),
     ("hook", &["install", "uninstall", "status"]),
     ("capability", &["call", "mcp"]),
 ];
@@ -293,6 +295,7 @@ fn flag_names(path: &[String]) -> BTreeSet<(&'static str, bool)> {
         ["milestone", "list" | "show"] => &[("json", false)],
         ["plan", "add"] => &[("milestone", true)],
         ["plan", "list" | "show"] => &[("json", false)],
+        ["plan", "use"] => &[("steal", false)],
         ["task", "add"] => &[("plan", true)],
         ["task", "list"] => &[("plan", true), ("status", true), ("json", false)],
         ["task", "show"] => &[("json", false)],
@@ -310,6 +313,7 @@ fn flag_names(path: &[String]) -> BTreeSet<(&'static str, bool)> {
         ["commit", "add" | "list"] => &[("task", true), ("plan", true), ("json", false)],
         ["commit", "record"] => &[("sha", true), ("subject", true)],
         ["commit", "show"] => &[("stat", false)],
+        ["config", "show"] => &[("json", false)],
         ["context" | "next" | "search" | "status" | "projects"] => &[("json", false)],
         ["guide"] => &[("print", false)],
         ["board"] => &[("plan", true), ("gui", false), ("json", false)],

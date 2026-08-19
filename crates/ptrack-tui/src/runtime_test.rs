@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use ptrack_app::{
-    AppError, AppResult, ApplicationPort, CapabilityCancellation, CapabilityMcpOutcome,
-    GuideAction, HookAction, HookResult, InitRequest, InitResult, Mutation, MutationResult,
-    ProcessOutput,
+    ActorIdentity, AppError, AppResult, ApplicationPort, CapabilityCancellation,
+    CapabilityMcpOutcome, GuideAction, HookAction, HookResult, InitRequest, InitResult, Mutation,
+    MutationResult, ProcessOutput,
 };
 use ptrack_core::{
     Meta, Plan, PlanStatus, ProjectRef, ProjectSnapshot, Task, TaskStatus, Timestamp,
@@ -44,6 +44,14 @@ impl ApplicationPort for FakeApplication {
     }
 
     fn projects(&mut self) -> AppResult<Vec<ProjectRef>> {
+        unreachable!()
+    }
+
+    fn identity(&mut self) -> AppResult<Option<ActorIdentity>> {
+        unreachable!()
+    }
+
+    fn set_identity(&mut self, _name: &str) -> AppResult<ActorIdentity> {
         unreachable!()
     }
 
@@ -87,6 +95,8 @@ fn snapshot(status: TaskStatus) -> ProjectSnapshot {
             updated_at: Timestamp::Zero,
             format_version: 4,
             last_write_version: "test".to_owned(),
+            active_plans: Vec::new(),
+            actors: Vec::new(),
         },
         vec![],
         vec![Plan {
@@ -98,6 +108,11 @@ fn snapshot(status: TaskStatus) -> ProjectSnapshot {
             created_at: Timestamp::Zero,
             updated_at: Timestamp::Zero,
             hold_reason: None,
+            actor: None,
+            claim_conflict: false,
+            claim_epoch: 0,
+            claim_owner: None,
+            ulid: None,
         }],
         vec![Task {
             id: 2,
@@ -108,6 +123,8 @@ fn snapshot(status: TaskStatus) -> ProjectSnapshot {
             created_at: Timestamp::Zero,
             updated_at: Timestamp::Zero,
             hold_reason: None,
+            actor: None,
+            ulid: None,
         }],
         vec![],
         vec![],

@@ -12,6 +12,8 @@ pub(crate) fn meta(active_plan: u64) -> Meta {
         updated_at: Timestamp::Zero,
         format_version: 5,
         last_write_version: "v0.21.0".to_owned(),
+        active_plans: Vec::new(),
+        actors: Vec::new(),
     }
 }
 
@@ -28,6 +30,8 @@ pub(crate) fn milestone(id: u64, order: i64) -> Milestone {
         order,
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
+        actor: None,
+        ulid: None,
     }
 }
 
@@ -47,6 +51,11 @@ pub(crate) fn plan(
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
         hold_reason: None,
+        actor: None,
+        claim_conflict: false,
+        claim_epoch: 0,
+        claim_owner: None,
+        ulid: None,
     }
 }
 
@@ -60,6 +69,8 @@ pub(crate) fn task(id: u64, plan_id: u64, title: &str, status: TaskStatus, order
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
         hold_reason: None,
+        actor: None,
+        ulid: None,
     }
 }
 
@@ -80,6 +91,8 @@ pub(crate) fn issue(
         task_id,
         created_at: Timestamp::Zero,
         updated_at: Timestamp::Zero,
+        actor: None,
+        ulid: None,
     }
 }
 
@@ -97,6 +110,8 @@ pub(crate) fn note(
         kind,
         body: body.to_owned(),
         created_at: Timestamp::Zero,
+        actor: None,
+        ulid: None,
     }
 }
 
@@ -108,6 +123,8 @@ pub(crate) fn commit(id: u64) -> Commit {
         plan_id: 1,
         task_id: 1,
         created_at: Timestamp::Zero,
+        actor: None,
+        ulid: None,
     }
 }
 

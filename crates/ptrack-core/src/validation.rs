@@ -191,6 +191,90 @@ pub fn check_hold_reason(reason: &str) -> Result<(), String> {
     }
 }
 
+/// Maximum accepted UTF-8 bytes in a user identity display name.
+///
+/// A display name is a short single-line label rendered next to claims and
+/// attribution markers; it shares the hold-reason forbidden-character set so
+/// the two single-line rules can never diverge.
+pub const MAX_IDENTITY_NAME_BYTES: usize = 64;
+
+/// The presentation sentinel for records whose actor is unset.
+///
+/// Storage keeps `actor: None`; JSON adapters render this sentinel instead of
+/// null so consumers never disambiguate two "absent" spellings. It can never
+/// collide with a real actor: [`is_identity_id`] rejects it.
+pub const LEGACY_ACTOR: &str = "legacy";
+
+const IDENTITY_ID_ALPHABET: &[u8; 32] = b"0123456789abcdefghjkmnpqrstvwxyz";
+
+/// Reports whether a value is a well-formed 26-character lowercase
+/// Crockford-base32 identity ID (the exact shape `ptrack config set user`
+/// mints, also used by the reserved entity ULID fields).
+#[must_use]
+pub fn is_identity_id(value: &str) -> bool {
+    value.len() == 26
+        && value
+            .bytes()
+            .all(|byte| IDENTITY_ID_ALPHABET.contains(&byte))
+}
+
+/// Checks a display name typed by a person, before it reaches storage.
+///
+/// # Errors
+///
+/// Returns a printable sentence when the name cannot be stored.
+pub fn check_identity_name(name: &str) -> Result<(), String> {
+    if name.trim().is_empty() {
+        return Err("the user name cannot be blank".to_owned());
+    }
+    if name.len() > MAX_IDENTITY_NAME_BYTES {
+        return Err(format!(
+            "the user name is {} bytes; the limit is {MAX_IDENTITY_NAME_BYTES}",
+            name.len()
+        ));
+    }
+    if name.chars().any(is_forbidden_control) {
+        return Err("the user name must be one line without control characters".to_owned());
+    }
+    Ok(())
+}
+
+/// Rejects a set identity-shaped field that is not a well-formed identity ID.
+fn validate_identity_option(
+    value: Option<&String>,
+    field: &'static str,
+) -> Result<(), ValidationError> {
+    match value {
+        Some(id) if !is_identity_id(id) => Err(ValidationError::new(
+            field,
+            "must be a 26-character identity id",
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Rejects an actor-keyed map that is unsorted, duplicated, or not keyed by
+/// well-formed identity IDs.
+fn validate_actor_map_keys<T>(
+    entries: &[(String, T)],
+    field: &'static str,
+) -> Result<(), ValidationError> {
+    for window in entries.windows(2) {
+        if window[0].0 >= window[1].0 {
+            return Err(ValidationError::new(
+                field,
+                "must be sorted strictly ascending by identity id",
+            ));
+        }
+    }
+    for (id, _) in entries {
+        if !is_identity_id(id) {
+            return Err(ValidationError::new(field, "must key by identity ids"));
+        }
+    }
+    Ok(())
+}
+
 impl Validate for Timestamp {
     fn validate(&self) -> Result<(), ValidationError> {
         if let Self::Fixed {
@@ -232,6 +316,20 @@ impl Validate for Meta {
                 "must be a supported legacy format from 0 through 5",
             ));
         }
+        validate_actor_map_keys(&self.active_plans, "meta.active_plans")?;
+        validate_actor_map_keys(&self.actors, "meta.actors")?;
+        // The directory holds names typed by people, so it reuses the same
+        // single-line rule the input boundary applies to a display name.
+        if self
+            .actors
+            .iter()
+            .any(|(_, name)| check_identity_name(name).is_err())
+        {
+            return Err(ValidationError::new(
+                "meta.actors",
+                "must hold bounded single-line names",
+            ));
+        }
         Ok(())
     }
 }
@@ -240,6 +338,8 @@ impl Validate for Milestone {
     fn validate(&self) -> Result<(), ValidationError> {
         require_id(self.id, "milestone.id")?;
         require_nonnegative(self.order, "milestone.order")?;
+        validate_identity_option(self.actor.as_ref(), "milestone.actor")?;
+        validate_identity_option(self.ulid.as_ref(), "milestone.ulid")?;
         validate_times(&[self.due, self.created_at, self.updated_at])
     }
 }
@@ -249,6 +349,25 @@ impl Validate for Plan {
         require_id(self.id, "plan.id")?;
         require_nonnegative(self.order, "plan.order")?;
         validate_hold_reason(self.hold_reason.as_ref(), "plan.hold_reason")?;
+        validate_identity_option(self.actor.as_ref(), "plan.actor")?;
+        validate_identity_option(self.ulid.as_ref(), "plan.ulid")?;
+        validate_identity_option(self.claim_owner.as_ref(), "plan.claim_owner")?;
+        // Claim consistency: every owner arrived through a claim that bumped
+        // the epoch, and the conflict marker only annotates a live claim. A
+        // release clears the owner and keeps the epoch, so a nonzero epoch
+        // without an owner is the normal released shape.
+        if self.claim_owner.is_some() && self.claim_epoch == 0 {
+            return Err(ValidationError::new(
+                "plan.claim_epoch",
+                "must be nonzero while the plan is claimed",
+            ));
+        }
+        if self.claim_conflict && self.claim_owner.is_none() {
+            return Err(ValidationError::new(
+                "plan.claim_conflict",
+                "must not be set on an unclaimed plan",
+            ));
+        }
         validate_times(&[self.created_at, self.updated_at])
     }
 }
@@ -259,6 +378,8 @@ impl Validate for Task {
         require_id(self.plan_id, "task.plan_id")?;
         require_nonnegative(self.order, "task.order")?;
         validate_hold_reason(self.hold_reason.as_ref(), "task.hold_reason")?;
+        validate_identity_option(self.actor.as_ref(), "task.actor")?;
+        validate_identity_option(self.ulid.as_ref(), "task.ulid")?;
         validate_times(&[self.created_at, self.updated_at])
     }
 }
@@ -287,6 +408,8 @@ impl Validate for Note {
                 "must not contain the summary command kind",
             ));
         }
+        validate_identity_option(self.actor.as_ref(), "note.actor")?;
+        validate_identity_option(self.ulid.as_ref(), "note.ulid")?;
         self.created_at.validate()
     }
 }
@@ -294,6 +417,8 @@ impl Validate for Note {
 impl Validate for Issue {
     fn validate(&self) -> Result<(), ValidationError> {
         require_id(self.id, "issue.id")?;
+        validate_identity_option(self.actor.as_ref(), "issue.actor")?;
+        validate_identity_option(self.ulid.as_ref(), "issue.ulid")?;
         validate_times(&[self.created_at, self.updated_at])
     }
 }
@@ -301,6 +426,8 @@ impl Validate for Issue {
 impl Validate for Commit {
     fn validate(&self) -> Result<(), ValidationError> {
         require_id(self.id, "commit.id")?;
+        validate_identity_option(self.actor.as_ref(), "commit.actor")?;
+        validate_identity_option(self.ulid.as_ref(), "commit.ulid")?;
         self.created_at.validate()
     }
 }

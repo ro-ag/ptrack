@@ -26,6 +26,8 @@ fn store_validation_binds_native_payloads_to_collection_keys() {
         updated_at: Timestamp::Zero,
         format_version: 5,
         last_write_version: "v0.21.0".to_owned(),
+        active_plans: Vec::new(),
+        actors: Vec::new(),
     }));
     validation::record(Collection::ProjectMeta, &OwnedRecordKey::Singleton, &meta).unwrap();
     assert!(validation::record(Collection::Plans, &OwnedRecordKey::Id(1), &meta).is_err());

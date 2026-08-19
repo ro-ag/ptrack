@@ -108,6 +108,11 @@ pub struct PlanRow<'a> {
     pub status: &'a str,
     pub active: bool,
     pub hold_reason: Option<&'a str>,
+    /// Identity holding the hard claim on this plan; `None` when unclaimed.
+    pub claimed_by: Option<&'a str>,
+    /// Identity that last mutated this record; [`ptrack_core::LEGACY_ACTOR`]
+    /// when unset.
+    pub actor: &'a str,
 }
 
 #[derive(Serialize)]
@@ -117,6 +122,9 @@ pub struct TaskRow<'a> {
     pub title: &'a str,
     pub status: &'a str,
     pub hold_reason: Option<&'a str>,
+    /// Identity that last mutated this record; [`ptrack_core::LEGACY_ACTOR`]
+    /// when unset.
+    pub actor: &'a str,
 }
 
 #[derive(Serialize)]
@@ -215,6 +223,9 @@ struct PlanRefJson<'a> {
     title: &'a str,
     status: &'a str,
     hold_reason: Option<&'a str>,
+    claimed_by: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    claimed_by_name: Option<&'a str>,
 }
 
 impl<'a> From<&'a PlanRef> for PlanRefJson<'a> {
@@ -224,6 +235,8 @@ impl<'a> From<&'a PlanRef> for PlanRefJson<'a> {
             title: &value.title,
             status: &value.status,
             hold_reason: value.hold_reason.as_deref(),
+            claimed_by: value.claimed_by.as_deref(),
+            claimed_by_name: value.claimed_by_name.as_deref(),
         }
     }
 }
@@ -481,6 +494,21 @@ impl<'a> From<&'a SearchView> for SearchJson<'a> {
             tasks: nonempty(value.tasks.iter().map(Into::into).collect()),
             issues: nonempty(value.issues.iter().map(Into::into).collect()),
             notes: nonempty(value.notes.iter().map(Into::into).collect()),
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct ConfigUserJson<'a> {
+    pub id: Option<&'a str>,
+    pub name: Option<&'a str>,
+}
+
+impl<'a> From<Option<&'a ptrack_app::ActorIdentity>> for ConfigUserJson<'a> {
+    fn from(value: Option<&'a ptrack_app::ActorIdentity>) -> Self {
+        Self {
+            id: value.map(|identity| identity.id.as_str()),
+            name: value.map(|identity| identity.name.as_str()),
         }
     }
 }

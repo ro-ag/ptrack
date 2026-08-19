@@ -16,7 +16,7 @@ resume after a previous session grew too large.\n\
 log, open issues), then keep it current:\n\
 - Goal: `ptrack goal set \"north star\"`\n\
 - Milestones (checkpoints): `ptrack milestone add \"v1.0\" [--due YYYY-MM-DD]`\n\
-- Plans (workstreams): `ptrack plan add \"...\" [--milestone N]`, then `ptrack plan use N`\n\
+- Plans (workstreams): `ptrack plan add \"...\" [--milestone N]`, then `ptrack plan use N` (also claims it)\n\
 - Tasks with status: `ptrack task add \"...\" [--plan N]` then `task start` (in progress) / `task done` / `task block` (todo = pending)\n\
 - Issues (bugs/problems): `ptrack issue add \"...\" [--severity high] [--task N]`\n\
 - Decisions: `ptrack note add \"...\" [--task N | --plan N]`\n\
@@ -30,6 +30,15 @@ progress:\", \"Done:\", etc. — ptrack tracks status separately. Set it with\n\
 a reason, independently of its status: `ptrack task hold <id> \"waiting on review\"`\n\
 / `ptrack task resume <id>` (same for `plan hold|resume`). Completing the item\n\
 clears its hold too. Do not pick up a held item; `ptrack next` skips them.\n\
+\n\
+**Working with other developers.** Configure your identity once per machine:\n\
+`ptrack config set user \"<your name>\"` (a stable ID is minted the first time;\n\
+renaming later keeps it). `ptrack plan use <id>` then claims the plan for you\n\
+as well as making it your active plan; content changes to a plan claimed by\n\
+someone else are refused. Holds, notes, and issue links stay open to everyone\n\
+— use them to talk across a claim. `ptrack plan release <id>` frees your\n\
+claim, finishing a plan releases it automatically, and\n\
+`ptrack plan use <id> --steal` takes over someone else's claim.\n\
 \n\
 **Record decisions, not narration.** Notes are the human-visible audit trail of\n\
 what you did and *why*. When you make a choice, hit a blocker, or find a\n\

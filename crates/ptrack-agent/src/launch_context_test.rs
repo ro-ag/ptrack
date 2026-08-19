@@ -40,6 +40,8 @@ impl Store {
                 updated_at: CoreTimestamp::Zero,
                 format_version: 1,
                 last_write_version: String::new(),
+                active_plans: Vec::new(),
+                actors: Vec::new(),
             },
             plans: BTreeMap::new(),
             tasks: BTreeMap::new(),
@@ -109,6 +111,11 @@ fn plan(id: u64) -> Plan {
         created_at: CoreTimestamp::Zero,
         updated_at: CoreTimestamp::Zero,
         hold_reason: None,
+        actor: None,
+        claim_conflict: false,
+        claim_epoch: 0,
+        claim_owner: None,
+        ulid: None,
     }
 }
 
@@ -122,6 +129,8 @@ fn task(id: u64, plan_id: u64) -> Task {
         created_at: CoreTimestamp::Zero,
         updated_at: CoreTimestamp::Zero,
         hold_reason: None,
+        actor: None,
+        ulid: None,
     }
 }
 
@@ -142,6 +151,8 @@ fn context_is_exact_bounded_untrusted_json_with_relevant_memory() {
             kind: MemoryKind::Decision,
             body: "Project decision".to_owned(),
             created_at: CoreTimestamp::Zero,
+            actor: None,
+            ulid: None,
         },
         Note {
             id: 2,
@@ -150,6 +161,8 @@ fn context_is_exact_bounded_untrusted_json_with_relevant_memory() {
             kind: MemoryKind::Legacy,
             body: "Plan memory".to_owned(),
             created_at: CoreTimestamp::Zero,
+            actor: None,
+            ulid: None,
         },
         Note {
             id: 3,
@@ -158,6 +171,8 @@ fn context_is_exact_bounded_untrusted_json_with_relevant_memory() {
             kind: MemoryKind::Decision,
             body: "unrelated".to_owned(),
             created_at: CoreTimestamp::Zero,
+            actor: None,
+            ulid: None,
         },
     ];
     store.issues.push(Issue {
@@ -169,6 +184,8 @@ fn context_is_exact_bounded_untrusted_json_with_relevant_memory() {
         task_id: 9,
         created_at: CoreTimestamp::Zero,
         updated_at: CoreTimestamp::Zero,
+        actor: None,
+        ulid: None,
     });
     store.commits.push(Commit {
         id: 5,
@@ -177,6 +194,8 @@ fn context_is_exact_bounded_untrusted_json_with_relevant_memory() {
         plan_id: 2,
         task_id: 9,
         created_at: CoreTimestamp::Zero,
+        actor: None,
+        ulid: None,
     });
     let host = AssociationHost::new(&canonical, 7, Some(&store)).unwrap();
     let context = build_launch_context(
@@ -327,6 +346,8 @@ fn hard_ceiling_is_deterministic_utf8_safe_and_marks_truncation() {
             kind: MemoryKind::Decision,
             body: huge.clone(),
             created_at: CoreTimestamp::Zero,
+            actor: None,
+            ulid: None,
         });
     }
     for id in 1..=6 {
@@ -339,6 +360,8 @@ fn hard_ceiling_is_deterministic_utf8_safe_and_marks_truncation() {
             task_id: 9,
             created_at: CoreTimestamp::Zero,
             updated_at: CoreTimestamp::Zero,
+            actor: None,
+            ulid: None,
         });
     }
     for id in 1..=8 {
@@ -349,6 +372,8 @@ fn hard_ceiling_is_deterministic_utf8_safe_and_marks_truncation() {
             plan_id: 2,
             task_id: 9,
             created_at: CoreTimestamp::Zero,
+            actor: None,
+            ulid: None,
         });
     }
     let host = AssociationHost::new(&canonical, 1, Some(&store)).unwrap();

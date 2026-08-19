@@ -202,6 +202,39 @@ _none_\n\
 }
 
 #[test]
+fn claim_owner_resolves_to_actor_name_in_plan_view_and_markdown() {
+    let mut claimed = snapshot();
+    claimed.plans[0].claim_owner = Some("01hzvyekq3s7m8w9x0abcdefgh".to_owned());
+    claimed
+        .meta
+        .actors
+        .push(("01hzvyekq3s7m8w9x0abcdefgh".to_owned(), "Alice".to_owned()));
+
+    let view = show_plan(&claimed, 1).expect("plan exists");
+    assert_eq!(
+        view.plan.claimed_by.as_deref(),
+        Some("01hzvyekq3s7m8w9x0abcdefgh")
+    );
+    assert_eq!(view.plan.claimed_by_name.as_deref(), Some("Alice"));
+    assert!(view.markdown().contains("[claimed: Alice]"));
+
+    // Every text surface that renders a `PlanRef` carries the marker, not
+    // just the plan's own show view.
+    assert!(
+        show_task(&claimed, 1)
+            .expect("task exists")
+            .markdown()
+            .contains("Plan: #1 Build CLI [claimed: Alice]\n")
+    );
+    assert!(
+        show_milestone(&claimed, 1)
+            .expect("milestone exists")
+            .markdown()
+            .contains("[claimed: Alice]\n")
+    );
+}
+
+#[test]
 fn milestone_due_date_pads_negative_years_after_the_sign() {
     let mut snapshot = snapshot();
     snapshot.milestones[0].due = Timestamp::Fixed {

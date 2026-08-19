@@ -2402,11 +2402,13 @@ impl BoundDesktopWorkspace {
     }
 
     fn project_store(&self) -> AppResult<ProjectStore> {
+        let actor = lock(&self.application).identity()?;
         Ok(ProjectStore::open_existing(
             &self.endpoint.database,
             &self.endpoint.binding,
             &self.bindings.writer_version,
-        )?)
+        )?
+        .with_actor(actor))
     }
 
     #[allow(clippy::too_many_lines)] // One bounded storage capture keeps totals and rows aligned.
@@ -2416,7 +2418,9 @@ impl BoundDesktopWorkspace {
         deadline: Instant,
     ) -> AppResult<SnapshotTrackingCapture> {
         let store = self.project_store()?;
-        let meta = store.meta()?;
+        let mut meta = store.meta()?;
+        let identity = lock(&self.application).identity()?;
+        meta.active_plan = meta.active_plan_for(identity.as_ref().map(|i| i.id.as_str()));
         ensure_snapshot_deadline(deadline)?;
         let plans = store.plans_bounded(SNAPSHOT_PLAN_LIMIT)?;
         let selected_plan = if requested_plan == 0 {
@@ -2490,6 +2494,10 @@ impl BoundDesktopWorkspace {
                     tasks_total: progress.total,
                     tasks_done: progress.done,
                     hold_reason: plan.hold_reason.clone(),
+                    claimed_by: plan
+                        .claim_owner
+                        .as_deref()
+                        .map(|owner| snapshot.meta.actor_name(owner).unwrap_or(owner).to_owned()),
                 }
             })
             .collect();
@@ -4164,6 +4172,11 @@ struct PlanSummaryView {
     /// marker on the existing row rather than a separate grouping.
     #[serde(skip_serializing_if = "Option::is_none")]
     hold_reason: Option<String>,
+    /// Present only while the plan is claimed; carries the resolved display
+    /// label (actor name, else the raw identity ID). Display-only — claims
+    /// are mutated through the CLI only, exactly like holds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    claimed_by: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -4396,6 +4409,10 @@ fn board_view(
                 tasks_total: entry.0,
                 tasks_done: entry.1,
                 hold_reason: plan.hold_reason.clone(),
+                claimed_by: plan
+                    .claim_owner
+                    .as_deref()
+                    .map(|owner| snapshot.meta.actor_name(owner).unwrap_or(owner).to_owned()),
             }
         })
         .collect();
@@ -4454,6 +4471,10 @@ fn snapshot_board_view(
                 tasks_total: entry.0,
                 tasks_done: entry.1,
                 hold_reason: plan.hold_reason.clone(),
+                claimed_by: plan
+                    .claim_owner
+                    .as_deref()
+                    .map(|owner| snapshot.meta.actor_name(owner).unwrap_or(owner).to_owned()),
             }
         })
         .collect();

@@ -9,14 +9,14 @@ use ptrack_capability_policy::{AuditEvent, confirm_approval, normalize, sanitize
 use ptrack_core::{
     Capability, CapabilityAudit, CapabilityAuditPolicy, CapabilityKind, CapabilityLimits, Digest32,
     GitScope, MIN_NATIVE_PAYLOAD_SCHEMA, MemoryKind, NativeRecord, NoteTarget, Plan, PlanStatus,
-    RecordKind, TaskStatus, Timestamp, decode_record, encode_record,
+    RecordKind, TaskStatus, Timestamp, decode_record, encode_record_at_schema,
 };
 
 use crate::typed;
 use crate::{
-    ActiveBinding, Clock, Collection, GlobalStore, MemoryWriteRequest, NATIVE_CODEC,
-    NATIVE_PAYLOAD_SCHEMA, ProjectRegistryCasResult, ProjectStore, RecordEnvelope, RecordKey,
-    Store, StoreError, StoreKind,
+    ActiveBinding, ActorIdentity, Clock, Collection, GlobalStore, INVALID_CLAIM_PREFIX,
+    MemoryWriteRequest, NATIVE_CODEC, NATIVE_PAYLOAD_SCHEMA, ProjectRegistryCasResult,
+    ProjectStore, RecordEnvelope, RecordKey, Store, StoreError, StoreKind,
 };
 
 static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -1356,18 +1356,23 @@ fn a_database_of_schema_1_records_opens_reads_and_upgrades_on_write() {
     let task = store.add_task(plan.id, "legacy task").unwrap();
 
     // Rewrite both records exactly as a released pre-hold build stored them:
-    // the current layout minus the trailing hold-reason option byte, under
-    // payload schema 1.
+    // the schema-1 layout, under payload schema 1.
     store
         .write(|transaction| {
-            let plan_payload = encode_record(&NativeRecord::Plan(plan.clone())).unwrap();
-            let task_payload = encode_record(&NativeRecord::Task(task.clone())).unwrap();
+            let plan_payload = encode_record_at_schema(
+                &NativeRecord::Plan(plan.clone()),
+                MIN_NATIVE_PAYLOAD_SCHEMA,
+            )
+            .unwrap();
+            let task_payload = encode_record_at_schema(
+                &NativeRecord::Task(task.clone()),
+                MIN_NATIVE_PAYLOAD_SCHEMA,
+            )
+            .unwrap();
             for (collection, id, payload) in [
                 (Collection::Plans, plan.id, plan_payload),
                 (Collection::Tasks, task.id, task_payload),
             ] {
-                let mut payload = payload;
-                assert_eq!(payload.pop(), Some(0));
                 let legacy = RecordEnvelope::new(NATIVE_CODEC, MIN_NATIVE_PAYLOAD_SCHEMA, payload);
                 transaction.put(collection, RecordKey::Id(id), &legacy)?;
             }
@@ -1405,6 +1410,86 @@ fn a_database_of_schema_1_records_opens_reads_and_upgrades_on_write() {
     assert_eq!(store.task(task.id).unwrap(), task);
 }
 
+/// The 0.26-era analogue of the schema-1 test above: a database whose records
+/// were written at payload schema 2 (hold reasons present, no actor/claim
+/// fields) opens as-is, reads correctly, and upgrades lazily per record on
+/// write. This is the exact upgrade path every existing 0.26 database takes.
+#[test]
+fn a_database_of_schema_2_records_opens_reads_and_upgrades_on_write() {
+    let temp = Temp::new();
+    let path = temp.path("schema-2-database.redb");
+    let expected = binding(&path, StoreKind::Project, "project-schema-2");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+    let plan = store.add_plan("held plan", 0).unwrap();
+    store
+        .set_plan_hold(plan.id, Some("waiting on review".to_owned()))
+        .unwrap();
+    let plan = store.plan(plan.id).unwrap();
+    let task = store.add_task(plan.id, "schema-2 task").unwrap();
+    let meta = store.meta().unwrap();
+
+    // Rewrite all three records exactly as a released 0.26 build stored them:
+    // payload schema 2, hold reason present, none of the schema-3 fields.
+    store
+        .write(|transaction| {
+            let plan_payload =
+                encode_record_at_schema(&NativeRecord::Plan(plan.clone()), 2).unwrap();
+            let task_payload =
+                encode_record_at_schema(&NativeRecord::Task(task.clone()), 2).unwrap();
+            let meta_payload =
+                encode_record_at_schema(&NativeRecord::Meta(meta.clone()), 2).unwrap();
+            transaction.put(
+                Collection::Plans,
+                RecordKey::Id(plan.id),
+                &RecordEnvelope::new(NATIVE_CODEC, 2, plan_payload),
+            )?;
+            transaction.put(
+                Collection::Tasks,
+                RecordKey::Id(task.id),
+                &RecordEnvelope::new(NATIVE_CODEC, 2, task_payload),
+            )?;
+            transaction.put(
+                Collection::ProjectMeta,
+                RecordKey::Singleton,
+                &RecordEnvelope::new(NATIVE_CODEC, 2, meta_payload),
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    drop(store);
+
+    // The database opens without any migration step and reads exactly.
+    let expected = binding(&path, StoreKind::Project, "project-schema-2");
+    let store = ProjectStore::open_existing(&path, &expected, "test").unwrap();
+    assert_eq!(store.plan(plan.id).unwrap(), plan);
+    assert_eq!(store.task(task.id).unwrap(), task);
+    assert_eq!(stored_schema(&store, Collection::Plans, plan.id), 2);
+    assert_eq!(stored_schema(&store, Collection::Tasks, task.id), 2);
+
+    // One write upgrades that one record to schema 3; nothing else moves.
+    store.set_task_title(task.id, "renamed").unwrap();
+    assert_eq!(
+        stored_schema(&store, Collection::Tasks, task.id),
+        NATIVE_PAYLOAD_SCHEMA
+    );
+    assert_eq!(stored_schema(&store, Collection::Plans, plan.id), 2);
+
+    // The half-upgraded database still opens and both records still read.
+    drop(store);
+    let expected = binding(&path, StoreKind::Project, "project-schema-2");
+    let store = ProjectStore::open_existing(&path, &expected, "test").unwrap();
+    assert_eq!(
+        store.plan(plan.id).unwrap().hold_reason.as_deref(),
+        Some("waiting on review")
+    );
+    assert_eq!(store.task(task.id).unwrap().title, "renamed");
+    // The legacy singleton still answers active-plan reads for any actor.
+    assert_eq!(
+        store.meta().unwrap().active_plan_for(None),
+        meta.active_plan
+    );
+}
+
 fn stored_schema(store: &ProjectStore, collection: Collection, id: u64) -> u32 {
     store
         .read(|transaction| {
@@ -1427,11 +1512,16 @@ fn schema_1_records_read_unheld_upgrade_on_write_and_future_schemas_fail_closed(
         created_at: timestamp(1_700_000_000),
         updated_at: timestamp(1_700_000_000),
         hold_reason: None,
+        actor: None,
+        claim_conflict: false,
+        claim_epoch: 0,
+        claim_owner: None,
+        ulid: None,
     };
-    // An older build stored the current layout minus the trailing hold-reason
-    // option, under payload schema 1.
-    let mut payload = encode_record(&NativeRecord::Plan(plan.clone())).unwrap();
-    assert_eq!(payload.pop(), Some(0));
+    // An older build stored the schema-1 layout, under payload schema 1.
+    let payload =
+        encode_record_at_schema(&NativeRecord::Plan(plan.clone()), MIN_NATIVE_PAYLOAD_SCHEMA)
+            .unwrap();
     let legacy = RecordEnvelope::new(NATIVE_CODEC, MIN_NATIVE_PAYLOAD_SCHEMA, payload);
 
     // It still decodes, and reads as not held.
@@ -1441,7 +1531,7 @@ fn schema_1_records_read_unheld_upgrade_on_write_and_future_schemas_fail_closed(
     // in place without the open path ever touching it.
     let upgraded = typed::encode(&plan).unwrap();
     assert_eq!(upgraded.payload_schema(), NATIVE_PAYLOAD_SCHEMA);
-    assert_eq!(upgraded.payload().len(), legacy.payload().len() + 1);
+    assert!(upgraded.payload().len() > legacy.payload().len());
     assert_eq!(typed::decode::<Plan>(upgraded).unwrap(), plan);
 
     // A schema this build does not know fails closed on read instead of being
@@ -1486,4 +1576,394 @@ fn schema_1_records_read_unheld_upgrade_on_write_and_future_schemas_fail_closed(
         })
         .unwrap_err();
     assert!(matches!(refused, StoreError::InvalidImport(_)), "{refused}");
+}
+
+const ACTOR_A: &str = "01hzvyekq3s7m8w9x0abcdefgh";
+
+fn actor_a() -> ActorIdentity {
+    ActorIdentity {
+        id: ACTOR_A.to_owned(),
+        name: "Alice".to_owned(),
+    }
+}
+
+#[test]
+fn mutations_stamp_the_configured_actor_and_register_it() {
+    let temp = Temp::new();
+    let path = temp.path("actor-stamp.redb");
+    let expected = binding(&path, StoreKind::Project, "project-actor");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock())
+        .unwrap()
+        .with_actor(Some(actor_a()));
+    let plan = store.add_plan("attributed", 0).unwrap();
+    assert_eq!(plan.actor.as_deref(), Some(ACTOR_A));
+    let task = store.add_task(plan.id, "attributed task").unwrap();
+    assert_eq!(task.actor.as_deref(), Some(ACTOR_A));
+    store.set_task_title(task.id, "renamed").unwrap();
+    assert_eq!(store.task(task.id).unwrap().actor.as_deref(), Some(ACTOR_A));
+    let meta = store.meta().unwrap();
+    assert_eq!(meta.actor_name(ACTOR_A), Some("Alice"));
+}
+
+#[test]
+fn unset_actor_leaves_records_unattributed() {
+    let temp = Temp::new();
+    let path = temp.path("actor-unset.redb");
+    let expected = binding(&path, StoreKind::Project, "project-noactor");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+    let plan = store.add_plan("legacy write", 0).unwrap();
+    assert_eq!(plan.actor, None);
+    assert!(store.meta().unwrap().actors.is_empty());
+}
+
+const ACTOR_B: &str = "01hzvyekq3s7m8w9x0abcdefgj";
+
+fn actor_b() -> ActorIdentity {
+    ActorIdentity {
+        id: ACTOR_B.to_owned(),
+        name: "Bob".to_owned(),
+    }
+}
+
+#[test]
+fn active_plan_is_per_actor_with_legacy_singleton_fallback() {
+    let temp = Temp::new();
+    let path = temp.path("per-actor-active.redb");
+    let expected = binding(&path, StoreKind::Project, "project-per-actor");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+    let one = store.add_plan("plan one", 0).unwrap();
+    let two = store.add_plan("plan two", 0).unwrap();
+
+    // Legacy path: no identity configured writes the singleton.
+    store.set_active_plan(one.id).unwrap();
+    assert_eq!(store.snapshot().unwrap().meta.active_plan, one.id);
+    drop(store);
+
+    // Actor A picks a different plan; only A sees it.
+    let expected = binding(&path, StoreKind::Project, "project-per-actor");
+    let store = ProjectStore::open_existing(&path, &expected, "test")
+        .unwrap()
+        .with_actor(Some(actor_a()));
+    store.set_active_plan(two.id).unwrap();
+    assert_eq!(store.snapshot().unwrap().meta.active_plan, two.id);
+    // The stored singleton is untouched.
+    assert_eq!(store.meta().unwrap().active_plan, one.id);
+    drop(store);
+
+    // Actor B has no entry yet and falls back to the legacy singleton.
+    let expected = binding(&path, StoreKind::Project, "project-per-actor");
+    let store = ProjectStore::open_existing(&path, &expected, "test")
+        .unwrap()
+        .with_actor(Some(actor_b()));
+    assert_eq!(store.snapshot().unwrap().meta.active_plan, one.id);
+    // An explicit zero entry means "none", not "fall back".
+    store.set_active_plan(0).unwrap();
+    assert_eq!(store.snapshot().unwrap().meta.active_plan, 0);
+}
+
+fn reopen_as(path: &std::path::Path, label: &str, actor: Option<ActorIdentity>) -> ProjectStore {
+    let expected = binding(path, StoreKind::Project, label);
+    ProjectStore::open_existing(path, &expected, "test")
+        .unwrap()
+        .with_actor(actor)
+}
+
+#[test]
+fn claims_gate_content_mutations_but_not_holds_notes_or_issues() {
+    let temp = Temp::new();
+    let path = temp.path("claims.redb");
+    let expected = binding(&path, StoreKind::Project, "project-claims");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+    let plan = store.add_plan("shared", 0).unwrap();
+    let task = store.add_task(plan.id, "shared task").unwrap();
+    drop(store);
+
+    // A claims the plan.
+    let store = reopen_as(&path, "project-claims", Some(actor_a()));
+    store.use_plan(plan.id, false).unwrap();
+    let claimed = store.plan(plan.id).unwrap();
+    assert_eq!(claimed.claim_owner.as_deref(), Some(ACTOR_A));
+    assert_eq!(claimed.claim_epoch, 1);
+    // Re-using your own claim is idempotent: no epoch bump.
+    store.use_plan(plan.id, false).unwrap();
+    assert_eq!(store.plan(plan.id).unwrap().claim_epoch, 1);
+    drop(store);
+
+    // B: content mutations refused, communication channels open.
+    let store = reopen_as(&path, "project-claims", Some(actor_b()));
+    let refused = store.set_plan_title(plan.id, "hijack").unwrap_err();
+    assert!(matches!(refused, StoreError::InvalidClaim(_)), "{refused}");
+    assert!(refused.to_string().starts_with(INVALID_CLAIM_PREFIX));
+    assert!(matches!(
+        store
+            .set_task_status(task.id, TaskStatus::Doing)
+            .unwrap_err(),
+        StoreError::InvalidClaim(_)
+    ));
+    assert!(matches!(
+        store.add_task(plan.id, "b task").unwrap_err(),
+        StoreError::InvalidClaim(_)
+    ));
+    store
+        .set_plan_hold(plan.id, Some("please pause".to_owned()))
+        .unwrap();
+    store.set_task_hold(task.id, None).unwrap();
+    store
+        .add_note(NoteTarget::Plan, plan.id, "note from B")
+        .unwrap();
+    store.add_issue("issue from B", "", None, task.id).unwrap();
+    // Non-steal takeover refused; steal succeeds and bumps the epoch.
+    assert!(matches!(
+        store.use_plan(plan.id, false).unwrap_err(),
+        StoreError::InvalidClaim(_)
+    ));
+    store.use_plan(plan.id, true).unwrap();
+    let stolen = store.plan(plan.id).unwrap();
+    assert_eq!(stolen.claim_owner.as_deref(), Some(ACTOR_B));
+    assert_eq!(stolen.claim_epoch, 2);
+    // Release frees the claim, keeps the epoch, and only the owner may do it.
+    store.release_plan(plan.id).unwrap();
+    let released = store.plan(plan.id).unwrap();
+    assert_eq!(released.claim_owner, None);
+    assert_eq!(released.claim_epoch, 2);
+    assert!(matches!(
+        store.release_plan(plan.id).unwrap_err(),
+        StoreError::InvalidClaim(_)
+    ));
+}
+
+#[test]
+fn unset_actor_cannot_mutate_claimed_content_and_terminal_status_releases() {
+    let temp = Temp::new();
+    let path = temp.path("claims-terminal.redb");
+    let expected = binding(&path, StoreKind::Project, "project-terminal");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+    let plan = store.add_plan("terminal", 0).unwrap();
+    drop(store);
+
+    let store = reopen_as(&path, "project-terminal", Some(actor_a()));
+    store.use_plan(plan.id, false).unwrap();
+    drop(store);
+
+    // No identity configured: claimed content is refused fail-closed.
+    let store = reopen_as(&path, "project-terminal", None);
+    assert!(matches!(
+        store.set_plan_title(plan.id, "anon edit").unwrap_err(),
+        StoreError::InvalidClaim(_)
+    ));
+    drop(store);
+
+    // The owner finishing the plan auto-releases the claim.
+    let store = reopen_as(&path, "project-terminal", Some(actor_a()));
+    store.set_plan_status(plan.id, PlanStatus::Done).unwrap();
+    let done = store.plan(plan.id).unwrap();
+    assert_eq!(done.claim_owner, None);
+    assert_eq!(done.claim_epoch, 1);
+}
+
+#[test]
+fn convert_births_the_new_plan_claimed_by_the_converter() {
+    let temp = Temp::new();
+    let path = temp.path("claims-convert.redb");
+    let expected = binding(&path, StoreKind::Project, "project-convert");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+    let plan = store.add_plan("parent", 0).unwrap();
+    let task = store.add_task(plan.id, "promote me").unwrap();
+    drop(store);
+
+    let store = reopen_as(&path, "project-convert", Some(actor_a()));
+    store.use_plan(plan.id, false).unwrap();
+    let born = store.convert_task_to_plan(task.id).unwrap();
+    assert_eq!(born.claim_owner.as_deref(), Some(ACTOR_A));
+    assert_eq!(born.claim_epoch, 1);
+}
+
+/// Marks a plan's claim as conflicted. Nothing in the store writes this field
+/// — it is accepted-but-never-written until conflict detection lands — so the
+/// only way to prove the clearing paths handle it is to plant one.
+fn plant_claim_conflict(store: &ProjectStore, plan_id: u64) {
+    store
+        .write(|transaction| {
+            let mut plan: Plan = typed::get_write(transaction, RecordKey::Id(plan_id))?.unwrap();
+            plan.claim_conflict = true;
+            typed::put(transaction, RecordKey::Id(plan_id), &plan)?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn claim_gate_covers_the_compare_and_set_and_cross_plan_paths() {
+    let temp = Temp::new();
+    let path = temp.path("claims-gates.redb");
+    let expected = binding(&path, StoreKind::Project, "project-gates");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+    let source = store.add_plan("source", 0).unwrap();
+    let target = store.add_plan("target", 0).unwrap();
+    let task = store.add_task(source.id, "moving target").unwrap();
+    drop(store);
+
+    let store = reopen_as(&path, "project-gates", Some(actor_a()));
+    store.use_plan(source.id, false).unwrap();
+    drop(store);
+
+    // B owns nothing here: the CAS path is gated like every other content write.
+    let store = reopen_as(&path, "project-gates", Some(actor_b()));
+    let refused = store
+        .compare_and_set_task_status(
+            task.id,
+            source.id,
+            TaskStatus::Todo,
+            task.updated_at,
+            TaskStatus::Doing,
+        )
+        .unwrap_err();
+    assert!(matches!(refused, StoreError::InvalidClaim(_)), "{refused}");
+    // The refusal names the owner the way a person knows them, not by ULID.
+    assert!(refused.to_string().contains("Alice"), "{refused}");
+    assert!(!refused.to_string().contains(ACTOR_A), "{refused}");
+
+    // Only the *source* plan is claimed, and moving out of it is still refused.
+    assert!(matches!(
+        store.set_task_plan(task.id, target.id).unwrap_err(),
+        StoreError::InvalidClaim(_)
+    ));
+    // The open channels leave the claim exactly as they found it.
+    store
+        .set_plan_hold(source.id, Some("waiting on B".to_owned()))
+        .unwrap();
+    store.set_plan_hold(source.id, None).unwrap();
+    let held = store.plan(source.id).unwrap();
+    assert_eq!(held.claim_owner.as_deref(), Some(ACTOR_A));
+    assert_eq!(held.claim_epoch, 1);
+    drop(store);
+
+    // Finishing a *task* is not a plan status change: the claim is untouched.
+    let store = reopen_as(&path, "project-gates", Some(actor_a()));
+    let task = store
+        .compare_and_set_task_status(
+            task.id,
+            source.id,
+            TaskStatus::Todo,
+            task.updated_at,
+            TaskStatus::Done,
+        )
+        .unwrap();
+    assert_eq!(task.status, TaskStatus::Done);
+    assert_eq!(
+        store.plan(source.id).unwrap().claim_owner.as_deref(),
+        Some(ACTOR_A)
+    );
+}
+
+#[test]
+fn claim_epochs_move_only_on_a_real_ownership_change() {
+    let temp = Temp::new();
+    let path = temp.path("claims-epoch.redb");
+    let expected = binding(&path, StoreKind::Project, "project-epoch");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+    let plan = store.add_plan("epochs", 0).unwrap();
+    drop(store);
+
+    let store = reopen_as(&path, "project-epoch", Some(actor_a()));
+    // Stealing a plan nobody holds is an ordinary first claim.
+    store.use_plan(plan.id, true).unwrap();
+    assert_eq!(store.plan(plan.id).unwrap().claim_epoch, 1);
+    // Stealing from yourself changes no ownership, so it bumps nothing.
+    store.use_plan(plan.id, true).unwrap();
+    assert_eq!(store.plan(plan.id).unwrap().claim_epoch, 1);
+    drop(store);
+
+    // An identity-less caller still moves its legacy active plan and leaves
+    // the claim alone, even though its content writes are refused.
+    let store = reopen_as(&path, "project-epoch", None);
+    store.use_plan(plan.id, false).unwrap();
+    assert_eq!(store.meta().unwrap().active_plan, plan.id);
+    let untouched = store.plan(plan.id).unwrap();
+    assert_eq!(untouched.claim_owner.as_deref(), Some(ACTOR_A));
+    assert_eq!(untouched.claim_epoch, 1);
+    // `--steal` is meaningless without an identity to steal for.
+    assert!(matches!(
+        store.use_plan(plan.id, true).unwrap_err(),
+        StoreError::InvalidClaim(_)
+    ));
+    drop(store);
+
+    // Terminal auto-release is a release: a second, explicit one has nothing
+    // left to free.
+    let store = reopen_as(&path, "project-epoch", Some(actor_a()));
+    store.set_plan_status(plan.id, PlanStatus::Done).unwrap();
+    assert!(matches!(
+        store.release_plan(plan.id).unwrap_err(),
+        StoreError::InvalidClaim(_)
+    ));
+}
+
+#[test]
+fn terminal_plans_hold_no_claim_from_any_direction() {
+    let temp = Temp::new();
+    let path = temp.path("claims-terminal-open.redb");
+    let expected = binding(&path, StoreKind::Project, "project-terminal-open");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+    let plan = store.add_plan("finished", 0).unwrap();
+    let done_task = store.add_task(plan.id, "already done").unwrap();
+    store
+        .set_task_status(done_task.id, TaskStatus::Done)
+        .unwrap();
+    drop(store);
+
+    let store = reopen_as(&path, "project-terminal-open", Some(actor_a()));
+    store.use_plan(plan.id, false).unwrap();
+    // A done task births a done plan, and a done plan is born unclaimed.
+    let born = store.convert_task_to_plan(done_task.id).unwrap();
+    assert_eq!(born.status, PlanStatus::Done);
+    assert_eq!(born.claim_owner, None);
+    assert_eq!(born.claim_epoch, 0);
+    store.set_plan_status(plan.id, PlanStatus::Done).unwrap();
+    drop(store);
+
+    // Using or stealing a terminal plan moves the active plan and claims
+    // nothing, so its content stays open to everyone.
+    let store = reopen_as(&path, "project-terminal-open", Some(actor_b()));
+    store.use_plan(plan.id, true).unwrap();
+    assert_eq!(store.plan(plan.id).unwrap().claim_owner, None);
+    assert_eq!(store.snapshot().unwrap().meta.active_plan, plan.id);
+    store
+        .set_plan_title(plan.id, "renamed after the fact")
+        .unwrap();
+    assert_eq!(store.plan(born.id).unwrap().claim_owner, None);
+}
+
+#[test]
+fn a_conflicted_claim_can_still_be_stolen_released_and_finished() {
+    let temp = Temp::new();
+    let path = temp.path("claims-conflict.redb");
+    let expected = binding(&path, StoreKind::Project, "project-conflict");
+    let store = ProjectStore::create_new_with_clock(&path, expected, "test", clock()).unwrap();
+    let released = store.add_plan("released", 0).unwrap();
+    let finished = store.add_plan("finished", 0).unwrap();
+    let stolen = store.add_plan("stolen", 0).unwrap();
+    drop(store);
+
+    let store = reopen_as(&path, "project-conflict", Some(actor_a()));
+    for plan in [&released, &finished, &stolen] {
+        store.use_plan(plan.id, false).unwrap();
+        plant_claim_conflict(&store, plan.id);
+    }
+
+    // Every write that clears an owner clears the marker with it; leaving it
+    // behind would make the record fail validation on encode forever.
+    store.release_plan(released.id).unwrap();
+    assert!(!store.plan(released.id).unwrap().claim_conflict);
+    store
+        .set_plan_status(finished.id, PlanStatus::Done)
+        .unwrap();
+    assert!(!store.plan(finished.id).unwrap().claim_conflict);
+    drop(store);
+
+    let store = reopen_as(&path, "project-conflict", Some(actor_b()));
+    store.use_plan(stolen.id, true).unwrap();
+    let taken = store.plan(stolen.id).unwrap();
+    assert_eq!(taken.claim_owner.as_deref(), Some(ACTOR_B));
+    assert!(!taken.claim_conflict);
 }

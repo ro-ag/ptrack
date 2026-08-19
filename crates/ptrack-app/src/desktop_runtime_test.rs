@@ -31,7 +31,7 @@ use crate::{
     DesktopUpdateService, InitializationCheckpointV1, InitializationOutcomeV1,
     InitializationStatusV1, InitializeProjectRequestV1, LocalApplication, ProjectEndpoint,
     ProjectTargetKindV1, ProjectTargetValidationV1, TerminalRuntime, TerminalRuntimeConfig,
-    UnavailableUpdateService, UpdatePhase, UpdateState, WorkspaceBindings,
+    UnavailableUpdateService, UpdatePhase, UpdateState, WorkspaceBindings, set_identity_name,
 };
 
 use super::terminal_runtime_test::{TestEvents, TestFactory, TestIdentity, profile};
@@ -1213,6 +1213,8 @@ fn heatmap_buckets_instants_in_the_host_local_calendar_day() {
             updated_at: Timestamp::Zero,
             format_version: 1,
             last_write_version: String::new(),
+            active_plans: Vec::new(),
+            actors: Vec::new(),
         },
         Vec::new(),
         Vec::new(),
@@ -1225,6 +1227,8 @@ fn heatmap_buckets_instants_in_the_host_local_calendar_day() {
             kind: MemoryKind::Legacy,
             body: "boundary".to_owned(),
             created_at: event,
+            actor: None,
+            ulid: None,
         }],
         vec![Commit {
             id: 1,
@@ -1233,6 +1237,8 @@ fn heatmap_buckets_instants_in_the_host_local_calendar_day() {
             plan_id: 0,
             task_id: 0,
             created_at: event,
+            actor: None,
+            ulid: None,
         }],
     );
     let now = time::OffsetDateTime::from_unix_timestamp(90_000).unwrap();
@@ -3147,4 +3153,107 @@ fn held_plans_and_tasks_reach_the_board_payload_without_leaving_their_column() {
         snapshot["tracking"]["board"]["plans"][0]["holdReason"],
         "waiting on design"
     );
+}
+
+#[test]
+fn claimed_plans_reach_the_board_and_snapshot_payload_with_the_resolved_name() {
+    let directory = TestDirectory::new("board-claim");
+    let (bindings, _task_id) = bound_bindings(&directory);
+    let project = bindings.project.as_ref().unwrap();
+    let global =
+        GlobalStore::open_existing(&bindings.global_database, &bindings.global_binding).unwrap();
+    let identity = set_identity_name(&global, "Alice").unwrap();
+    drop(global);
+    let store = ProjectStore::open_existing(&project.database, &project.binding, "test")
+        .unwrap()
+        .with_actor(Some(identity));
+    let plan_id = store.meta().unwrap().active_plan;
+    store.use_plan(plan_id, false).unwrap();
+    drop(store);
+    let workspace = BoundDesktopWorkspace::new(
+        7,
+        0,
+        bindings.clone(),
+        Box::new(LocalApplication::new(bindings)),
+        None,
+        None,
+        None,
+    );
+
+    let board = workspace
+        .invoke("GetBoardV2", &[json!(7), json!(0)])
+        .unwrap();
+    assert_eq!(board["board"]["plans"][0]["claimedBy"], "Alice");
+
+    let snapshot = workspace
+        .invoke("GetWorkspaceSnapshot", &[json!(7), json!(0)])
+        .unwrap();
+    assert_eq!(
+        snapshot["tracking"]["board"]["plans"][0]["claimedBy"],
+        "Alice"
+    );
+}
+
+#[test]
+fn unclaimed_plans_omit_claimed_by_from_the_board_payload() {
+    let directory = TestDirectory::new("board-unclaimed");
+    let (bindings, _task_id) = bound_bindings(&directory);
+    let workspace = BoundDesktopWorkspace::new(
+        7,
+        0,
+        bindings.clone(),
+        Box::new(LocalApplication::new(bindings)),
+        None,
+        None,
+        None,
+    );
+
+    let board = workspace
+        .invoke("GetBoardV2", &[json!(7), json!(0)])
+        .unwrap();
+    assert!(board["board"]["plans"][0].get("claimedBy").is_none());
+}
+
+#[test]
+fn bounded_workspace_snapshot_follows_the_per_actor_active_plan() {
+    // The bounded snapshot path (GetWorkspaceSnapshot) used to read the raw
+    // stored singleton via store.meta() instead of resolving it through the
+    // configured actor, so a claimed-plan GUI opened the wrong plan and
+    // marked the wrong row active once identities existed.
+    let directory = TestDirectory::new("bounded-snapshot-per-actor");
+    let (bindings, _task_id) = bound_bindings(&directory);
+    let project = bindings.project.as_ref().unwrap();
+    let global =
+        GlobalStore::open_existing(&bindings.global_database, &bindings.global_binding).unwrap();
+    let identity = set_identity_name(&global, "Alice").unwrap();
+    drop(global);
+    let store = ProjectStore::open_existing(&project.database, &project.binding, "test")
+        .unwrap()
+        .with_actor(Some(identity));
+    let first_plan = store.meta().unwrap().active_plan;
+    let second_plan = store.add_plan("Alice's plan", 0).unwrap().id;
+    // Only Alice's per-actor pointer moves; the legacy singleton stays put.
+    store.set_active_plan(second_plan).unwrap();
+    assert_eq!(store.meta().unwrap().active_plan, first_plan);
+    drop(store);
+
+    let workspace = BoundDesktopWorkspace::new(
+        7,
+        0,
+        bindings.clone(),
+        Box::new(LocalApplication::new(bindings)),
+        None,
+        None,
+        None,
+    );
+    let snapshot = workspace
+        .invoke("GetWorkspaceSnapshot", &[json!(7), json!(0)])
+        .unwrap();
+    let board = &snapshot["tracking"]["board"];
+    assert_eq!(board["planId"], second_plan);
+    let plans = board["plans"].as_array().unwrap();
+    let first = plans.iter().find(|plan| plan["id"] == first_plan).unwrap();
+    let second = plans.iter().find(|plan| plan["id"] == second_plan).unwrap();
+    assert_eq!(first["isActive"], false);
+    assert_eq!(second["isActive"], true);
 }
