@@ -2241,3 +2241,116 @@ fn delete_plan_leaves_a_surviving_plans_issue_untouched() {
         .unwrap();
     assert_eq!(detached.task_id, 0);
 }
+
+#[test]
+fn export_import_copies_a_plan_subtree_with_reminted_ids_and_no_dangling_refs() {
+    let temp = Temp::new();
+    let store = ProjectStore::create_new_with_clock(
+        temp.path("copy.redb"),
+        binding(&temp.path("copy.redb"), StoreKind::Project, "copy-1"),
+        "test",
+        clock(),
+    )
+    .unwrap();
+    let milestone = store.add_milestone("M1").unwrap();
+    let plan = store.add_plan("Original", milestone.id).unwrap();
+    store
+        .set_plan_hold(plan.id, Some("waiting".to_owned()))
+        .unwrap();
+    let task = store.add_task(plan.id, "t1").unwrap();
+    store
+        .add_note(NoteTarget::Plan, plan.id, "plan note")
+        .unwrap();
+    store
+        .add_note(NoteTarget::Task, task.id, "task note")
+        .unwrap();
+    let issue = store.add_issue("bug", "", None, task.id).unwrap();
+    store
+        .add_commit("ccc333", "work", plan.id, task.id)
+        .unwrap();
+
+    let subtree = store.export_plan_subtree(plan.id).unwrap();
+    assert_eq!(subtree.tasks.len(), 1);
+    assert_eq!(subtree.notes.len(), 2);
+    assert_eq!(subtree.issues.len(), 1);
+    assert_eq!(subtree.commits.len(), 1);
+
+    let copy = store
+        .import_plan_subtree(&subtree, Some("Copied".to_owned()))
+        .unwrap();
+    assert_ne!(copy.id, plan.id);
+    assert_eq!(copy.title, "Copied");
+    assert_eq!(copy.milestone_id, 0); // milestone link dropped
+    assert_eq!(copy.hold_reason.as_deref(), Some("waiting")); // hold travels
+    assert_eq!(copy.claim_owner, None); // arrives unclaimed
+    assert_eq!(copy.claim_epoch, 0);
+
+    let snapshot = store.snapshot().unwrap();
+    let copied_tasks: Vec<_> = snapshot
+        .tasks
+        .iter()
+        .filter(|t| t.plan_id == copy.id)
+        .collect();
+    assert_eq!(copied_tasks.len(), 1);
+    let copied_task = copied_tasks[0];
+    assert_ne!(copied_task.id, task.id);
+    // Every copied reference points at reminted IDs — zero dangling.
+    let copied_issue = snapshot.issues.iter().find(|i| i.id != issue.id).unwrap();
+    assert_eq!(copied_issue.task_id, copied_task.id);
+    let copied_commit = snapshot
+        .commits
+        .iter()
+        .find(|c| c.sha == "ccc333" && c.plan_id == copy.id)
+        .unwrap();
+    assert_eq!(copied_commit.task_id, copied_task.id);
+    assert!(
+        snapshot
+            .notes
+            .iter()
+            .any(|n| n.target == NoteTarget::Task && n.target_id == copied_task.id)
+    );
+    assert!(
+        snapshot
+            .notes
+            .iter()
+            .any(|n| n.target == NoteTarget::Plan && n.target_id == copy.id)
+    );
+
+    // The copy is independent: mutating it leaves the original untouched.
+    store
+        .set_task_status(copied_task.id, TaskStatus::Done)
+        .unwrap();
+    let after = store.snapshot().unwrap();
+    assert_eq!(
+        after.tasks.iter().find(|t| t.id == task.id).unwrap().status,
+        TaskStatus::Todo
+    );
+    assert_eq!(
+        after.plans.iter().find(|p| p.id == plan.id).unwrap().title,
+        "Original"
+    );
+}
+
+#[test]
+fn export_plan_subtree_is_claim_gated() {
+    let temp = Temp::new();
+    let path = temp.path("export-gate.redb");
+    let expected = binding(&path, StoreKind::Project, "export-gate-1");
+    let alice = ProjectStore::create_new_with_clock(&path, expected.clone(), "test", clock())
+        .unwrap()
+        .with_actor(Some(ActorIdentity {
+            id: "01hzvyekq3s7m8w9x0aaaaaaaa".to_owned(),
+            name: "Alice".to_owned(),
+        }));
+    let bob = ProjectStore::open_existing(&path, &expected, "test")
+        .unwrap()
+        .with_actor(Some(ActorIdentity {
+            id: "01hzvyekq3s7m8w9x0bbbbbbbb".to_owned(),
+            name: "Bob".to_owned(),
+        }));
+    let plan = alice.add_plan("Mine", 0).unwrap();
+    alice.use_plan(plan.id, false).unwrap();
+    let refusal = bob.export_plan_subtree(plan.id).unwrap_err();
+    assert!(refusal.to_string().starts_with(INVALID_CLAIM_PREFIX));
+    assert!(alice.export_plan_subtree(plan.id).is_ok());
+}

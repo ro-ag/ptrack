@@ -66,6 +66,18 @@ pub struct PlanDeleteSummary {
     pub issues: Vec<(u64, String)>,
 }
 
+/// One plan with every record that belongs to it, in memory, ready to be
+/// inserted into any project store with freshly minted IDs. Not a stored
+/// record shape — a carrier between two stores in one process.
+#[derive(Clone, Debug)]
+pub struct PlanSubtree {
+    pub plan: Plan,
+    pub tasks: Vec<Task>,
+    pub notes: Vec<Note>,
+    pub issues: Vec<Issue>,
+    pub commits: Vec<Commit>,
+}
+
 /// Typed, activation-bound project storage.
 pub struct ProjectStore {
     active: ActivatedStore,
@@ -797,6 +809,132 @@ impl ProjectStore {
             typed::put(transaction, RecordKey::Singleton, &meta)?;
             transaction.delete(Collection::Plans, RecordKey::Id(plan_id))?;
             Ok(summary)
+        })
+    }
+
+    /// Collects a plan and everything that travels with it: its tasks, notes on
+    /// the plan or its tasks, issues linked to its tasks, and commit records
+    /// referencing the plan or its tasks. Claim-gated like every other content
+    /// operation on a plan.
+    pub fn export_plan_subtree(&self, plan_id: u64) -> StoreResult<PlanSubtree> {
+        let actor = self.actor_id().map(str::to_owned);
+        self.write(|transaction| {
+            let plan = required_write::<Plan>(transaction, RecordKey::Id(plan_id))?;
+            require_claim_access(transaction, &plan, actor.as_deref())?;
+            let tasks: Vec<Task> = typed::scan_write::<Task>(transaction)?
+                .into_iter()
+                .filter(|task| task.plan_id == plan_id)
+                .collect();
+            let task_ids: BTreeSet<u64> = tasks.iter().map(|task| task.id).collect();
+            let notes = typed::scan_write::<Note>(transaction)?
+                .into_iter()
+                .filter(|note| {
+                    (note.target == NoteTarget::Plan && note.target_id == plan_id)
+                        || (note.target == NoteTarget::Task && task_ids.contains(&note.target_id))
+                })
+                .collect();
+            let issues = typed::scan_write::<Issue>(transaction)?
+                .into_iter()
+                .filter(|issue| task_ids.contains(&issue.task_id))
+                .collect();
+            let commits = typed::scan_write::<Commit>(transaction)?
+                .into_iter()
+                .filter(|commit| commit.plan_id == plan_id || task_ids.contains(&commit.task_id))
+                .collect();
+            Ok(PlanSubtree {
+                plan,
+                tasks,
+                notes,
+                issues,
+                commits,
+            })
+        })
+    }
+
+    /// Inserts an exported subtree into this store in one write transaction,
+    /// reminting sequential IDs and remapping every reference. The plan arrives
+    /// unclaimed (owner `None`, epoch 0), its milestone link is dropped (a
+    /// milestone is a source-project grouping), hold reasons travel, and `title`
+    /// replaces the plan title at insert time.
+    pub fn import_plan_subtree(
+        &self,
+        subtree: &PlanSubtree,
+        title: Option<String>,
+    ) -> StoreResult<Plan> {
+        let now = self.clock.now_local();
+        let actor = self.actor_id().map(str::to_owned);
+        self.write(|transaction| {
+            let order = count_write::<Plan>(transaction)?;
+            let plan_id = transaction.next_id(Collection::Plans)?;
+            let plan = Plan {
+                id: plan_id,
+                title: title.clone().unwrap_or_else(|| subtree.plan.title.clone()),
+                status: subtree.plan.status,
+                milestone_id: 0,
+                order,
+                created_at: subtree.plan.created_at,
+                updated_at: now,
+                hold_reason: subtree.plan.hold_reason.clone(),
+                actor: actor.clone(),
+                claim_conflict: false,
+                claim_epoch: 0,
+                claim_owner: None,
+                ulid: None,
+            };
+            typed::put(transaction, RecordKey::Id(plan_id), &plan)?;
+            let first_task_order = count_write::<Task>(transaction)?;
+            let mut task_map = BTreeMap::new();
+            for (task_order, task) in (first_task_order..).zip(&subtree.tasks) {
+                let id = transaction.next_id(Collection::Tasks)?;
+                task_map.insert(task.id, id);
+                let mut copy = task.clone();
+                copy.id = id;
+                copy.plan_id = plan_id;
+                copy.order = task_order;
+                copy.ulid = None;
+                typed::put(transaction, RecordKey::Id(id), &copy)?;
+            }
+            let mapped_task = |source: u64| -> StoreResult<u64> {
+                task_map.get(&source).copied().ok_or_else(|| {
+                    StoreError::InvalidManifest(
+                        "imported subtree references a task outside the subtree".to_owned(),
+                    )
+                })
+            };
+            for note in &subtree.notes {
+                let id = transaction.next_id(Collection::Notes)?;
+                let mut copy = note.clone();
+                copy.id = id;
+                copy.target_id = match note.target {
+                    NoteTarget::Plan => plan_id,
+                    NoteTarget::Task => mapped_task(note.target_id)?,
+                    NoteTarget::Project => note.target_id,
+                };
+                copy.ulid = None;
+                typed::put(transaction, RecordKey::Id(id), &copy)?;
+            }
+            for issue in &subtree.issues {
+                let id = transaction.next_id(Collection::Issues)?;
+                let mut copy = issue.clone();
+                copy.id = id;
+                copy.task_id = mapped_task(issue.task_id)?;
+                copy.ulid = None;
+                typed::put(transaction, RecordKey::Id(id), &copy)?;
+            }
+            for commit in &subtree.commits {
+                let id = transaction.next_id(Collection::Commits)?;
+                let mut copy = commit.clone();
+                copy.id = id;
+                copy.plan_id = if commit.plan_id == subtree.plan.id {
+                    plan_id
+                } else {
+                    0
+                };
+                copy.task_id = task_map.get(&commit.task_id).copied().unwrap_or(0);
+                copy.ulid = None;
+                typed::put(transaction, RecordKey::Id(id), &copy)?;
+            }
+            Ok(plan)
         })
     }
 
