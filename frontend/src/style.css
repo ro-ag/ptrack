@@ -570,6 +570,14 @@ button:disabled {
   line-height: 1;
 }
 
+/* Lock marker for a claimed plan; the owner name is the row's tooltip. */
+.sidebar-plan-claim {
+  flex: 0 0 auto;
+  color: var(--todo);
+  font-size: 0.6875rem;
+  line-height: 1;
+}
+
 /* Accent marker for the project's active plan. */
 .sidebar-plan-dot {
   width: 7px;

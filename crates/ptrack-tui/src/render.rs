@@ -300,6 +300,9 @@ fn draw_overview(frame: &mut Frame<'_>, area: Rect, model: &Model) {
                 spans.push(Span::raw("  "));
             }
             spans.push(hold_span(plan.hold_reason.as_deref()));
+            spans.push(claim_span(plan.claim_owner.as_deref().map(|owner| {
+                model.snapshot.meta.actor_name(owner).unwrap_or(owner)
+            })));
             spans.push(Span::styled(
                 format!("#{} {}", plan.id, plan.title),
                 Style::default().fg(plan_color(plan.status)),
@@ -562,6 +565,11 @@ fn draw_milestones(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         for plan in model.snapshot.plans_for_milestone(milestone.id) {
             plans.push(Line::from(vec![
                 hold_span(plan.hold_reason.as_deref()),
+                claim_span(
+                    plan.claim_owner
+                        .as_deref()
+                        .map(|owner| model.snapshot.meta.actor_name(owner).unwrap_or(owner)),
+                ),
                 Span::styled(
                     format!("#{} {}", plan.id, plan.title),
                     Style::default().fg(TEXT),
@@ -969,6 +977,10 @@ fn detail_content(model: &Model) -> (String, Vec<Line<'static>>) {
             ];
             if let Some(reason) = plan.hold_reason.as_deref() {
                 rows.push(line_kv("On hold", &format!("⏸ {reason}")));
+            }
+            if let Some(owner) = plan.claim_owner.as_deref() {
+                let name = model.snapshot.meta.actor_name(owner).unwrap_or(owner);
+                rows.push(line_kv("Claimed by", &format!("🔒 {name}")));
             }
             if let Some(milestone) = model.snapshot.milestone(plan.milestone_id) {
                 rows.push(line_kv(
@@ -1809,6 +1821,16 @@ fn hold_mark(reason: Option<&str>) -> &'static str {
 
 fn hold_span(reason: Option<&str>) -> Span<'static> {
     Span::styled(hold_mark(reason), Style::default().fg(AMBER))
+}
+
+/// Claim marker naming the identity holding a plan's claim, or nothing when
+/// it is unclaimed. Claims are display-only here — mutated through the CLI
+/// only, exactly like holds.
+fn claim_span(owner: Option<&str>) -> Span<'static> {
+    Span::styled(
+        owner.map_or_else(String::new, |owner| format!("🔒{owner} ")),
+        Style::default().fg(LAVENDER),
+    )
 }
 
 fn task_icon(status: TaskStatus) -> &'static str {

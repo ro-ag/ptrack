@@ -1509,6 +1509,14 @@ function renderPlanList() {
       item.append(hold);
       item.title = `${item.title} · on hold: ${plan.holdReason}`;
     }
+    if (plan.claimedBy) {
+      const claim = document.createElement("span");
+      claim.className = "sidebar-plan-claim";
+      claim.textContent = "🔒";
+      claim.setAttribute("aria-hidden", "true");
+      item.append(claim);
+      item.title = `${item.title} · claimed by ${plan.claimedBy}`;
+    }
     item.addEventListener("click", () => selectPlan(plan.id));
     if (plan.tasksTotal > 0) {
       // 2px session progress track; absolutely positioned so the 30px row

@@ -585,6 +585,26 @@ fn held_plans_and_tasks_keep_their_column_and_gain_a_pause_marker() {
     );
 }
 
+const ACTOR_A: &str = "01hzvyekq3s7m8w9x0abcdefgh";
+
+#[test]
+fn claimed_plans_show_the_owners_resolved_name() {
+    let mut value = populated_model();
+    value.welcome = false;
+    value.snapshot.meta.actors = vec![(ACTOR_A.to_owned(), "Alice".to_owned())];
+    value.snapshot.plans[0].claim_owner = Some(ACTOR_A.to_owned());
+
+    // The plan list row spells out the resolved name, not just a marker.
+    let overview = rendered(&value, 120, 30);
+    assert!(overview.contains("Alice"), "{overview}");
+
+    // The detail pane names the claim owner in its own row.
+    value.detail = Some(DetailTarget::Plan(1));
+    let plan_detail = rendered(&value, 100, 30);
+    assert!(plan_detail.contains("Claimed by"), "{plan_detail}");
+    assert!(plan_detail.contains("Alice"), "{plan_detail}");
+}
+
 #[test]
 fn panels_clip_rows_and_input_cursor_stays_in_the_terminal() {
     let mut value = populated_model();
