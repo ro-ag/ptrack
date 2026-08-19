@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.28.1] - 2026-08-19
+
+### Fixed
+- Plan context menu actions (rename, move, copy, delete) did nothing when
+  clicked with the mouse in the desktop app. WKWebView never focuses a button
+  on mousedown, so the menu's focus-out handler removed the menu before the
+  item's click could dispatch; only keyboard activation worked. The menu also
+  clamps to the viewport now, so the Delete item is reachable for plans near
+  the bottom of the sidebar.
+
+### Changed
+- The plan action triggers in the board header and sidebar use a gear icon
+  (inline SVG) instead of the "⋯" glyph, with rotation feedback on hover and
+  press.
+
 ## [0.28.0] - 2026-08-19
 
 ### Added
@@ -709,7 +724,8 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
-[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.28.0...HEAD
+[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.28.1...HEAD
+[0.28.1]: https://github.com/ro-ag/ptrack/releases/tag/v0.28.1
 [0.28.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.28.0
 [0.27.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.27.0
 [0.26.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.26.0

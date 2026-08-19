@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "productVersion": "0.28.0",
+  "productVersion": "0.28.1",
   "capturedAt": "2026-08-11",
   "capture": {
     "app": "packaged macOS Desktop app",
@@ -16,7 +16,7 @@
     "frontend/src/workspace/model.ts",
     "frontend/src/workspace/presentation.ts"
   ],
-  "uiSourceSha256": "8167ea5f4cb759b4483a28c83e02e3616e1a2cbae29890944648354ac77ad1b4",
+  "uiSourceSha256": "2edd74fa2e46117e5c5510db8485bb128423625692f9c852d8ad7a49ab7e3ee1",
   "requiredWorkflows": [
     "board",
     "capabilities",
