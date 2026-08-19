@@ -814,39 +814,32 @@ impl ProjectStore {
 
     /// Collects a plan and everything that travels with it: its tasks, notes on
     /// the plan or its tasks, issues linked to its tasks, and commit records
-    /// referencing the plan or its tasks. Claim-gated like every other content
-    /// operation on a plan.
+    /// referencing the plan or its tasks — selected by the very predicates the
+    /// delete preview and the delete cascade use, so a move can never export one
+    /// set and delete another. Claim-gated like every other content operation on
+    /// a plan.
+    ///
+    /// Read-only in effect, but it runs in the write funnel to reuse the single
+    /// claim gate, so it costs what a write costs: it takes the exclusive writer
+    /// lock (and can therefore return [`StoreError::Busy`]), and the funnel
+    /// registers the configured actor in the `Meta` directory — stamping
+    /// `Meta.updated_at` whenever that entry is new or renamed.
     pub fn export_plan_subtree(&self, plan_id: u64) -> StoreResult<PlanSubtree> {
         let actor = self.actor_id().map(str::to_owned);
         self.write(|transaction| {
             let plan = required_write::<Plan>(transaction, RecordKey::Id(plan_id))?;
             require_claim_access(transaction, &plan, actor.as_deref())?;
-            let tasks: Vec<Task> = typed::scan_write::<Task>(transaction)?
-                .into_iter()
-                .filter(|task| task.plan_id == plan_id)
-                .collect();
-            let task_ids: BTreeSet<u64> = tasks.iter().map(|task| task.id).collect();
-            let notes = typed::scan_write::<Note>(transaction)?
-                .into_iter()
-                .filter(|note| {
-                    (note.target == NoteTarget::Plan && note.target_id == plan_id)
-                        || (note.target == NoteTarget::Task && task_ids.contains(&note.target_id))
-                })
-                .collect();
-            let issues = typed::scan_write::<Issue>(transaction)?
-                .into_iter()
-                .filter(|issue| task_ids.contains(&issue.task_id))
-                .collect();
-            let commits = typed::scan_write::<Commit>(transaction)?
-                .into_iter()
-                .filter(|commit| commit.plan_id == plan_id || task_ids.contains(&commit.task_id))
-                .collect();
+            let tasks = typed::scan_write::<Task>(transaction)?;
+            let notes = typed::scan_write::<Note>(transaction)?;
+            let issues = typed::scan_write::<Issue>(transaction)?;
+            let commits = typed::scan_write::<Commit>(transaction)?;
+            let cascade = compute_cascade(&plan, &tasks, &notes, &issues, &commits);
             Ok(PlanSubtree {
                 plan,
-                tasks,
-                notes,
-                issues,
-                commits,
+                tasks: pick(tasks, &cascade.tasks, |task| task.id),
+                notes: pick(notes, &cascade.notes, |note| note.id),
+                issues: pick(issues, &cascade.issues, |issue| issue.id),
+                commits: pick(commits, &cascade.commits, |commit| commit.id),
             })
         })
     }
@@ -855,7 +848,9 @@ impl ProjectStore {
     /// reminting sequential IDs and remapping every reference. The plan arrives
     /// unclaimed (owner `None`, epoch 0), its milestone link is dropped (a
     /// milestone is a source-project grouping), hold reasons travel, and `title`
-    /// replaces the plan title at insert time.
+    /// replaces the plan title at insert time. A commit whose sha this store
+    /// already holds is left alone rather than duplicated — a sha is a commit's
+    /// natural key, so a same-store copy shares the source's commit records.
     pub fn import_plan_subtree(
         &self,
         subtree: &PlanSubtree,
@@ -896,7 +891,7 @@ impl ProjectStore {
             }
             let mapped_task = |source: u64| -> StoreResult<u64> {
                 task_map.get(&source).copied().ok_or_else(|| {
-                    StoreError::InvalidManifest(
+                    StoreError::InvalidImport(
                         "imported subtree references a task outside the subtree".to_owned(),
                     )
                 })
@@ -908,7 +903,13 @@ impl ProjectStore {
                 copy.target_id = match note.target {
                     NoteTarget::Plan => plan_id,
                     NoteTarget::Task => mapped_task(note.target_id)?,
-                    NoteTarget::Project => note.target_id,
+                    // Never exported: a project note belongs to no plan's
+                    // subtree, and its target id means nothing in this store.
+                    NoteTarget::Project => {
+                        return Err(StoreError::InvalidImport(
+                            "imported subtree carries a project-scoped note".to_owned(),
+                        ));
+                    }
                 };
                 copy.ulid = None;
                 typed::put(transaction, RecordKey::Id(id), &copy)?;
@@ -921,16 +922,30 @@ impl ProjectStore {
                 copy.ulid = None;
                 typed::put(transaction, RecordKey::Id(id), &copy)?;
             }
+            // A sha is a commit's natural key — `add_commit` returns the record
+            // that already holds it. Minting a second record for a sha this
+            // store already has would leave later links landing on whichever
+            // one scans first, so an existing sha is left exactly as it is.
+            let existing_shas: BTreeSet<String> = typed::scan_write::<Commit>(transaction)?
+                .into_iter()
+                .map(|commit| commit.sha)
+                .collect();
             for commit in &subtree.commits {
+                if existing_shas.contains(&commit.sha) {
+                    continue;
+                }
                 let id = transaction.next_id(Collection::Commits)?;
                 let mut copy = commit.clone();
                 copy.id = id;
-                copy.plan_id = if commit.plan_id == subtree.plan.id {
+                copy.task_id = task_map.get(&commit.task_id).copied().unwrap_or(0);
+                // A commit selected through one of the subtree's tasks belongs
+                // to the arriving plan even when its source plan link named
+                // another plan entirely.
+                copy.plan_id = if copy.task_id != 0 || commit.plan_id == subtree.plan.id {
                     plan_id
                 } else {
                     0
                 };
-                copy.task_id = task_map.get(&commit.task_id).copied().unwrap_or(0);
                 copy.ulid = None;
                 typed::put(transaction, RecordKey::Id(id), &copy)?;
             }
@@ -2022,6 +2037,16 @@ fn compute_cascade(
         issues: doomed_issues.into_iter().map(|(id, _)| id).collect(),
         commits: doomed_commits,
     }
+}
+
+/// Keeps exactly the records a [`Cascade`] chose, so the subtree export selects
+/// through the same predicates the preview and the delete already agreed on.
+fn pick<R>(records: Vec<R>, chosen: &[u64], id: impl Fn(&R) -> u64) -> Vec<R> {
+    let chosen: BTreeSet<u64> = chosen.iter().copied().collect();
+    records
+        .into_iter()
+        .filter(|record| chosen.contains(&id(record)))
+        .collect()
 }
 
 /// Reports whether a task in this status may carry a hold reason. A done task

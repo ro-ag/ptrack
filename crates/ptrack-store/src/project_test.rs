@@ -2297,12 +2297,16 @@ fn export_import_copies_a_plan_subtree_with_reminted_ids_and_no_dangling_refs() 
     // Every copied reference points at reminted IDs — zero dangling.
     let copied_issue = snapshot.issues.iter().find(|i| i.id != issue.id).unwrap();
     assert_eq!(copied_issue.task_id, copied_task.id);
-    let copied_commit = snapshot
+    // A sha is a commit's natural key: the copy mints no second "ccc333", so
+    // the one record still names the original plan and task.
+    let shared: Vec<_> = snapshot
         .commits
         .iter()
-        .find(|c| c.sha == "ccc333" && c.plan_id == copy.id)
-        .unwrap();
-    assert_eq!(copied_commit.task_id, copied_task.id);
+        .filter(|c| c.sha == "ccc333")
+        .collect();
+    assert_eq!(shared.len(), 1);
+    assert_eq!(shared[0].plan_id, plan.id);
+    assert_eq!(shared[0].task_id, task.id);
     assert!(
         snapshot
             .notes
@@ -2353,4 +2357,142 @@ fn export_plan_subtree_is_claim_gated() {
     let refusal = bob.export_plan_subtree(plan.id).unwrap_err();
     assert!(refusal.to_string().starts_with(INVALID_CLAIM_PREFIX));
     assert!(alice.export_plan_subtree(plan.id).is_ok());
+}
+
+#[test]
+fn import_plan_subtree_round_trips_an_empty_plan_and_keeps_the_source_title() {
+    let temp = Temp::new();
+    let store = ProjectStore::create_new_with_clock(
+        temp.path("empty.redb"),
+        binding(&temp.path("empty.redb"), StoreKind::Project, "empty-1"),
+        "test",
+        clock(),
+    )
+    .unwrap();
+    let plan = store.add_plan("Bare", 0).unwrap();
+
+    let subtree = store.export_plan_subtree(plan.id).unwrap();
+    assert!(subtree.tasks.is_empty());
+    assert!(subtree.notes.is_empty());
+    assert!(subtree.issues.is_empty());
+    assert!(subtree.commits.is_empty());
+
+    let copy = store.import_plan_subtree(&subtree, None).unwrap();
+    assert_ne!(copy.id, plan.id);
+    assert_eq!(copy.title, "Bare"); // no override keeps the source title
+    let snapshot = store.snapshot().unwrap();
+    assert_eq!(snapshot.plans.len(), 2);
+    assert!(snapshot.tasks.is_empty());
+}
+
+#[test]
+fn export_skips_detached_issues_and_import_advances_every_high_water_mark() {
+    let temp = Temp::new();
+    let store = ProjectStore::create_new_with_clock(
+        temp.path("detached.redb"),
+        binding(
+            &temp.path("detached.redb"),
+            StoreKind::Project,
+            "detached-1",
+        ),
+        "test",
+        clock(),
+    )
+    .unwrap();
+    let plan = store.add_plan("Source", 0).unwrap();
+    let task = store.add_task(plan.id, "t1").unwrap();
+    let linked = store.add_issue("linked", "", None, task.id).unwrap();
+    let floating = store.add_issue("detached", "", None, 0).unwrap();
+
+    let subtree = store.export_plan_subtree(plan.id).unwrap();
+    assert_eq!(
+        subtree.issues.iter().map(|i| i.id).collect::<Vec<_>>(),
+        vec![linked.id]
+    );
+
+    let copy = store.import_plan_subtree(&subtree, None).unwrap();
+    // Fresh records minted after the import collide with nothing.
+    let later_task = store.add_task(copy.id, "t2").unwrap();
+    let later_issue = store.add_issue("fresh", "", None, later_task.id).unwrap();
+    let snapshot = store.snapshot().unwrap();
+    let task_ids: BTreeSet<u64> = snapshot.tasks.iter().map(|t| t.id).collect();
+    assert_eq!(task_ids.len(), snapshot.tasks.len());
+    assert_eq!(snapshot.tasks.len(), 3);
+    assert!(later_task.id > task.id);
+    assert!(later_issue.id > floating.id);
+    let issue_ids: BTreeSet<u64> = snapshot.issues.iter().map(|i| i.id).collect();
+    assert_eq!(issue_ids.len(), snapshot.issues.len());
+}
+
+#[test]
+fn import_plan_subtree_lands_in_a_second_store_stamped_with_its_own_actor() {
+    let temp = Temp::new();
+    let source = ProjectStore::create_new_with_clock(
+        temp.path("source.redb"),
+        binding(&temp.path("source.redb"), StoreKind::Project, "source-1"),
+        "test",
+        clock(),
+    )
+    .unwrap()
+    .with_actor(Some(ActorIdentity {
+        id: "01hzvyekq3s7m8w9x0aaaaaaaa".to_owned(),
+        name: "Alice".to_owned(),
+    }));
+    let target = ProjectStore::create_new_with_clock(
+        temp.path("target.redb"),
+        binding(&temp.path("target.redb"), StoreKind::Project, "target-1"),
+        "test",
+        clock(),
+    )
+    .unwrap()
+    .with_actor(Some(ActorIdentity {
+        id: "01hzvyekq3s7m8w9x0bbbbbbbb".to_owned(),
+        name: "Bob".to_owned(),
+    }));
+    // The target already holds records, so nothing may reuse a source ID.
+    let decoy = target.add_plan("Decoy", 0).unwrap();
+    target.add_task(decoy.id, "decoy task").unwrap();
+
+    let plan = source.add_plan("Travelling", 0).unwrap();
+    source.use_plan(plan.id, false).unwrap();
+    let task = source.add_task(plan.id, "t1").unwrap();
+    source
+        .add_note(NoteTarget::Task, task.id, "task note")
+        .unwrap();
+    source.add_issue("bug", "", None, task.id).unwrap();
+    source
+        .add_commit("abc123", "work", plan.id, task.id)
+        .unwrap();
+
+    let subtree = source.export_plan_subtree(plan.id).unwrap();
+    let landed = target.import_plan_subtree(&subtree, None).unwrap();
+    assert_eq!(landed.claim_owner, None); // Alice's claim does not travel
+    assert_eq!(landed.claim_epoch, 0);
+    assert_eq!(landed.actor.as_deref(), Some("01hzvyekq3s7m8w9x0bbbbbbbb"));
+
+    let snapshot = target.snapshot().unwrap();
+    let landed_task = snapshot
+        .tasks
+        .iter()
+        .find(|t| t.plan_id == landed.id)
+        .unwrap();
+    assert_eq!(landed_task.title, "t1");
+    assert_eq!(
+        snapshot
+            .notes
+            .iter()
+            .find(|n| n.target == NoteTarget::Task)
+            .unwrap()
+            .target_id,
+        landed_task.id
+    );
+    assert_eq!(snapshot.issues.first().unwrap().task_id, landed_task.id);
+    let commit = snapshot.commits.first().unwrap();
+    assert_eq!(commit.sha, "abc123");
+    assert_eq!(commit.plan_id, landed.id);
+    assert_eq!(commit.task_id, landed_task.id);
+    // The source is untouched by the far-side insert.
+    let origin = source.snapshot().unwrap();
+    assert_eq!(origin.plans.len(), 1);
+    assert_eq!(origin.tasks.len(), 1);
 }
