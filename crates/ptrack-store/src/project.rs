@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
@@ -48,6 +48,20 @@ pub struct MemoryWriteResult {
     pub note: Option<Note>,
     pub summary: String,
     pub replayed: bool,
+}
+
+/// What a plan delete destroys (tasks, notes), unlinks (commit records), and
+/// detaches (issues). Returned by both the read-only preview and the delete
+/// itself so every surface prints the same facts.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlanDeleteSummary {
+    pub plan_id: u64,
+    pub title: String,
+    pub tasks: usize,
+    pub notes: usize,
+    pub commits_unlinked: usize,
+    /// `(issue id, issue title)` for every issue whose task link is zeroed.
+    pub detached_issues: Vec<(u64, String)>,
 }
 
 /// Typed, activation-bound project storage.
@@ -661,6 +675,110 @@ impl ProjectStore {
             plan.stamp_actor(self.actor_id());
             typed::put(transaction, RecordKey::Id(id), &plan)?;
             Ok(())
+        })
+    }
+
+    /// Read-only preview of exactly what [`ProjectStore::delete_plan`] would
+    /// destroy. Ungated: looking is free, only deleting is claim-gated.
+    pub fn plan_delete_preview(&self, plan_id: u64) -> StoreResult<PlanDeleteSummary> {
+        self.read(|transaction| {
+            let plan: Plan =
+                typed::get(transaction, RecordKey::Id(plan_id))?.ok_or(StoreError::NotFound)?;
+            Ok(cascade_summary(
+                &plan,
+                &typed::scan::<Task>(transaction)?,
+                &typed::scan::<Note>(transaction)?,
+                &typed::scan::<Issue>(transaction)?,
+                &typed::scan::<Commit>(transaction)?,
+            ))
+        })
+    }
+
+    /// Permanently deletes a plan and cascades in one write transaction: its
+    /// tasks and their notes are deleted, linked issues survive with their task
+    /// link zeroed, commit records survive with plan/task references zeroed, and
+    /// every active-plan pointer (per-actor map and legacy singleton) that named
+    /// the plan is reset to 0. Claim-gated: deleting a plan claimed by someone
+    /// else is refused; the deleter's own claim dies with the plan.
+    pub fn delete_plan(&self, plan_id: u64) -> StoreResult<PlanDeleteSummary> {
+        self.delete_plan_inner(plan_id, true)
+    }
+
+    /// The move-phase variant of the delete cascade: identical, except linked
+    /// issues are deleted rather than detached — the move already duplicated
+    /// them into the target, and an issue follows its task.
+    pub fn delete_plan_for_move(&self, plan_id: u64) -> StoreResult<PlanDeleteSummary> {
+        self.delete_plan_inner(plan_id, false)
+    }
+
+    fn delete_plan_inner(
+        &self,
+        plan_id: u64,
+        detach_issues: bool,
+    ) -> StoreResult<PlanDeleteSummary> {
+        let now = self.clock.now_local();
+        let writer = self.writer_version.clone();
+        let actor = self.actor_id().map(str::to_owned);
+        self.write(|transaction| {
+            let plan = required_write::<Plan>(transaction, RecordKey::Id(plan_id))?;
+            require_claim_access(transaction, &plan, actor.as_deref())?;
+            let tasks = typed::scan_write::<Task>(transaction)?;
+            let notes = typed::scan_write::<Note>(transaction)?;
+            let issues = typed::scan_write::<Issue>(transaction)?;
+            let commits = typed::scan_write::<Commit>(transaction)?;
+            let summary = cascade_summary(&plan, &tasks, &notes, &issues, &commits);
+            let task_ids: BTreeSet<u64> = tasks
+                .iter()
+                .filter(|task| task.plan_id == plan_id)
+                .map(|task| task.id)
+                .collect();
+            for task in &tasks {
+                if task.plan_id == plan_id {
+                    transaction.delete(Collection::Tasks, RecordKey::Id(task.id))?;
+                }
+            }
+            for note in &notes {
+                let dead = (note.target == NoteTarget::Plan && note.target_id == plan_id)
+                    || (note.target == NoteTarget::Task && task_ids.contains(&note.target_id));
+                if dead {
+                    transaction.delete(Collection::Notes, RecordKey::Id(note.id))?;
+                }
+            }
+            for mut issue in issues {
+                if task_ids.contains(&issue.task_id) {
+                    if detach_issues {
+                        issue.task_id = 0;
+                        issue.updated_at = now;
+                        typed::put(transaction, RecordKey::Id(issue.id), &issue)?;
+                    } else {
+                        transaction.delete(Collection::Issues, RecordKey::Id(issue.id))?;
+                    }
+                }
+            }
+            for mut commit in commits {
+                if commit.plan_id == plan_id || task_ids.contains(&commit.task_id) {
+                    if commit.plan_id == plan_id {
+                        commit.plan_id = 0;
+                    }
+                    if task_ids.contains(&commit.task_id) {
+                        commit.task_id = 0;
+                    }
+                    typed::put(transaction, RecordKey::Id(commit.id), &commit)?;
+                }
+            }
+            let mut meta = required_write::<Meta>(transaction, RecordKey::Singleton)?;
+            if meta.active_plan == plan_id {
+                meta.active_plan = 0;
+            }
+            for entry in &mut meta.active_plans {
+                if entry.1 == plan_id {
+                    entry.1 = 0;
+                }
+            }
+            stamp_meta(&mut meta, now, writer);
+            typed::put(transaction, RecordKey::Singleton, &meta)?;
+            transaction.delete(Collection::Plans, RecordKey::Id(plan_id))?;
+            Ok(summary)
         })
     }
 
@@ -1688,6 +1806,43 @@ fn normalize_hold_reason(reason: Option<String>) -> Option<String> {
 /// [`ProjectStore::set_plan_hold`] refuses to create.
 fn plan_status_can_hold(status: PlanStatus) -> bool {
     status == PlanStatus::Active
+}
+
+/// Computes the delete cascade facts from full-collection scans. Pure so the
+/// read-only preview and the write-path delete can never disagree.
+fn cascade_summary(
+    plan: &Plan,
+    tasks: &[Task],
+    notes: &[Note],
+    issues: &[Issue],
+    commits: &[Commit],
+) -> PlanDeleteSummary {
+    let task_ids: BTreeSet<u64> = tasks
+        .iter()
+        .filter(|task| task.plan_id == plan.id)
+        .map(|task| task.id)
+        .collect();
+    PlanDeleteSummary {
+        plan_id: plan.id,
+        title: plan.title.clone(),
+        tasks: task_ids.len(),
+        notes: notes
+            .iter()
+            .filter(|note| {
+                (note.target == NoteTarget::Plan && note.target_id == plan.id)
+                    || (note.target == NoteTarget::Task && task_ids.contains(&note.target_id))
+            })
+            .count(),
+        commits_unlinked: commits
+            .iter()
+            .filter(|commit| commit.plan_id == plan.id || task_ids.contains(&commit.task_id))
+            .count(),
+        detached_issues: issues
+            .iter()
+            .filter(|issue| task_ids.contains(&issue.task_id))
+            .map(|issue| (issue.id, issue.title.clone()))
+            .collect(),
+    }
 }
 
 /// Reports whether a task in this status may carry a hold reason. A done task

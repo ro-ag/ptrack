@@ -15,8 +15,9 @@ use ptrack_core::{
 use crate::typed;
 use crate::{
     ActiveBinding, ActorIdentity, Clock, Collection, GlobalStore, INVALID_CLAIM_PREFIX,
-    MemoryWriteRequest, NATIVE_CODEC, NATIVE_PAYLOAD_SCHEMA, ProjectRegistryCasResult,
-    ProjectStore, RecordEnvelope, RecordKey, Store, StoreError, StoreKind,
+    MemoryWriteRequest, NATIVE_CODEC, NATIVE_PAYLOAD_SCHEMA, PlanDeleteSummary,
+    ProjectRegistryCasResult, ProjectStore, RecordEnvelope, RecordKey, Store, StoreError,
+    StoreKind,
 };
 
 static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -1966,4 +1967,173 @@ fn a_conflicted_claim_can_still_be_stolen_released_and_finished() {
     let taken = store.plan(stolen.id).unwrap();
     assert_eq!(taken.claim_owner.as_deref(), Some(ACTOR_B));
     assert!(!taken.claim_conflict);
+}
+
+#[test]
+fn delete_plan_cascades_tasks_notes_detaches_issues_and_zeroes_commits() {
+    let temp = Temp::new();
+    let store = ProjectStore::create_new_with_clock(
+        temp.path("delete.redb"),
+        binding(&temp.path("delete.redb"), StoreKind::Project, "delete-1"),
+        "test",
+        clock(),
+    )
+    .unwrap();
+    let doomed = store.add_plan("Doomed", 0).unwrap();
+    let survivor = store.add_plan("Survivor", 0).unwrap();
+    let task = store.add_task(doomed.id, "dead task").unwrap();
+    let kept_task = store.add_task(survivor.id, "kept task").unwrap();
+    store
+        .add_note(NoteTarget::Plan, doomed.id, "plan note")
+        .unwrap();
+    store
+        .add_note(NoteTarget::Task, task.id, "task note")
+        .unwrap();
+    store
+        .add_note(NoteTarget::Task, kept_task.id, "kept note")
+        .unwrap();
+    let issue = store.add_issue("crash on save", "", None, task.id).unwrap();
+    store
+        .add_commit("aaa111", "linked", doomed.id, task.id)
+        .unwrap();
+    store.add_commit("bbb222", "kept", survivor.id, 0).unwrap();
+    store.set_active_plan(doomed.id).unwrap();
+
+    let summary: PlanDeleteSummary = store.delete_plan(doomed.id).unwrap();
+    assert_eq!(summary.plan_id, doomed.id);
+    assert_eq!(summary.title, "Doomed");
+    assert_eq!(summary.tasks, 1);
+    assert_eq!(summary.notes, 2);
+    assert_eq!(summary.commits_unlinked, 1);
+    assert_eq!(
+        summary.detached_issues,
+        vec![(issue.id, "crash on save".to_owned())]
+    );
+
+    // Sweep every collection: nothing references the dead plan or its task.
+    let snapshot = store.snapshot().unwrap();
+    assert!(snapshot.plans.iter().all(|plan| plan.id != doomed.id));
+    assert!(
+        snapshot
+            .tasks
+            .iter()
+            .all(|task_| task_.plan_id != doomed.id)
+    );
+    assert!(
+        snapshot
+            .notes
+            .iter()
+            .all(
+                |note| !(note.target == NoteTarget::Task && note.target_id == task.id)
+                    && !(note.target == NoteTarget::Plan && note.target_id == doomed.id)
+            )
+    );
+    let detached = snapshot.issues.iter().find(|i| i.id == issue.id).unwrap();
+    assert_eq!(detached.task_id, 0);
+    let unlinked = snapshot
+        .commits
+        .iter()
+        .find(|commit| commit.sha == "aaa111")
+        .unwrap();
+    assert_eq!((unlinked.plan_id, unlinked.task_id), (0, 0));
+    let kept = snapshot
+        .commits
+        .iter()
+        .find(|commit| commit.sha == "bbb222")
+        .unwrap();
+    assert_eq!(kept.plan_id, survivor.id);
+    // Legacy active-plan singleton reset to 0.
+    assert_eq!(store.meta().unwrap().active_plan, 0);
+}
+
+#[test]
+fn delete_plan_resets_every_actor_pointer_and_respects_claims() {
+    let temp = Temp::new();
+    let path = temp.path("delete-claims.redb");
+    let expected = binding(&path, StoreKind::Project, "delete-claims-1");
+    let alice = ProjectStore::create_new_with_clock(&path, expected.clone(), "test", clock())
+        .unwrap()
+        .with_actor(Some(ActorIdentity {
+            id: "01hzvyekq3s7m8w9x0aaaaaaaa".to_owned(),
+            name: "Alice".to_owned(),
+        }));
+    let bob = ProjectStore::open_existing(&path, &expected, "test")
+        .unwrap()
+        .with_actor(Some(ActorIdentity {
+            id: "01hzvyekq3s7m8w9x0bbbbbbbb".to_owned(),
+            name: "Bob".to_owned(),
+        }));
+    let plan = alice.add_plan("Claimed", 0).unwrap();
+    alice.use_plan(plan.id, false).unwrap();
+    bob.use_plan(plan.id, true).unwrap(); // Bob steals and points at it too.
+    alice.use_plan(plan.id, true).unwrap(); // Alice steals back; both actors point at it.
+
+    // Bob cannot delete Alice's claimed plan.
+    let refusal = bob.delete_plan(plan.id).unwrap_err();
+    assert!(refusal.to_string().starts_with(INVALID_CLAIM_PREFIX));
+
+    // The owner's own claim dies with the plan; every pointer resets to 0.
+    alice.delete_plan(plan.id).unwrap();
+    let meta = alice.meta().unwrap();
+    assert_eq!(meta.active_plan, 0);
+    assert!(meta.active_plans.iter().all(|(_, plan_id)| *plan_id == 0));
+    assert!(matches!(alice.plan(plan.id), Err(StoreError::NotFound)));
+}
+
+#[test]
+fn delete_plan_for_move_deletes_linked_issues_instead_of_detaching() {
+    let temp = Temp::new();
+    let store = ProjectStore::create_new_with_clock(
+        temp.path("move-delete.redb"),
+        binding(
+            &temp.path("move-delete.redb"),
+            StoreKind::Project,
+            "move-delete-1",
+        ),
+        "test",
+        clock(),
+    )
+    .unwrap();
+    let plan = store.add_plan("Moving out", 0).unwrap();
+    let task = store.add_task(plan.id, "t").unwrap();
+    let issue = store
+        .add_issue("follows its task", "", None, task.id)
+        .unwrap();
+    let unrelated = store.add_issue("stays", "", None, 0).unwrap();
+
+    let summary = store.delete_plan_for_move(plan.id).unwrap();
+    assert_eq!(
+        summary.detached_issues,
+        vec![(issue.id, "follows its task".to_owned())]
+    );
+    let snapshot = store.snapshot().unwrap();
+    assert!(snapshot.issues.iter().all(|i| i.id != issue.id)); // moved, not detached
+    assert!(snapshot.issues.iter().any(|i| i.id == unrelated.id)); // untouched
+}
+
+#[test]
+fn plan_delete_preview_counts_without_mutating() {
+    let temp = Temp::new();
+    let store = ProjectStore::create_new_with_clock(
+        temp.path("preview.redb"),
+        binding(&temp.path("preview.redb"), StoreKind::Project, "preview-1"),
+        "test",
+        clock(),
+    )
+    .unwrap();
+    let plan = store.add_plan("Previewed", 0).unwrap();
+    let task = store.add_task(plan.id, "one").unwrap();
+    store.add_note(NoteTarget::Task, task.id, "note").unwrap();
+    store.add_issue("bug", "", None, task.id).unwrap();
+
+    let summary = store.plan_delete_preview(plan.id).unwrap();
+    assert_eq!((summary.tasks, summary.notes), (1, 1));
+    assert_eq!(summary.detached_issues.len(), 1);
+    assert_eq!(summary.commits_unlinked, 0);
+    // Nothing changed.
+    assert_eq!(store.snapshot().unwrap().tasks.len(), 1);
+    assert!(matches!(
+        store.plan_delete_preview(9999),
+        Err(StoreError::NotFound)
+    ));
 }
