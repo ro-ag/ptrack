@@ -37,6 +37,9 @@
   --done: #5fff87;
   --doing-rgb: 255, 215, 95;
   --blocked-rgb: 255, 95, 135;
+  /* Darker than --blocked: white text on --blocked itself is ~2.9:1 in this
+     theme, below WCAG AA (4.5:1). Solid destructive fills use this instead. */
+  --blocked-strong: #c22a5a;
   --info: #5fafff;
   --issue-chip: #ff9db5;
   --hold: #ffab5f;
@@ -136,6 +139,8 @@
   --done: #16a34a;
   --doing-rgb: 161, 98, 7;
   --blocked-rgb: 214, 51, 99;
+  /* Already ~4.65:1 with white text — no separate darkening needed here. */
+  --blocked-strong: #d63363;
   --info: #1d6fc5;
   --issue-chip: #c2255c;
   --hold: #b45309;
@@ -3276,13 +3281,18 @@ button.modal-backdrop:active {
 .dialog-danger {
   border-color: rgba(var(--blocked-rgb), 0.6);
   color: #fff;
-  background: var(--blocked);
+  background: var(--blocked-strong);
 }
 
+/* No brightness/filter lightening on hover: it pushes the fill back toward
+   --blocked, which fails WCAG AA (4.5:1) against white text in dark theme. */
 .dialog-danger:hover {
-  border-color: rgba(var(--blocked-rgb), 0.85);
-  background: var(--blocked);
-  filter: brightness(1.08);
+  border-color: rgba(var(--blocked-rgb), 0.9);
+  background: var(--blocked-strong);
+  box-shadow:
+    var(--highlight-inset),
+    var(--shadow-button),
+    0 6px 22px rgba(var(--blocked-rgb), 0.32);
 }
 
 .plan-rename-input {

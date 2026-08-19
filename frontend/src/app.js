@@ -623,6 +623,7 @@ let dialogReturnFocus = null;
 let planContextMenu = null;
 let planContextMenuDispose = null;
 let planContextMenuReturnFocus = null;
+let planRenameActive = false;
 let planDialogMode = null; // "delete" | "move" | "copy"
 let planDialogPlan = null;
 let planDialogTransferState = null;
@@ -2198,7 +2199,9 @@ async function loadSnapshot(
     quiet &&
     (snapshotDialogIsOpen() ||
       draggedTask ||
-      elements.taskTitle.value.trim().length > 0)
+      elements.taskTitle.value.trim().length > 0 ||
+      planRenameActive ||
+      planContextMenu !== null)
   ) {
     refreshGate.finish();
     return false;
@@ -2649,6 +2652,7 @@ function beginPlanRename(titleElement, plan) {
   if (workspaceController.state.status !== "open") return;
   const original = titleElement.textContent;
   let settled = false;
+  planRenameActive = true;
   const input = document.createElement("input");
   input.type = "text";
   input.maxLength = 240;
@@ -2659,12 +2663,14 @@ function beginPlanRename(titleElement, plan) {
   const restore = () => {
     if (settled) return;
     settled = true;
+    planRenameActive = false;
     titleElement.textContent = original;
   };
 
   const commit = async () => {
     if (settled) return;
     settled = true;
+    planRenameActive = false;
     const title = input.value.trim();
     if (!title || title === plan.title) {
       titleElement.textContent = original;
@@ -2773,9 +2779,11 @@ async function openPlanTransferDialog(plan, mode) {
     return;
   }
   if (!workspaceController.accepts(ticket, Number(response.generation))) return;
+  const projects = response.projects || [];
+  const hasOtherProject = projects.some((project) => !project.current);
   planDialogMode = mode;
   planDialogPlan = plan;
-  planDialogTransferState = { mode, projects: response.projects || [], targetPath: "", title: "" };
+  planDialogTransferState = { mode, projects, targetPath: "", title: "" };
   openPlanDialogShell();
   elements.planDialogEyebrow.textContent = mode === "move" ? "Move plan" : "Copy plan";
   elements.planDialogHeading.textContent =
@@ -2783,12 +2791,16 @@ async function openPlanTransferDialog(plan, mode) {
   elements.planDialogBody.textContent = mode === "move"
     ? "Choose a project to move this plan to."
     : "Choose a project to copy this plan into. Copying into the current project needs a new title.";
+  if (!hasOtherProject) {
+    elements.planDialogBody.textContent +=
+      " No other projects registered — run ptrack init in another repository first.";
+  }
   elements.planDialogProject.replaceChildren();
   const placeholder = document.createElement("option");
   placeholder.value = "";
   placeholder.textContent = "Choose a project…";
   elements.planDialogProject.append(placeholder);
-  (response.projects || []).forEach((project) => {
+  projects.forEach((project) => {
     const option = document.createElement("option");
     option.value = project.path;
     option.textContent = project.current
