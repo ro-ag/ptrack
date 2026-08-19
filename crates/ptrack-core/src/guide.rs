@@ -38,7 +38,7 @@ as well as making it your active plan; content changes to a plan claimed by\n\
 someone else are refused. Holds, notes, and issue links stay open to everyone\n\
 — use them to talk across a claim. `ptrack plan release <id>` frees your\n\
 claim, finishing a plan releases it automatically, and\n\
-`ptrack plan use <id> --steal` takes over an abandoned one.\n\
+`ptrack plan use <id> --steal` takes over someone else's claim.\n\
 \n\
 **Record decisions, not narration.** Notes are the human-visible audit trail of\n\
 what you did and *why*. When you make a choice, hit a blocker, or find a\n\
