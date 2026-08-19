@@ -1549,7 +1549,7 @@ function renderPlanList() {
     }
     item.addEventListener("click", () => selectPlan(plan.id));
     item.addEventListener("keydown", (event) => {
-      // Ignore keys bubbling up from the nested "⋯" button (Enter/Space
+      // Ignore keys bubbling up from the nested gear button (Enter/Space
       // there should trigger it, not also select the row).
       if (event.target !== item) return;
       if (event.key !== "Enter" && event.key !== " ") return;
@@ -1576,7 +1576,9 @@ function renderPlanList() {
     const menuButton = document.createElement("button");
     menuButton.type = "button";
     menuButton.className = "sidebar-plan-menu";
-    menuButton.textContent = "⋯";
+    // Same gear as the board header's plan-actions trigger, cloned so the
+    // icon path lives in index.html exactly once.
+    menuButton.append(elements.planTitleMenu.querySelector("svg").cloneNode(true));
     menuButton.setAttribute("aria-label", `Plan #${plan.id} actions`);
     menuButton.setAttribute("aria-haspopup", "menu");
     menuButton.addEventListener("click", (event) => {

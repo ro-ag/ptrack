@@ -2054,6 +2054,22 @@ select option {
   box-shadow: none;
 }
 
+.plan-menu-trigger svg,
+.sidebar-plan-menu svg {
+  display: block;
+  fill: currentColor;
+}
+
+.plan-menu-trigger svg {
+  width: 14px;
+  height: 14px;
+}
+
+.sidebar-plan-menu svg {
+  width: 12px;
+  height: 12px;
+}
+
 .progress-label {
   flex: 0 0 auto;
   color: var(--muted);
