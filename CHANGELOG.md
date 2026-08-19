@@ -17,7 +17,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `ptrack plan release` frees a claim, finishing a plan releases it
   automatically, and `ptrack plan use --steal` takes over a claim. Claim
   owners are shown in `plan list`, plan JSON, the TUI, and the desktop
-  sidebar (display-only; claim changes are CLI-only).
+  sidebar (display-only; there is no dedicated claim UI outside the CLI,
+  though the TUI's active-plan switch also claims, by design).
 
 ### Changed
 - **Compatibility: upgrade every installed copy of p-track.** The first write

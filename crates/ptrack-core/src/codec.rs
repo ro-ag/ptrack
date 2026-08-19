@@ -531,7 +531,7 @@ fn decode_meta(reader: &mut Reader<'_>, payload_schema: u32) -> Result<Meta, Cod
 /// The payload schema that introduced the plan and task hold reason.
 ///
 /// This is deliberately an absolute schema number rather than a comparison
-/// against [`NATIVE_PAYLOAD_SCHEMA`]: the next bump to 3 must keep writing and
+/// against [`NATIVE_PAYLOAD_SCHEMA`]: any later bump must keep writing and
 /// reading the hold-reason option byte for schema-2 records.
 pub(crate) const HOLD_REASON_PAYLOAD_SCHEMA: u32 = 2;
 

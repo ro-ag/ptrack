@@ -52,8 +52,9 @@ pub use production::{
     production_desktop_runtime, resolve_global_home, resolved_startup_project, startup_project,
 };
 pub use ptrack_store::ActorIdentity;
-/// Re-exported so a presentation layer can strip the store's hold-refusal
-/// prefix off an [`AppError`] without depending on `ptrack-store` itself.
+/// Re-exported so a presentation layer can strip the store's claim- or
+/// hold-refusal prefix off an [`AppError`] without depending on
+/// `ptrack-store` itself.
 pub use ptrack_store::{INVALID_CLAIM_PREFIX, INVALID_HOLD_PREFIX};
 pub use service::{
     AppError, AppResult, ApplicationPort, CapabilityCancellation, CapabilityMcpOutcome,
