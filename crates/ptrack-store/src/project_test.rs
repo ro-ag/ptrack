@@ -2016,15 +2016,10 @@ fn delete_plan_cascades_tasks_notes_detaches_issues_and_zeroes_commits() {
             .iter()
             .all(|task_| task_.plan_id != doomed.id)
     );
-    assert!(
-        snapshot
-            .notes
-            .iter()
-            .all(
-                |note| !(note.target == NoteTarget::Task && note.target_id == task.id)
-                    && !(note.target == NoteTarget::Plan && note.target_id == doomed.id)
-            )
-    );
+    assert!(snapshot.notes.iter().all(|note| {
+        (note.target != NoteTarget::Task || note.target_id != task.id)
+            && (note.target != NoteTarget::Plan || note.target_id != doomed.id)
+    }));
     let detached = snapshot.issues.iter().find(|i| i.id == issue.id).unwrap();
     assert_eq!(detached.task_id, 0);
     let unlinked = snapshot
