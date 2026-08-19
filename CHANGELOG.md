@@ -8,8 +8,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 - Plan lifecycle operations. `ptrack plan delete <id> --force` permanently
-  removes a plan and cascades in one transaction: its tasks and their notes
-  are deleted, linked issues survive with the task link cleared (each one is
+  removes a plan and cascades in one transaction: its tasks and every note
+  on the plan or its tasks are deleted, linked issues survive with the task
+  link cleared (each one is
   listed), commit records survive as audit trail with their references
   zeroed, and every active-plan pointer that named the plan resets. Without
   `--force` the command only prints what would be destroyed. `ptrack plan
