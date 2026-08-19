@@ -509,18 +509,34 @@ impl LocalApplication {
     /// `ptrack projects` prints them. Registry-only: no marker resolution here,
     /// so "is this the current project?" can be answered without an active
     /// runtime lookup.
+    ///
+    /// A path wins outright. Names are directory basenames and therefore not
+    /// unique, so an ambiguous name is refused rather than resolved by
+    /// registry order — silently picking the most recently seen `web` would
+    /// land a destructive move in a project the caller never named.
     fn lookup_registered_project(&self, to: &str) -> AppResult<ProjectRef> {
         let projects = self.with_global(|store| Ok(store.projects()?))?;
-        projects
-            .into_iter()
-            .find(|project| {
-                project.name == to || project.path == to || Path::new(&project.path) == Path::new(to)
-            })
-            .ok_or_else(|| {
-                AppError::Message(format!(
-                    "unknown target project {to:?}; run 'ptrack projects' for registered names and paths"
-                ))
-            })
+        if let Some(exact) = projects
+            .iter()
+            .find(|project| Path::new(&project.path) == Path::new(to))
+        {
+            return Ok(exact.clone());
+        }
+        let mut by_name = projects.into_iter().filter(|project| project.name == to);
+        let first = by_name.next().ok_or_else(|| {
+            AppError::Message(format!(
+                "unknown target project {to:?}; run 'ptrack projects' for registered names and paths"
+            ))
+        })?;
+        let mut paths = vec![first.path.clone()];
+        paths.extend(by_name.map(|project| project.path));
+        if paths.len() == 1 {
+            return Ok(first);
+        }
+        Err(AppError::Message(format!(
+            "target project {to:?} is ambiguous ({}); name it by path",
+            paths.join(", ")
+        )))
     }
 
     /// Resolves a registered project to an openable endpoint through the
@@ -539,7 +555,12 @@ impl LocalApplication {
                     "target project {} has no active database binding; run 'ptrack init' inside it once",
                     project.path
                 )),
-                other => other,
+                // A stale registry row whose directory moved or vanished
+                // surfaces as a bare io error otherwise, naming nothing.
+                other => AppError::Message(format!(
+                    "cannot resolve target project {}: {other}",
+                    project.path
+                )),
             })?;
         bindings.project.ok_or(AppError::NoProject)
     }
@@ -1488,7 +1509,7 @@ fn project_label(root: &Path) -> String {
 /// Fail-closed target-open refusal: the store's own manifest/schema message,
 /// plus the upgrade hint the spec requires when the target was written by a
 /// newer build.
-fn target_open_error(root: &Path, error: &ptrack_store::StoreError) -> AppError {
+pub(crate) fn target_open_error(root: &Path, error: &ptrack_store::StoreError) -> AppError {
     let hint = if matches!(
         error,
         ptrack_store::StoreError::UnsupportedSchemaVersion { .. }

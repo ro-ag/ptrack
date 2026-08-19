@@ -634,3 +634,85 @@ fn plan_lifecycle_unknown_target_is_refused_with_projects_hint() {
         .unwrap_err();
     assert!(error.to_string().contains("ptrack projects"));
 }
+
+#[test]
+fn plan_lifecycle_ambiguous_target_name_is_refused_but_the_exact_path_resolves() {
+    let test = TestDirectory::new("lifecycle-ambiguous");
+    let (mut application, endpoint) = configured(&test, true);
+    application
+        .mutate(Mutation::AddPlan {
+            title: "Shared".to_owned(),
+            milestone_id: 0,
+        })
+        .unwrap();
+
+    // Registry names are directory basenames: two different roots can both be
+    // called "twin", and picking either by registry order would be a guess.
+    let first = test.0.join("a/twin");
+    let second = test.0.join("b/twin");
+    std::fs::create_dir_all(&first).expect("first twin");
+    std::fs::create_dir_all(&second).expect("second twin");
+    let global_database = test.0.join("home/global.redb");
+    let registry = GlobalStore::open_existing(
+        &global_database,
+        &binding(&global_database, StoreKind::Global, "global-9"),
+    )
+    .expect("open registry");
+    registry
+        .register_project("twin", &first)
+        .expect("register first");
+    registry
+        .register_project("twin", &second)
+        .expect("register second");
+    drop(registry);
+
+    let error = application
+        .plan_lifecycle(PlanLifecycleRequest::Copy {
+            plan_id: 1,
+            to: Some("twin".to_owned()),
+            rename: None,
+        })
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("ambiguous"), "{error}");
+    assert!(
+        error.contains(&first.to_string_lossy().into_owned()),
+        "{error}"
+    );
+    assert!(
+        error.contains(&second.to_string_lossy().into_owned()),
+        "{error}"
+    );
+
+    // The exact path is unambiguous, so lookup succeeds and the refusal that
+    // follows comes from the marker, not from the registry.
+    let resolved = application
+        .plan_lifecycle(PlanLifecycleRequest::Copy {
+            plan_id: 1,
+            to: Some(second.to_string_lossy().into_owned()),
+            rename: None,
+        })
+        .unwrap_err()
+        .to_string();
+    assert!(!resolved.contains("ambiguous"), "{resolved}");
+    assert!(!resolved.contains("unknown target project"), "{resolved}");
+    assert_ne!(endpoint.root, second);
+}
+
+#[test]
+fn target_open_failures_are_fail_closed_and_only_stale_schemas_get_the_upgrade_hint() {
+    let root = Path::new("/tmp/some-target-project");
+    let stale = crate::service::target_open_error(
+        root,
+        &StoreError::InvalidManifest("activation generation is missing".to_owned()),
+    )
+    .to_string();
+    assert!(stale.contains("/tmp/some-target-project"), "{stale}");
+    assert!(stale.contains("upgrade ptrack for that project"), "{stale}");
+
+    // A busy target is a retry-later condition, not a version problem: the
+    // upgrade hint would send the caller off to reinstall for nothing.
+    let busy = crate::service::target_open_error(root, &StoreError::Busy).to_string();
+    assert!(busy.contains("/tmp/some-target-project"), "{busy}");
+    assert!(!busy.contains("upgrade ptrack"), "{busy}");
+}

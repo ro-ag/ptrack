@@ -120,9 +120,12 @@ impl ApplicationPort for FakeApplication {
 
     fn plan_lifecycle(&mut self, request: PlanLifecycleRequest) -> AppResult<PlanLifecycleOutcome> {
         self.lifecycle_requests.push(request);
-        self.lifecycle_results
-            .pop()
-            .unwrap_or(Err(AppError::NotImplemented("test plan lifecycle")))
+        // `match`, not `unwrap_or_else`: clippy rejects the lazy closure here,
+        // and `unwrap_or` would build the fallback error on every call.
+        match self.lifecycle_results.pop() {
+            Some(result) => result,
+            None => Err(AppError::NotImplemented("test plan lifecycle")),
+        }
     }
 
     fn projects(&mut self) -> AppResult<Vec<ProjectRef>> {
