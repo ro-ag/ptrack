@@ -56,11 +56,12 @@ pub use ptrack_store::ActorIdentity;
 /// hold-refusal prefix off an [`AppError`] without depending on
 /// `ptrack-store` itself.
 pub use ptrack_store::{INVALID_CLAIM_PREFIX, INVALID_HOLD_PREFIX};
+pub use ptrack_store::{PlanDeleteSummary, PlanSubtree};
 pub use service::{
     AppError, AppResult, ApplicationPort, CapabilityCancellation, CapabilityMcpOutcome,
     CapabilitySessionEnvironment, GuideAction, HookAction, HookResult, InitRequest, InitResult,
-    LocalApplication, Mutation, MutationResult, ProcessOutput, ProjectEndpoint,
-    UnavailableApplication, WorkspaceBindings,
+    LocalApplication, Mutation, MutationResult, PlanLifecycleOutcome, PlanLifecycleRequest,
+    PlanTransferSummary, ProcessOutput, ProjectEndpoint, UnavailableApplication, WorkspaceBindings,
 };
 pub use shell_command::{ShellCommandInstallResult, install_shell_command};
 pub use terminal_runtime::{

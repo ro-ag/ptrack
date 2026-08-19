@@ -3,15 +3,15 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ptrack_capability::{BrokerConfig, BrokerServer, BrokerServerConfig, McpCancellation};
-use ptrack_core::{PlanStatus, TaskStatus};
+use ptrack_core::{NoteTarget, PlanStatus, TaskStatus};
 use ptrack_store::{
     ActiveBinding, GlobalStore, PinnedProjectDirectory, ProjectStore, StoreError, StoreKind,
 };
 
 use crate::{
     AppError, ApplicationPort, CapabilityMcpOutcome, CapabilitySessionEnvironment,
-    INVALID_HOLD_PREFIX, InitRequest, LocalApplication, Mutation, MutationResult, ProjectEndpoint,
-    WorkspaceBindings,
+    INVALID_HOLD_PREFIX, InitRequest, LocalApplication, Mutation, MutationResult,
+    PlanLifecycleOutcome, PlanLifecycleRequest, ProjectEndpoint, WorkspaceBindings,
 };
 #[cfg(unix)]
 use crate::{GuideAction, HookAction, HookResult};
@@ -470,4 +470,167 @@ fn hook_operations_reject_links_and_publish_exact_executable_block() {
             & 0o777,
         0o755
     );
+}
+
+#[test]
+fn plan_lifecycle_delete_previews_then_deletes_with_summary() {
+    let test = TestDirectory::new("lifecycle-delete");
+    let (mut application, _endpoint) = configured(&test, true);
+    let MutationResult::Plan(plan) = application
+        .mutate(Mutation::AddPlan {
+            title: "Doomed".to_owned(),
+            milestone_id: 0,
+        })
+        .unwrap()
+    else {
+        panic!("plan result");
+    };
+    let MutationResult::Task(task) = application
+        .mutate(Mutation::AddTask {
+            plan_id: plan.id,
+            title: "t".to_owned(),
+        })
+        .unwrap()
+    else {
+        panic!("task result");
+    };
+    application
+        .mutate(Mutation::AddNote {
+            target: NoteTarget::Task,
+            target_id: task.id,
+            body: "n".to_owned(),
+        })
+        .unwrap();
+    application
+        .mutate(Mutation::AddIssue {
+            title: "bug".to_owned(),
+            body: String::new(),
+            severity: None,
+            task_id: task.id,
+        })
+        .unwrap();
+    application
+        .mutate(Mutation::SetActivePlan(plan.id))
+        .unwrap();
+
+    let preview = application
+        .plan_lifecycle(PlanLifecycleRequest::DeletePreview { plan_id: plan.id })
+        .unwrap();
+    let PlanLifecycleOutcome::Preview(summary) = preview else {
+        panic!("preview outcome");
+    };
+    assert_eq!(
+        (summary.tasks, summary.notes, summary.issues.len()),
+        (1, 1, 1)
+    );
+    assert!(
+        application
+            .snapshot()
+            .unwrap()
+            .plans
+            .iter()
+            .any(|p| p.id == plan.id)
+    );
+
+    let deleted = application
+        .plan_lifecycle(PlanLifecycleRequest::Delete { plan_id: plan.id })
+        .unwrap();
+    let PlanLifecycleOutcome::Deleted(summary) = deleted else {
+        panic!("deleted outcome");
+    };
+    assert_eq!((summary.tasks, summary.notes), (1, 1));
+    let snapshot = application.snapshot().unwrap();
+    assert!(snapshot.plans.iter().all(|p| p.id != plan.id));
+    assert_eq!(snapshot.meta.active_plan, 0);
+}
+
+#[test]
+fn plan_lifecycle_move_to_current_project_is_refused_pointing_at_rename() {
+    let test = TestDirectory::new("lifecycle-move-self");
+    let (mut application, _endpoint) = configured(&test, true);
+    let MutationResult::Plan(plan) = application
+        .mutate(Mutation::AddPlan {
+            title: "Stay".to_owned(),
+            milestone_id: 0,
+        })
+        .unwrap()
+    else {
+        panic!("plan result");
+    };
+    let error = application
+        .plan_lifecycle(PlanLifecycleRequest::Move {
+            plan_id: plan.id,
+            to: "project".to_owned(),
+            rename: None,
+        })
+        .unwrap_err();
+    assert!(error.to_string().contains("ptrack plan rename"));
+}
+
+#[test]
+fn plan_lifecycle_copy_without_target_requires_rename_and_duplicates_with_it() {
+    let test = TestDirectory::new("lifecycle-copy-self");
+    let (mut application, _endpoint) = configured(&test, true);
+    let MutationResult::Plan(plan) = application
+        .mutate(Mutation::AddPlan {
+            title: "Original".to_owned(),
+            milestone_id: 0,
+        })
+        .unwrap()
+    else {
+        panic!("plan result");
+    };
+    let refusal = application
+        .plan_lifecycle(PlanLifecycleRequest::Copy {
+            plan_id: plan.id,
+            to: None,
+            rename: None,
+        })
+        .unwrap_err();
+    assert!(refusal.to_string().contains("--as"));
+
+    let outcome = application
+        .plan_lifecycle(PlanLifecycleRequest::Copy {
+            plan_id: plan.id,
+            to: None,
+            rename: Some("Second".to_owned()),
+        })
+        .unwrap();
+    let PlanLifecycleOutcome::Transferred(summary) = outcome else {
+        panic!("transfer outcome");
+    };
+    assert!(!summary.moved);
+    assert_eq!(summary.title, "Second");
+    let titles: Vec<String> = application
+        .snapshot()
+        .unwrap()
+        .plans
+        .iter()
+        .map(|p| p.title.clone())
+        .collect();
+    assert!(titles.contains(&"Original".to_owned()));
+    assert!(titles.contains(&"Second".to_owned()));
+}
+
+#[test]
+fn plan_lifecycle_unknown_target_is_refused_with_projects_hint() {
+    let test = TestDirectory::new("lifecycle-unknown-target");
+    let (mut application, _endpoint) = configured(&test, true);
+    let MutationResult::Plan(plan) = application
+        .mutate(Mutation::AddPlan {
+            title: "Lost".to_owned(),
+            milestone_id: 0,
+        })
+        .unwrap()
+    else {
+        panic!("plan result");
+    };
+    let error = application
+        .plan_lifecycle(PlanLifecycleRequest::Move {
+            plan_id: plan.id,
+            to: "no-such-project".to_owned(),
+            rename: None,
+        })
+        .unwrap_err();
+    assert!(error.to_string().contains("ptrack projects"));
 }

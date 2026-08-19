@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Barrier};
 use std::time::Duration;
 
+use ptrack_core::NoteTarget;
 use ptrack_store::{
     ActiveBinding, ActiveGeneration, ActiveGenerationProject, CutoverLockMode, GlobalStore,
     PinnedProjectDirectory, PrivatePathIdentity, ProjectStore, StoreKind, acquire_cutover_lock,
@@ -14,7 +15,8 @@ use crate::{
     ActiveRuntime, ApplicationPort, DesktopCommandRequest, DesktopInitializationService,
     DesktopRuntime, DesktopRuntimeConfig, DesktopWorkspaceFactory, InitRequest,
     InitializationCheckpointV1, InitializationOutcomeV1, InitializationStatusV1,
-    InitializeProjectRequestV1, NoRecentProjectsProvider, ProductionDesktopAuthority,
+    InitializeProjectRequestV1, Mutation, MutationResult, NoRecentProjectsProvider,
+    PlanLifecycleOutcome, PlanLifecycleRequest, ProductionDesktopAuthority,
     ProductionDesktopWorkspaceFactory, ProductionRecentProjects, ProjectGuideChoiceV1,
     ProjectGuideFileActionV1, ProjectGuidePreviewRequestV1, ProjectTargetKindV1,
     RecentProjectAvailabilityV1, RecentProjectResolutionV1, RecentProjectsProvider,
@@ -3164,4 +3166,178 @@ fn initializing_the_home_directory_is_refused_by_name() {
         "{validation}"
     );
     desktop.begin_shutdown().unwrap();
+}
+
+fn bootstrap_two_projects(temp: &Temp) -> (PathBuf, PathBuf, PathBuf) {
+    let home = temp.0.join("xfer-home");
+    let first = temp.0.join("xfer-first");
+    let second = temp.0.join("xfer-second");
+    fs::create_dir(&home).unwrap();
+    fs::create_dir(&first).unwrap();
+    fs::create_dir(&second).unwrap();
+    private_directory(&home);
+    for root in [&first, &second] {
+        let mut application = RoutedApplication::new(home.clone(), first.clone(), "test");
+        application
+            .initialize(InitRequest {
+                root: Some(root.clone()),
+                goal: String::new(),
+                force: false,
+                no_guide: true,
+            })
+            .unwrap();
+    }
+    (home, first, second)
+}
+
+fn seed_transfer_plan(source: &mut RoutedApplication) -> (u64, u64) {
+    let MutationResult::Plan(plan) = source
+        .mutate(Mutation::AddPlan {
+            title: "Traveler".to_owned(),
+            milestone_id: 0,
+        })
+        .unwrap()
+    else {
+        panic!("plan result");
+    };
+    let MutationResult::Task(task) = source
+        .mutate(Mutation::AddTask {
+            plan_id: plan.id,
+            title: "t".to_owned(),
+        })
+        .unwrap()
+    else {
+        panic!("task result");
+    };
+    source
+        .mutate(Mutation::AddNote {
+            target: NoteTarget::Task,
+            target_id: task.id,
+            body: "n".to_owned(),
+        })
+        .unwrap();
+    source
+        .mutate(Mutation::AddIssue {
+            title: "bug".to_owned(),
+            body: String::new(),
+            severity: None,
+            task_id: task.id,
+        })
+        .unwrap();
+    source
+        .mutate(Mutation::AddCommit {
+            sha: "eee555".to_owned(),
+            subject: "s".to_owned(),
+            plan_id: plan.id,
+            task_id: task.id,
+        })
+        .unwrap();
+    (plan.id, task.id)
+}
+
+#[test]
+fn routed_plan_lifecycle_moves_a_plan_between_two_bootstrapped_projects() {
+    let temp = Temp::new();
+    let (home, first, second) = bootstrap_two_projects(&temp);
+    let mut source = RoutedApplication::new(home.clone(), first, "test");
+    let (plan_id, _task_id) = seed_transfer_plan(&mut source);
+
+    let outcome = source
+        .plan_lifecycle(PlanLifecycleRequest::Move {
+            plan_id,
+            to: fs::canonicalize(&second)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            rename: Some("Landed".to_owned()),
+        })
+        .unwrap();
+    let PlanLifecycleOutcome::Transferred(summary) = outcome else {
+        panic!("transfer outcome");
+    };
+    assert!(summary.moved);
+    assert_eq!(summary.title, "Landed");
+    assert_ne!(summary.new_plan_id, 0);
+
+    let source_snapshot = source.snapshot().unwrap();
+    assert!(source_snapshot.plans.is_empty());
+    assert!(source_snapshot.issues.is_empty()); // the issue moved with its task
+    assert!(
+        source_snapshot
+            .commits
+            .iter()
+            .all(|c| c.plan_id == 0 && c.task_id == 0)
+    );
+
+    let mut target = RoutedApplication::new(home, second, "test");
+    let target_snapshot = target.snapshot().unwrap();
+    let landed = target_snapshot
+        .plans
+        .iter()
+        .find(|p| p.title == "Landed")
+        .unwrap();
+    assert_eq!(landed.claim_owner, None);
+    assert_eq!(landed.claim_epoch, 0);
+    let landed_task = target_snapshot
+        .tasks
+        .iter()
+        .find(|t| t.plan_id == landed.id)
+        .unwrap();
+    assert!(
+        target_snapshot
+            .issues
+            .iter()
+            .any(|i| i.task_id == landed_task.id)
+    );
+    assert!(
+        target_snapshot
+            .notes
+            .iter()
+            .any(|n| n.target == NoteTarget::Task && n.target_id == landed_task.id)
+    );
+    assert!(
+        target_snapshot
+            .commits
+            .iter()
+            .any(|c| c.plan_id == landed.id && c.task_id == landed_task.id)
+    );
+}
+
+#[test]
+fn routed_plan_lifecycle_copies_a_plan_and_leaves_the_source_intact() {
+    let temp = Temp::new();
+    let (home, first, second) = bootstrap_two_projects(&temp);
+    let mut source = RoutedApplication::new(home.clone(), first, "test");
+    let (plan_id, _task_id) = seed_transfer_plan(&mut source);
+
+    let outcome = source
+        .plan_lifecycle(PlanLifecycleRequest::Copy {
+            plan_id,
+            to: Some(
+                fs::canonicalize(&second)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            rename: None,
+        })
+        .unwrap();
+    let PlanLifecycleOutcome::Transferred(summary) = outcome else {
+        panic!("transfer outcome");
+    };
+    assert!(!summary.moved);
+    assert_eq!(summary.title, "Traveler");
+
+    let source_snapshot = source.snapshot().unwrap();
+    assert!(source_snapshot.plans.iter().any(|p| p.id == plan_id));
+    assert_eq!(source_snapshot.tasks.len(), 1);
+    let mut target = RoutedApplication::new(home, second, "test");
+    assert!(
+        target
+            .snapshot()
+            .unwrap()
+            .plans
+            .iter()
+            .any(|p| p.title == "Traveler")
+    );
 }

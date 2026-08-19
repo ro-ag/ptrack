@@ -6,7 +6,7 @@ use std::rc::Rc;
 use ptrack_app::{
     ActorIdentity, AppError, AppResult, ApplicationPort, CapabilityCancellation,
     CapabilityMcpOutcome, GuideAction, HookAction, HookResult, InitRequest, InitResult, Mutation,
-    MutationResult, ProcessOutput,
+    MutationResult, PlanLifecycleOutcome, PlanLifecycleRequest, ProcessOutput,
 };
 use ptrack_core::{
     Meta, Plan, PlanStatus, ProjectRef, ProjectSnapshot, Task, TaskStatus, Timestamp,
@@ -41,6 +41,13 @@ impl ApplicationPort for FakeApplication {
         } else {
             Ok(MutationResult::None)
         }
+    }
+
+    fn plan_lifecycle(
+        &mut self,
+        _request: PlanLifecycleRequest,
+    ) -> AppResult<PlanLifecycleOutcome> {
+        Err(AppError::NotImplemented("test plan lifecycle"))
     }
 
     fn projects(&mut self) -> AppResult<Vec<ProjectRef>> {

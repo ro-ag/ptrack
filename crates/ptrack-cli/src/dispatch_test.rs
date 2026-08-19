@@ -4,7 +4,8 @@ use std::path::PathBuf;
 use ptrack_app::{
     ActorIdentity, AppError, AppResult, ApplicationPort, CapabilityCancellation,
     CapabilityMcpOutcome, GuideAction, HookAction, HookResult, INVALID_CLAIM_PREFIX,
-    INVALID_HOLD_PREFIX, InitRequest, InitResult, Mutation, MutationResult, ProcessOutput,
+    INVALID_HOLD_PREFIX, InitRequest, InitResult, Mutation, MutationResult, PlanLifecycleOutcome,
+    PlanLifecycleRequest, ProcessOutput,
 };
 use ptrack_core::{
     Meta, Plan, PlanStatus, ProjectRef, ProjectSnapshot, Task, TaskStatus, Timestamp,
@@ -20,6 +21,8 @@ struct FakeApplication {
     mcp_input: Vec<u8>,
     identity: Option<ActorIdentity>,
     claim_owner: Option<&'static str>,
+    lifecycle_requests: Vec<PlanLifecycleRequest>,
+    lifecycle_results: Vec<AppResult<PlanLifecycleOutcome>>,
 }
 
 impl Default for FakeApplication {
@@ -50,6 +53,8 @@ impl Default for FakeApplication {
             mcp_input: Vec::new(),
             identity: None,
             claim_owner: None,
+            lifecycle_requests: Vec::new(),
+            lifecycle_results: Vec::new(),
         }
     }
 }
@@ -111,6 +116,13 @@ impl ApplicationPort for FakeApplication {
             _ => return Err(AppError::NotImplemented("test mutation")),
         }
         Ok(MutationResult::None)
+    }
+
+    fn plan_lifecycle(&mut self, request: PlanLifecycleRequest) -> AppResult<PlanLifecycleOutcome> {
+        self.lifecycle_requests.push(request);
+        self.lifecycle_results
+            .pop()
+            .unwrap_or(Err(AppError::NotImplemented("test plan lifecycle")))
     }
 
     fn projects(&mut self) -> AppResult<Vec<ProjectRef>> {
