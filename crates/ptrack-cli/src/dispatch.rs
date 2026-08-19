@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use clap::ArgMatches;
 use ptrack_app::{
     ApplicationPort, GuideAction, HookAction, HookResult, InitRequest, Mutation, MutationResult,
+    PlanLifecycleOutcome, PlanLifecycleRequest,
 };
 use ptrack_core::{
     IssueStatus, LEGACY_ACTOR, MilestoneStatus, NoteTarget, PlanStatus, Severity, TaskStatus,
@@ -448,6 +449,107 @@ fn plan(
                 id: parse_u64(&args[0])?,
                 title: args[1..].join(" "),
             })?)?;
+        }
+        "delete" => {
+            let id = parse_u64(first(matches, "id")?)?;
+            let force = matches.get_flag("force");
+            let request = if force {
+                PlanLifecycleRequest::Delete { plan_id: id }
+            } else {
+                PlanLifecycleRequest::DeletePreview { plan_id: id }
+            };
+            let outcome = application.plan_lifecycle(request).map_err(claim_error)?;
+            let (summary, deleted) = match outcome {
+                PlanLifecycleOutcome::Preview(summary) => (summary, false),
+                PlanLifecycleOutcome::Deleted(summary) => (summary, true),
+                PlanLifecycleOutcome::Transferred(_) => return Err(internal_result()),
+            };
+            output::line(
+                io.stdout,
+                format_args!(
+                    "plan #{} \"{}\": {} task(s), {} note(s), {} issue link(s), {} commit record(s)",
+                    summary.plan_id,
+                    summary.title,
+                    summary.tasks,
+                    summary.notes,
+                    summary.issues.len(),
+                    summary.commits_unlinked
+                ),
+            )?;
+            for (issue_id, title) in &summary.issues {
+                let verb = if deleted { "detached" } else { "would detach" };
+                output::line(
+                    io.stdout,
+                    format_args!("{verb} issue #{issue_id} \"{title}\""),
+                )?;
+            }
+            if deleted {
+                output::line(io.stdout, format_args!("plan #{} deleted", summary.plan_id))?;
+            } else {
+                return Err(CliError::message(format!(
+                    "refusing to delete plan #{} without --force",
+                    summary.plan_id
+                )));
+            }
+        }
+        "move" => {
+            let id = parse_u64(first(matches, "id")?)?;
+            let Some(to) = option(matches, "to").cloned() else {
+                return Err(CliError::message(
+                    "pass the target project with --to <project>",
+                ));
+            };
+            let rename = option(matches, "as").cloned();
+            let outcome = application
+                .plan_lifecycle(PlanLifecycleRequest::Move {
+                    plan_id: id,
+                    to,
+                    rename,
+                })
+                .map_err(claim_error)?;
+            let PlanLifecycleOutcome::Transferred(summary) = outcome else {
+                return Err(internal_result());
+            };
+            output::line(
+                io.stdout,
+                format_args!(
+                    "moved plan #{} from {} to {}: now plan #{} \"{}\" ({} tasks, {} notes, {} issues, {} commits)",
+                    summary.source_plan_id,
+                    summary.source_project,
+                    summary.target_project,
+                    summary.new_plan_id,
+                    summary.title,
+                    summary.tasks,
+                    summary.notes,
+                    summary.issues,
+                    summary.commits
+                ),
+            )?;
+        }
+        "copy" => {
+            let id = parse_u64(first(matches, "id")?)?;
+            let to = option(matches, "to").cloned();
+            let rename = option(matches, "as").cloned();
+            let outcome = application
+                .plan_lifecycle(PlanLifecycleRequest::Copy {
+                    plan_id: id,
+                    to,
+                    rename,
+                })
+                .map_err(claim_error)?;
+            let PlanLifecycleOutcome::Transferred(summary) = outcome else {
+                return Err(internal_result());
+            };
+            output::line(
+                io.stdout,
+                format_args!(
+                    "copied plan #{} to {}: new plan #{} \"{}\"",
+                    summary.source_plan_id,
+                    summary.target_project,
+                    summary.new_plan_id,
+                    summary.title
+                ),
+            )?;
         }
         _ => return Err(CliError::message("internal plan dispatch mismatch")),
     }
