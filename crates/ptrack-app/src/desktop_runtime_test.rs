@@ -843,7 +843,7 @@ fn desktop_update_commands_delegate_exact_arguments_and_return_full_state() {
 }
 
 #[test]
-#[allow(clippy::too_many_lines)] // Full 87-command freeze fixture is intentionally explicit.
+#[allow(clippy::too_many_lines)] // Full 93-command freeze fixture is intentionally explicit.
 fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
     let commands = allowed_desktop_commands();
     assert_eq!(
@@ -865,10 +865,12 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "CloseProject",
             "CloseTerminal",
             "CloseTerminalV2",
+            "CopyPlanV1",
             "CreateFirstPlanV1",
             "CreateFirstTaskV1",
             "CreateTerminal",
             "CreateTerminalV2",
+            "DeletePlanV1",
             "DisableCapabilityV2",
             "DismissAgentWorkflowV2",
             "DownloadUpdate",
@@ -899,6 +901,8 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "InitializeProjectV1",
             "InstallShellCommand",
             "LaunchLinkedAgentV2",
+            "ListProjectsV1",
+            "MovePlanV1",
             "MoveTask",
             "MoveTaskV2",
             "MoveTaskV3",
@@ -914,6 +918,7 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "PreviewProjectGuideV1",
             "PreviewTerminalWritebackV2",
             "RemoveCapabilityV2",
+            "RenamePlanV1",
             "RenameTask",
             "RenameTaskV2",
             "ResetApplicationState",
@@ -3256,4 +3261,67 @@ fn bounded_workspace_snapshot_follows_the_per_actor_active_plan() {
     let second = plans.iter().find(|plan| plan["id"] == second_plan).unwrap();
     assert_eq!(first["isActive"], false);
     assert_eq!(second["isActive"], true);
+}
+
+#[test]
+fn desktop_plan_lifecycle_commands_rename_preview_delete_and_copy_within() {
+    let directory = TestDirectory::new("plan-lifecycle-commands");
+    let workspace = bound_workspace(&directory); // seeded: plan "Desktop" + task + note
+    let plan_id = 1_u64;
+
+    // Rename.
+    workspace
+        .invoke(
+            "RenamePlanV1",
+            &[json!(7), json!(plan_id), json!("Renamed")],
+        )
+        .unwrap();
+    // Preview (force=false): counts, nothing deleted.
+    let preview = workspace
+        .invoke("DeletePlanV1", &[json!(7), json!(plan_id), json!(false)])
+        .unwrap();
+    assert_eq!(preview["preview"], json!(true));
+    assert_eq!(preview["summary"]["title"], json!("Renamed"));
+    assert_eq!(preview["summary"]["tasks"], json!(1));
+    assert_eq!(preview["summary"]["notes"], json!(1));
+
+    // Copy within the project requires a new title; empty target + empty title fails.
+    let refusal = workspace
+        .invoke(
+            "CopyPlanV1",
+            &[json!(7), json!(plan_id), json!(""), json!("")],
+        )
+        .unwrap_err();
+    assert!(refusal.to_string().contains("--as"));
+    let copied = workspace
+        .invoke(
+            "CopyPlanV1",
+            &[json!(7), json!(plan_id), json!(""), json!("Second")],
+        )
+        .unwrap();
+    assert_eq!(copied["summary"]["title"], json!("Second"));
+    assert_eq!(copied["summary"]["moved"], json!(false));
+
+    // Delete (force=true) removes it.
+    let deleted = workspace
+        .invoke("DeletePlanV1", &[json!(7), json!(plan_id), json!(true)])
+        .unwrap();
+    assert_eq!(deleted["preview"], json!(false));
+    let missing = workspace
+        .invoke("DeletePlanV1", &[json!(7), json!(plan_id), json!(false)])
+        .unwrap_err();
+    assert!(missing.to_string().contains("not found"));
+
+    // Move to an unregistered project surfaces the guard message verbatim.
+    let unknown = workspace
+        .invoke(
+            "MovePlanV1",
+            &[json!(7), json!(2), json!("/no/such/project"), json!("")],
+        )
+        .unwrap_err();
+    assert!(unknown.to_string().contains("ptrack projects"));
+
+    // ListProjectsV1 answers with the registry (possibly empty in this harness).
+    let projects = workspace.invoke("ListProjectsV1", &[json!(7)]).unwrap();
+    assert!(projects["projects"].is_array());
 }
