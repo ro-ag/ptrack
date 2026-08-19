@@ -560,7 +560,7 @@ fn plan_move_requires_to_and_prints_both_projects_and_the_new_id() {
         }]
     );
     assert!(stdout.contains(
-        "moved plan #3 from alpha to beta: now plan #9 \"Landed\" (2 tasks, 1 notes, 1 issues, 4 commits)"
+        "moved plan #3 from alpha to beta: now plan #9 \"Landed\" (2 tasks, 1 notes, 1 issues, 4 commits carried from source)"
     ));
 }
 

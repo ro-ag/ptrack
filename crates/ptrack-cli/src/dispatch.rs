@@ -513,7 +513,7 @@ fn plan(
             output::line(
                 io.stdout,
                 format_args!(
-                    "moved plan #{} from {} to {}: now plan #{} \"{}\" ({} tasks, {} notes, {} issues, {} commits)",
+                    "moved plan #{} from {} to {}: now plan #{} \"{}\" ({} tasks, {} notes, {} issues, {} commits carried from source)",
                     summary.source_plan_id,
                     summary.source_project,
                     summary.target_project,
