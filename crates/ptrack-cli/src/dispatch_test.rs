@@ -74,10 +74,7 @@ impl ApplicationPort for FakeApplication {
             .clone()
             .unwrap_or_else(|| PathBuf::from("/cwd/project"));
         self.relocate_requests.push(request);
-        Ok(RelocateResult {
-            database: root.join(".ptrack/ptrack.redb"),
-            root,
-        })
+        Ok(RelocateResult { root })
     }
 
     fn snapshot(&mut self) -> AppResult<ProjectSnapshot> {

@@ -271,11 +271,6 @@ impl ProjectStore {
         path: impl AsRef<Path>,
         expected: &ActiveBinding,
     ) -> StoreResult<ActiveBinding> {
-        if expected.kind != StoreKind::Project {
-            return Err(StoreError::ActivationBinding(
-                "project relocation requires a project binding".to_owned(),
-            ));
-        }
         Store::open_existing(path, StoreKind::Project)?.rebind_canonical_path(expected)
     }
 

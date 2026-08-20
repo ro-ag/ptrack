@@ -664,10 +664,18 @@ impl Store {
                 "store already lives at its recorded canonical path".to_owned(),
             ));
         }
-        if expected.canonical_path.exists() {
-            return Err(StoreError::ActivationBinding(
-                "recorded canonical path still exists; a copied store cannot be rebound".to_owned(),
-            ));
+        // Fail closed: any answer but a definitive NotFound (EACCES, a hung
+        // mount, a dangling symlink target) must refuse — a copied store
+        // rebinding would leave two live databases with one identity.
+        match fs::symlink_metadata(&expected.canonical_path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Ok(_) => {
+                return Err(StoreError::ActivationBinding(
+                    "recorded canonical path still exists; a copied store cannot be rebound"
+                        .to_owned(),
+                ));
+            }
+            Err(error) => return Err(error.into()),
         }
         if self.active_binding()?.as_ref() != Some(expected) {
             return Err(StoreError::ActivationBinding(

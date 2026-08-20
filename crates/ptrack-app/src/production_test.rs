@@ -3492,7 +3492,6 @@ fn routed_relocate_reregisters_a_moved_project() {
         .relocate(RelocateRequest { root: None })
         .unwrap();
     assert_eq!(result.root, new_root);
-    assert_eq!(result.database, new_root.join(".ptrack/ptrack.redb"));
     assert_eq!(
         application.snapshot().unwrap().meta.goal,
         "survive the move"
@@ -3627,4 +3626,111 @@ fn validate_target_hints_relocation_for_a_moved_store() {
         "{}",
         validation.reason
     );
+}
+
+#[test]
+fn routed_relocate_refuses_a_root_nested_inside_another_project() {
+    let temp = Temp::new();
+    let home = temp.0.join("home");
+    let outer = temp.0.join("outer");
+    let moved = temp.0.join("moved");
+    fs::create_dir(&home).unwrap();
+    private_directory(&home);
+    init_relocatable_project(&home, &outer, "outer");
+    init_relocatable_project(&home, &moved, "moved");
+
+    let nested = outer.join("vendor/moved");
+    fs::create_dir_all(outer.join("vendor")).unwrap();
+    fs::rename(&moved, &nested).unwrap();
+    let mut application = RoutedApplication::new(home, nested, "test");
+    let error = application
+        .relocate(RelocateRequest { root: None })
+        .unwrap_err();
+    assert!(error.to_string().contains("nested inside"), "{error}");
+}
+
+#[test]
+fn routed_relocate_backs_up_the_marker_before_dropping_a_vanished_project() {
+    let temp = Temp::new();
+    let home = temp.0.join("home");
+    let moved_old = temp.0.join("moved-old");
+    let moved_new = temp.0.join("moved-new");
+    let vanished = temp.0.join("vanished");
+    fs::create_dir(&home).unwrap();
+    private_directory(&home);
+    init_relocatable_project(&home, &moved_old, "moved");
+    init_relocatable_project(&home, &vanished, "vanished");
+
+    fs::rename(&moved_old, &moved_new).unwrap();
+    fs::remove_dir_all(&vanished).unwrap();
+    let mut application = RoutedApplication::new(home.clone(), moved_new, "test");
+    application
+        .relocate(RelocateRequest { root: None })
+        .unwrap();
+    let backups = fs::read_dir(home.join("runtime"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("active-generation.json.pruned-")
+        })
+        .count();
+    assert_eq!(backups, 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn routed_relocate_refuses_symlinked_project_storage() {
+    use std::os::unix::fs::symlink;
+
+    let temp = Temp::new();
+    let home = temp.0.join("home");
+    let donor = temp.0.join("donor");
+    let moved = temp.0.join("moved");
+    fs::create_dir(&home).unwrap();
+    fs::create_dir(&moved).unwrap();
+    private_directory(&home);
+    init_relocatable_project(&home, &donor, "donor");
+    let hidden = temp.0.join("hidden-storage");
+    fs::rename(donor.join(".ptrack"), &hidden).unwrap();
+    fs::remove_dir_all(&donor).unwrap();
+    symlink(&hidden, moved.join(".ptrack")).unwrap();
+
+    let mut application = RoutedApplication::new(home, moved, "test");
+    let error = application
+        .relocate(RelocateRequest { root: None })
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("project storage is unsafe"),
+        "{error}"
+    );
+}
+
+#[test]
+fn routed_relocate_moves_the_recents_row_even_after_the_marker_was_pruned() {
+    let temp = Temp::new();
+    let home = temp.0.join("home");
+    let old_root = temp.0.join("old-project");
+    let new_root = temp.0.join("new-project");
+    fs::create_dir(&home).unwrap();
+    private_directory(&home);
+    init_relocatable_project(&home, &old_root, "pruned first");
+    fs::rename(&old_root, &new_root).unwrap();
+
+    // A startup between the move and the relocate prunes the stale marker
+    // entry, so the old root survives only in the store's own manifest.
+    assert!(ActiveRuntime::load(&home, "test").unwrap().is_some());
+
+    let mut application = RoutedApplication::new(home, new_root.clone(), "test");
+    application
+        .relocate(RelocateRequest { root: None })
+        .unwrap();
+    let runtime = application.active_runtime().unwrap().unwrap();
+    let bindings = runtime.global_bindings(&new_root).unwrap();
+    let global =
+        GlobalStore::open_existing(&bindings.global_database, &bindings.global_binding).unwrap();
+    assert!(global.project(&old_root).unwrap().is_none());
+    assert!(global.project(&new_root).unwrap().is_some());
 }

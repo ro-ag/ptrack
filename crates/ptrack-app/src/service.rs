@@ -144,7 +144,6 @@ pub struct RelocateRequest {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RelocateResult {
     pub root: PathBuf,
-    pub database: PathBuf,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

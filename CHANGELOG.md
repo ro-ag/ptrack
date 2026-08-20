@@ -13,11 +13,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   canonical path, republishes the active-generation marker, and moves the
   recents registry row to the new root. A copied store is refused — only a
   genuine move is rebound — and mismatched generation, bound database IDs,
-  and foreign files all fail closed. The desktop recovery screen now names
-  the command when the unregistered store at the selected folder looks like
-  a moved project. Interrupted relocations resume safely: a store already
-  rebound to its new location but missing from the marker is picked up by
-  simply running `ptrack relocate` again.
+  symlinked storage, nested roots, home directories, and foreign files all
+  fail closed. Dropping a vanished project from the marker writes the same
+  `active-generation.json.pruned-*` backup the startup self-heal does, and a
+  running p-track instance is reported as exactly that instead of a recovery
+  error. The desktop recovery screen now names the command when the selected
+  folder holds an unregistered store. Interrupted relocations resume safely:
+  a store already rebound to its new location but missing from the marker is
+  picked up by simply running `ptrack relocate` again.
 
 ## [0.29.0] - 2026-08-20
 
