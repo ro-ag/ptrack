@@ -3341,3 +3341,124 @@ fn routed_plan_lifecycle_copies_a_plan_and_leaves_the_source_intact() {
             .any(|p| p.title == "Traveler")
     );
 }
+
+#[test]
+fn load_self_heals_marker_projects_with_missing_roots() {
+    let temp = Temp::new();
+    let home = temp.0.join("home");
+    let kept = temp.0.join("kept");
+    let doomed = temp.0.join("doomed");
+    fs::create_dir(&home).unwrap();
+    fs::create_dir(&kept).unwrap();
+    fs::create_dir(&doomed).unwrap();
+    private_directory(&home);
+
+    let mut application = RoutedApplication::new(home.clone(), kept.clone(), "test");
+    application
+        .initialize(InitRequest {
+            root: Some(kept.clone()),
+            goal: String::new(),
+            force: false,
+            no_guide: true,
+        })
+        .unwrap();
+    drop(application);
+    let mut application = RoutedApplication::new(home.clone(), doomed.clone(), "test");
+    application
+        .initialize(InitRequest {
+            root: Some(doomed.clone()),
+            goal: String::new(),
+            force: false,
+            no_guide: true,
+        })
+        .unwrap();
+    drop(application);
+
+    fs::remove_dir_all(&doomed).unwrap();
+
+    let runtime = ActiveRuntime::load(&home, "test").unwrap().unwrap();
+    assert_eq!(runtime.marker().projects.len(), 1);
+    assert_eq!(runtime.marker().projects[0].root, kept.to_string_lossy());
+    let backups = fs::read_dir(home.join("runtime"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("active-generation.json.pruned-")
+        })
+        .count();
+    assert_eq!(backups, 1);
+}
+
+#[test]
+fn load_still_fails_closed_for_a_noncanonical_marker() {
+    let temp = Temp::new();
+    let home = temp.0.join("home");
+    let project = temp.0.join("project");
+    fs::create_dir(&home).unwrap();
+    fs::create_dir(&project).unwrap();
+    private_directory(&home);
+    let mut application = RoutedApplication::new(home.clone(), project.clone(), "test");
+    application
+        .initialize(InitRequest {
+            root: Some(project.clone()),
+            goal: String::new(),
+            force: false,
+            no_guide: true,
+        })
+        .unwrap();
+    drop(application);
+
+    let marker_path = home.join("runtime/active-generation.json");
+    let lease = acquire_cutover_lock(&home, CutoverLockMode::Exclusive).unwrap();
+    let mut tampered = b" ".to_vec();
+    tampered.extend_from_slice(&fs::read(&marker_path).unwrap());
+    fs::write(&marker_path, &tampered).unwrap();
+    private_file(&marker_path);
+    drop(lease);
+
+    let error = match ActiveRuntime::load(&home, "test") {
+        Err(error) => error.to_string(),
+        Ok(_) => panic!("load must fail closed"),
+    };
+    assert!(
+        error.contains("runtime recovery is required"),
+        "error: {error}"
+    );
+    assert_eq!(fs::read(&marker_path).unwrap(), tampered);
+}
+
+#[test]
+fn load_does_not_rewrite_a_marker_whose_roots_all_exist() {
+    let temp = Temp::new();
+    let home = temp.0.join("home");
+    let project = temp.0.join("project");
+    fs::create_dir(&home).unwrap();
+    fs::create_dir(&project).unwrap();
+    private_directory(&home);
+    let mut application = RoutedApplication::new(home.clone(), project.clone(), "test");
+    application
+        .initialize(InitRequest {
+            root: Some(project.clone()),
+            goal: String::new(),
+            force: false,
+            no_guide: true,
+        })
+        .unwrap();
+    drop(application);
+
+    let marker_path = home.join("runtime/active-generation.json");
+    let before = fs::read(&marker_path).unwrap();
+    let runtime = ActiveRuntime::load(&home, "test").unwrap().unwrap();
+    assert_eq!(runtime.marker().projects.len(), 1);
+    drop(runtime);
+    assert_eq!(fs::read(&marker_path).unwrap(), before);
+    let backups = fs::read_dir(home.join("runtime"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().contains(".pruned-"))
+        .count();
+    assert_eq!(backups, 0);
+}
