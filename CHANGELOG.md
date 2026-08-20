@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-08-20
+
 ### Added
 - Plan and task dependency edges. `ptrack task dep add <id> <dep-id>` records
   that a task waits on another task — across plans within the project — and
@@ -25,6 +27,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   are the tooltip), the TUI board prefixes such cards with ⛓, and the TUI item
   views list each dependency as open or done. Payload schema bumps 3 → 4:
   older databases read fine and upgrade on their next write.
+
+### Fixed
+- Startup no longer fails with "runtime recovery is required" when a
+  registered project's directory has been deleted. The missing projects are
+  pruned from the active-generation marker at load (the replaced marker is
+  backed up as `runtime/active-generation.json.pruned-<epoch>` beside it) and
+  every other validation failure still fails closed unchanged.
 
 ## [0.28.1] - 2026-08-19
 
@@ -744,7 +753,8 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
-[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.28.1...HEAD
+[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.29.0...HEAD
+[0.29.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.29.0
 [0.28.1]: https://github.com/ro-ag/ptrack/releases/tag/v0.28.1
 [0.28.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.28.0
 [0.27.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.27.0

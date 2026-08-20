@@ -6,8 +6,8 @@ Observe agent work, keep project state durable, and pass bounded context to
 the next agent—without a hosted service or cloud account.
 
 [![Rust](https://img.shields.io/badge/Rust-1.89%2B-CE6A3D?logo=rust&logoColor=white)](https://www.rust-lang.org/)
-[![Release](https://img.shields.io/badge/release-v0.28.1-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.28.1)
-[![Help Center](https://img.shields.io/badge/help-v0.28.1-3DD6A3)](https://ro-ag.github.io/ptrack/help/)
+[![Release](https://img.shields.io/badge/release-v0.29.0-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.29.0)
+[![Help Center](https://img.shields.io/badge/help-v0.29.0-3DD6A3)](https://ro-ag.github.io/ptrack/help/)
 [![License](https://img.shields.io/badge/License-Apache--2.0-3DD6A3)](LICENSE)
 [![Storage](https://img.shields.io/badge/Storage-local--first-AFA8FF)](#storage-and-safety)
 
