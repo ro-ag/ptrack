@@ -169,6 +169,11 @@ pub struct ActiveRuntime {
 impl ActiveRuntime {
     /// Loads and attests the sole active-generation marker.
     ///
+    /// When validation fails because listed project roots were deleted, the
+    /// missing projects are pruned from the marker under the exclusive
+    /// cutover lock (the replaced marker is backed up beside it) and the
+    /// load is retried once.
+    ///
     /// # Errors
     /// Returns a recovery-required error for an unsafe marker, lock, or store.
     pub fn load(
@@ -177,6 +182,19 @@ impl ActiveRuntime {
     ) -> AppResult<Option<Arc<Self>>> {
         let writer_version = writer_version.into();
         let global_home = global_home.as_ref();
+        match Self::attempt(global_home, &writer_version) {
+            Err(error) => {
+                if prune_missing_marker_projects(global_home, &writer_version).unwrap_or(false) {
+                    Self::attempt(global_home, &writer_version)
+                } else {
+                    Err(error)
+                }
+            }
+            loaded => loaded,
+        }
+    }
+
+    fn attempt(global_home: &Path, writer_version: &str) -> AppResult<Option<Arc<Self>>> {
         if !global_home.exists() {
             return Ok(None);
         }
@@ -190,11 +208,11 @@ impl ActiveRuntime {
         let Some(marker) = load_active_generation(&home, &lease).map_err(recovery)? else {
             return Ok(None);
         };
-        validate_active_generation(&home, &marker, &writer_version).map_err(recovery)?;
+        validate_active_generation(&home, &marker, writer_version).map_err(recovery)?;
         Ok(Some(Arc::new(Self {
             home,
             marker,
-            writer_version,
+            writer_version: writer_version.to_owned(),
             _lease: lease,
         })))
     }
@@ -2775,6 +2793,53 @@ pub fn resolve_global_home() -> AppResult<PathBuf> {
 
 fn recovery(error: impl std::fmt::Display) -> AppError {
     AppError::Message(format!("{RECOVERY_REQUIRED}: {error}"))
+}
+
+/// Prunes marker projects whose root directories no longer exist so one
+/// deleted project cannot block every startup. Returns true only when a
+/// pruned marker was published; any other outcome leaves the caller's
+/// original fail-closed error in force. The exclusive lock is non-blocking,
+/// so a live process holding the shared lease makes this return an error
+/// rather than wait.
+fn prune_missing_marker_projects(global_home: &Path, writer_version: &str) -> AppResult<bool> {
+    if !global_home.exists() {
+        return Ok(false);
+    }
+    let home = fs::canonicalize(global_home).map_err(recovery)?;
+    if path_is_present(&home.join("runtime").join(BOOTSTRAP_PLAN))? {
+        return Ok(false);
+    }
+    let lease = acquire_cutover_lock(&home, CutoverLockMode::Exclusive).map_err(recovery)?;
+    let Some(marker) = load_active_generation(&home, &lease).map_err(recovery)? else {
+        return Ok(false);
+    };
+    let kept: Vec<ActiveGenerationProject> = marker
+        .projects
+        .iter()
+        .filter(|project| path_is_present(Path::new(&project.root)).unwrap_or(true))
+        .cloned()
+        .collect();
+    if kept.len() == marker.projects.len() {
+        return Ok(false);
+    }
+    backup_marker(&home)?;
+    let pruned = ActiveGeneration {
+        projects: kept,
+        ..marker
+    };
+    install_active_generation(&home, &lease, &pruned, writer_version).map_err(recovery)?;
+    Ok(true)
+}
+
+fn backup_marker(home: &Path) -> AppResult<()> {
+    let marker = home.join("runtime").join("active-generation.json");
+    let backup = home.join("runtime").join(format!(
+        "active-generation.json.pruned-{}",
+        OffsetDateTime::now_utc().unix_timestamp()
+    ));
+    fs::copy(&marker, &backup)?;
+    protect_private_file(&backup).map_err(recovery)?;
+    Ok(())
 }
 
 fn uninitialized() -> AppError {
