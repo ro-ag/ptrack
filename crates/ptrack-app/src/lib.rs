@@ -61,7 +61,8 @@ pub use service::{
     AppError, AppResult, ApplicationPort, CapabilityCancellation, CapabilityMcpOutcome,
     CapabilitySessionEnvironment, GuideAction, HookAction, HookResult, InitRequest, InitResult,
     LocalApplication, Mutation, MutationResult, PlanLifecycleOutcome, PlanLifecycleRequest,
-    PlanTransferSummary, ProcessOutput, ProjectEndpoint, UnavailableApplication, WorkspaceBindings,
+    PlanTransferSummary, ProcessOutput, ProjectEndpoint, RelocateRequest, RelocateResult,
+    UnavailableApplication, WorkspaceBindings,
 };
 pub use shell_command::{ShellCommandInstallResult, install_shell_command};
 pub use terminal_runtime::{

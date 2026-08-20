@@ -6,6 +6,7 @@ use ptrack_app::{
     CapabilityMcpOutcome, GuideAction, HookAction, HookResult, INVALID_CLAIM_PREFIX,
     INVALID_HOLD_PREFIX, InitRequest, InitResult, Mutation, MutationResult, PlanDeleteSummary,
     PlanLifecycleOutcome, PlanLifecycleRequest, PlanTransferSummary, ProcessOutput,
+    RelocateRequest, RelocateResult,
 };
 use ptrack_core::{
     Meta, Plan, PlanStatus, ProjectRef, ProjectSnapshot, Task, TaskStatus, Timestamp,
@@ -24,6 +25,7 @@ struct FakeApplication {
     claim_owner: Option<&'static str>,
     lifecycle_requests: Vec<PlanLifecycleRequest>,
     lifecycle_results: Vec<AppResult<PlanLifecycleOutcome>>,
+    relocate_requests: Vec<RelocateRequest>,
 }
 
 impl Default for FakeApplication {
@@ -56,6 +58,7 @@ impl Default for FakeApplication {
             claim_owner: None,
             lifecycle_requests: Vec::new(),
             lifecycle_results: Vec::new(),
+            relocate_requests: Vec::new(),
         }
     }
 }
@@ -63,6 +66,18 @@ impl Default for FakeApplication {
 impl ApplicationPort for FakeApplication {
     fn initialize(&mut self, _request: InitRequest) -> AppResult<InitResult> {
         Err(AppError::NotImplemented("test initialize"))
+    }
+
+    fn relocate(&mut self, request: RelocateRequest) -> AppResult<RelocateResult> {
+        let root = request
+            .root
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("/cwd/project"));
+        self.relocate_requests.push(request);
+        Ok(RelocateResult {
+            database: root.join(".ptrack/ptrack.redb"),
+            root,
+        })
     }
 
     fn snapshot(&mut self) -> AppResult<ProjectSnapshot> {
@@ -1190,4 +1205,28 @@ fn config_set_rejects_an_unknown_key() {
     );
     assert!(stdout.is_empty());
     assert!(stderr.is_empty());
+}
+
+#[test]
+fn relocate_routes_the_root_flag_and_prints_the_new_registration() {
+    let mut application = FakeApplication::default();
+    let (result, stdout, stderr) = invoke_with(
+        &mut application,
+        &["ptrack", "relocate", "--root", "/moved/project"],
+    );
+    assert_eq!(result.unwrap(), RunOutcome::ExitSuccess);
+    assert_eq!(stdout, "project re-registered at /moved/project\n");
+    assert!(stderr.is_empty());
+    assert_eq!(
+        application.relocate_requests,
+        [RelocateRequest {
+            root: Some(PathBuf::from("/moved/project")),
+        }]
+    );
+
+    let mut application = FakeApplication::default();
+    let (result, stdout, _) = invoke_with(&mut application, &["ptrack", "relocate"]);
+    assert_eq!(result.unwrap(), RunOutcome::ExitSuccess);
+    assert_eq!(stdout, "project re-registered at /cwd/project\n");
+    assert_eq!(application.relocate_requests, [RelocateRequest::default()]);
 }

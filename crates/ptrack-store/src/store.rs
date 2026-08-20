@@ -642,6 +642,58 @@ impl Store {
         self.ensure_current_path()
     }
 
+    /// Rewrites the recorded canonical path of an active store that was
+    /// physically moved on disk. Every other binding field is immutable here:
+    /// the recorded binding must equal `expected` exactly, the store must now
+    /// live somewhere other than `expected.canonical_path`, and the recorded
+    /// location must no longer hold a database — a copy is refused, only a
+    /// move is rebound.
+    pub(crate) fn rebind_canonical_path(
+        &self,
+        expected: &crate::ActiveBinding,
+    ) -> StoreResult<crate::ActiveBinding> {
+        self.ensure_current_path()?;
+        let current = fs::canonicalize(&self.path)?;
+        let rebound = crate::ActiveBinding {
+            canonical_path: current.clone(),
+            ..expected.clone()
+        };
+        crate::activation::validate_binding_for_path(&rebound, self.kind, &self.path)?;
+        if current == expected.canonical_path {
+            return Err(StoreError::ActivationBinding(
+                "store already lives at its recorded canonical path".to_owned(),
+            ));
+        }
+        if expected.canonical_path.exists() {
+            return Err(StoreError::ActivationBinding(
+                "recorded canonical path still exists; a copied store cannot be rebound".to_owned(),
+            ));
+        }
+        if self.active_binding()?.as_ref() != Some(expected) {
+            return Err(StoreError::ActivationBinding(
+                "stored binding does not match the expected relocation source".to_owned(),
+            ));
+        }
+        let mut transaction = self.shared.database.begin_write()?;
+        transaction.set_durability(Durability::Immediate)?;
+        transaction.set_quick_repair(true);
+        {
+            let mut manifest = transaction.open_table(MANIFEST_TABLE)?;
+            manifest.insert(
+                MANIFEST_KEY_CANONICAL_PATH,
+                rebound.canonical_path.as_os_str().as_encoded_bytes(),
+            )?;
+        }
+        transaction.commit()?;
+        if self.active_binding()?.as_ref() != Some(&rebound) {
+            return Err(StoreError::ActivationBinding(
+                "rebound binding did not persist".to_owned(),
+            ));
+        }
+        self.ensure_current_path()?;
+        Ok(rebound)
+    }
+
     pub(crate) fn with_writer_barrier<R>(
         &self,
         operation: impl FnOnce(&Path, &File) -> StoreResult<R>,

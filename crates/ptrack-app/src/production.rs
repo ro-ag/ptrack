@@ -46,9 +46,10 @@ use crate::{
     ProjectTargetKindV1, ProjectTargetValidationV1, RecentProjectAvailabilityV1,
     RecentProjectOpenAuthorizationV1, RecentProjectRegistryCommitV1, RecentProjectRegistryStatusV1,
     RecentProjectResolutionV1, RecentProjectV1, RecentProjectsProvider, RecentProjectsV1,
-    ResolvedRecentProjectV1, TerminalAgentAuthority, TerminalEventSink, TerminalIdentityAuthority,
-    TerminalRuntime, TerminalRuntimeConfig, UnavailableUpdateService, UpdateEventSink,
-    UpdateRuntime, UpdateState, WorkspaceBindings, WorkspaceProject,
+    RelocateRequest, RelocateResult, ResolvedRecentProjectV1, TerminalAgentAuthority,
+    TerminalEventSink, TerminalIdentityAuthority, TerminalRuntime, TerminalRuntimeConfig,
+    UnavailableUpdateService, UpdateEventSink, UpdateRuntime, UpdateState, WorkspaceBindings,
+    WorkspaceProject,
 };
 
 const RECOVERY_REQUIRED: &str = "runtime recovery is required";
@@ -420,9 +421,127 @@ impl RoutedApplication {
         self.active = ActiveRuntime::load(&home, &self.writer_version)?;
         Ok(true)
     }
+
+    /// Re-registers a project store whose folder was physically moved.
+    ///
+    /// Fail-closed on every mismatch: the healthy marker is the base, the
+    /// store's recorded binding must belong to the current generation with an
+    /// unused database ID, and the storage layer refuses a copied store. The
+    /// manifest rewrite lands before the marker install, so a crash between
+    /// the two resumes here: an already-rebound store at an unregistered root
+    /// skips straight to the marker publication.
+    fn relocate_project(&mut self, request: &RelocateRequest) -> AppResult<RelocateResult> {
+        self.active = None;
+        let home = fs::canonicalize(&self.global_home).map_err(recovery)?;
+        let lease = acquire_cutover_lock(&home, CutoverLockMode::Exclusive).map_err(recovery)?;
+        if path_is_present(&home.join("runtime").join(BOOTSTRAP_PLAN))? {
+            return Err(recovery(
+                "bootstrap recovery must complete before relocation",
+            ));
+        }
+        let marker = load_active_generation(&home, &lease)
+            .map_err(recovery)?
+            .ok_or_else(uninitialized)?;
+        let requested = request.root.as_deref().unwrap_or(&self.current_dir);
+        let root = fs::canonicalize(requested)?;
+        let root_text = root
+            .to_str()
+            .ok_or_else(|| recovery("project root is not valid UTF-8"))?
+            .to_owned();
+        if marker
+            .projects
+            .iter()
+            .any(|project| Path::new(&project.root) == root)
+        {
+            return Err(AppError::Message(
+                "project is already registered at this location".to_owned(),
+            ));
+        }
+        let database = root.join(".ptrack").join("ptrack.redb");
+        if !path_is_present(&database)? {
+            return Err(AppError::Message(
+                "no project store found at this location".to_owned(),
+            ));
+        }
+        let database_text = database
+            .to_str()
+            .ok_or_else(|| recovery("project database path is not valid UTF-8"))?
+            .to_owned();
+        let recorded = ProjectStore::peek_binding(&database)
+            .map_err(recovery)?
+            .ok_or_else(|| recovery("the project store is not activated"))?;
+        if recorded.kind != StoreKind::Project {
+            return Err(recovery("the store is not a project database"));
+        }
+        if recorded.generation != marker.generation_number().map_err(recovery)? {
+            return Err(recovery(
+                "the project store belongs to another runtime generation",
+            ));
+        }
+        if recorded.database_id == marker.global.database_id {
+            return Err(recovery(
+                "the store's database ID is already bound in the active runtime",
+            ));
+        }
+        // The store's own stale registration (same database ID, old root) and
+        // any project whose root vanished are dropped from the target marker,
+        // exactly as the startup self-heal would prune them; the install below
+        // revalidates every kept destination. A surviving entry with this
+        // database ID at a present root is a live twin and refuses relocation.
+        let mut projects: Vec<ActiveGenerationProject> = Vec::new();
+        let mut stale_root: Option<String> = None;
+        for project in &marker.projects {
+            if project.database_id == recorded.database_id {
+                if path_is_present(Path::new(&project.path))? {
+                    return Err(recovery(
+                        "a store with this database ID still exists at its registered location; a copied store cannot be relocated",
+                    ));
+                }
+                // The stale registration of this store's previous location.
+                stale_root = Some(project.root.clone());
+                continue;
+            }
+            if path_is_present(Path::new(&project.root))? {
+                projects.push(project.clone());
+            }
+        }
+        if recorded.canonical_path != database {
+            ProjectStore::rebind_moved(&database, &recorded).map_err(recovery)?;
+        }
+        projects.push(ActiveGenerationProject {
+            root: root_text,
+            database_id: recorded.database_id,
+            path: database_text,
+        });
+        projects.sort_by(|left, right| left.root.cmp(&right.root));
+        let target = ActiveGeneration {
+            projects,
+            ..marker.clone()
+        };
+        install_active_generation(&home, &lease, &target, &self.writer_version)
+            .map_err(recovery)?;
+        drop(lease);
+        self.active = ActiveRuntime::load(&home, &self.writer_version)?;
+        // Best-effort recents cleanup: move the registry row from the old
+        // root to the new one. A stale row is cosmetic, never fatal.
+        if let Some(stale_root) = stale_root
+            && let Some(runtime) = &self.active
+            && let Ok(bindings) = runtime.global_bindings(&root)
+            && let Ok(global) =
+                GlobalStore::open_existing(&bindings.global_database, &bindings.global_binding)
+            && let Ok(Some(expected)) = global.project(&stale_root)
+        {
+            let _ = global.relocate_project_if_matches(&expected, project_name(&root), &root);
+        }
+        Ok(RelocateResult { root, database })
+    }
 }
 
 impl ApplicationPort for RoutedApplication {
+    fn relocate(&mut self, request: RelocateRequest) -> AppResult<RelocateResult> {
+        self.relocate_project(&request)
+    }
+
     fn initialize(&mut self, request: InitRequest) -> AppResult<InitResult> {
         let initialized_root = fs::canonicalize(
             request
@@ -1535,10 +1654,17 @@ impl ProductionDesktopAuthority {
                 continue;
             }
             if path_is_present(&storage.join("ptrack.redb"))? {
-                return Ok(Self::recovery_validation(
-                    canonical_text,
-                    "an unregistered project store requires recovery",
-                ));
+                // A readable activated store at the selected root is the
+                // moved-project shape, which relocation can re-register.
+                let reason = if depth == 0
+                    && ProjectStore::peek_binding(storage.join("ptrack.redb"))
+                        .is_ok_and(|binding| binding.is_some())
+                {
+                    "an unregistered project store requires recovery; a moved project can be re-registered by running 'ptrack relocate' in the project folder"
+                } else {
+                    "an unregistered project store requires recovery"
+                };
+                return Ok(Self::recovery_validation(canonical_text, reason));
             }
             if let Ok(metadata) = fs::symlink_metadata(&storage) {
                 return Ok(Self::recovery_validation(

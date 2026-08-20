@@ -14,6 +14,7 @@ pub struct LeafSpec {
 
 pub const LEAVES: &[LeafSpec] = &[
     leaf(&["init"], ArgCount::None),
+    leaf(&["relocate"], ArgCount::None),
     leaf(&["goal", "show"], ArgCount::None),
     leaf(&["goal", "set"], ArgCount::Minimum(1)),
     leaf(&["summary", "show"], ArgCount::None),

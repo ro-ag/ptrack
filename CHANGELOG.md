@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `ptrack relocate` re-registers a project whose folder was physically moved
+  on disk (the current directory, or an explicit `--root`). The store keeps
+  its identity and full history; the command rewrites the store's recorded
+  canonical path, republishes the active-generation marker, and moves the
+  recents registry row to the new root. A copied store is refused — only a
+  genuine move is rebound — and mismatched generation, bound database IDs,
+  and foreign files all fail closed. The desktop recovery screen now names
+  the command when the unregistered store at the selected folder looks like
+  a moved project. Interrupted relocations resume safely: a store already
+  rebound to its new location but missing from the marker is picked up by
+  simply running `ptrack relocate` again.
+
 ## [0.29.0] - 2026-08-20
 
 ### Added

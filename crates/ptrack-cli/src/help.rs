@@ -146,6 +146,10 @@ const ROOT_CHILDREN: &[Child] = &[
     child("note", "Manage notes"),
     child("plan", "Manage plans"),
     child("projects", "List registered projects"),
+    child(
+        "relocate",
+        "Re-register a project whose folder was moved on disk",
+    ),
     child("search", "Search plan/task titles and note bodies"),
     child("status", "Print a short project overview"),
     child("summary", "Show or set the rolling context summary"),
@@ -929,6 +933,21 @@ fn root_leaf(name: &str) -> Spec {
         ),
         "status" => leaf_spec("status", "Print a short project overview", JSON_FLAGS),
         "projects" => leaf_spec("projects", "List registered projects", JSON_FLAGS),
+        "relocate" => leaf_spec(
+            "relocate",
+            concat!(
+                "Re-register a project whose folder was physically moved on disk (the\n",
+                "current directory, or an explicit --root). The store keeps its identity\n",
+                "and history; a copied store is refused, only a genuine move is rebound."
+            ),
+            &[
+                HELP_FLAG,
+                flag(
+                    "    --root string",
+                    "the moved project directory (default: cwd)",
+                ),
+            ],
+        ),
         "backup" => leaf_spec("backup", "Back up the current project database", HELP_ONLY),
         _ => leaf_spec("version", "Print the ptrack version", HELP_ONLY),
     }
