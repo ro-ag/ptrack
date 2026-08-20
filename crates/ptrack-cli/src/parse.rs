@@ -7,6 +7,7 @@ use crate::error::CliError;
 
 pub const ROOT_COMMANDS: &[&str] = &[
     "init",
+    "relocate",
     "goal",
     "summary",
     "milestone",
@@ -304,6 +305,7 @@ fn flag_names(path: &[String]) -> BTreeSet<(&'static str, bool)> {
             ("force", false),
             ("no-guide", false),
         ],
+        ["relocate"] => &[("root", true)],
         ["milestone", "add"] => &[("due", true)],
         ["milestone", "list" | "show"] => &[("json", false)],
         ["plan", "add"] => &[("milestone", true)],

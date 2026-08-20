@@ -2809,3 +2809,94 @@ fn import_remaps_subtree_deps_and_drops_targets_missing_from_the_destination() {
     assert_eq!(landed_t1.deps, vec![landed_t2.id]);
     assert!(landed_t2.deps.is_empty());
 }
+
+#[test]
+fn rebind_moved_reregisters_a_moved_store() {
+    let temp = Temp::new();
+    let old_dir = temp.path("old");
+    let new_dir = temp.path("new");
+    fs::create_dir(&old_dir).unwrap();
+    crate::protect_private_directory(&old_dir).unwrap();
+    let old_path = old_dir.join("store.redb");
+    let recorded = binding(&old_path, StoreKind::Project, "project-moved");
+    drop(ProjectStore::create_new_with_clock(&old_path, recorded.clone(), "w", clock()).unwrap());
+
+    fs::rename(&old_dir, &new_dir).unwrap();
+    let new_path = new_dir.join("store.redb");
+    assert_eq!(
+        ProjectStore::peek_binding(&new_path).unwrap().unwrap(),
+        recorded
+    );
+    assert!(ProjectStore::open_existing(&new_path, &recorded, "w").is_err());
+
+    let rebound = ProjectStore::rebind_moved(&new_path, &recorded).unwrap();
+    assert_eq!(rebound.canonical_path, new_path.canonicalize().unwrap());
+    assert_eq!(rebound.database_id, recorded.database_id);
+    assert_eq!(rebound.generation, recorded.generation);
+    assert_eq!(
+        ProjectStore::peek_binding(&new_path).unwrap().unwrap(),
+        rebound
+    );
+    drop(ProjectStore::open_existing(&new_path, &rebound, "w").unwrap());
+}
+
+#[test]
+fn rebind_moved_refuses_a_copied_store() {
+    let temp = Temp::new();
+    let old_dir = temp.path("old");
+    let new_dir = temp.path("new");
+    fs::create_dir(&old_dir).unwrap();
+    fs::create_dir(&new_dir).unwrap();
+    crate::protect_private_directory(&old_dir).unwrap();
+    crate::protect_private_directory(&new_dir).unwrap();
+    let old_path = old_dir.join("store.redb");
+    let recorded = binding(&old_path, StoreKind::Project, "project-copied");
+    drop(ProjectStore::create_new_with_clock(&old_path, recorded.clone(), "w", clock()).unwrap());
+
+    let new_path = new_dir.join("store.redb");
+    fs::copy(&old_path, &new_path).unwrap();
+    let error = ProjectStore::rebind_moved(&new_path, &recorded).unwrap_err();
+    assert!(error.to_string().contains("copied store"), "{error}");
+    // The original is untouched and still opens under its recorded binding.
+    drop(ProjectStore::open_existing(&old_path, &recorded, "w").unwrap());
+}
+
+#[test]
+fn rebind_moved_refuses_a_store_already_at_its_recorded_path() {
+    let temp = Temp::new();
+    let path = temp.path("inplace.redb");
+    let recorded = binding(&path, StoreKind::Project, "project-inplace");
+    drop(ProjectStore::create_new_with_clock(&path, recorded.clone(), "w", clock()).unwrap());
+    let error = ProjectStore::rebind_moved(&path, &recorded).unwrap_err();
+    assert!(error.to_string().contains("already lives"), "{error}");
+}
+
+#[test]
+fn rebind_moved_refuses_a_binding_mismatch() {
+    let temp = Temp::new();
+    let old_dir = temp.path("old");
+    let new_dir = temp.path("new");
+    fs::create_dir(&old_dir).unwrap();
+    crate::protect_private_directory(&old_dir).unwrap();
+    let old_path = old_dir.join("store.redb");
+    let recorded = binding(&old_path, StoreKind::Project, "project-mismatch");
+    drop(ProjectStore::create_new_with_clock(&old_path, recorded.clone(), "w", clock()).unwrap());
+    fs::rename(&old_dir, &new_dir).unwrap();
+    let new_path = new_dir.join("store.redb");
+
+    let wrong_id = ActiveBinding {
+        database_id: "project-other".to_owned(),
+        ..recorded.clone()
+    };
+    assert!(ProjectStore::rebind_moved(&new_path, &wrong_id).is_err());
+    let wrong_generation = ActiveBinding {
+        generation: recorded.generation + 1,
+        ..recorded.clone()
+    };
+    assert!(ProjectStore::rebind_moved(&new_path, &wrong_generation).is_err());
+    let wrong_kind = ActiveBinding {
+        kind: StoreKind::Global,
+        ..recorded
+    };
+    assert!(ProjectStore::rebind_moved(&new_path, &wrong_kind).is_err());
+}

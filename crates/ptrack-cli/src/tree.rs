@@ -28,6 +28,7 @@ pub fn root() -> Command {
             flag("force"),
             flag("no-guide"),
         ]))
+        .subcommand(leaf("relocate").arg(option("root")))
         .subcommand(
             group("goal", &["show", "set"])
                 .mut_subcommand("set", |c| c.arg(positional("text", 1..))),

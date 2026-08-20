@@ -20,8 +20,8 @@ use crate::{
     ProductionDesktopWorkspaceFactory, ProductionRecentProjects, ProjectGuideChoiceV1,
     ProjectGuideFileActionV1, ProjectGuidePreviewRequestV1, ProjectTargetKindV1,
     RecentProjectAvailabilityV1, RecentProjectResolutionV1, RecentProjectsProvider,
-    RoutedApplication, StartupProjectV1, UnavailableUpdateService, WorkspaceStatus,
-    production_desktop_runtime, resolved_startup_project, startup_project,
+    RelocateRequest, RoutedApplication, StartupProjectV1, UnavailableUpdateService,
+    WorkspaceStatus, production_desktop_runtime, resolved_startup_project, startup_project,
 };
 
 static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -3461,4 +3461,276 @@ fn load_does_not_rewrite_a_marker_whose_roots_all_exist() {
         .filter(|entry| entry.file_name().to_string_lossy().contains(".pruned-"))
         .count();
     assert_eq!(backups, 0);
+}
+
+fn init_relocatable_project(home: &Path, project: &Path, goal: &str) {
+    fs::create_dir_all(project).unwrap();
+    let mut application = RoutedApplication::new(home.to_path_buf(), project.to_path_buf(), "test");
+    application
+        .initialize(InitRequest {
+            root: Some(project.to_path_buf()),
+            goal: goal.to_owned(),
+            force: false,
+            no_guide: true,
+        })
+        .unwrap();
+}
+
+#[test]
+fn routed_relocate_reregisters_a_moved_project() {
+    let temp = Temp::new();
+    let home = temp.0.join("home");
+    let old_root = temp.0.join("old-project");
+    let new_root = temp.0.join("new-project");
+    fs::create_dir(&home).unwrap();
+    private_directory(&home);
+    init_relocatable_project(&home, &old_root, "survive the move");
+
+    fs::rename(&old_root, &new_root).unwrap();
+    let mut application = RoutedApplication::new(home.clone(), new_root.clone(), "test");
+    let result = application
+        .relocate(RelocateRequest { root: None })
+        .unwrap();
+    assert_eq!(result.root, new_root);
+    assert_eq!(
+        application.snapshot().unwrap().meta.goal,
+        "survive the move"
+    );
+
+    let runtime = application.active_runtime().unwrap().unwrap();
+    let bound = runtime.bindings_for(&new_root).unwrap().project.unwrap();
+    assert_eq!(bound.root, new_root);
+    assert!(
+        !runtime
+            .marker()
+            .projects
+            .iter()
+            .any(|project| Path::new(&project.root) == old_root)
+    );
+
+    // The recents registry row moved with the project.
+    let bindings = runtime.global_bindings(&new_root).unwrap();
+    let global =
+        GlobalStore::open_existing(&bindings.global_database, &bindings.global_binding).unwrap();
+    assert!(global.project(&old_root).unwrap().is_none());
+    assert!(global.project(&new_root).unwrap().is_some());
+    drop(global);
+
+    // A fresh process reopens the relocated project with no special handling.
+    let mut reopened = RoutedApplication::new(home, new_root, "test");
+    assert_eq!(reopened.snapshot().unwrap().meta.goal, "survive the move");
+}
+
+#[test]
+fn routed_relocate_refuses_a_copied_project() {
+    let temp = Temp::new();
+    let home = temp.0.join("home");
+    let old_root = temp.0.join("old-project");
+    let copy_root = temp.0.join("copy-project");
+    fs::create_dir(&home).unwrap();
+    private_directory(&home);
+    init_relocatable_project(&home, &old_root, "original");
+
+    fs::create_dir_all(copy_root.join(".ptrack")).unwrap();
+    private_directory(&copy_root.join(".ptrack"));
+    fs::copy(
+        old_root.join(".ptrack/ptrack.redb"),
+        copy_root.join(".ptrack/ptrack.redb"),
+    )
+    .unwrap();
+    private_file(&copy_root.join(".ptrack/ptrack.redb"));
+
+    let mut application = RoutedApplication::new(home, copy_root, "test");
+    let error = application
+        .relocate(RelocateRequest { root: None })
+        .unwrap_err();
+    assert!(error.to_string().contains("copied"), "{error}");
+    // The original registration is untouched.
+    let runtime = application.active_runtime().unwrap().unwrap();
+    assert!(
+        runtime
+            .marker()
+            .projects
+            .iter()
+            .any(|project| Path::new(&project.root) == old_root)
+    );
+}
+
+#[test]
+fn routed_relocate_refuses_a_registered_root_and_a_missing_store() {
+    let temp = Temp::new();
+    let home = temp.0.join("home");
+    let project = temp.0.join("project");
+    let empty = temp.0.join("empty");
+    fs::create_dir(&home).unwrap();
+    fs::create_dir(&empty).unwrap();
+    private_directory(&home);
+    init_relocatable_project(&home, &project, "stay put");
+
+    let mut at_registered = RoutedApplication::new(home.clone(), project, "test");
+    let error = at_registered
+        .relocate(RelocateRequest { root: None })
+        .unwrap_err();
+    assert!(error.to_string().contains("already registered"), "{error}");
+
+    let mut at_empty = RoutedApplication::new(home, empty, "test");
+    let error = at_empty
+        .relocate(RelocateRequest { root: None })
+        .unwrap_err();
+    assert!(error.to_string().contains("no project store"), "{error}");
+}
+
+#[test]
+fn routed_relocate_resumes_after_a_crash_between_rebind_and_marker_install() {
+    let temp = Temp::new();
+    let home = temp.0.join("home");
+    let old_root = temp.0.join("old-project");
+    let new_root = temp.0.join("new-project");
+    fs::create_dir(&home).unwrap();
+    private_directory(&home);
+    init_relocatable_project(&home, &old_root, "resume me");
+    fs::rename(&old_root, &new_root).unwrap();
+
+    // The crash left the store rebound to its new location while the marker
+    // still carries the stale old registration.
+    let database = new_root.join(".ptrack/ptrack.redb");
+    let recorded = ProjectStore::peek_binding(&database).unwrap().unwrap();
+    ProjectStore::rebind_moved(&database, &recorded).unwrap();
+
+    let mut application = RoutedApplication::new(home, new_root.clone(), "test");
+    let result = application
+        .relocate(RelocateRequest { root: None })
+        .unwrap();
+    assert_eq!(result.root, new_root);
+    assert_eq!(application.snapshot().unwrap().meta.goal, "resume me");
+}
+
+#[test]
+fn validate_target_hints_relocation_for_a_moved_store() {
+    let temp = Temp::new();
+    let home = temp.0.join("home");
+    let old_root = temp.0.join("old-project");
+    let new_root = temp.0.join("new-project");
+    fs::create_dir(&home).unwrap();
+    private_directory(&home);
+    init_relocatable_project(&home, &old_root, "hint me");
+    fs::rename(&old_root, &new_root).unwrap();
+
+    // Loading after the move exercises the startup self-heal prune, then the
+    // validation walk finds the moved, still-activated store.
+    let authority = ProductionDesktopAuthority::load(home, "test", None, None, 0).unwrap();
+    let validation = authority.validate_target(&new_root).unwrap();
+    assert_eq!(validation.kind, ProjectTargetKindV1::RecoveryRequired);
+    assert!(
+        validation.reason.contains("ptrack relocate"),
+        "{}",
+        validation.reason
+    );
+}
+
+#[test]
+fn routed_relocate_refuses_a_root_nested_inside_another_project() {
+    let temp = Temp::new();
+    let home = temp.0.join("home");
+    let outer = temp.0.join("outer");
+    let moved = temp.0.join("moved");
+    fs::create_dir(&home).unwrap();
+    private_directory(&home);
+    init_relocatable_project(&home, &outer, "outer");
+    init_relocatable_project(&home, &moved, "moved");
+
+    let nested = outer.join("vendor/moved");
+    fs::create_dir_all(outer.join("vendor")).unwrap();
+    fs::rename(&moved, &nested).unwrap();
+    let mut application = RoutedApplication::new(home, nested, "test");
+    let error = application
+        .relocate(RelocateRequest { root: None })
+        .unwrap_err();
+    assert!(error.to_string().contains("nested inside"), "{error}");
+}
+
+#[test]
+fn routed_relocate_backs_up_the_marker_before_dropping_a_vanished_project() {
+    let temp = Temp::new();
+    let home = temp.0.join("home");
+    let moved_old = temp.0.join("moved-old");
+    let moved_new = temp.0.join("moved-new");
+    let vanished = temp.0.join("vanished");
+    fs::create_dir(&home).unwrap();
+    private_directory(&home);
+    init_relocatable_project(&home, &moved_old, "moved");
+    init_relocatable_project(&home, &vanished, "vanished");
+
+    fs::rename(&moved_old, &moved_new).unwrap();
+    fs::remove_dir_all(&vanished).unwrap();
+    let mut application = RoutedApplication::new(home.clone(), moved_new, "test");
+    application
+        .relocate(RelocateRequest { root: None })
+        .unwrap();
+    let backups = fs::read_dir(home.join("runtime"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("active-generation.json.pruned-")
+        })
+        .count();
+    assert_eq!(backups, 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn routed_relocate_refuses_symlinked_project_storage() {
+    use std::os::unix::fs::symlink;
+
+    let temp = Temp::new();
+    let home = temp.0.join("home");
+    let donor = temp.0.join("donor");
+    let moved = temp.0.join("moved");
+    fs::create_dir(&home).unwrap();
+    fs::create_dir(&moved).unwrap();
+    private_directory(&home);
+    init_relocatable_project(&home, &donor, "donor");
+    let hidden = temp.0.join("hidden-storage");
+    fs::rename(donor.join(".ptrack"), &hidden).unwrap();
+    fs::remove_dir_all(&donor).unwrap();
+    symlink(&hidden, moved.join(".ptrack")).unwrap();
+
+    let mut application = RoutedApplication::new(home, moved, "test");
+    let error = application
+        .relocate(RelocateRequest { root: None })
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("project storage is unsafe"),
+        "{error}"
+    );
+}
+
+#[test]
+fn routed_relocate_moves_the_recents_row_even_after_the_marker_was_pruned() {
+    let temp = Temp::new();
+    let home = temp.0.join("home");
+    let old_root = temp.0.join("old-project");
+    let new_root = temp.0.join("new-project");
+    fs::create_dir(&home).unwrap();
+    private_directory(&home);
+    init_relocatable_project(&home, &old_root, "pruned first");
+    fs::rename(&old_root, &new_root).unwrap();
+
+    // A startup between the move and the relocate prunes the stale marker
+    // entry, so the old root survives only in the store's own manifest.
+    assert!(ActiveRuntime::load(&home, "test").unwrap().is_some());
+
+    let mut application = RoutedApplication::new(home, new_root.clone(), "test");
+    application
+        .relocate(RelocateRequest { root: None })
+        .unwrap();
+    let runtime = application.active_runtime().unwrap().unwrap();
+    let bindings = runtime.global_bindings(&new_root).unwrap();
+    let global =
+        GlobalStore::open_existing(&bindings.global_database, &bindings.global_binding).unwrap();
+    assert!(global.project(&old_root).unwrap().is_none());
+    assert!(global.project(&new_root).unwrap().is_some());
 }

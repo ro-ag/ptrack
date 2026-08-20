@@ -134,6 +134,18 @@ pub struct InitResult {
     pub guide_files: Vec<PathBuf>,
 }
 
+/// Re-registers a project store whose folder was physically moved on disk.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RelocateRequest {
+    /// The moved project root; the current directory when absent.
+    pub root: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RelocateResult {
+    pub root: PathBuf,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Mutation {
     SetGoal(String),
@@ -345,6 +357,14 @@ pub type CapabilityCancellation = McpCancellation;
 #[allow(clippy::missing_errors_doc)]
 pub trait ApplicationPort {
     fn initialize(&mut self, request: InitRequest) -> AppResult<InitResult>;
+    /// Re-registers a moved project store. Only the marker-owning routed
+    /// application can do this; everywhere else the default refusal applies.
+    fn relocate(&mut self, request: RelocateRequest) -> AppResult<RelocateResult> {
+        let _ = request;
+        Err(AppError::Message(
+            "project relocation is unavailable in this context".to_owned(),
+        ))
+    }
     fn snapshot(&mut self) -> AppResult<ProjectSnapshot>;
     fn mutate(&mut self, mutation: Mutation) -> AppResult<MutationResult>;
     fn plan_lifecycle(&mut self, request: PlanLifecycleRequest) -> AppResult<PlanLifecycleOutcome>;

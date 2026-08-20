@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use clap::ArgMatches;
 use ptrack_app::{
     ApplicationPort, GuideAction, HookAction, HookResult, InitRequest, Mutation, MutationResult,
-    PlanLifecycleOutcome, PlanLifecycleRequest,
+    PlanLifecycleOutcome, PlanLifecycleRequest, RelocateRequest,
 };
 use ptrack_core::{
     IssueStatus, LEGACY_ACTOR, MilestoneStatus, NoteTarget, PlanStatus, Severity, TaskStatus,
@@ -104,6 +104,7 @@ fn dispatch(
         .as_slice()
     {
         ["init"] => init(leaf, application, io),
+        ["relocate"] => relocate(leaf, application, io),
         ["goal", "show"] => show_meta(false, application, io),
         ["goal", "set"] => set_meta(false, leaf, application),
         ["summary", "show"] => show_meta(true, application, io),
@@ -174,6 +175,21 @@ fn init(
     if !no_guide {
         write_guide_result(io, &result.guide_files)?;
     }
+    Ok(RunOutcome::ExitSuccess)
+}
+
+fn relocate(
+    matches: &ArgMatches,
+    application: &mut dyn ApplicationPort,
+    io: &mut Io<'_>,
+) -> Result<RunOutcome, CliError> {
+    let result = application.relocate(RelocateRequest {
+        root: option(matches, "root").map(PathBuf::from),
+    })?;
+    output::line(
+        io.stdout,
+        format_args!("project re-registered at {}", result.root.display()),
+    )?;
     Ok(RunOutcome::ExitSuccess)
 }
 

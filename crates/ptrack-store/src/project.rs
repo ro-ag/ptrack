@@ -250,6 +250,30 @@ impl ProjectStore {
         )
     }
 
+    /// Reads the binding recorded inside a project database without demanding
+    /// that the database still lives at its recorded canonical path. Every
+    /// other fail-closed probe (family, owner, kind, schema) still applies.
+    ///
+    /// # Errors
+    /// Returns an error when the file is not a valid project database.
+    pub fn peek_binding(path: impl AsRef<Path>) -> StoreResult<Option<ActiveBinding>> {
+        Store::open_existing(path, StoreKind::Project)?.active_binding()
+    }
+
+    /// Rebinds a project database that was physically moved on disk to its
+    /// current location. The recorded binding must equal `expected` exactly,
+    /// and the recorded location must no longer exist — a copy is refused.
+    /// Returns the rebound binding with the updated canonical path.
+    ///
+    /// # Errors
+    /// Returns an error when the store is not a moved twin of `expected`.
+    pub fn rebind_moved(
+        path: impl AsRef<Path>,
+        expected: &ActiveBinding,
+    ) -> StoreResult<ActiveBinding> {
+        Store::open_existing(path, StoreKind::Project)?.rebind_canonical_path(expected)
+    }
+
     pub fn from_activated(
         active: ActivatedStore,
         writer_version: impl Into<String>,

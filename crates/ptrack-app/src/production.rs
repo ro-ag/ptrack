@@ -46,9 +46,10 @@ use crate::{
     ProjectTargetKindV1, ProjectTargetValidationV1, RecentProjectAvailabilityV1,
     RecentProjectOpenAuthorizationV1, RecentProjectRegistryCommitV1, RecentProjectRegistryStatusV1,
     RecentProjectResolutionV1, RecentProjectV1, RecentProjectsProvider, RecentProjectsV1,
-    ResolvedRecentProjectV1, TerminalAgentAuthority, TerminalEventSink, TerminalIdentityAuthority,
-    TerminalRuntime, TerminalRuntimeConfig, UnavailableUpdateService, UpdateEventSink,
-    UpdateRuntime, UpdateState, WorkspaceBindings, WorkspaceProject,
+    RelocateRequest, RelocateResult, ResolvedRecentProjectV1, TerminalAgentAuthority,
+    TerminalEventSink, TerminalIdentityAuthority, TerminalRuntime, TerminalRuntimeConfig,
+    UnavailableUpdateService, UpdateEventSink, UpdateRuntime, UpdateState, WorkspaceBindings,
+    WorkspaceProject,
 };
 
 const RECOVERY_REQUIRED: &str = "runtime recovery is required";
@@ -420,9 +421,130 @@ impl RoutedApplication {
         self.active = ActiveRuntime::load(&home, &self.writer_version)?;
         Ok(true)
     }
+
+    /// Re-registers a project store whose folder was physically moved.
+    ///
+    /// Fail-closed on every mismatch: the healthy marker is the base, the
+    /// store's recorded binding must belong to the current generation with an
+    /// unused database ID, and the storage layer refuses a copied store. The
+    /// manifest rewrite lands before the marker install, so a crash between
+    /// the two resumes here: an already-rebound store at an unregistered root
+    /// skips straight to the marker publication.
+    fn relocate_project(&mut self, request: &RelocateRequest) -> AppResult<RelocateResult> {
+        self.active = None;
+        let home = fs::canonicalize(&self.global_home).map_err(recovery)?;
+        let lease = match acquire_cutover_lock(&home, CutoverLockMode::Exclusive) {
+            Ok(lease) => lease,
+            Err(error) if error.to_string().contains("cutover lock is unavailable") => {
+                return Err(AppError::Message(
+                    "another p-track process is running; quit it and run 'ptrack relocate' again"
+                        .to_owned(),
+                ));
+            }
+            Err(error) => return Err(recovery(error)),
+        };
+        if path_is_present(&home.join("runtime").join(BOOTSTRAP_PLAN))? {
+            return Err(recovery(
+                "bootstrap recovery must complete before relocation",
+            ));
+        }
+        let marker = load_active_generation(&home, &lease)
+            .map_err(recovery)?
+            .ok_or_else(uninitialized)?;
+        let requested = request.root.as_deref().unwrap_or(&self.current_dir);
+        let root = fs::canonicalize(requested)?;
+        let root_text = root
+            .to_str()
+            .ok_or_else(|| recovery("project root is not valid UTF-8"))?
+            .to_owned();
+        if marker
+            .projects
+            .iter()
+            .any(|project| Path::new(&project.root) == root)
+        {
+            return Err(AppError::Message(
+                "project is already registered at this location".to_owned(),
+            ));
+        }
+        require_relocation_target(&root, &home)?;
+        let database = root.join(".ptrack").join("ptrack.redb");
+        if !path_is_present(&database)? {
+            return Err(AppError::Message(
+                "no project store found at this location".to_owned(),
+            ));
+        }
+        // A symlinked `.ptrack` (or database file) would make the rebound
+        // manifest record the resolved path while the marker records the
+        // literal one, wedging the store between the two. Refuse up front.
+        if fs::canonicalize(&database)? != database {
+            return Err(recovery("project storage is unsafe"));
+        }
+        let database_text = database
+            .to_str()
+            .ok_or_else(|| recovery("project database path is not valid UTF-8"))?
+            .to_owned();
+        let recorded = ProjectStore::peek_binding(&database)
+            .map_err(recovery)?
+            .ok_or_else(|| recovery("the project store is not activated"))?;
+        if recorded.generation != marker.generation_number().map_err(recovery)? {
+            return Err(recovery(
+                "the project store belongs to another runtime generation",
+            ));
+        }
+        if recorded.database_id == marker.global.database_id {
+            return Err(recovery(
+                "the store's database ID is already bound in the active runtime",
+            ));
+        }
+        let (mut projects, dropped_other) = relocation_marker_projects(&marker, &recorded)?;
+        if dropped_other {
+            // Match the startup self-heal: never publish a marker that drops
+            // an unrelated project without a recoverable backup.
+            backup_marker(&home)?;
+        }
+        // Where the store lived before this run's rebind — the authoritative
+        // old root for the recents cleanup, surviving marker pruning.
+        let previous_root = (recorded.canonical_path != database)
+            .then(|| recorded.canonical_path.parent().and_then(Path::parent))
+            .flatten()
+            .map(Path::to_path_buf);
+        if recorded.canonical_path != database {
+            ProjectStore::rebind_moved(&database, &recorded).map_err(recovery)?;
+        }
+        projects.push(ActiveGenerationProject {
+            root: root_text,
+            database_id: recorded.database_id,
+            path: database_text,
+        });
+        projects.sort_by(|left, right| left.root.cmp(&right.root));
+        let target = ActiveGeneration {
+            projects,
+            ..marker.clone()
+        };
+        install_active_generation(&home, &lease, &target, &self.writer_version)
+            .map_err(recovery)?;
+        drop(lease);
+        self.active = ActiveRuntime::load(&home, &self.writer_version)?;
+        // Best-effort recents cleanup: move the registry row from the old
+        // root to the new one. A stale row is cosmetic, never fatal.
+        if let Some(previous_root) = previous_root
+            && let Some(runtime) = &self.active
+            && let Ok(bindings) = runtime.global_bindings(&root)
+            && let Ok(global) =
+                GlobalStore::open_existing(&bindings.global_database, &bindings.global_binding)
+            && let Ok(Some(expected)) = global.project(&previous_root)
+        {
+            let _ = global.relocate_project_if_matches(&expected, project_name(&root), &root);
+        }
+        Ok(RelocateResult { root })
+    }
 }
 
 impl ApplicationPort for RoutedApplication {
+    fn relocate(&mut self, request: RelocateRequest) -> AppResult<RelocateResult> {
+        self.relocate_project(&request)
+    }
+
     fn initialize(&mut self, request: InitRequest) -> AppResult<InitResult> {
         let initialized_root = fs::canonicalize(
             request
@@ -1535,10 +1657,16 @@ impl ProductionDesktopAuthority {
                 continue;
             }
             if path_is_present(&storage.join("ptrack.redb"))? {
-                return Ok(Self::recovery_validation(
-                    canonical_text,
-                    "an unregistered project store requires recovery",
-                ));
+                // A store at the selected root itself is the moved-project
+                // shape. The hint never opens the file: relocation fail-closes
+                // on anything that is not a genuinely moved store, and this
+                // walk must stay a read-only classification.
+                let reason = if depth == 0 {
+                    "an unregistered project store requires recovery; a moved project can be re-registered by quitting p-track and running 'ptrack relocate' in the project folder"
+                } else {
+                    "an unregistered project store requires recovery"
+                };
+                return Ok(Self::recovery_validation(canonical_text, reason));
             }
             if let Ok(metadata) = fs::symlink_metadata(&storage) {
                 return Ok(Self::recovery_validation(
@@ -2972,6 +3100,60 @@ fn path_is_present(path: &Path) -> AppResult<bool> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error.into()),
     }
+}
+
+/// The same target guards initialization enforces, applied to a relocation
+/// root: never the p-track or user home, and never a root nested inside
+/// another project's storage tree (which would make deepest-ancestor binding
+/// resolution reroute commands under this subtree).
+fn require_relocation_target(root: &Path, home: &Path) -> AppResult<()> {
+    let global_homes = global_home_exemptions(home);
+    if let Some(refusal) = home_project_refusal(root, &global_homes) {
+        return Err(AppError::Message(refusal.to_owned()));
+    }
+    for ancestor in root.ancestors().skip(1) {
+        let storage = ancestor.join(".ptrack");
+        if is_global_home(&storage, &global_homes) {
+            continue;
+        }
+        if path_is_present(&storage)? {
+            return Err(AppError::Message(
+                "cannot relocate into a folder nested inside another project".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Splits a marker for a relocation: keeps live projects, drops the moved
+/// store's stale registration and any project whose root vanished — exactly
+/// as the startup self-heal would prune them; the marker install revalidates
+/// every kept destination. A store still present at its registered location
+/// is a copy, not a move, and refuses relocation. Returns the kept entries
+/// and whether an unrelated project was dropped.
+fn relocation_marker_projects(
+    marker: &ActiveGeneration,
+    recorded: &ActiveBinding,
+) -> AppResult<(Vec<ActiveGenerationProject>, bool)> {
+    let mut projects: Vec<ActiveGenerationProject> = Vec::new();
+    let mut dropped_other = false;
+    for project in &marker.projects {
+        if project.database_id == recorded.database_id {
+            if path_is_present(Path::new(&project.path))? {
+                return Err(recovery(
+                    "a store with this database ID still exists at its registered location; a copied store cannot be relocated",
+                ));
+            }
+            // The stale registration of this store's previous location.
+            continue;
+        }
+        if path_is_present(Path::new(&project.root))? {
+            projects.push(project.clone());
+        } else {
+            dropped_other = true;
+        }
+    }
+    Ok((projects, dropped_other))
 }
 
 fn require_new_project_storage_absent(root: &Path, global_home: &Path) -> AppResult<()> {
