@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-08-20
+
 ### Added
 - `ptrack relocate` re-registers a project whose folder was physically moved
   on disk (the current directory, or an explicit `--root`). The store keeps
@@ -770,6 +772,7 @@ Initial release.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
 [Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.29.0...HEAD
+[0.30.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.30.0
 [0.29.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.29.0
 [0.28.1]: https://github.com/ro-ag/ptrack/releases/tag/v0.28.1
 [0.28.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.28.0
