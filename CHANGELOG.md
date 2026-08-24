@@ -6,6 +6,35 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-08-24
+
+### Added
+- Goal anchoring and integration gates for the agent workflow. `ptrack next`
+  and `ptrack task show` lead with the project goal so every decision point
+  re-anchors to the north star. `ptrack task done <id>` now requires
+  `--summary "what changed, where it is wired in, what remains"` and at least
+  one linked commit (`#<id>` in the commit message, or `ptrack commit
+  record`); the summary is stored as a closeout note and the linked-commit
+  count is printed. One task in progress at a time: `task start`, `task add`,
+  and `plan add` are refused while a started task is unfinished — park it
+  with `task hold`/`task block` instead (identity-scoped, so another agent's
+  in-progress work never blocks you). `ptrack plan add` appends a final
+  "Integrate and verify against goal" task (`--no-verify-task` skips it),
+  and `ptrack plan done` refuses while tasks are open, printing a
+  re-evaluation CHECKPOINT block (goal, rolling summary, remaining open
+  plans, open issues, milestone progress) on success. The new
+  `ptrack checkpoint [--json]` command prints the same block on demand.
+  Every gate accepts `--force`, recorded as an override note in the audit
+  trail. The managed agent guide, README, and Help Center teach the gated
+  workflow.
+- Desktop Overview repository statistics: tracked-file and line-of-code
+  tiles, fetched lazily from git when the Overview opens.
+
+### Fixed
+- The Desktop Overview page no longer changes with the selected plan: the
+  stats grid and progress ring now render project-wide totals (tasks, plans,
+  milestones), while per-plan numbers stay on the board header.
+
 ## [0.30.0] - 2026-08-20
 
 ### Added
@@ -771,7 +800,8 @@ Initial release.
   plans, tasks, goal, summary, and notes.
 - `go install` support and cross-platform release binaries via GoReleaser.
 
-[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.29.0...HEAD
+[Unreleased]: https://github.com/ro-ag/ptrack/compare/v0.31.0...HEAD
+[0.31.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.31.0
 [0.30.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.30.0
 [0.29.0]: https://github.com/ro-ag/ptrack/releases/tag/v0.29.0
 [0.28.1]: https://github.com/ro-ag/ptrack/releases/tag/v0.28.1
