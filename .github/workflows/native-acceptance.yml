@@ -52,6 +52,12 @@ concurrency:
 
 jobs:
   portable:
+    # Release commits are validated by the release workflow on the same tree;
+    # skipping here prevents the duplicate pipeline racing the tag build.
+    # Skipping portable transitively skips the native jobs that need it.
+    if: >-
+      github.event_name != 'push' ||
+      !startsWith(github.event.head_commit.message, 'chore(release)')
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -64,12 +70,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Cache Rust dependencies
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: portable-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+        uses: Swatinem/rust-cache@v2
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -136,12 +137,7 @@ jobs:
         uses: dtolnay/rust-toolchain@1.89.0
 
       - name: Cache Rust dependencies
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: native-${{ matrix.rust_target }}-${{ hashFiles('Cargo.lock') }}
+        uses: Swatinem/rust-cache@v2
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -244,10 +240,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-15-intel
-            rust_target: x86_64-apple-darwin
-            archive_os: darwin
-            arch: amd64
           - runner: macos-15
             rust_target: aarch64-apple-darwin
             archive_os: darwin
@@ -261,12 +253,7 @@ jobs:
         uses: dtolnay/rust-toolchain@1.89.0
 
       - name: Cache Rust dependencies
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: native-${{ matrix.rust_target }}-${{ hashFiles('Cargo.lock') }}
+        uses: Swatinem/rust-cache@v2
 
       - name: Set up Node
         uses: actions/setup-node@v6

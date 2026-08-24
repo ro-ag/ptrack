@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 """Generate the p-track brand icon set and README banner.
 
-Brand concept: a dark terminal-style squircle holding three kanban columns
-(todo / doing / done) in the brand palette, finished with a check on the done
-column and a faint track rail underneath. Everything is code-drawn so the
-assets are deterministic, crisp at every size, and reproducible.
+Brand concept: a dark squircle holding three kanban columns (todo / doing /
+done) in the brand palette, with a hand-drawn check mark carved through the
+columns as negative space — progress, checked off. Below 48 px the carving
+cannot survive, so small frames simplify to the three-bar silhouette alone,
+pixel-snapped for crisp taskbar and favicon rendering. Everything is
+code-drawn so the assets are deterministic, crisp at every size, and
+reproducible.
 
 Outputs (relative to the repository root):
-  build/appicon.png                 1024x1024 master icon used by Wails
+  build/appicon.png                 1024x1024 master icon
   assets/brand/icon-{16..512}.png   standalone PNG exports
   assets/brand/AppIcon.icns         macOS icon bundle (via iconutil)
-  src-tauri/icons/icon.ico          Windows application resource
+  src-tauri/icons/icon.ico          Windows application resource (per-size frames)
   assets/brand/banner.png           1280x400 README banner
   assets/brand/social.png           1280x640 social/Open Graph card
 
-Requires: Pillow + numpy (Kimi Work managed Python). macOS for iconutil.
+Requires: Pillow + numpy. macOS for iconutil.
 Run from anywhere:  python3 assets/brand/generate_icons.py
 """
 
@@ -27,7 +30,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parents[2]
 BRAND = ROOT / "assets" / "brand"
@@ -36,14 +39,33 @@ WINDOWS_ICON = ROOT / "src-tauri" / "icons" / "icon.ico"
 
 # --- brand palette (matches the README badge colors) -----------------------
 INK_TOP = (14, 18, 34)       # deep navy, top of the squircle gradient
-INK_BOTTOM = (22, 30, 58)    # slightly lifted navy at the bottom
+INK_BOTTOM = (38, 50, 94)    # lifted navy at the bottom (perceptible sweep)
 BLUE = (95, 175, 255)        # #5FAFFF  doing
 GREEN = (61, 214, 163)       # #3DD6A3  done
 LAVENDER = (175, 168, 255)   # #AFA8FF  todo
 WHITE = (245, 248, 255)
-RAIL = (140, 155, 200)
 
 SUPER = 4  # supersampling factor for anti-aliasing
+
+# Hand-drawn check mark (flattened from a potrace vector), carved through the
+# columns as negative space. x,y pairs on a 1000-wide grid, aspect 0.929.
+CHECK_GLYPH = (
+    "981,7,949,26,917,46,884,69,851,92,817,118,784,144,750,171,717,200,690,224,"
+    "663,248,636,274,609,301,581,328,554,356,528,385,501,414,483,434,464,455,"
+    "446,477,427,499,408,521,390,544,372,567,354,590,347,599,338,611,328,624,"
+    "317,638,306,653,297,666,288,677,282,686,280,689,278,692,276,694,274,696,"
+    "273,698,272,699,271,699,271,700,268,698,260,694,248,687,231,677,212,666,"
+    "189,654,165,640,138,625,7,551,4,554,3,555,3,555,2,556,1,557,1,557,1,558,"
+    "0,558,0,559,1,560,6,567,18,581,40,607,76,649,129,710,200,793,295,903,"
+    "318,929,321,929,324,929,342,893,375,829,408,768,441,708,474,651,508,596,"
+    "542,542,578,490,614,439,655,384,698,329,742,276,787,224,834,173,882,123,"
+    "931,74,982,26,986,23,989,20,992,17,995,14,997,12,999,11,1000,10,1000,9,"
+    "1000,9,999,8,998,6,997,5,996,3,995,2,994,1,994,0,993,0,992,1,991,1,990,2,"
+    "988,3,986,4,983,6,981,7"
+)
+_glyph_values = [int(v) for v in CHECK_GLYPH.split(",")]
+GLYPH_POINTS = list(zip(_glyph_values[0::2], _glyph_values[1::2]))
+GLYPH_ASPECT = 0.929
 
 
 def lerp(a: tuple[int, ...], b: tuple[int, ...], t: float) -> tuple[int, ...]:
@@ -55,7 +77,7 @@ def vertical_gradient(size: int, top: tuple, bottom: tuple) -> Image.Image:
     column = np.zeros((size, 1, 3), dtype=np.uint8)
     for y in range(size):
         column[y, 0] = lerp(top, bottom, y / (size - 1))
-    return Image.fromarray(np.repeat(column, size, axis=1), "RGB")
+    return Image.fromarray(np.repeat(column, size, axis=1))
 
 
 def squircle_mask(size: int, radius: int) -> Image.Image:
@@ -66,8 +88,22 @@ def squircle_mask(size: int, radius: int) -> Image.Image:
     return mask
 
 
-def draw_icon(canvas: int) -> Image.Image:
-    """Draw the master icon on a transparent `canvas` x `canvas` image."""
+def check_mask(s: int, margin: int, art: int) -> Image.Image:
+    """The brush check scaled to the artwork, as a filled polygon mask."""
+    width = art * 0.66
+    height = width * GLYPH_ASPECT
+    ox = margin + art * 0.50 - width / 2
+    oy = margin + art * 0.47 - height / 2
+    mask = Image.new("L", (s, s), 0)
+    ImageDraw.Draw(mask).polygon(
+        [(ox + x / 1000 * width, oy + y / 1000 * width) for x, y in GLYPH_POINTS],
+        fill=255,
+    )
+    return mask
+
+
+def draw_icon_full(canvas: int) -> Image.Image:
+    """Full design: gradient squircle, rim light, bars, check carved out."""
     s = canvas * SUPER
 
     # macOS Big Sur icon grid: 824x824 artwork centred in the 1024 canvas.
@@ -76,66 +112,76 @@ def draw_icon(canvas: int) -> Image.Image:
     radius = round(art * 0.2237)
 
     base = Image.new("RGBA", (s, s), (0, 0, 0, 0))
-
-    # Squircle with vertical gradient fill.
     grad = vertical_gradient(art, INK_TOP, INK_BOTTOM).convert("RGBA")
     mask = squircle_mask(art, radius)
     base.paste(grad, (margin, margin), mask)
 
-    d = ImageDraw.Draw(base)
+    # Top rim light so the tile separates from dark grounds.
+    rim = Image.new("L", (art, art), 0)
+    rim_h = round(art * 0.18)
+    rd = ImageDraw.Draw(rim)
+    for y in range(rim_h):
+        rd.line([(0, y), (art, y)], fill=round(30 * (1 - y / rim_h)))
+    clipped = Image.new("L", (art, art), 0)
+    clipped.paste(rim, (0, 0), mask)
+    rim_img = Image.new("RGBA", (art, art), (255, 255, 255, 0))
+    rim_img.putalpha(clipped)
+    base.alpha_composite(rim_img, (margin, margin))
 
-    # --- kanban columns -----------------------------------------------------
-    # Geometry in artwork-fraction units, then scaled to pixels.
-    def ax(fx: float) -> int:  # artwork-relative x
+    # Kanban columns on their own layer so the check can carve through them.
+    def ax(fx: float) -> int:
         return margin + round(art * fx)
 
-    def ay(fy: float) -> int:  # artwork-relative y
+    def ay(fy: float) -> int:
         return margin + round(art * fy)
 
-    bar_w = art * 0.16
-    bar_r = bar_w * 0.32
-    col_x = (0.20, 0.42, 0.64)          # left edge of each column
-    base_y = 0.76                        # shared baseline (bottom of bars)
-    top_y = (0.36, 0.28, 0.20)           # staggered heights: todo/doing/done
-    fills = (LAVENDER, BLUE, GREEN)
+    bars = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+    d = ImageDraw.Draw(bars)
+    bar_w = art * 0.17
+    for fx, fy, fill in zip(
+        (0.175, 0.415, 0.655), (0.38, 0.29, 0.20), (LAVENDER, BLUE, GREEN)
+    ):
+        d.rounded_rectangle(
+            (ax(fx), ay(fy), ax(fx + 0.17), ay(0.80)),
+            radius=round(bar_w * 0.34),
+            fill=fill + (255,),
+        )
 
-    # Track rail under the columns.
-    rail_y = ay(base_y) + round(bar_w * 0.9)
-    d.rounded_rectangle(
-        (ax(col_x[0]), rail_y, ax(col_x[2] + 0.16), rail_y + round(bar_w * 0.28)),
-        radius=round(bar_w * 0.14),
-        fill=RAIL + (90,),
-    )
-    # Node on the rail under the done column — "tracked to done".
-    node_r = bar_w * 0.30
-    node_cx = ax(col_x[2]) + bar_w / 2
-    node_cy = rail_y + bar_w * 0.14
-    d.ellipse(
-        (node_cx - node_r, node_cy - node_r, node_cx + node_r, node_cy + node_r),
-        fill=GREEN + (255,),
-    )
-
-    for fx, fy, fill in zip(col_x, top_y, fills):
-        x0, x1 = ax(fx), ax(fx + 0.16)
-        y0, y1 = ay(fy), ay(base_y)
-        d.rounded_rectangle((x0, y0, x1, y1), radius=round(bar_r), fill=fill + (255,))
-
-    # Check mark inside the done column (kept within the bar's width).
-    cx = ax(col_x[2]) + bar_w / 2
-    cy = ay(top_y[2]) + bar_w * 1.35
-    arm = bar_w * 0.34
-    lw = round(bar_w * 0.26)
-    check_ink = (10, 34, 26, 255)
-    d.line(
-        [(cx - arm, cy + arm * 0.1), (cx - arm * 0.12, cy + arm * 0.78)],
-        fill=check_ink, width=lw,
-    )
-    d.line(
-        [(cx - arm * 0.12, cy + arm * 0.78), (cx + arm, cy - arm * 0.55)],
-        fill=check_ink, width=lw,
-    )
-
+    bars.putalpha(ImageChops.subtract(bars.split()[3], check_mask(s, margin, art)))
+    base.alpha_composite(bars)
     return base.resize((canvas, canvas), Image.LANCZOS)
+
+
+# Pixel-snapped small frames: (x0, y0, x1, y1) per bar, plus corner radii.
+SMALL_FRAMES = {
+    16: {"tile_radius": 3, "bar_radius": 1,
+         "bars": [(3, 8, 5, 13), (7, 6, 9, 13), (11, 4, 13, 13)]},
+    32: {"tile_radius": 7, "bar_radius": 2,
+         "bars": [(6, 15, 11, 26), (14, 11, 19, 26), (22, 7, 27, 26)]},
+}
+
+
+def draw_icon_small(canvas: int) -> Image.Image:
+    """<=48 px: three-bar silhouette only, pixel-snapped, no carving."""
+    ref = 16 if canvas <= 20 else 32
+    spec = SMALL_FRAMES[ref]
+    k = canvas / ref
+    img = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
+    grad = vertical_gradient(canvas, INK_TOP, INK_BOTTOM).convert("RGBA")
+    mask = squircle_mask(canvas, max(2, round(spec["tile_radius"] * k)))
+    img.paste(grad, (0, 0), mask)
+    d = ImageDraw.Draw(img)
+    for (x0, y0, x1, y1), fill in zip(spec["bars"], (LAVENDER, BLUE, GREEN)):
+        d.rounded_rectangle(
+            (round(x0 * k), round(y0 * k), round(x1 * k), round(y1 * k)),
+            radius=max(1, round(spec["bar_radius"] * k)),
+            fill=fill + (255,),
+        )
+    return img
+
+
+def draw_icon(canvas: int) -> Image.Image:
+    return draw_icon_small(canvas) if canvas <= 48 else draw_icon_full(canvas)
 
 
 def find_font(preferred: list[tuple[str, int]]) -> str | None:
@@ -200,18 +246,16 @@ def draw_banner(width: int, height: int, out: Path, social: bool = False) -> Non
     print(f"wrote {out.relative_to(ROOT)}")
 
 
-def export_iconset(master: Image.Image) -> None:
+def export_iconset() -> None:
     """Emit PNG exports plus native Windows and macOS icon resources."""
     for size in (16, 32, 64, 128, 256, 512):
-        master.resize((size, size), Image.LANCZOS).save(BRAND / f"icon-{size}.png")
+        draw_icon(size).save(BRAND / f"icon-{size}.png")
         print(f"wrote assets/brand/icon-{size}.png")
 
+    # Per-size ICO frames so the small designs actually ship on Windows.
+    ico_frames = [draw_icon(size) for size in (16, 24, 32, 48, 64, 128, 256)]
     WINDOWS_ICON.parent.mkdir(parents=True, exist_ok=True)
-    master.save(
-        WINDOWS_ICON,
-        format="ICO",
-        sizes=[(size, size) for size in (16, 24, 32, 48, 64, 128, 256)],
-    )
+    ico_frames[-1].save(WINDOWS_ICON, format="ICO", append_images=ico_frames[:-1])
     print(f"wrote {WINDOWS_ICON.relative_to(ROOT)}")
 
     if shutil.which("iconutil") is None:
@@ -228,7 +272,7 @@ def export_iconset(master: Image.Image) -> None:
             "icon_512x512.png": 512, "icon_512x512@2x.png": 1024,
         }
         for name, px in specs.items():
-            master.resize((px, px), Image.LANCZOS).save(iconset / name)
+            draw_icon(px).save(iconset / name)
         subprocess.run(
             ["iconutil", "-c", "icns", str(iconset), "-o", str(BRAND / "AppIcon.icns")],
             check=True,
@@ -244,7 +288,7 @@ def main() -> None:
     master.save(APPICON)
     print(f"wrote {APPICON.relative_to(ROOT)}")
 
-    export_iconset(master)
+    export_iconset()
     draw_banner(1280, 400, BRAND / "banner.png")
     draw_banner(1280, 640, BRAND / "social.png", social=True)
 

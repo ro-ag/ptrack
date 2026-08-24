@@ -11,7 +11,7 @@
     },
     {
       "title": "Desktop",
-      "summary": "See durable plan status beside registered agent activity, repository evidence, terminals, and capabilities.",
+      "summary": "See durable plan status beside registered agent activity, repository evidence, and terminals.",
       "headings": ["Board", "Task drawer", "Overview", "Project switching", "Settings", "Startup and restore", "Reset actions"],
       "keywords": ["gui", "workspace", "kanban", "sidebar", "agent activity", "plan status", "repository", "settings", "preferences", "appearance", "density", "startup", "restore last project", "window position", "layout", "reset window layout", "reset application state", "plan context menu", "rename plan", "delete plan", "move plan", "copy plan", "dependency badge", "waiting badge"],
       "url": "desktop/"
@@ -24,10 +24,10 @@
       "url": "terminals/"
     },
     {
-      "title": "Agents & Capabilities",
-      "summary": "Pass bounded context across supported agent tools while keeping associations, worktrees, drift, and broker authority explicit.",
-      "headings": ["Agent runs", "Associations", "Plan transfer", "Handoffs", "Worktrees", "Capabilities"],
-      "keywords": ["ownership", "workflow", "network", "git", "ssh", "security", "provider", "multi-agent", "Claude", "Codex", "Gemini", "Agy", "OpenCode"],
+      "title": "Agents",
+      "summary": "Pass bounded context across supported agent tools while keeping associations, worktrees, drift, and handoffs explicit.",
+      "headings": ["Agent runs", "Associations", "Plan transfer", "Handoffs", "Worktrees"],
+      "keywords": ["ownership", "workflow", "handoff", "drift", "provider", "multi-agent", "Claude", "Codex", "Gemini", "Agy", "OpenCode"],
       "url": "agents-and-capabilities/"
     },
     {
@@ -53,7 +53,7 @@
     },
     {
       "title": "Troubleshooting",
-      "summary": "Diagnose project, terminal, agent, capability, and updater problems.",
+      "summary": "Diagnose project, terminal, agent, and updater problems.",
       "headings": ["Diagnostics", "Recovery", "FAQ"],
       "keywords": ["error", "stopped", "stale", "failed", "recovery"],
       "url": "troubleshooting/"

@@ -36,7 +36,8 @@
       "../assets/brand/icon-32.png",
       "../assets/brand/icon-128.png",
       "../assets/brand/icon-256.png",
-      "../assets/brand/icon.ico",
+      "../assets/brand/icon-512.png",
+      "icons/icon.ico",
       "../assets/brand/AppIcon.icns"
     ],
     "macOS": {

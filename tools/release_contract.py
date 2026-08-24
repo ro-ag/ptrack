@@ -19,6 +19,7 @@ MAX_EXPANDED_BYTES = 160 << 20
 MAX_NOTES_BYTES = 32 << 10
 VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 ARCHES = ("amd64", "arm64")
+DARWIN_ARCHES = ("arm64",)  # Intel macOS retired in v0.32.0
 
 
 class ContractError(ValueError):
@@ -34,11 +35,16 @@ def require_version(version: str) -> str:
 def package_names(version: str) -> tuple[str, ...]:
     require_version(version)
     names: list[str] = []
-    for arch in ARCHES:
+    for arch in DARWIN_ARCHES:
         names.extend(
             (
                 f"p-track_{version}_darwin_{arch}.dmg",
                 f"ptrack_{version}_darwin_{arch}.tar.gz",
+            )
+        )
+    for arch in ARCHES:
+        names.extend(
+            (
                 f"ptrack_{version}_linux_{arch}.tar.gz",
                 f"ptrack_{version}_windows_{arch}.zip",
             )

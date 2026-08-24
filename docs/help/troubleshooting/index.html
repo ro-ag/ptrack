@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="Diagnose p-track project, database, Desktop, terminal, agent, capability, and updater problems without weakening safety boundaries.">
+    <meta name="description" content="Diagnose p-track project, database, Desktop, terminal, agent, and updater problems without weakening safety boundaries.">
     <meta name="ptrack-version" content="0.31.0">
     <title>Troubleshooting · p-track Help Center</title>
     <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
@@ -23,7 +23,7 @@
             <li><a href="../start-here/">Start Here</a></li>
             <li><a href="../desktop/">Desktop</a></li>
             <li><a href="../terminals/">Terminals</a></li>
-            <li><a href="../agents-and-capabilities/">Agents &amp; Capabilities</a></li>
+            <li><a href="../agents-and-capabilities/">Agents</a></li>
             <li><a href="../reference/">Reference</a></li>
             <li><a href="../install-and-safety/">Install &amp; Safety</a></li>
             <li><a href="./" aria-current="page">Troubleshooting</a></li>
@@ -83,7 +83,7 @@ ptrack context</code></pre>
 
           <h3>Desktop reopened wrong, or the window is misplaced</h3>
           <p>If p-track reopened a project you did not expect, turn off <strong>Reopen the last project when p-track starts</strong> in <strong>Settings ▸ Startup</strong>; if it landed on the welcome screen instead, look for the recent entry marked <strong>Preselected</strong> — that is the project p-track recorded, and it moved, because p-track never opens a relocated project on its own. Confirm its new location yourself with <strong>Locate…</strong> on it. A window restored onto a display that is no longer connected is recentered on the primary display automatically, so no reset is needed for that case.</p>
-          <p>When the sidebar, panels, or window geometry are unusable, use <strong>Settings ▸ Data &amp; Diagnostics ▸ Reset Window Layout</strong>. It restores the default window and layout immediately and touches nothing else. Reach for <strong>Reset Application State</strong> only when you accept losing every setting, saved terminal workspace, and network capability grant. Grants live in the project, so revoking them writes to the open project's database and each scope must be granted again before any network access works; plans, tasks, notes, and Recent projects are not touched. Stored window and layout records that p-track cannot read are reported and replaced by defaults in memory, not overwritten, so an unreadable record left by a newer version survives a downgrade.</p>
+          <p>When the sidebar, panels, or window geometry are unusable, use <strong>Settings ▸ Data &amp; Diagnostics ▸ Reset Window Layout</strong>. It restores the default window and layout immediately and touches nothing else. Reach for <strong>Reset Application State</strong> only when you accept losing every setting and saved terminal workspace; plans, tasks, notes, and Recent projects are not touched. Stored window and layout records that p-track cannot read are reported and replaced by defaults in memory, not overwritten, so an unreadable record left by a newer version survives a downgrade.</p>
 
           <h2 id="terminal-recovery">Terminal recovery</h2>
           <p>Restored tabs and split descriptors start as stopped panes. Opening one creates a new session. The prior process, terminal contents, output, and scrollback are not restored.</p>
@@ -104,17 +104,12 @@ ptrack context</code></pre>
           <h2 id="agents-and-authority">Agents, associations, and stale runs</h2>
           <p>After a Desktop restart, a previously launched agent is marked stale because its hosting terminal ended and the new process cannot know its outcome. Relaunch it from the intended plan or task. An external agent may resume heartbeats only with its existing lease token; otherwise its lease expires and the run becomes stale.</p>
           <ul>
-            <li>An association provides validated project, plan, or task context. It grants no task, filesystem, network, command, Git, or capability authority.</li>
+            <li>An association provides validated project, plan, or task context. It grants no task, filesystem, network, command, or Git authority.</li>
             <li>A worktree claim only records a verified, existing host-observed worktree that contains the run's working directory. It does not create a worktree, move the agent, change its CWD, or run Git.</li>
             <li>A handoff is a bounded proposal and preview. Sending or acknowledging it grants no authority and changes no task or project memory.</li>
-            <li>A workflow proposal remains a proposal when approved. It executes no command, Git or hosting action, task change, or capability grant.</li>
+            <li>A workflow proposal remains a proposal when approved. It executes no command, Git or hosting action, or task change.</li>
           </ul>
           <p>When one of these actions is rejected as stale, refresh Overview and repeat it against the current live run and association revision. Read the full <a href="../agents-and-capabilities/#boundary-summary">authority boundary summary</a>.</p>
-
-          <h2 id="capability-denials">Capability denials and connection tests</h2>
-          <p>A broker call is denied when its grant is missing, disabled, expired, materially edited, for another agent profile, or outside the exact normalized scope. Return to <strong>Capabilities</strong>, inspect <strong>Preview scope</strong>, correct the draft if needed, save it, and explicitly enable the exact previewed scope again. Do not broaden the scope merely to make a failing call pass.</p>
-          <p><code>ptrack capability call</code> also requires the broker session token and matching project descriptor supplied inside a p-track-launched agent terminal. Calling it from an ordinary or stale shell fails closed; relaunch the agent from the correct project context instead of copying tokens.</p>
-          <p><strong>Test connection</strong> is a separate, explicit, non-mutating diagnostic for the draft. Use its normalized error class to check reachability or configuration before enabling a grant. A successful test does not enable the capability, approve a scope, or prove that a later broker call is authorized. See <a href="../agents-and-capabilities/#grant-lifecycle">grant lifecycle</a>.</p>
 
           <h2 id="updater-recovery">Updater recovery</h2>
           <p>If the updater enters recovery-required state, close p-track and preserve the update state under <code>$PTRACK_HOME/updates</code> or <code>~/.ptrack/updates</code>. On Linux, keep every <code>.pending-apply-*.json</code> journal with its sibling <code>.ptrack-backup-*</code> executable until the installed target is identified. <strong>Settings ▸ Data &amp; Diagnostics</strong> reports those paths and the recovery-required status read-only, so you can confirm the state before closing the app.</p>
@@ -127,9 +122,7 @@ ptrack context</code></pre>
             <dt>Does p-track check for updates automatically?</dt>
             <dd>Not by default. Automatic checks remain off until you explicitly opt in from <strong>Settings ▸ Updates</strong> or <strong>About &amp; Updates</strong>; a manual check does not silently download or install.</dd>
             <dt>Does <strong>Reset Application State</strong> delete my plans or tasks?</dt>
-            <dd>No. It clears settings, the startup and update-check opt-ins, window and layout state, and saved terminal workspaces, and it revokes all network capability grants. Grants live in the project, so revoking them writes to the open project's database; with no project open, nothing is revoked. Plans, tasks, notes, and Recent projects are not touched, and your capability definitions stay authored — re-granting each scope is the part you must redo.</dd>
-            <dt>Are capabilities an operating-system sandbox?</dt>
-            <dd>No. They authorize exact typed broker calls. Ordinary shell processes retain whatever network and filesystem access the operating system gives them.</dd>
+            <dd>No. It clears settings, the startup and update-check opt-ins, window and layout state, and saved terminal workspaces. Plans, tasks, notes, and Recent projects are not touched.</dd>
             <dt>Does <code>ptrack backup</code> capture everything, and can p-track restore it?</dt>
             <dd>No. It copies the project database, not runtime state or WebView <code>localStorage</code>, and there is no built-in restore command. Follow the documented <a href="../install-and-safety/#backup">backup limits</a>; this page does not prescribe an unverified restore procedure.</dd>
             <dt>Are interactive terminal paths verified on every platform?</dt>
@@ -144,7 +137,6 @@ ptrack context</code></pre>
             <li><a href="#desktop-and-board">Desktop and board</a></li>
             <li><a href="#terminal-recovery">Terminal recovery</a></li>
             <li><a href="#agents-and-authority">Agents and authority</a></li>
-            <li><a href="#capability-denials">Capability denials</a></li>
             <li><a href="#updater-recovery">Updater recovery</a></li>
             <li><a href="#faq">FAQ</a></li>
           </ul>

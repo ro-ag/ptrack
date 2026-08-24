@@ -53,18 +53,19 @@ def write_zip(path: Path, arch: str) -> None:
 
 
 class ReleaseArtifactTests(unittest.TestCase):
-    def test_exact_six_target_package_set_layout_machines_and_checksums(self) -> None:
+    def test_exact_five_target_package_set_layout_machines_and_checksums(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             dist = Path(temporary)
-            for arch in release_contract.ARCHES:
+            for arch in release_contract.DARWIN_ARCHES:
                 (dist / f"p-track_1.2.3_darwin_{arch}.dmg").write_bytes(b"dmg")
                 write_tar(dist / f"ptrack_1.2.3_darwin_{arch}.tar.gz", "darwin", arch)
+            for arch in release_contract.ARCHES:
                 write_tar(dist / f"ptrack_1.2.3_linux_{arch}.tar.gz", "linux", arch)
                 write_zip(dist / f"ptrack_1.2.3_windows_{arch}.zip", arch)
             release_contract.validate_dist(dist, "1.2.3")
             checksum_path = release_contract.write_checksums(dist, "1.2.3")
             lines = checksum_path.read_text(encoding="ascii").splitlines()
-            self.assertEqual(len(lines), 8)
+            self.assertEqual(len(lines), 6)
             self.assertEqual(
                 [line.split("  ", 1)[1] for line in lines],
                 list(release_contract.package_names("1.2.3")),
@@ -99,19 +100,19 @@ class ReleaseArtifactTests(unittest.TestCase):
 
 
 class WorkflowTests(unittest.TestCase):
-    def test_release_workflow_is_tag_only_native_rust_and_exactly_six_targets(self) -> None:
+    def test_release_workflow_is_tag_only_native_rust_and_exactly_five_targets(self) -> None:
         workflow = (Path(__file__).resolve().parent.parent / ".github/workflows/release.yml").read_text(
             encoding="utf-8"
         )
         for target in (
             "x86_64-unknown-linux-gnu",
             "aarch64-unknown-linux-gnu",
-            "x86_64-apple-darwin",
             "aarch64-apple-darwin",
             "x86_64-pc-windows-msvc",
             "aarch64-pc-windows-msvc",
         ):
             self.assertEqual(workflow.count(f"rust_target: {target}"), 1)
+        self.assertNotIn("x86_64-apple-darwin", workflow)
         self.assertIn('tags:\n      - "v*"', workflow)
         self.assertEqual(workflow.count("npm --prefix frontend run tauri -- build"), 3)
         self.assertEqual(workflow.count("--no-bundle"), 2)
@@ -126,7 +127,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("cmd/wails", workflow.lower())
         self.assertNotIn("wails build", workflow.lower())
 
-    def test_native_acceptance_is_nonpublishing_and_exactly_six_native_hosts(self) -> None:
+    def test_native_acceptance_is_nonpublishing_and_exactly_five_native_hosts(self) -> None:
         workflow = (
             Path(__file__).resolve().parent.parent
             / ".github/workflows/native-acceptance.yml"
@@ -134,12 +135,12 @@ class WorkflowTests(unittest.TestCase):
         for target in (
             "x86_64-unknown-linux-gnu",
             "aarch64-unknown-linux-gnu",
-            "x86_64-apple-darwin",
             "aarch64-apple-darwin",
             "x86_64-pc-windows-msvc",
             "aarch64-pc-windows-msvc",
         ):
             self.assertEqual(workflow.count(f"rust_target: {target}"), 1)
+        self.assertNotIn("x86_64-apple-darwin", workflow)
         self.assertIn("pull_request:", workflow)
         self.assertIn("branches:\n      - main", workflow)
         self.assertIn("needs: portable", workflow)

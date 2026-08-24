@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="Use p-track Desktop to see durable plan status beside registered agent activity, repository evidence, terminals, and explicit capabilities.">
+    <meta name="description" content="Use p-track Desktop to see durable plan status beside registered agent activity, repository evidence, and terminals.">
     <meta name="ptrack-version" content="0.31.0">
     <title>Desktop · p-track Help Center</title>
     <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
@@ -23,7 +23,7 @@
             <li><a href="../start-here/">Start Here</a></li>
             <li><a href="./" aria-current="page">Desktop</a></li>
             <li><a href="../terminals/">Terminals</a></li>
-            <li><a href="../agents-and-capabilities/">Agents &amp; Capabilities</a></li>
+            <li><a href="../agents-and-capabilities/">Agents</a></li>
             <li><a href="../reference/">Reference</a></li>
             <li><a href="../install-and-safety/">Install &amp; Safety</a></li>
             <li><a href="../troubleshooting/">Troubleshooting</a></li>
@@ -54,14 +54,14 @@
         <article class="article">
           <p class="eyebrow">One project control view</p>
           <h1>See plans, agents, and repository signals together</h1>
-          <p class="lede">p-track Desktop puts durable project status beside registered agent activity, bounded repository evidence, terminals, and explicit capabilities. Board, Overview, and Capabilities remain separate views of the same local project record.</p>
+          <p class="lede">p-track Desktop puts durable project status beside registered agent activity, bounded repository evidence, and terminals. Board and Overview remain separate views of the same local project record.</p>
 
           <div class="callout">
             <p><strong>Viewing a plan is not activating it.</strong> Selecting a plan in the Desktop sidebar changes the snapshot shown on the Board. It does not change the active plan used by CLI defaults. Run <code>ptrack plan use &lt;id&gt;</code> when you intend to change the CLI active plan.</p>
           </div>
 
           <h2 id="open-project">Open, switch, or close a project</h2>
-          <p>When no project is open, the project chooser shows an <strong>Open Project…</strong> button and recent projects. Choose a directory containing a p-track project. Once it opens, the workspace shows the project name, its plans, and the three primary views.</p>
+          <p>When no project is open, the project chooser shows an <strong>Open Project…</strong> button and recent projects. Choose a directory containing a p-track project. Once it opens, the workspace shows the project name, its plans, and the two primary views.</p>
           <p>Use <strong>Switch Project…</strong> to choose another project without first returning to the welcome screen. Use <strong>Close Project</strong> to leave the current project and return to the chooser. The same project actions are available from the application menu.</p>
           <div class="callout warning">
             <p><strong>Active resources require confirmation.</strong> Switching or closing prompts before leaving when the project has active terminal sessions, agent runs, or pending resource admissions. Review the counts before continuing. The confirmation is tied to the observed project state, expires after one minute, and becomes invalid if that state changes.</p>
@@ -77,10 +77,9 @@
           <ul>
             <li><strong>Board</strong> to add tasks, move work through statuses, open task details, launch agents, and use the terminal dock.</li>
             <li><strong>Overview</strong> to read project memory, progress, repository information, and agent coordination signals.</li>
-            <li><strong>Capabilities</strong> to inspect and configure the selected project's broker capability records.</li>
           </ul>
           <p>The plan list shows each plan's ID, title, progress, and an indicator for the CLI active plan. Selecting a row loads that plan's Board snapshot only. The sidebar can be hidden or resized; the Board and terminal panels have independent visibility controls while Board is selected.</p>
-          <p>The terminal is not a fourth primary view. It is a dock inside Board, so moving to Overview or Capabilities hides the dock without closing its sessions.</p>
+          <p>The terminal is not a third primary view. It is a dock inside Board, so moving to Overview hides the dock without closing its sessions.</p>
           <p>Each plan has a context menu, opened from the sidebar row or the Board header title (both carry a &#8942; trigger, and right-click also opens it). <strong>Rename</strong> edits the title inline. <strong>Delete</strong> asks for a preview first — the exact tasks, notes, issue links, and commit records that will be affected — before offering a destructive confirmation; linked issues detach rather than delete, and commit records survive as an unlinked audit trail. <strong>Move</strong> and <strong>Copy</strong> open a dialog with a project picker fed by the registered-projects list; picking the current project for a move is refused (rename in place instead), and a same-project copy needs a new title. Any refusal from the store — a claimed plan, an unopenable target — is shown verbatim in the dialog rather than paraphrased.</p>
 
           <h2 id="board">Use the Board</h2>
@@ -127,18 +126,6 @@
             <figcaption>Overview combines durable memory with bounded repository and coordination observations.</figcaption>
           </figure>
 
-          <h2 id="capabilities">Open Capabilities</h2>
-          <p>Capabilities is a primary project view, alongside Board and Overview. Use it to list the project's capability records, review recent audit metadata, and create or edit HTTP, Git, or SSH scope drafts for an agent profile.</p>
-          <p>The editor separates <strong>Preview scope</strong>, <strong>Test connection</strong>, and <strong>Save draft</strong>. Saving a draft does not silently enable it; approval and enablement remain explicit actions in the capability list. Scope fields and status messages in the view show what is currently configured.</p>
-          <div class="callout">
-            <p><strong>Capabilities and terminals are separate.</strong> These records apply to p-track broker tools for the selected project and agent profile. Opening this view does not turn ordinary terminal processes into an operating-system network sandbox.</p>
-          </div>
-          <figure class="screenshot-pair">
-            <img class="screenshot-dark" src="../assets/screenshots/capabilities-dark.png" width="1552" height="1012" loading="lazy" decoding="async" alt="Dark p-track Capabilities view with an empty project list and HTTP grant draft form">
-            <img class="screenshot-light" src="../assets/screenshots/capabilities-light.png" width="1552" height="1012" loading="lazy" decoding="async" alt="Light p-track Capabilities view showing the same deny-by-default state and scoped draft fields">
-            <figcaption>A new project has no enabled broker capabilities; drafts, approval, and enablement remain separate.</figcaption>
-          </figure>
-
           <h2 id="settings">Open Settings</h2>
           <p>Settings is an application dialog, not a project view. Open it with <kbd>Cmd+,</kbd> or <kbd>Ctrl+,</kbd>, from <strong>Project ▸ Settings…</strong>, or with the <strong>Settings</strong> button in the workspace toolbar. It opens with or without a project open and holds no project-scoped state. Its five sections are:</p>
           <ul>
@@ -146,12 +133,9 @@
             <li><strong>Appearance</strong> — color theme, density, and reduced motion.</li>
             <li><strong>Terminal</strong> — default profile, font family, font size, Unicode mode, scrollback, and renderer for terminals you open next.</li>
             <li><strong>Updates</strong> — the automatic-check opt-in; check, download, and install stay in <strong>About &amp; Updates</strong>.</li>
-            <li><strong>Data &amp; Diagnostics</strong> — read-only data paths, backup and migration records, recovery status, a capability summary, and the two <a href="#reset-state">reset actions</a>.</li>
+            <li><strong>Data &amp; Diagnostics</strong> — read-only data paths, backup and migration records, recovery status, and the two <a href="#reset-state">reset actions</a>.</li>
           </ul>
           <p>Changes are saved as you make them and a status line reports each save. <strong>Reset to defaults</strong> discards the stored record; the next read returns the documented defaults. If a stored settings record cannot be read, Settings says so and keeps showing defaults instead of overwriting it.</p>
-          <div class="callout">
-            <p><strong>Settings and Capabilities are separate surfaces.</strong> Settings holds application preferences that apply to every project; the Capabilities view configures broker grants for the selected project and agent profile. <kbd>Cmd+3</kbd> and <strong>Project ▸ Network Capabilities…</strong> still open Capabilities.</p>
-          </div>
 
           <h2 id="restore-state">Reopen where you left off</h2>
           <p>Desktop remembers how its window and workspace were arranged, and can optionally reopen the project you were last working in.</p>
@@ -169,11 +153,9 @@
           <p><strong>Settings ▸ Data &amp; Diagnostics</strong> holds two reset actions. Both ask for confirmation first, and neither appears in the native menus.</p>
           <ul>
             <li><strong>Reset Window Layout</strong> clears the stored window and layout state and applies the defaults immediately. Nothing else changes.</li>
-            <li><strong>Reset Application State</strong> clears everything the application stores about itself — your settings, the automatic update-check opt-in, the startup opt-in and last project, window and layout state, and saved terminal workspaces — <strong>and revokes every network capability grant in the open project</strong>. The app returns to its default state without a restart.</li>
+            <li><strong>Reset Application State</strong> clears everything the application stores about itself — your settings, the automatic update-check opt-in, the startup opt-in and last project, window and layout state, and saved terminal workspaces. The app returns to its default state without a restart.</li>
           </ul>
-          <div class="callout warning">
-            <p><strong>Reset Application State revokes every capability grant.</strong> Network capability grants live in the project, not in application state, so revoking them writes to the open project's database: each grant you approved and enabled is dropped, and agents lose that access until you grant each scope again in <a href="#capabilities">Capabilities</a>. Your capability definitions stay as you authored them, so you re-grant rather than re-author, and with no project open nothing is revoked. That is still real work to redo, so the confirmation names it explicitly. Plans, tasks, notes, and the list of recent projects are <em>not</em> touched by either reset.</p>
-          </div>
+          <p>Plans, tasks, notes, and the list of recent projects are <em>not</em> touched by either reset.</p>
 
           <h2 id="navigation-summary">Workspace at a glance</h2>
           <div class="table-wrap">
@@ -187,9 +169,8 @@
                 <tr><td>Board</td><td>Add, inspect, rename, move, and link task work.</td><td>The terminal is a Board dock.</td></tr>
                 <tr><td>Task drawer</td><td>Review status, runtime, notes, commits, and issues.</td><td>Memory writeback previews its destination.</td></tr>
                 <tr><td>Overview</td><td>Read project memory, progress, repository, and coordination signals.</td><td>Snapshot bounds remain visible.</td></tr>
-                <tr><td>Capabilities</td><td>Draft and manage scoped broker access.</td><td>Draft save and enablement are separate.</td></tr>
                 <tr><td>Settings dialog</td><td>Set startup, appearance, terminal defaults, update checks, and read diagnostics.</td><td>Application-wide; it stores no project state.</td></tr>
-                <tr><td>Reset actions</td><td>Restore default window layout, or clear all application state.</td><td>Reset Application State also revokes capability grants in the open project; plans, tasks, notes, and Recent projects are not touched.</td></tr>
+                <tr><td>Reset actions</td><td>Restore default window layout, or clear all application state.</td><td>Plans, tasks, notes, and Recent projects are not touched.</td></tr>
               </tbody>
             </table>
           </div>
@@ -203,7 +184,6 @@
             <li><a href="#board">Board</a></li>
             <li><a href="#task-drawer">Task drawer</a></li>
             <li><a href="#overview">Overview</a></li>
-            <li><a href="#capabilities">Capabilities</a></li>
             <li><a href="#settings">Settings</a></li>
             <li><a href="#restore-state">Reopen where you left off</a></li>
             <li><a href="#reset-state">Reset actions</a></li>
