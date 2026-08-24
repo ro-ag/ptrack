@@ -7,7 +7,7 @@
     { "title": "Start Here", "url": "start-here/" },
     { "title": "Desktop", "url": "desktop/" },
     { "title": "Terminals", "url": "terminals/" },
-    { "title": "Agents & Capabilities", "url": "agents-and-capabilities/" },
+    { "title": "Agents", "url": "agents-and-capabilities/" },
     { "title": "Reference", "url": "reference/" },
     { "title": "Install & Safety", "url": "install-and-safety/" },
     { "title": "Troubleshooting", "url": "troubleshooting/" }

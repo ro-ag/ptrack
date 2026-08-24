@@ -6,6 +6,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- New app icon: a hand-drawn check mark carved through the kanban columns as
+  negative space, a perceptible background gradient with a top rim light, and
+  pixel-snapped simplified frames at 16–48 px so the mark stays legible in
+  taskbars, tabs, and list views. The Windows ICO now carries true per-size
+  frames, the 512 px PNG joined the Tauri bundle icon list, and the stale
+  hand-made `assets/brand/icon.ico` was removed in favor of the generated
+  `src-tauri/icons/icon.ico`.
+- CI: Rust dependency and target caching (`Swatinem/rust-cache`) in the
+  acceptance and release workflows; the acceptance push-to-`main` run is
+  skipped for `chore(release)` commits so it no longer races the
+  tag-triggered release pipeline on the same commit.
+
+### Removed
+- Intel macOS (darwin/amd64) targets retired from the acceptance and release
+  matrices; releases ship darwin arm64 only, and existing Intel installs
+  stay on v0.31.0.
+- Capability brokering is no longer documented in the Help Center; scoped
+  capability management is delegated to the companion project pam.
+
 ## [0.31.0] - 2026-08-24
 
 ### Added

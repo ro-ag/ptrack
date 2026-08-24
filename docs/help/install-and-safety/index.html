@@ -23,7 +23,7 @@
             <li><a href="../start-here/">Start Here</a></li>
             <li><a href="../desktop/">Desktop</a></li>
             <li><a href="../terminals/">Terminals</a></li>
-            <li><a href="../agents-and-capabilities/">Agents &amp; Capabilities</a></li>
+            <li><a href="../agents-and-capabilities/">Agents</a></li>
             <li><a href="../reference/">Reference</a></li>
             <li><a href="./" aria-current="page">Install &amp; Safety</a></li>
             <li><a href="../troubleshooting/">Troubleshooting</a></li>
@@ -91,20 +91,19 @@
           <p>When recovery is required, close p-track and inspect <code>$PTRACK_HOME/updates</code> or <code>~/.ptrack/updates</code> together with the installation. On Linux, preserve each <code>.pending-apply-*.json</code> journal and sibling <code>.ptrack-backup-*</code> executable until the installed target is identified. Deleting either first may remove evidence needed for safe rollback. Reinstalling the same or a newer official package is the conservative fallback; do not copy a staged payload into place or bypass its verification.</p>
 
           <h2 id="local-security">Local-first security boundary</h2>
-          <p>p-track has no cloud service account and does not send project planning data to a p-track-hosted service. Project records remain in local files. Desktop may expose private loopback endpoints for local agent-run integration and the typed capability broker while a project is active; their descriptors and session material are stored in the private per-project runtime directory.</p>
-          <p>The updater does not use agent capabilities, accept project-supplied update URLs, store credentials, build from source, elevate privileges, or run unattended installation helpers. Update checks contact GitHub only through the manual or opted-in automatic flow.</p>
-          <p>Capability grants are not an operating-system sandbox. They authorize only exact typed broker calls for one project and agent profile. Ordinary shell processes can still use their normal OS network tools directly. Capability configuration stores scope and approval metadata, not credentials.</p>
+          <p>p-track has no cloud service account and does not send project planning data to a p-track-hosted service. Project records remain in local files. Desktop may expose private loopback endpoints for local agent-run integration while a project is active; their descriptors and session material are stored in the private per-project runtime directory.</p>
+          <p>The updater does not accept project-supplied update URLs, store credentials, build from source, elevate privileges, or run unattended installation helpers. Update checks contact GitHub only through the manual or opted-in automatic flow.</p>
 
           <h2 id="privacy">Privacy and bounded diagnostics</h2>
           <p>Structured agent event collection is enabled by default; free-text summaries are disabled. The default policy retains the newest 128 accepted events and expires events older than 14 days. The closed event contract rejects raw prompts, messages, transcripts, tool payloads, command arguments or output, environment data, credentials, and hidden reasoning.</p>
-          <p>Capability audits contain bounded sanitized metadata such as operation, target identity, result class, duration, and byte counts. They contain no headers, bodies, terminal output, credentials, raw standard error, or raw arguments. Terminal workspace persistence stores layout and descriptors, not terminal screen contents.</p>
+          <p>Terminal workspace persistence stores layout and descriptors, not terminal screen contents.</p>
 
           <h2 id="data-paths">Know where data lives</h2>
           <div class="table-wrap">
             <table>
               <thead><tr><th>Data</th><th>Default location</th><th>Contents</th></tr></thead>
               <tbody>
-                <tr><td>Project store</td><td><code>&lt;project&gt;/.ptrack/ptrack.redb</code></td><td>Goal, summary, plans, tasks, notes, milestones, issues, commits, capabilities, audits, and writeback records.</td></tr>
+                <tr><td>Project store</td><td><code>&lt;project&gt;/.ptrack/ptrack.redb</code></td><td>Goal, summary, plans, tasks, notes, milestones, issues, commits, and writeback records.</td></tr>
                 <tr><td>Global store</td><td><code>$PTRACK_HOME/global.redb</code> or <code>~/.ptrack/global.redb</code></td><td>Global preferences, known projects, and backup records.</td></tr>
                 <tr><td>Runtime routing</td><td><code>&lt;global-home&gt;/runtime/active-generation.json</code></td><td>The attested generation and exact global/project store bindings.</td></tr>
                 <tr><td>Runtime state</td><td><code>&lt;global-home&gt;/runtime/&lt;sha256(project-root)&gt;/</code></td><td>Private local service descriptors and bounded agent-run history.</td></tr>
@@ -118,7 +117,7 @@
             </table>
           </div>
           <p>Set <code>PTRACK_HOME</code> to move the global store and its backups, runtime state, and update staging. WebView <code>localStorage</code> remains a separate application-browser store; it is not part of <code>global.redb</code>.</p>
-          <p>All three records use a versioned envelope and are repaired field by field when partly invalid. A record p-track cannot read, or one written by a newer version, is reported and read as defaults rather than overwritten, so downgrading never destroys it. <strong>Settings ▸ Data &amp; Diagnostics ▸ Reset Application State</strong> clears these records and the saved terminal workspaces, and revokes every network capability grant. Grants live in the project, so revoking them writes to the open project's database; with no project open, nothing is revoked. It does not touch plans, tasks, notes, backups, or the known-projects list. See <a href="../desktop/#reset-state">the reset actions</a>.</p>
+          <p>All three records use a versioned envelope and are repaired field by field when partly invalid. A record p-track cannot read, or one written by a newer version, is reported and read as defaults rather than overwritten, so downgrading never destroys it. <strong>Settings ▸ Data &amp; Diagnostics ▸ Reset Application State</strong> clears these records and the saved terminal workspaces. It does not touch plans, tasks, notes, backups, or the known-projects list. See <a href="../desktop/#reset-state">the reset actions</a>.</p>
 
           <h2 id="backup">Back up with the documented limits</h2>
           <pre><code>ptrack backup</code></pre>
@@ -136,7 +135,6 @@
             <li>Keep automatic update checks off unless GitHub checks are wanted.</li>
             <li>Treat co-hosted checksums as corruption detection, not an independent signature.</li>
             <li>Preserve update journals and rollback artifacts during recovery.</li>
-            <li>Remember that broker capabilities do not restrict ordinary shells.</li>
             <li>Back up and stop writers before manual database replacement.</li>
           </ol>
         </article>

@@ -3,9 +3,9 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="Observe and coordinate supported coding-agent tools, transfer durable plan context, and preserve explicit, deny-by-default capability boundaries.">
+    <meta name="description" content="Observe and coordinate supported coding-agent tools, transfer durable plan context, and keep handoffs and drift signals explicit.">
     <meta name="ptrack-version" content="0.31.0">
-    <title>Agents &amp; Capabilities · p-track Help Center</title>
+    <title>Agents · p-track Help Center</title>
     <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="../assets/style.css">
   </head>
@@ -23,7 +23,7 @@
             <li><a href="../start-here/">Start Here</a></li>
             <li><a href="../desktop/">Desktop</a></li>
             <li><a href="../terminals/">Terminals</a></li>
-            <li><a href="./" aria-current="page">Agents &amp; Capabilities</a></li>
+            <li><a href="./" aria-current="page">Agents</a></li>
             <li><a href="../reference/">Reference</a></li>
             <li><a href="../install-and-safety/">Install &amp; Safety</a></li>
             <li><a href="../troubleshooting/">Troubleshooting</a></li>
@@ -37,13 +37,13 @@
       <nav class="breadcrumbs" aria-label="Breadcrumb">
         <ol>
           <li><a href="../">Help Center</a></li>
-          <li aria-current="page">Agents &amp; Capabilities</li>
+          <li aria-current="page">Agents</li>
         </ol>
       </nav>
 
       <form class="search-panel" role="search" data-help-search>
         <label class="search-label" for="help-search">Search p-track Help</label>
-        <input class="search-input" id="help-search" type="search" autocomplete="off" placeholder="Try “worktree claim” or “enable capability”" disabled>
+        <input class="search-input" id="help-search" type="search" autocomplete="off" placeholder="Try “worktree claim” or “agent handoff”" disabled>
         <p class="search-help">Search runs in this browser and never sends your query off-device.</p>
         <p class="search-status" data-search-status role="status" aria-live="polite">Loading the local search index…</p>
         <ul class="search-results" data-search-results aria-label="Search results"></ul>
@@ -54,21 +54,17 @@
         <article class="article">
           <p class="eyebrow">Cross-agent coordination</p>
           <h1>Keep control when agents or tools change</h1>
-          <p class="lede">p-track gives launched and registered agent runs a shared local project record and a bounded coordination view. Durable plans, tasks, notes, and summaries survive agent sessions; live handoffs and broker authority remain separate, explicit, and narrowly scoped.</p>
-
-          <div class="callout warning">
-            <p><strong>Capabilities are not a shell sandbox.</strong> Ordinary terminal processes keep their normal operating-system access and may invoke tools such as <code>curl</code>, <code>git</code>, or <code>ssh</code> directly. p-track capability policy applies only when an agent calls a typed p-track broker tool.</p>
-          </div>
+          <p class="lede">p-track gives launched and registered agent runs a shared local project record and a bounded coordination view. Durable plans, tasks, notes, and summaries survive agent sessions; live handoffs remain separate, explicit, and narrowly scoped.</p>
 
           <h2 id="launch-and-runs">Launch agents and read run state</h2>
           <p>On Board, use <strong>Launch agent</strong> in the plan header or the <strong>Agent</strong> action on a task. Choose an installed agent profile; p-track starts it in a new terminal tab linked to that plan or task. The task drawer shows linked terminal-backed agents alongside external agents registered with the current project.</p>
           <p>Overview presents bounded run information, including whether a run is terminal-backed or external, its lifecycle, process or lease state, current association, structured activity, and notifications. A run may remain in history after it exits or becomes stale, so a historical row is not evidence that an agent is still live.</p>
 
           <h2 id="associations">Treat associations as context, not permission</h2>
-          <p>An association points a live terminal session or agent run at project, plan, or task context. The persisted pointer contains IDs only: it has no token, environment, runtime output, project generation, or capability.</p>
+          <p>An association points a live terminal session or agent run at project, plan, or task context. The persisted pointer contains IDs only: it has no token, environment, runtime output, or project generation.</p>
           <p>Before accepting an association or using it for a linked mutation, the host resolves it against the current canonical project, workspace generation, live identity, and project catalog. A task must still belong to the named plan. Stale or mismatched associations are rejected instead of being reused.</p>
           <div class="callout">
-            <p><strong>An association grants no authority.</strong> It describes where activity belongs. It does not authorize task changes, filesystem access, network access, commands, Git operations, or capability use.</p>
+            <p><strong>An association grants no authority.</strong> It describes where activity belongs. It does not authorize task changes, filesystem access, network access, commands, or Git operations.</p>
           </div>
 
           <h2 id="move-work-between-agents">Move work between agents or supported tools</h2>
@@ -94,13 +90,13 @@ git status --short</code></pre>
           <p>Installed profiles can include Agy, Claude Code, Codex, Gemini, and OpenCode. Known adapters normalize bounded events into one model; other registered providers may expose lifecycle information only. p-track does not transfer provider transcripts, prompts, hidden reasoning, authentication, configuration, terminal state, or authority, and it cannot make an agent maintain the project record correctly. The receiving agent must reconcile stale claims with observable project and repository evidence.</p>
 
           <h2 id="ownership-and-worktrees">Use ownership and worktrees as advisory signals</h2>
-          <p>A live task-associated agent can claim or release task ownership in Overview. Ownership helps expose multiple agents working on the same task, but it is advisory. Claiming or releasing it does not change the agent, association, task status, process, or capabilities. An incomplete bounded snapshot cannot prove exclusive ownership.</p>
-          <p>A live run can be associated with an existing worktree observed by the host. p-track verifies the current run and association revision, inspects the worktree, and confirms that the agent working directory is inside it. The claim is ephemeral presentation metadata, separate from both the run association and every capability decision.</p>
-          <p>Associating a worktree does not create a worktree, move the agent, change its working directory, run a mutating Git command, or grant filesystem, network, or capability authority.</p>
+          <p>A live task-associated agent can claim or release task ownership in Overview. Ownership helps expose multiple agents working on the same task, but it is advisory. Claiming or releasing it does not change the agent, association, task status, or process. An incomplete bounded snapshot cannot prove exclusive ownership.</p>
+          <p>A live run can be associated with an existing worktree observed by the host. p-track verifies the current run and association revision, inspects the worktree, and confirms that the agent working directory is inside it. The claim is ephemeral presentation metadata, separate from the run association.</p>
+          <p>Associating a worktree does not create a worktree, move the agent, change its working directory, run a mutating Git command, or grant filesystem or network authority.</p>
 
           <h2 id="handoffs-workflows">Review handoffs and workflow proposals</h2>
-          <p>Overview can prepare a bounded handoff from one live registered agent to another. The inbox stores an immutable proposal and its preview in p-track memory for up to 30 minutes, only while the same workspace and exact live associations remain valid; restart or project replacement clears it. The proposal is not injected into either provider. Sending it grants no authority and changes no task. Acknowledgment revalidates the exact proposal and removes that inbox item; it does not mutate project memory, task state, an agent, or a capability.</p>
-          <p>Agents can also prepare validation, commit, pull-request, or merge workflow proposals. Preparing, approving, or dismissing one manages the proposal only. Approval executes no command or Git/hosting action, changes no task, and grants no capability. Perform the proposed work through the repository's normal, separately authorized workflow.</p>
+          <p>Overview can prepare a bounded handoff from one live registered agent to another. The inbox stores an immutable proposal and its preview in p-track memory for up to 30 minutes, only while the same workspace and exact live associations remain valid; restart or project replacement clears it. The proposal is not injected into either provider. Sending it grants no authority and changes no task. Acknowledgment revalidates the exact proposal and removes that inbox item; it does not mutate project memory, task state, or an agent.</p>
+          <p>Agents can also prepare validation, commit, pull-request, or merge workflow proposals. Preparing, approving, or dismissing one manages the proposal only. Approval executes no command or Git/hosting action and changes no task. Perform the proposed work through the repository's normal, separately authorized workflow.</p>
           <figure class="screenshot-pair">
             <img class="screenshot-dark" src="../assets/screenshots/overview-dark.png" width="1552" height="1012" loading="lazy" decoding="async" alt="Dark p-track Overview where agent activity and handoff controls appear alongside bounded project memory">
             <img class="screenshot-light" src="../assets/screenshots/overview-light.png" width="1552" height="1012" loading="lazy" decoding="async" alt="Light p-track Overview showing the same coordination surface without execution authority">
@@ -115,35 +111,8 @@ git status --short</code></pre>
           <p>Structured event collection is enabled by default. Free-text event summaries are disabled by default. p-track retains at most the most recent 128 accepted events for a run and removes events older than 14 days under the default policy.</p>
           <p>The provider input is a closed structured contract. It does not accept raw provider JSON, prompts, messages, tool payloads, command arguments or output, transcripts, environment data, credentials, or hidden reasoning. Accepted fields are normalized and bounded; project paths must remain project-relative. Credential-like or reasoning-like content is rejected, and rejection messages do not echo the rejected input.</p>
 
-          <h2 id="capability-model">Start from deny by default</h2>
-          <p>A capability belongs to one project and one agent profile. Every broker operation rechecks the stored grant, exact normalized scope, profile, enabled state, and approval expiry immediately before use. A missing, disabled, stale, mismatched, expired, or out-of-scope grant is denied.</p>
-          <p>Capabilities authorize one typed family:</p>
-          <ul>
-            <li><strong>HTTP</strong> — exact origin, allowed methods, segment-bounded path prefixes, request and response limits, redirects, timeout, and concurrency.</li>
-            <li><strong>Git</strong> — allowed operations plus the repository's freshly read remote name and URL, branches, and exact refspecs. Tag writes, ref deletion, and force behavior require separate explicit scope.</li>
-            <li><strong>SSH</strong> — exact host, port, user, pinned host key, and individually approved operations such as Git-over-SSH, exact remote commands, upload, download, or forwarding targets. Local transfer paths must remain within separately approved project roots. Interactive shell transport is unavailable.</li>
-          </ul>
-          <p>One grant does not imply another. For example, an SSH upload approval does not approve download or a remote command, and a Git approval does not inherit an SSH grant unless the operation explicitly names and passes that separate grant.</p>
-
-          <h2 id="grant-lifecycle">Preview, approve, expire, or remove a grant</h2>
-          <ol>
-            <li>Create or edit the draft in <strong>Capabilities</strong>.</li>
-            <li>Use <strong>Preview scope</strong> to inspect the normalized effective scope. <strong>Test connection</strong> is a separate explicit diagnostic.</li>
-            <li>Use <strong>Save draft</strong>. A new draft is disabled and saving does not enable it.</li>
-            <li>Enable only the exact previewed scope. Approval is bound to its digest and a bounded expiry window.</li>
-            <li>Disable to revoke approval immediately, or let the approval expire. Authorization checks observe revocation and expiry on subsequent calls.</li>
-          </ol>
-          <p>A material edit to the security envelope disables the grant and clears its approval, requiring a fresh preview and enable action. Removing a capability deletes the grant but deliberately retains its bounded audit history.</p>
-
-          <h2 id="broker-calls">Call the typed broker</h2>
-          <p>The broker exposes <code>ptrack_http_request</code>, <code>ptrack_git</code>, and <code>ptrack_ssh</code>. From a p-track-launched agent terminal that has the broker session token, call one tool with a JSON object:</p>
-          <pre><code>ptrack capability call &lt;tool&gt; --arguments '{"capability_id": 1}'</code></pre>
-          <p>The arguments must match that tool's input schema and identify an enabled capability. The command fails outside a p-track agent terminal when the broker token or matching project descriptor is unavailable. Agent integrations that speak MCP can use the same tools over standard input and output:</p>
-          <pre><code>ptrack capability mcp</code></pre>
-
-          <h2 id="audit">Read audit metadata</h2>
-          <p>When auditing is enabled for a grant, p-track keeps a bounded record of sanitized operation metadata: capability and profile identity, kind, operation, sanitized target, success or error class, duration, byte counts, redirects, and time.</p>
-          <p>The audit recorder has no fields for headers, bodies, terminal output, credentials, raw standard error, or raw arguments. HTTP targets retain only their origin; other targets are reduced to their sanitized typed identity.</p>
+          <h2 id="capability-model">Capability brokering moved to pam</h2>
+          <p>Capability brokering has been removed from p-track. Scoped capability management — HTTP, Git, and SSH grants for agent profiles — is delegated to the companion project <strong>pam</strong>. Existing capability records in a p-track project are ignored; p-track neither evaluates nor enforces them.</p>
 
           <h2 id="boundary-summary">Boundaries at a glance</h2>
           <div class="table-wrap">
@@ -152,12 +121,11 @@ git status --short</code></pre>
                 <tr><th>Feature</th><th>What it records</th><th>What it does not grant or execute</th></tr>
               </thead>
               <tbody>
-                <tr><td>Association</td><td>Validated project, plan, or task context.</td><td>No task, filesystem, network, command, or capability authority.</td></tr>
+                <tr><td>Association</td><td>Validated project, plan, or task context.</td><td>No task, filesystem, network, or command authority.</td></tr>
                 <tr><td>Ownership</td><td>An advisory task claim for a live run.</td><td>No exclusive lock and no product mutation.</td></tr>
                 <tr><td>Worktree claim</td><td>A host-observed worktree containing the run's CWD.</td><td>No worktree creation, CWD change, Git command, or authority.</td></tr>
-                <tr><td>Handoff</td><td>A bounded immutable proposal and preview.</td><td>No task, memory, agent, or capability mutation.</td></tr>
-                <tr><td>Workflow proposal</td><td>A revalidated suggested workflow.</td><td>No command, Git/hosting action, task change, or grant.</td></tr>
-                <tr><td>Capability</td><td>An exact, time-bounded broker scope.</td><td>No restriction on ordinary shell processes.</td></tr>
+                <tr><td>Handoff</td><td>A bounded immutable proposal and preview.</td><td>No task, memory, or agent mutation.</td></tr>
+                <tr><td>Workflow proposal</td><td>A revalidated suggested workflow.</td><td>No command, Git/hosting action, or task change.</td></tr>
               </tbody>
             </table>
           </div>
@@ -173,10 +141,7 @@ git status --short</code></pre>
             <li><a href="#handoffs-workflows">Handoffs and workflows</a></li>
             <li><a href="#drift-notifications">Drift and notifications</a></li>
             <li><a href="#event-privacy">Event privacy</a></li>
-            <li><a href="#capability-model">Capability model</a></li>
-            <li><a href="#grant-lifecycle">Grant lifecycle</a></li>
-            <li><a href="#broker-calls">Broker calls</a></li>
-            <li><a href="#audit">Audit metadata</a></li>
+            <li><a href="#capability-model">Capability brokering</a></li>
             <li><a href="#boundary-summary">Boundaries at a glance</a></li>
           </ul>
         </aside>

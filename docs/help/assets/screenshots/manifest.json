@@ -19,7 +19,6 @@
   "uiSourceSha256": "5f3e5033141e9b99173b958eeb35db0a5de82125f2e09a721895475416b4a607",
   "requiredWorkflows": [
     "board",
-    "capabilities",
     "overview",
     "project-search",
     "project-switch",
@@ -44,24 +43,6 @@
       "width": 1552,
       "height": 1012,
       "sha256": "4fc5b48ea76ef2d278f69fea82ed1826986e13b47a238d7d722a0a282fde7fa1"
-    },
-    {
-      "file": "capabilities-dark.png",
-      "workflow": "capabilities",
-      "theme": "dark",
-      "route": "desktop/#capabilities",
-      "width": 1552,
-      "height": 1012,
-      "sha256": "d29ed04e13ee9586bfc1d8b8694d1f173f273bb031b8fc90bedcc2d01943246b"
-    },
-    {
-      "file": "capabilities-light.png",
-      "workflow": "capabilities",
-      "theme": "light",
-      "route": "desktop/#capabilities",
-      "width": 1552,
-      "height": 1012,
-      "sha256": "2dc167e87c6e056211ae8a1ab19a2ea7bd0f678a4f0cd1a29d619cac54b300a6"
     },
     {
       "file": "overview-dark.png",

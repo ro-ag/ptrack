@@ -11,20 +11,19 @@ interactive matrices.
 
 | OS | Arch | CI runner | Minimum OS / baseline | Webview | Package format | Signing |
 |---|---|---|---|---|---|---|
-| macOS | amd64 | macos-15-intel | 12.0 (`minimumSystemVersion` in `src-tauri/tauri.conf.json`) | wkwebview | Signed, notarized DMG + signed (not notarized/stapled) CLI tar.gz | Developer ID signing on both packages; notarization + stapling on the DMG only |
-| macOS | arm64 | macos-15 | 12.0 | wkwebview | Signed, notarized DMG + signed (not notarized/stapled) CLI tar.gz | Developer ID signing on both packages; notarization + stapling on the DMG only |
+| macOS | arm64 | macos-15 | 12.0 (`minimumSystemVersion` in `src-tauri/tauri.conf.json`) | wkwebview | Signed, notarized DMG + signed (not notarized/stapled) CLI tar.gz | Developer ID signing on both packages; notarization + stapling on the DMG only |
 | Windows | amd64 | windows-2025 | Windows as provided by windows-2025 | webview2 | ZIP | None (unsigned) |
 | Windows | arm64 | windows-11-arm | Windows as provided by windows-11-arm | webview2 | ZIP | None (unsigned) |
 | Linux | amd64 | ubuntu-24.04 | glibc/webkit2gtk as provided by ubuntu-24.04 | webkitgtk | tar.gz | None (unsigned) |
 | Linux | arm64 | ubuntu-24.04-arm | glibc/webkit2gtk as provided by ubuntu-24.04-arm | webkitgtk | tar.gz | None (unsigned) |
 
-These six targets are the exact `build` matrix in `.github/workflows/release.yml`.
-`tools/release_contract.py`'s `package_names()` hardcodes the same two arches
-via `ARCHES = ("amd64", "arm64")`, but emits eight package names, not six: for
-each arch it lists a darwin `.dmg`, a darwin CLI `.tar.gz`, a linux `.tar.gz`,
-and a windows `.zip` (macOS ships two packages per arch — DMG plus the signed
-but not notarized/stapled CLI archive — while Windows and Linux ship one
-each). There is no distro
+These five targets are the exact `build` matrix in `.github/workflows/release.yml`.
+`tools/release_contract.py`'s `package_names()` hardcodes the arches via
+`ARCHES = ("amd64", "arm64")` for Linux/Windows and `DARWIN_ARCHES =
+("arm64",)` for macOS, and emits six package names: macOS ships two packages
+(DMG plus the signed but not notarized/stapled CLI archive) while Windows and
+Linux ship one per arch. Intel macOS (darwin/amd64) was retired in v0.32.0 —
+existing Intel installs stay on their last release. There is no distro
 matrix pinned for Linux beyond the ubuntu-24.04 runner images; no other libc,
 webview engine, or distro is validated.
 
@@ -83,11 +82,13 @@ revision:
 ## Updater
 
 `crates/ptrack-updater` is the only update path and only ever targets these
-six combinations:
+combinations:
 
 - Discovery is from the GitHub releases `/latest` endpoint only
   (`crates/ptrack-updater/src/discovery.rs`), and maps the running host to
-  one of the six `os`/`arch` pairs above (`Target::host`).
+  an `os`/`arch` pair (`Target::host`). Hosts without a published package —
+  Intel macOS from v0.32.0 on — find no matching asset and keep their
+  current version.
 - Prereleases, drafts, and development builds are rejected (the release tag
   must be a canonical, non-prerelease, non-draft release, and the running
   binary's own version must parse as a release version).
@@ -103,6 +104,8 @@ six combinations:
 
 ## Explicitly unsupported
 
+- Intel macOS (darwin/amd64) — retired in v0.32.0; the last Intel packages
+  are those of v0.31.0.
 - 32-bit builds (only amd64/arm64 are built or validated).
 - musl/Alpine Linux, or any Linux libc/webview baseline other than what
   ubuntu-24.04 / ubuntu-24.04-arm provide.

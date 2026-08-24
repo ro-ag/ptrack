@@ -13,14 +13,14 @@ prefix `/ptrack/` and when `docs/` is served locally.
 | `help/start-here/` | First project, plan, task, and resume workflow |
 | `help/desktop/` | Board, drawer, Overview, navigation, and project switching |
 | `help/terminals/` | Sessions, tabs, splits, safety, profiles, and recovery |
-| `help/agents-and-capabilities/` | Agents, associations, handoffs, worktrees, drift, and capability boundaries |
+| `help/agents-and-capabilities/` | Agents, associations, handoffs, worktrees, and drift |
 | `help/reference/` | CLI, TUI, desktop shortcut, and project-search reference |
 | `help/reference/shortcuts/` | Stable native Help-menu destination for keyboard shortcuts |
 | `help/install-and-safety/` | Installation, updates, storage, privacy, backup, and migration |
 | `help/troubleshooting/` | Diagnostics, recovery, and frequently asked questions |
 
-The top-level navigation exposes Start Here, Desktop, Terminals, Agents &
-Capabilities, Reference, Install & Safety, and Troubleshooting in that order.
+The top-level navigation exposes Start Here, Desktop, Terminals, Agents,
+Reference, Install & Safety, and Troubleshooting in that order.
 The same order is used in the no-JavaScript sitemap and the search scope.
 
 ## URL policy

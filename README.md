@@ -30,9 +30,6 @@ coding-agent tools:
   live runs.
 - **Run agents where the work is.** A multi-session terminal dock at the project
   root hosts PTY-backed shells and detected agent profiles alongside the board.
-- **Deny by default.** HTTP, Git, and SSH capabilities are scoped to a single
-  agent profile and project, previewed before they are enabled, and expire
-  automatically.
 - **Local-first, one binary.** No hosted service and no long-lived daemon—and
   over `ssh user@host` the terminal dashboard opens the same project.
 
@@ -182,13 +179,13 @@ observable Git and structured-event evidence. Explicit task ownership and
 overlap warnings are advisory. Agent handoffs are bounded, single-use,
 memory-only proposals that grant no authority and change no task.
 
-### Capabilities
+### Capabilities (deprecated)
 
-Settings also exposes deny-by-default HTTP, Git, and SSH capabilities scoped to
-one agent profile and project. Preview and test the normalized scope before
-enabling it. Approval expires automatically; request/response bodies, headers,
-credentials, terminal contents, and raw arguments are excluded from the
-bounded audit metadata.
+Capability brokering (deny-by-default HTTP, Git, and SSH scopes) is no longer
+supported and is scheduled for removal; scoped capability management is
+delegated to the companion project pam. The Capabilities view remains in the
+current build, but it is undocumented and existing capability records should
+be considered inert.
 
 ### The terminal dock
 
