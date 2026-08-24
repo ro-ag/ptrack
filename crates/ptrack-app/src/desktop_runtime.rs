@@ -70,7 +70,7 @@ const WORKSPACE_OPERATION_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub const FIRST_RUN_GOAL_MAX_BYTES: usize = 4_096;
 
-const COMMANDS: [&str; 93] = [
+const COMMANDS: [&str; 94] = [
     "AcknowledgeAgentHandoffV2",
     "AddTask",
     "AddTaskNote",
@@ -113,6 +113,7 @@ const COMMANDS: [&str; 93] = [
     "GetPreferences",
     "GetRecentProjects",
     "GetRecentProjectsV1",
+    "GetRepoStatsV1",
     "GetTaskDetailV2",
     "GetTerminalProfiles",
     "GetTerminalProfilesV2",
@@ -2535,6 +2536,12 @@ impl BoundDesktopWorkspace {
             notes: counts.notes,
             commits: counts.commits,
             open_issues: counts.issues_open,
+            tasks: counts.tasks,
+            tasks_done: counts.tasks_done,
+            plans: counts.plans,
+            plans_done: counts.plans_done,
+            milestones: counts.milestones,
+            milestones_done: counts.milestones_done,
         };
         let activity_total = notes.total.saturating_add(commits.total);
         let blocker_cards = blockers
@@ -3533,6 +3540,7 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
                 })
             }
             "GetActivityHeatmapV2" => value(heatmap(&self.snapshot()?, i64_arg(arguments, 0)?)),
+            "GetRepoStatsV1" => value(repo_stats(&self.endpoint.root)),
             "GetTaskDetailV2" => {
                 let generation = u64_arg(arguments, 0)?;
                 self.require_generation(generation)?;
@@ -4387,6 +4395,14 @@ struct ProjectStatsView {
     notes: usize,
     commits: usize,
     open_issues: usize,
+    /// Project-wide totals: the Overview renders these regardless of the
+    /// selected plan, while `plan_tasks*` stays scoped to the board's plan.
+    tasks: usize,
+    tasks_done: usize,
+    plans: usize,
+    plans_done: usize,
+    milestones: usize,
+    milestones_done: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -4554,6 +4570,12 @@ pub(super) fn board_view(
             notes: counts.notes,
             commits: counts.commits,
             open_issues: counts.issues_open,
+            tasks: counts.tasks,
+            tasks_done: counts.tasks_done,
+            plans: counts.plans,
+            plans_done: counts.plans_done,
+            milestones: counts.milestones,
+            milestones_done: counts.milestones_done,
         },
         activity: recent_activity(snapshot, plan_id, &task_ids),
         open_issues,
@@ -4626,6 +4648,12 @@ fn snapshot_board_view(
             notes: counts.notes,
             commits: counts.commits,
             open_issues: counts.issues_open,
+            tasks: counts.tasks,
+            tasks_done: counts.tasks_done,
+            plans: counts.plans,
+            plans_done: counts.plans_done,
+            milestones: counts.milestones,
+            milestones_done: counts.milestones_done,
         },
         activity: recent_activity(snapshot, 0, &task_ids),
         open_issues: snapshot
@@ -5019,6 +5047,60 @@ fn snippet(body: &str, index: usize, needle_len: usize) -> String {
         result.push('…');
     }
     result
+}
+
+/// Repository-wide code statistics for the Overview page.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct RepoStatsView {
+    /// False when the project root is not a usable git repository (no git,
+    /// no HEAD yet); the frontend hides the tiles instead of showing zeros.
+    pub(super) available: bool,
+    pub(super) files: u64,
+    pub(super) lines: u64,
+}
+
+/// Counts tracked files and lines by diffing the empty tree against HEAD —
+/// two short git invocations, run only when the Overview requests them.
+pub(super) fn repo_stats(root: &Path) -> RepoStatsView {
+    let unavailable = RepoStatsView {
+        available: false,
+        files: 0,
+        lines: 0,
+    };
+    let git = |args: &[&str]| -> Option<String> {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .ok()?;
+        output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+    };
+    // The empty-tree hash is derived (mktree on empty stdin), not hard-coded,
+    // so SHA-256 repos work and no platform null-device path is needed.
+    let Some(empty_tree) = git(&["mktree"]) else {
+        return unavailable;
+    };
+    let Some(shortstat) = git(&["diff", "--shortstat", empty_tree.trim(), "HEAD"]) else {
+        return unavailable;
+    };
+    // " 27 files changed, 78436 insertions(+)"; a repo of only empty files
+    // has no insertions clause at all.
+    let mut numbers = shortstat
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| part.parse::<u64>().ok());
+    // An empty diff (commit with no files) is a valid, empty repository.
+    RepoStatsView {
+        available: true,
+        files: numbers.next().unwrap_or(0),
+        lines: numbers.next().unwrap_or(0),
+    }
 }
 
 fn heatmap(snapshot: &ProjectSnapshot, requested_weeks: i64) -> Vec<Value> {

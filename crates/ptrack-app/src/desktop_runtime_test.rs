@@ -25,7 +25,7 @@ use super::desktop_runtime::{
     RecentProjectsProvider, ResetApplicationStateResultV1, WorkspaceProject, WorkspaceStatus,
     agent_intelligence_for_task_result, allowed_desktop_commands, apply_preferences, board_view,
     capture_git_snapshot_with, confirm_linked_launch, heatmap_at, project_storage,
-    record_last_project_in, reset_application_records, watch_workspace_data,
+    record_last_project_in, repo_stats, reset_application_records, watch_workspace_data,
 };
 use crate::{
     AppError, AppResult, DesktopEvent, DesktopEventSink, DesktopInitializationService,
@@ -892,6 +892,7 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "GetPreferences",
             "GetRecentProjects",
             "GetRecentProjectsV1",
+            "GetRepoStatsV1",
             "GetTaskDetailV2",
             "GetTerminalProfiles",
             "GetTerminalProfilesV2",
@@ -3437,4 +3438,66 @@ fn desktop_plan_lifecycle_commands_rename_preview_delete_and_copy_within() {
     // ListProjectsV1 answers with the registry (possibly empty in this harness).
     let projects = workspace.invoke("ListProjectsV1", &[json!(7)]).unwrap();
     assert!(projects["projects"].is_array());
+}
+
+#[test]
+fn repo_stats_counts_tracked_files_and_lines_and_fails_soft() {
+    let root = std::env::temp_dir().join(format!(
+        "ptrack-repo-stats-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+
+    // Not a git repository: soft failure, never an error.
+    let stats = repo_stats(&root);
+    assert!(!stats.available);
+
+    let git = |args: &[&str]| {
+        let outcome = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(outcome.success(), "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    git(&[
+        "-c",
+        "user.email=t@t",
+        "-c",
+        "user.name=t",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "root",
+    ]);
+
+    // A repository whose HEAD holds no files is available and empty.
+    let stats = repo_stats(&root);
+    assert_eq!((stats.available, stats.files, stats.lines), (true, 0, 0));
+
+    std::fs::write(root.join("a.txt"), "one\ntwo\nthree\n").unwrap();
+    std::fs::write(root.join("b.txt"), "four\n").unwrap();
+    git(&["add", "."]);
+    git(&[
+        "-c",
+        "user.email=t@t",
+        "-c",
+        "user.name=t",
+        "commit",
+        "-q",
+        "-m",
+        "content",
+    ]);
+
+    let stats = repo_stats(&root);
+    assert_eq!((stats.available, stats.files, stats.lines), (true, 2, 4));
+
+    std::fs::remove_dir_all(&root).unwrap();
 }
