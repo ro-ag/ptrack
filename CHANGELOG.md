@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-08-24
+
 ### Changed
 - New app icon: a hand-drawn check mark carved through the kanban columns as
   negative space, a perceptible background gradient with a top rim light, and
