@@ -13,16 +13,20 @@ Outputs (relative to the repository root):
   build/appicon.png                 1024x1024 master icon
   assets/brand/icon-{16..512}.png   standalone PNG exports
   assets/brand/AppIcon.icns         macOS icon bundle (via iconutil)
+  assets/brand/AppIcon.icon         Icon Composer source (macOS 26 layered icon)
+  assets/brand/tahoe/Assets.car     compiled layered icon (via actool)
   src-tauri/icons/icon.ico          Windows application resource (per-size frames)
   assets/brand/banner.png           1280x400 README banner
   assets/brand/social.png           1280x640 social/Open Graph card
 
-Requires: Pillow + numpy. macOS for iconutil.
+Requires: Pillow + numpy. macOS for iconutil; Xcode's actool for Assets.car.
 Run from anywhere:  python3 assets/brand/generate_icons.py
 """
 
 from __future__ import annotations
 
+import json
+import os
 import shutil
 import subprocess
 import sys
@@ -184,6 +188,103 @@ def draw_icon(canvas: int) -> Image.Image:
     return draw_icon_small(canvas) if canvas <= 48 else draw_icon_full(canvas)
 
 
+def draw_tahoe_layer(canvas: int = 1024) -> Image.Image:
+    """Foreground layer for the macOS 26 layered icon: the carved bars on a
+    transparent full-bleed canvas. The system draws the tile shape, gradient
+    lives in the .icon fill, and Liquid Glass supplies depth and specular."""
+    s = canvas * SUPER
+    margin = 0
+    art = s
+    layer = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    bar_w = art * 0.17
+    for fx, fy, fill in zip(
+        (0.175, 0.415, 0.655), (0.38, 0.29, 0.20), (LAVENDER, BLUE, GREEN)
+    ):
+        d.rounded_rectangle(
+            (round(art * fx), round(art * fy), round(art * (fx + 0.17)), round(art * 0.80)),
+            radius=round(bar_w * 0.34),
+            fill=fill + (255,),
+        )
+    layer.putalpha(ImageChops.subtract(layer.split()[3], check_mask(s, margin, art)))
+    return layer.resize((canvas, canvas), Image.LANCZOS)
+
+
+def srgb(color: tuple[int, int, int], alpha: float = 1.0) -> str:
+    return "srgb:" + ",".join(f"{c / 255:.5f}" for c in color) + f",{alpha:.5f}"
+
+
+def find_actool() -> list[str] | None:
+    """actool ships with full Xcode; fall back past a CLT-only xcode-select."""
+    for env in (None, "/Applications/Xcode.app/Contents/Developer"):
+        environ = dict(os.environ, DEVELOPER_DIR=env) if env else os.environ
+        probe = subprocess.run(
+            ["xcrun", "--find", "actool"], capture_output=True, env=environ
+        )
+        if probe.returncode == 0:
+            return ["env", f"DEVELOPER_DIR={env}", "actool"] if env else ["actool"]
+    return None
+
+
+def export_tahoe() -> None:
+    """Write the Icon Composer source bundle and compile it to Assets.car."""
+    icon_dir = BRAND / "AppIcon.icon"
+    assets_dir = icon_dir / "Assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    draw_tahoe_layer().save(assets_dir / "bars.png")
+
+    document = {
+        "fill": {"linear-gradient": [srgb(INK_TOP), srgb(INK_BOTTOM)]},
+        "groups": [
+            {
+                "layers": [
+                    {
+                        "glass": True,
+                        "image-name": "bars.png",
+                        "name": "bars",
+                        "position": {"scale": 1, "translation-in-points": [0, 0]},
+                    }
+                ],
+                "shadow": {"kind": "neutral", "opacity": 0.5},
+                "specular": True,
+                "translucency": {"enabled": True, "value": 0.5},
+            }
+        ],
+        "supported-platforms": {"circles": ["watchOS"], "squares": "shared"},
+    }
+    (icon_dir / "icon.json").write_text(json.dumps(document, indent=2) + "\n")
+    print("wrote assets/brand/AppIcon.icon")
+
+    actool = find_actool()
+    if actool is None:
+        print("actool not found; skipping Assets.car", file=sys.stderr)
+        return
+    out_dir = BRAND / "tahoe"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        subprocess.run(
+            actool
+            + [
+                str(icon_dir),
+                "--compile", tmp,
+                "--output-format", "human-readable-text",
+                "--notices", "--warnings", "--errors",
+                "--output-partial-info-plist", str(Path(tmp) / "partial.plist"),
+                "--app-icon", "AppIcon",
+                "--include-all-app-icons",
+                "--enable-on-demand-resources", "NO",
+                "--development-region", "en",
+                "--target-device", "mac",
+                "--minimum-deployment-target", "12.0",
+                "--platform", "macosx",
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+        shutil.copy(Path(tmp) / "Assets.car", out_dir / "Assets.car")
+    print("wrote assets/brand/tahoe/Assets.car")
+
+
 def find_font(preferred: list[tuple[str, int]]) -> str | None:
     for path, _ in preferred:
         if Path(path).exists():
@@ -289,6 +390,7 @@ def main() -> None:
     print(f"wrote {APPICON.relative_to(ROOT)}")
 
     export_iconset()
+    export_tahoe()
     draw_banner(1280, 400, BRAND / "banner.png")
     draw_banner(1280, 640, BRAND / "social.png", social=True)
 

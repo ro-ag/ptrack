@@ -32,6 +32,9 @@
   "bundle": {
     "active": true,
     "category": "DeveloperTool",
+    "resources": {
+      "../assets/brand/tahoe/Assets.car": "Assets.car"
+    },
     "icon": [
       "../assets/brand/icon-32.png",
       "../assets/brand/icon-128.png",

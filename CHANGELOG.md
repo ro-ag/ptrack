@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- macOS 26 (Tahoe) layered Liquid Glass app icon. The generator now emits an
+  Icon Composer source bundle (`assets/brand/AppIcon.icon`: gradient fill +
+  the carved-bars glass layer) and compiles it with Xcode's `actool` into
+  `assets/brand/tahoe/Assets.car`, which the Tauri bundle ships in
+  `Contents/Resources` with `CFBundleIconName` set. macOS 26 renders the
+  layered glass icon in all four appearance modes; macOS 15 and older keep
+  the existing `.icns` via `CFBundleIconFile`.
+
 ## [0.32.0] - 2026-08-24
 
 ### Changed
