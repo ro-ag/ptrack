@@ -931,7 +931,7 @@ export function driftPresentation(section: unknown): {
 // by an input, a modal, or the terminal.
 export function commandShortcut(
   input: ShortcutInput,
-): "palette" | "settings" | "board" | "overview" | "capabilities" | "addTask" | null {
+): "palette" | "settings" | "board" | "overview" | "addTask" | null {
   if (
     input.composing ||
     input.repeat ||
@@ -945,7 +945,6 @@ export function commandShortcut(
   if (key === ",") return "settings";
   if (key === "1") return "board";
   if (key === "2") return "overview";
-  if (key === "3") return "capabilities";
   if (key === "n") return "addTask";
   return null;
 }

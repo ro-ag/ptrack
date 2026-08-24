@@ -10,7 +10,7 @@ import {
 describe("native menu event routing", () => {
   it("registers every native action and delegates to the supplied behavior", () => {
     const handlers = new Map<string, () => void>();
-    const disposers = Array.from({ length: 11 }, () => vi.fn());
+    const disposers = Array.from({ length: 10 }, () => vi.fn());
     let disposerIndex = 0;
     const subscribe = vi.fn((name: string, callback: () => void) => {
       handlers.set(name, callback);
@@ -21,7 +21,6 @@ describe("native menu event routing", () => {
       "switchProject",
       "closeProject",
       "showSettings",
-      "showCapabilities",
       "showBoard",
       "showIntelligence",
       "toggleTerminalPanel",
@@ -40,7 +39,6 @@ describe("native menu event routing", () => {
       "workspace:switch-requested",
       "workspace:close-requested",
       "workspace:settings-requested",
-      "workspace:capabilities-requested",
       "workspace:board-requested",
       "workspace:intelligence-requested",
       "workspace:terminal-panel-toggle-requested",
@@ -56,7 +54,6 @@ describe("native menu event routing", () => {
   it("allows explicit workspace commands despite retained input or terminal focus", () => {
     const commands: NativeMenuCommand[] = [
       "showSettings",
-      "showCapabilities",
       "showBoard",
       "showIntelligence",
       "toggleTerminalPanel",
@@ -73,7 +70,6 @@ describe("native menu event routing", () => {
   });
 
   it("maps native view commands to headings that should receive focus", () => {
-    expect(nativeMenuViewTarget("showCapabilities")).toBe("capabilities");
     expect(nativeMenuViewTarget("showSettings")).toBeNull();
     expect(nativeMenuViewTarget("showBoard")).toBe("board");
     expect(nativeMenuViewTarget("showIntelligence")).toBe("overview");

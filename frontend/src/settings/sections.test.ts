@@ -53,39 +53,24 @@ describe("reset confirmations", () => {
       "Settings, plans, tasks, notes, project databases, and Recent projects are not touched.",
     );
     expect(resetApplicationStateConfirmation.detail).toContain(
-      "Network capability grants live in the project and are revoked in the open project, and must be granted again",
-    );
-    expect(resetApplicationStateConfirmation.detail).toContain(
       "Plans, tasks, notes, and Recent projects are not touched.",
     );
     expect(resetApplicationStateConfirmation.submit).toBe("Reset Application State");
   });
 
-  // Revoking a grant writes DisableCapabilityV2 into the open project, so no
-  // reset copy may promise the project database is untouched.
-  it("never claims the project database survives a grant revocation", () => {
-    expect(resetApplicationStateConfirmation.detail).not.toContain("project database");
-    expect(resetApplicationStateMessage({ records: ["preferences"], capabilityGrants: 1 }))
-      .not.toContain("project database");
-  });
-
-  it("reports the records and grants the runtime actually returned", () => {
+  it("reports the records the runtime actually returned", () => {
     expect(
       resetApplicationStateMessage({
         records: ["preferences", "updates.auto-check", "window-state", "layout-state"],
-        capabilityGrants: 2,
       }),
     ).toBe(
-      "Cleared preferences, updates.auto-check, window-state, layout-state. 2 network capability grants were revoked and must be granted again. Plans, tasks, notes, and Recent projects were not touched.",
+      "Cleared preferences, updates.auto-check, window-state, layout-state. Plans, tasks, notes, and Recent projects were not touched.",
     );
-    expect(resetApplicationStateMessage({ records: ["preferences"], capabilityGrants: 1 }))
-      .toContain("1 network capability grant was revoked and must be granted again.");
   });
 
   it("claims nothing when the reply carries nothing", () => {
-    const message = resetApplicationStateMessage({ records: ["", 7], capabilityGrants: "many" });
+    const message = resetApplicationStateMessage({ records: ["", 7] });
     expect(message).toContain("No stored records were cleared.");
-    expect(message).toContain("No network capability grants were revoked.");
     expect(resetApplicationStateMessage(null)).toBe(message);
   });
 });
@@ -104,6 +89,10 @@ describe("diagnostics rows", () => {
       capabilities: { granted: 2, total: 5 },
     });
 
+    // The runtime still reports the deprecated capability broker, and the
+    // dialog no longer renders it.
+    expect(rows.map((row) => row.label)).not.toContain("Capabilities · Granted");
+
     expect(rows).toContainEqual({
       label: "Paths · Global home",
       value: "/Users/dev/.ptrack",
@@ -112,11 +101,6 @@ describe("diagnostics rows", () => {
     expect(rows).toContainEqual({
       label: "Runtime · Status",
       value: "active",
-      copy: null,
-    });
-    expect(rows).toContainEqual({
-      label: "Capabilities · Granted",
-      value: "2",
       copy: null,
     });
   });
@@ -136,10 +120,10 @@ describe("diagnostics rows", () => {
     });
   });
 
-  // `paths.globalDatabase` is null when the marker cannot be read, `capabilities`
-  // is null whenever the caller has no counts, and `paths.project` is null with
-  // no workspace open. A row that silently disappeared would read as "there is
-  // nothing here" rather than "this could not be reported".
+  // `paths.globalDatabase` is null when the marker cannot be read, and
+  // `paths.project` is null with no workspace open. A row that silently
+  // disappeared would read as "there is nothing here" rather than "this could
+  // not be reported".
   it("reports the sections the runtime nulls instead of dropping them", () => {
     const rows = diagnosticsRows({
       paths: { globalDatabase: null, project: null },
@@ -149,7 +133,6 @@ describe("diagnostics rows", () => {
     expect(rows).toEqual([
       { label: "Paths · Global database", value: "Not available", copy: null },
       { label: "Paths · Project", value: "No project open", copy: null },
-      { label: "Capabilities", value: "Not available", copy: null },
     ]);
   });
 
@@ -287,24 +270,21 @@ describe("diagnostics rows", () => {
   // Key order is the serializer's business; reading order is the dialog's.
   it("orders the report rather than trusting the serializer's key order", () => {
     const rows = diagnosticsRows({
-      capabilities: { granted: 1, total: 1 },
       backups: { status: "available", entries: [] },
+      runtime: { status: "active" },
       paths: { globalHome: "/Users/dev/.ptrack" },
     });
 
     expect(rows.map((row) => row.label)).toEqual([
       "Paths · Global home",
-      "Capabilities · Granted",
-      "Capabilities · Total",
+      "Runtime · Status",
       "Backups",
     ]);
   });
 
   // The row cap cuts from the end, so the two unbounded ledgers sit there and
-  // the bounded sections sit above them. The realistic worst case is already
-  // 63 rows, which left the old cap of 64 exactly one backend field of
-  // headroom — and `capabilities`, ordered last, was the section it took.
-  // This fixture is that worst case plus four more path fields.
+  // the bounded sections sit above them. This fixture is the realistic worst
+  // case plus four more path fields.
   it("keeps every section when the report outgrows the old 64-row cap", () => {
     const entries = Array.from({ length: 30 }, (_, index) => ({
       recordedAt: "2026-08-13T09:15:00Z",
@@ -331,10 +311,10 @@ describe("diagnostics rows", () => {
       capabilities: { granted: 1, total: 5 },
     });
 
-    // 12 paths + 1 runtime + 2 capabilities + 25 backups + 2 quarantine + 25
-    // receipts, with both ledgers already capped at 25 by their own slices.
-    expect(rows).toHaveLength(67);
-    expect(rows.map((row) => row.label)).toContain("Capabilities · Total");
+    // 12 paths + 1 runtime + 25 backups + 2 quarantine + 25 receipts, with
+    // both ledgers already capped at 25 by their own slices; the deprecated
+    // `capabilities` section contributes nothing.
+    expect(rows).toHaveLength(65);
     expect(rows.at(-1)?.label).toBe("Migration receipt 24");
   });
 

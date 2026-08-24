@@ -53,7 +53,6 @@ fn dispatch_and_window_contracts_are_exact() {
     let events = [
         "update:open-requested",
         "workspace:board-requested",
-        "workspace:capabilities-requested",
         "workspace:close-requested",
         "workspace:command-palette-requested",
         "workspace:install-shell-command-requested",

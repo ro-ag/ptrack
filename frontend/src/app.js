@@ -73,21 +73,6 @@ import {
   updateStateIsNewer,
 } from "./updates/presentation";
 import {
-  canEnableCapability,
-  canStartCapabilitySave,
-  capabilityActionAccessibleName,
-  capabilityAnnouncement,
-  capabilityFocusKey,
-  capabilityFocusRestoreKey,
-  capabilityResponseIsCurrent,
-  capabilityRiskGrants,
-  capabilityScopeFieldState,
-  capabilityStateLabel,
-  diagnosticLabel,
-  gitCapabilityNeedsSSH,
-  splitCapabilityList,
-} from "./capabilities/presentation";
-import {
   clampSidebarWidth,
   defaultLayoutState,
   defaultSidebarWidth,
@@ -233,12 +218,9 @@ const elements = {
   terminalPanelToggle: document.querySelector("#terminal-panel-toggle"),
   workspace: document.querySelector("#workspace"),
   overviewPage: document.querySelector("#overview-page"),
-  capabilitiesPage: document.querySelector("#capabilities-page"),
   overviewHeading: document.querySelector("#overview-heading"),
-  capabilitiesHeading: document.querySelector("#capabilities-heading"),
   navBoard: document.querySelector("#nav-board"),
   navOverview: document.querySelector("#nav-overview"),
-  navCapabilities: document.querySelector("#nav-capabilities"),
   stateScreen: document.querySelector("#workspace-state-screen"),
   stateCard: document.querySelector("#project-state-card"),
   welcomePanel: document.querySelector("#welcome-panel"),
@@ -362,7 +344,6 @@ const elements = {
   settingsUpdatesAutomatic: document.querySelector("#settings-updates-automatic"),
   settingsOpenUpdates: document.querySelector("#settings-open-updates"),
   settingsDiagnostics: document.querySelector("#settings-diagnostics"),
-  settingsOpenCapabilities: document.querySelector("#settings-open-capabilities"),
   aboutVersion: document.querySelector("#about-version"),
   aboutBuild: document.querySelector("#about-build"),
   aboutProject: document.querySelector("#about-project"),
@@ -529,69 +510,6 @@ const elements = {
   paletteResults: document.querySelector("#palette-results"),
   planRing: document.querySelector("#plan-ring"),
   heatmap: document.querySelector("#activity-heatmap"),
-  capabilityHelp: document.querySelector("#capability-help"),
-  capabilityNew: document.querySelector("#capability-new"),
-  capabilityStatus: document.querySelector("#capability-status"),
-  capabilityClear: document.querySelector("#capability-clear"),
-  capabilityForm: document.querySelector("#capability-form"),
-  capabilityEditorTitle: document.querySelector("#capability-editor-title"),
-  capabilityID: document.querySelector("#capability-id"),
-  capabilityName: document.querySelector("#capability-name"),
-  capabilityProfile: document.querySelector("#capability-profile"),
-  capabilityKind: document.querySelector("#capability-kind"),
-  capabilityDuration: document.querySelector("#capability-duration"),
-  capabilityTimeout: document.querySelector("#capability-timeout"),
-  capabilityResponseLimit: document.querySelector("#capability-response-limit"),
-  capabilityRequestLimit: document.querySelector("#capability-request-limit"),
-  capabilityOutputLimit: document.querySelector("#capability-output-limit"),
-  capabilityConcurrency: document.querySelector("#capability-concurrency"),
-  capabilityRedirects: document.querySelector("#capability-redirects"),
-  capabilityAuditRetain: document.querySelector("#capability-audit-retain"),
-  capabilityAudit: document.querySelector("#capability-audit"),
-  capabilityHTTPFields: document.querySelector("#capability-http-fields"),
-  capabilityHTTPURL: document.querySelector("#capability-http-url"),
-  capabilityHTTPMethods: document.querySelector("#capability-http-methods"),
-  capabilityHTTPPaths: document.querySelector("#capability-http-paths"),
-  capabilityGitFields: document.querySelector("#capability-git-fields"),
-  capabilityGitName: document.querySelector("#capability-git-name"),
-  capabilityGitURL: document.querySelector("#capability-git-url"),
-  capabilityGitSSHID: document.querySelector("#capability-git-ssh-id"),
-  capabilityGitOperations: document.querySelector("#capability-git-operations"),
-  capabilityGitBranches: document.querySelector("#capability-git-branches"),
-  capabilityGitRefspecs: document.querySelector("#capability-git-refspecs"),
-  capabilityGitTags: document.querySelector("#capability-git-tags"),
-  capabilityGitForce: document.querySelector("#capability-git-force"),
-  capabilityGitDelete: document.querySelector("#capability-git-delete"),
-  capabilitySSHFields: document.querySelector("#capability-ssh-fields"),
-  capabilitySSHAlias: document.querySelector("#capability-ssh-alias"),
-  capabilitySSHHost: document.querySelector("#capability-ssh-host"),
-  capabilitySSHPort: document.querySelector("#capability-ssh-port"),
-  capabilitySSHUser: document.querySelector("#capability-ssh-user"),
-  capabilitySSHKey: document.querySelector("#capability-ssh-key"),
-  capabilitySSHCommands: document.querySelector("#capability-ssh-commands"),
-  capabilitySSHGit: document.querySelector("#capability-ssh-git"),
-  capabilitySSHUpload: document.querySelector("#capability-ssh-upload"),
-  capabilitySSHDownload: document.querySelector("#capability-ssh-download"),
-  capabilitySSHShell: document.querySelector("#capability-ssh-shell"),
-  capabilitySSHUploadLocal: document.querySelector("#capability-ssh-upload-local"),
-  capabilitySSHUploadRemote: document.querySelector("#capability-ssh-upload-remote"),
-  capabilitySSHDownloadLocal: document.querySelector("#capability-ssh-download-local"),
-  capabilitySSHDownloadRemote: document.querySelector("#capability-ssh-download-remote"),
-  capabilitySSHLocalForward: document.querySelector("#capability-ssh-local-forward"),
-  capabilitySSHRemoteForward: document.querySelector("#capability-ssh-remote-forward"),
-  capabilityPreviewButton: document.querySelector("#capability-preview"),
-  capabilityTestButton: document.querySelector("#capability-test"),
-  capabilitySaveButton: document.querySelector("#capability-save"),
-  capabilityPreviewResult: document.querySelector("#capability-preview-result"),
-  capabilityEffectiveScope: document.querySelector("#capability-effective-scope"),
-  capabilityRiskSummary: document.querySelector("#capability-risk-summary"),
-  capabilityDiagnostic: document.querySelector("#capability-diagnostic"),
-  capabilityTotal: document.querySelector("#capability-total"),
-  capabilityListHeading: document.querySelector("#capability-list-heading"),
-  capabilityList: document.querySelector("#capability-list"),
-  capabilityAuditList: document.querySelector("#capability-audit-list"),
-  capabilityAuditHeading: document.querySelector("#capability-audit-heading"),
-  capabilityAuditItems: document.querySelector("#capability-audit-items"),
   toast: document.querySelector("#toast"),
 };
 
@@ -690,14 +608,6 @@ let pendingDetailTaskId = 0;
 let heatmapRequested = false;
 let repoStatsRequested = false;
 let repoStats = null;
-let capabilityViews = [];
-let capabilityPreview = null;
-let capabilityRequest = 0;
-let capabilityFormRevision = 0;
-let capabilityPreviewRequest = 0;
-let capabilityTestRequest = 0;
-let capabilityAuditRequest = 0;
-let capabilitySaveInFlight = false;
 const expandedLanes = new Set();
 const foldedLanes = new Set();
 
@@ -962,15 +872,6 @@ function showError(error) {
 
 function setStatus(message) {
   elements.status.textContent = message;
-}
-
-function setCapabilityStatus(action, phase) {
-  elements.capabilityStatus.textContent = capabilityAnnouncement(action, phase);
-}
-
-function showCapabilityError(action) {
-  setCapabilityStatus(action, "failure");
-  showError(new Error(capabilityAnnouncement(action, "failure")));
 }
 
 function relativeTime(value) {
@@ -3272,9 +3173,6 @@ async function resetApplicationState(invoker) {
     applyLayoutState(defaultLayoutState());
     await loadPreferences();
     void refreshUpdateState();
-    if (workspaceState.status === "open" && view === "capabilities") {
-      void loadCapabilities();
-    }
     // Sticky for the same reason as the layout reset, and more so: this
     // message is three clauses long and wraps to about four lines.
     setSettingsStatus(resetApplicationStateMessage(result), false, true);
@@ -5312,14 +5210,12 @@ function renderFirstPlanOnboarding(focus = false) {
   elements.stateScreen.hidden = false;
   elements.workspace.hidden = true;
   elements.overviewPage.hidden = true;
-  elements.capabilitiesPage.hidden = true;
   elements.welcomePanel.hidden = true;
   elements.welcomePanel.inert = true;
   elements.setupPanel.hidden = true;
   elements.setupPanel.inert = true;
   elements.navBoard.disabled = true;
   elements.navOverview.disabled = true;
-  elements.navCapabilities.disabled = true;
   elements.switchProject.disabled = true;
   elements.closeProject.disabled = true;
 
@@ -5429,11 +5325,8 @@ async function finishFirstPlanOnboarding(planId = firstPlanState.planId) {
   elements.workspace.removeAttribute("aria-busy");
   elements.overviewPage.inert = false;
   elements.overviewPage.removeAttribute("aria-busy");
-  elements.capabilitiesPage.inert = false;
-  elements.capabilitiesPage.removeAttribute("aria-busy");
   elements.navBoard.disabled = false;
   elements.navOverview.disabled = false;
-  elements.navCapabilities.disabled = false;
   elements.switchProject.disabled = false;
   elements.closeProject.disabled = false;
   view = "board";
@@ -5657,600 +5550,28 @@ async function loadRecentProjects({
   }
 }
 
-function numberValue(element, fallback = 0) {
-  const value = Number(element.value);
-  return Number.isFinite(value) ? value : fallback;
-}
-
-function capabilityDraftFromForm() {
-  const kind = elements.capabilityKind.value;
-  const draft = {
-    id: numberValue(elements.capabilityID),
-    model_version: 1,
-    name: elements.capabilityName.value.trim(),
-    kind,
-    agent_profile: elements.capabilityProfile.value.trim(),
-    approval_duration_seconds: Math.round(
-      numberValue(elements.capabilityDuration, 60) * 60,
-    ),
-    limits: {
-      timeout_seconds: numberValue(elements.capabilityTimeout, 30),
-      max_request_bytes: numberValue(elements.capabilityRequestLimit, 1048576),
-      max_response_bytes: numberValue(
-        elements.capabilityResponseLimit,
-        4194304,
-      ),
-      max_output_bytes: numberValue(elements.capabilityOutputLimit, 1048576),
-      max_redirects: numberValue(elements.capabilityRedirects, 3),
-      max_concurrent: numberValue(elements.capabilityConcurrency, 1),
-    },
-    audit: {
-      enabled: elements.capabilityAudit.checked,
-      retain_last: numberValue(elements.capabilityAuditRetain, 100),
-    },
-  };
-  if (kind === "http") {
-    draft.http = {
-      base_url: elements.capabilityHTTPURL.value.trim(),
-      methods: splitCapabilityList(elements.capabilityHTTPMethods.value),
-      path_prefixes: splitCapabilityList(elements.capabilityHTTPPaths.value),
-    };
-  } else if (kind === "git") {
-    draft.git = {
-      remote_name: elements.capabilityGitName.value.trim(),
-      remote_url: elements.capabilityGitURL.value.trim(),
-      operations: splitCapabilityList(elements.capabilityGitOperations.value),
-      branches: splitCapabilityList(elements.capabilityGitBranches.value),
-      refspecs: splitCapabilityList(elements.capabilityGitRefspecs.value),
-      allow_tags: elements.capabilityGitTags.checked,
-      allow_force_push: elements.capabilityGitForce.checked,
-      allow_delete_refs: elements.capabilityGitDelete.checked,
-    };
-  } else if (kind === "ssh") {
-    draft.ssh = {
-      alias: elements.capabilitySSHAlias.value.trim(),
-      host: elements.capabilitySSHHost.value.trim(),
-      port: numberValue(elements.capabilitySSHPort, 22),
-      user: elements.capabilitySSHUser.value.trim(),
-      host_key: elements.capabilitySSHKey.value.trim(),
-      allow_git: elements.capabilitySSHGit.checked,
-      remote_commands: splitCapabilityList(elements.capabilitySSHCommands.value),
-      allow_upload: elements.capabilitySSHUpload.checked,
-      allow_download: elements.capabilitySSHDownload.checked,
-      upload_roots: splitCapabilityList(elements.capabilitySSHUploadLocal.value),
-      upload_remote_roots: splitCapabilityList(
-        elements.capabilitySSHUploadRemote.value,
-      ),
-      download_roots: splitCapabilityList(
-        elements.capabilitySSHDownloadLocal.value,
-      ),
-      download_remote_roots: splitCapabilityList(
-        elements.capabilitySSHDownloadRemote.value,
-      ),
-      allow_interactive_shell: elements.capabilitySSHShell.checked,
-      local_forward_targets: splitCapabilityList(
-        elements.capabilitySSHLocalForward.value,
-      ),
-      remote_forward_targets: splitCapabilityList(
-        elements.capabilitySSHRemoteForward.value,
-      ),
-    };
-  }
-  return draft;
-}
-
-function syncCapabilityScopeFields() {
-  const kind = elements.capabilityKind.value;
-  const selected = capabilityScopeFieldState(kind);
-  for (const [fieldset, active] of [
-    [elements.capabilityHTTPFields, selected.http],
-    [elements.capabilityGitFields, selected.git],
-    [elements.capabilitySSHFields, selected.ssh],
-  ]) {
-    fieldset.hidden = !active;
-    fieldset.disabled = !active;
-  }
-}
-
-function invalidateCapabilityForm() {
-  capabilityFormRevision += 1;
-  invalidateCapabilityResponses();
-  capabilityPreview = null;
-  elements.capabilityPreviewResult.hidden = true;
-  elements.capabilityAuditList.hidden = true;
-}
-
-function invalidateCapabilityResponses() {
-  capabilityPreviewRequest += 1;
-  capabilityTestRequest += 1;
-  capabilityAuditRequest += 1;
-}
-
-function resetCapabilityForm() {
-  invalidateCapabilityForm();
-  elements.capabilityForm.reset();
-  elements.capabilityID.value = "0";
-  elements.capabilityEditorTitle.textContent = "New capability";
-  elements.capabilityPreviewResult.hidden = true;
-  elements.capabilityAuditList.hidden = true;
-  capabilityPreview = null;
-  syncCapabilityScopeFields();
-  elements.capabilityName.focus();
-}
-
-function setInputValue(element, value) {
-  element.value = value ?? "";
-}
-
-function fillCapabilityForm(view) {
-  invalidateCapabilityForm();
-  const capability = view.capability;
-  const limits = capability.limits || {};
-  const audit = capability.audit || {};
-  setInputValue(elements.capabilityID, capability.id);
-  setInputValue(elements.capabilityName, capability.name);
-  setInputValue(elements.capabilityProfile, capability.agent_profile);
-  setInputValue(elements.capabilityKind, capability.kind);
-  setInputValue(
-    elements.capabilityDuration,
-    Math.max(1, Math.round(capability.approval_duration_seconds / 60)),
-  );
-  setInputValue(elements.capabilityTimeout, limits.timeout_seconds);
-  setInputValue(elements.capabilityRequestLimit, limits.max_request_bytes);
-  setInputValue(elements.capabilityResponseLimit, limits.max_response_bytes);
-  setInputValue(elements.capabilityOutputLimit, limits.max_output_bytes);
-  setInputValue(elements.capabilityRedirects, limits.max_redirects);
-  setInputValue(elements.capabilityConcurrency, limits.max_concurrent);
-  elements.capabilityAudit.checked = Boolean(audit.enabled);
-  setInputValue(elements.capabilityAuditRetain, audit.retain_last);
-
-  const http = capability.http || {};
-  setInputValue(elements.capabilityHTTPURL, http.base_url);
-  setInputValue(elements.capabilityHTTPMethods, (http.methods || []).join(", "));
-  setInputValue(elements.capabilityHTTPPaths, (http.path_prefixes || []).join("\n"));
-
-  const git = capability.git || {};
-  setInputValue(elements.capabilityGitName, git.remote_name);
-  setInputValue(elements.capabilityGitURL, git.remote_url);
-  setInputValue(elements.capabilityGitSSHID, 0);
-  setInputValue(elements.capabilityGitOperations, (git.operations || []).join(", "));
-  setInputValue(elements.capabilityGitBranches, (git.branches || []).join(", "));
-  setInputValue(elements.capabilityGitRefspecs, (git.refspecs || []).join("\n"));
-  elements.capabilityGitTags.checked = Boolean(git.allow_tags);
-  elements.capabilityGitForce.checked = Boolean(git.allow_force_push);
-  elements.capabilityGitDelete.checked = Boolean(git.allow_delete_refs);
-
-  const ssh = capability.ssh || {};
-  setInputValue(elements.capabilitySSHAlias, ssh.alias);
-  setInputValue(elements.capabilitySSHHost, ssh.host);
-  setInputValue(elements.capabilitySSHPort, ssh.port || 22);
-  setInputValue(elements.capabilitySSHUser, ssh.user);
-  setInputValue(elements.capabilitySSHKey, ssh.host_key);
-  setInputValue(elements.capabilitySSHCommands, (ssh.remote_commands || []).join("\n"));
-  elements.capabilitySSHGit.checked = Boolean(ssh.allow_git);
-  elements.capabilitySSHUpload.checked = Boolean(ssh.allow_upload);
-  elements.capabilitySSHDownload.checked = Boolean(ssh.allow_download);
-  elements.capabilitySSHShell.checked = Boolean(ssh.allow_interactive_shell);
-  setInputValue(elements.capabilitySSHUploadLocal, (ssh.upload_roots || []).join(", "));
-  setInputValue(
-    elements.capabilitySSHUploadRemote,
-    (ssh.upload_remote_roots || []).join(", "),
-  );
-  setInputValue(
-    elements.capabilitySSHDownloadLocal,
-    (ssh.download_roots || []).join(", "),
-  );
-  setInputValue(
-    elements.capabilitySSHDownloadRemote,
-    (ssh.download_remote_roots || []).join(", "),
-  );
-  setInputValue(
-    elements.capabilitySSHLocalForward,
-    (ssh.local_forward_targets || []).join(", "),
-  );
-  setInputValue(
-    elements.capabilitySSHRemoteForward,
-    (ssh.remote_forward_targets || []).join(", "),
-  );
-
-  elements.capabilityEditorTitle.textContent = `Edit capability #${capability.id}`;
-  elements.capabilityAuditList.hidden = true;
-  syncCapabilityScopeFields();
-  showCapabilityPreview(view);
-  elements.capabilityName.focus();
-}
-
-function showCapabilityPreview(view, diagnostic = null) {
-  capabilityPreview = view;
-  elements.capabilityPreviewResult.hidden = false;
-  elements.capabilityEffectiveScope.textContent =
-    view?.effective_scope || "No effective scope available.";
-  const grants = capabilityRiskGrants(view?.capability);
-  elements.capabilityRiskSummary.textContent = grants.length
-    ? `High-risk grants: ${grants.join(", ")}.`
-    : "No write or interactive grants are in this scope.";
-  elements.capabilityDiagnostic.textContent = diagnosticLabel(diagnostic);
-}
-
-function capabilityEmpty(message) {
-  const empty = document.createElement("div");
-  empty.className = "capability-empty";
-  empty.setAttribute("role", "listitem");
-  empty.textContent = message;
-  return empty;
-}
-
-function capabilityButton(label, actionName, capability, action, disabled = false) {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "button-secondary";
-  button.textContent = label;
-  button.setAttribute(
-    "aria-label",
-    capabilityActionAccessibleName(actionName, capability),
-  );
-  button.dataset.capabilityFocusKey = capabilityFocusKey(
-    capability.id,
-    actionName,
-  );
-  button.disabled = disabled;
-  button.addEventListener("click", action);
-  return button;
-}
-
-async function runCapabilityAction(operation, action) {
-  if (workspaceController.state.status !== "open") return null;
-  invalidateCapabilityResponses();
-  const ticket = workspaceController.capture();
-  setCapabilityStatus(action, "progress");
-  try {
-    const result = await operation(ticket.generation);
-    if (!workspaceController.accepts(ticket, Number(result?.generation || 0))) {
-      return null;
-    }
-    await loadCapabilities();
-    setCapabilityStatus(action, "success");
-    return result;
-  } catch {
-    if (ticket.epoch === workspaceController.capture().epoch) {
-      showCapabilityError(action);
-    }
-    return null;
-  }
-}
-
-async function enableCapability(view) {
-  const digest = view.capability.scope_digest;
-  if (!canEnableCapability(view, digest)) return;
-  const confirmed = window.confirm(
-    `Enable this exact scope for ${view.capability.agent_profile}?\n\n${view.effective_scope}`,
-  );
-  if (!confirmed) return;
-  await runCapabilityAction(
-    (generation) =>
-      api().EnableCapabilityV2(generation, Number(view.capability.id), digest),
-    "enable",
-  );
-}
-
-async function loadCapabilityAudits(view) {
-  if (workspaceController.state.status !== "open") return;
-  const request = ++capabilityAuditRequest;
-  const ticket = workspaceController.capture();
-  setCapabilityStatus("audit", "progress");
-  try {
-    const result = await api().GetCapabilityAuditsV2(
-      ticket.generation,
-      Number(view.capability.id),
-      25,
-    );
-    if (
-      request !== capabilityAuditRequest ||
-      !workspaceController.accepts(ticket, Number(result.generation))
-    ) return;
-    elements.capabilityAuditHeading.textContent =
-      `Recent audit metadata · capability #${view.capability.id}`;
-    elements.capabilityAuditItems.replaceChildren();
-    if (!result.audits?.length) {
-      elements.capabilityAuditItems.append(capabilityEmpty("No audit records."));
-    } else {
-      result.audits.forEach((audit) => {
-        const item = document.createElement("div");
-        item.className = "capability-audit-item";
-        const outcome = audit.success ? "allowed" : `denied · ${audit.error_class}`;
-        item.textContent = `${audit.operation} · ${audit.target} · ${outcome} · ${audit.duration_millis} ms · ${relativeTime(audit.created_at)}`;
-        elements.capabilityAuditItems.append(item);
-      });
-    }
-    elements.capabilityAuditList.hidden = false;
-    setCapabilityStatus("audit", "success");
-  } catch {
-    if (
-      request === capabilityAuditRequest &&
-      ticket.epoch === workspaceController.capture().epoch
-    ) {
-      showCapabilityError("audit");
-    }
-  }
-}
-
-async function testCapability() {
-  const draft = capabilityDraftFromForm();
-  const sshID = numberValue(elements.capabilityGitSSHID);
-  if (gitCapabilityNeedsSSH(draft) && sshID <= 0) {
-    setCapabilityStatus("test", "blocked");
-    elements.capabilityGitSSHID.focus();
-    return;
-  }
-  if (workspaceController.state.status !== "open") return;
-  const request = ++capabilityTestRequest;
-  const revision = capabilityFormRevision;
-  const ticket = workspaceController.capture();
-  setCapabilityStatus("test", "progress");
-  try {
-    const result = await api().TestCapabilityV2(ticket.generation, draft, sshID);
-    if (
-      !capabilityResponseIsCurrent(
-        request, capabilityTestRequest, revision, capabilityFormRevision,
-      ) || !workspaceController.accepts(ticket, Number(result.generation))
-    ) return;
-    showCapabilityPreview(capabilityPreview || { capability: draft }, result.diagnostic);
-    setCapabilityStatus(
-      "test",
-      result.diagnostic?.success ? "success" : "failure",
-    );
-  } catch {
-    if (
-      capabilityResponseIsCurrent(
-        request, capabilityTestRequest, revision, capabilityFormRevision,
-      ) && ticket.epoch === workspaceController.capture().epoch
-    ) {
-      showCapabilityError("test");
-    }
-  }
-}
-
-function captureCapabilityListFocus() {
-  const active = document.activeElement;
-  if (!(active instanceof HTMLElement) || !elements.capabilityList.contains(active)) {
-    return null;
-  }
-  const card = active.closest("[data-capability-id]");
-  const cards = Array.from(
-    elements.capabilityList.querySelectorAll("[data-capability-id]"),
-  );
-  return {
-    key: active.dataset.capabilityFocusKey || card?.dataset.capabilityFocusKey || "",
-    index: Math.max(0, cards.indexOf(card)),
-  };
-}
-
-function restoreCapabilityListFocus(previous) {
-  if (!previous) return;
-  const focusTargets = Array.from(
-    document.querySelectorAll("[data-capability-focus-key]"),
-  ).filter(
-    (target) =>
-      !(target instanceof HTMLButtonElement) || !target.disabled,
-  );
-  const key = capabilityFocusRestoreKey(
-    previous.key,
-    previous.index,
-    capabilityViews.map((view) => view.capability.id),
-    focusTargets.map((target) => target.dataset.capabilityFocusKey),
-  );
-  focusTargets.find((target) => target.dataset.capabilityFocusKey === key)?.focus();
-}
-
-function renderCapabilities() {
-  const previousFocus = captureCapabilityListFocus();
-  elements.capabilityTotal.textContent = String(capabilityViews.length);
-  elements.capabilityList.replaceChildren();
-  if (!capabilityViews.length) {
-    elements.capabilityList.append(
-      capabilityEmpty("No capabilities. Broker tools are denied by default."),
-    );
-    restoreCapabilityListFocus(previousFocus);
-    return;
-  }
-  capabilityViews.forEach((view) => {
-    const capability = view.capability;
-    const card = document.createElement("article");
-    card.className = "capability-card";
-    card.setAttribute("role", "listitem");
-    card.tabIndex = -1;
-    card.dataset.capabilityId = String(capability.id);
-    card.dataset.capabilityFocusKey = capabilityFocusKey(capability.id);
-    const heading = document.createElement("div");
-    heading.className = "capability-card-heading";
-    const title = document.createElement("div");
-    const name = document.createElement("h3");
-    name.id = `capability-${capability.id}-heading`;
-    name.textContent = capability.name;
-    card.setAttribute("aria-labelledby", name.id);
-    const metadata = document.createElement("p");
-    metadata.className = "intelligence-meta";
-    metadata.textContent = `${capability.kind.toUpperCase()} · ${capability.agent_profile} · revision ${capability.revision}`;
-    title.append(name, metadata);
-    const state = document.createElement("span");
-    state.className = "capability-state";
-    state.dataset.state = view.state;
-    state.textContent = capabilityStateLabel(view.state);
-    heading.append(title, state);
-
-    const scope = document.createElement("code");
-    scope.className = "capability-card-scope";
-    scope.textContent = view.effective_scope || view.error || "Invalid scope";
-    const grants = capabilityRiskGrants(capability);
-    const risk = document.createElement("p");
-    risk.className = grants.length ? "capabilities-warning" : "intelligence-meta";
-    risk.textContent = grants.length
-      ? `High-risk grants: ${grants.join(", ")}`
-      : "Read-only or connection-only scope";
-
-    const actions = document.createElement("div");
-    actions.className = "capability-card-actions";
-    actions.append(
-      capabilityButton("Edit", "edit", capability, () => fillCapabilityForm(view)),
-      capabilityButton("Test", "test", capability, () => {
-        fillCapabilityForm(view);
-        if (gitCapabilityNeedsSSH(capability)) {
-          setCapabilityStatus("test", "blocked");
-          elements.capabilityGitSSHID.focus();
-          return;
-        }
-        void testCapability();
-      }, view.state === "invalid"),
-    );
-    if (view.state === "enabled") {
-      actions.append(
-        capabilityButton("Disable", "disable", capability, () =>
-          void runCapabilityAction(
-            (generation) =>
-              api().DisableCapabilityV2(generation, Number(capability.id)),
-            "disable",
-          ),
-        ),
-        capabilityButton("Expire now", "expire", capability, () =>
-          void runCapabilityAction(
-            (generation) =>
-              api().ExpireCapabilityV2(generation, Number(capability.id)),
-            "expire",
-          ),
-        ),
-      );
-    } else {
-      actions.append(
-        capabilityButton(
-          "Review and enable",
-          "enable",
-          capability,
-          () => void enableCapability(view),
-          !canEnableCapability(view, capability.scope_digest),
-        ),
-      );
-    }
-    actions.append(
-      capabilityButton("Audit", "audit", capability, () =>
-        void loadCapabilityAudits(view)),
-      capabilityButton("Remove", "remove", capability, async () => {
-        if (!window.confirm(`Remove capability “${capability.name}”?`)) return;
-        await runCapabilityAction(
-          (generation) =>
-            api().RemoveCapabilityV2(generation, Number(capability.id)),
-          "remove",
-        );
-      }),
-    );
-    card.append(heading, scope, risk, actions);
-    elements.capabilityList.append(card);
-  });
-  restoreCapabilityListFocus(previousFocus);
-}
-
-async function loadCapabilities() {
-  if (workspaceController.state.status !== "open") return;
-  const request = ++capabilityRequest;
-  const ticket = workspaceController.capture();
-  try {
-    const result = await api().GetCapabilitiesV2(ticket.generation);
-    if (
-      request !== capabilityRequest ||
-      !workspaceController.accepts(ticket, Number(result.generation))
-    ) return;
-    capabilityViews = result.capabilities || [];
-    renderCapabilities();
-  } catch {
-    if (
-      request === capabilityRequest &&
-      ticket.epoch === workspaceController.capture().epoch
-    ) {
-      const previousFocus = captureCapabilityListFocus();
-      elements.capabilityList.replaceChildren(
-        capabilityEmpty("Capabilities could not be loaded."),
-      );
-      restoreCapabilityListFocus(previousFocus);
-      showError(new Error("Capabilities could not be loaded."));
-    }
-  }
-}
-
-async function previewCapability() {
-  if (workspaceController.state.status !== "open") return;
-  const request = ++capabilityPreviewRequest;
-  const revision = capabilityFormRevision;
-  const ticket = workspaceController.capture();
-  setCapabilityStatus("preview", "progress");
-  try {
-    const result = await api().PreviewCapabilityV2(
-      ticket.generation,
-      capabilityDraftFromForm(),
-    );
-    if (
-      !capabilityResponseIsCurrent(
-        request, capabilityPreviewRequest, revision, capabilityFormRevision,
-      ) || !workspaceController.accepts(ticket, Number(result.generation))
-    ) return;
-    showCapabilityPreview(result.view);
-    setCapabilityStatus("preview", "success");
-  } catch {
-    if (
-      capabilityResponseIsCurrent(
-        request, capabilityPreviewRequest, revision, capabilityFormRevision,
-      ) && ticket.epoch === workspaceController.capture().epoch
-    ) {
-      showCapabilityError("preview");
-    }
-  }
-}
-
-async function saveCapability() {
-  if (!canStartCapabilitySave(capabilitySaveInFlight)) return;
-  capabilitySaveInFlight = true;
-  elements.capabilitySaveButton.disabled = true;
-  const revision = capabilityFormRevision;
-  const draft = capabilityDraftFromForm();
-  try {
-    const result = await runCapabilityAction(
-      (generation) => api().SaveCapabilityV2(generation, draft),
-      "save",
-    );
-    if (result?.view && revision === capabilityFormRevision) {
-      fillCapabilityForm(result.view);
-    }
-  } finally {
-    capabilitySaveInFlight = false;
-    elements.capabilitySaveButton.disabled = false;
-  }
-}
-
 function applyView() {
   const open = workspaceState.status === "open";
   elements.workspace.hidden = !open || view !== "board";
   elements.overviewPage.hidden = !open || view !== "overview";
-  elements.capabilitiesPage.hidden = !open || view !== "capabilities";
   elements.navBoard.classList.toggle("active", view === "board");
   elements.navOverview.classList.toggle("active", view === "overview");
-  elements.navCapabilities.classList.toggle("active", view === "capabilities");
   if (view === "board") elements.navBoard.setAttribute("aria-current", "page");
   else elements.navBoard.removeAttribute("aria-current");
   if (view === "overview") elements.navOverview.setAttribute("aria-current", "page");
   else elements.navOverview.removeAttribute("aria-current");
-  if (view === "capabilities") elements.navCapabilities.setAttribute("aria-current", "page");
-  else elements.navCapabilities.removeAttribute("aria-current");
   terminalHandle?.setVisible(open && view === "board");
 }
 
 function setView(nextView, focusHeading = false) {
   if (firstPlanState.phase !== "idle") return;
-  view = ["overview", "capabilities"].includes(nextView) ? nextView : "board";
+  view = nextView === "overview" ? "overview" : "board";
   applyView();
   if (view === "overview") {
     requestAnimationFrame(fitRecentMemory);
     void loadHeatmap();
     void loadRepoStats();
   }
-  if (view === "capabilities") void loadCapabilities();
   recordProjectLayout();
   if (focusHeading) {
     const focusedView = view;
@@ -6259,7 +5580,6 @@ function setView(nextView, focusHeading = false) {
       const heading = {
         board: elements.planTitle,
         overview: elements.overviewHeading,
-        capabilities: elements.capabilitiesHeading,
       }[focusedView];
       heading?.focus();
     });
@@ -6283,7 +5603,6 @@ function renderWorkspaceState(state, focus = false) {
   elements.stateScreen.hidden = open;
   elements.navBoard.disabled = !open;
   elements.navOverview.disabled = !open;
-  elements.navCapabilities.disabled = !open;
   elements.switchProject.hidden = !open;
   elements.closeProject.hidden = !open;
   elements.openProject.hidden = true;
@@ -6291,8 +5610,6 @@ function renderWorkspaceState(state, focus = false) {
   elements.workspace.inert = false;
   elements.overviewPage.removeAttribute("aria-busy");
   elements.overviewPage.inert = false;
-  elements.capabilitiesPage.removeAttribute("aria-busy");
-  elements.capabilitiesPage.inert = false;
   elements.switchProject.disabled = false;
   elements.closeProject.disabled = false;
 
@@ -6342,16 +5659,6 @@ function renderWorkspaceState(state, focus = false) {
   heatmapRequested = false;
   repoStatsRequested = false;
   repoStats = null;
-  capabilityRequest += 1;
-  capabilityFormRevision += 1;
-  capabilityPreviewRequest += 1;
-  capabilityTestRequest += 1;
-  capabilityAuditRequest += 1;
-  capabilityViews = [];
-  capabilityPreview = null;
-  renderCapabilities();
-  elements.capabilityPreviewResult.hidden = true;
-  elements.capabilityAuditList.hidden = true;
   board = null;
   snapshot = null;
   elements.projectName.textContent = "Project workspace";
@@ -6387,8 +5694,6 @@ function publishBackendState(state, transition, focus = false, keepInert = false
     elements.workspace.setAttribute("aria-busy", "true");
     elements.overviewPage.inert = true;
     elements.overviewPage.setAttribute("aria-busy", "true");
-    elements.capabilitiesPage.inert = true;
-    elements.capabilitiesPage.setAttribute("aria-busy", "true");
   }
   if (state.status === "open" && !keepInert) {
     void loadSnapshot(restoredPlanId(state.project?.root));
@@ -6406,8 +5711,6 @@ function beginWorkspaceTransition() {
     elements.workspace.setAttribute("aria-busy", "true");
     elements.overviewPage.inert = true;
     elements.overviewPage.setAttribute("aria-busy", "true");
-    elements.capabilitiesPage.inert = true;
-    elements.capabilitiesPage.setAttribute("aria-busy", "true");
     elements.switchProject.disabled = true;
     elements.closeProject.disabled = true;
     setStatus("Preparing project transition…");
@@ -7517,9 +6820,6 @@ function registerNativeProjectActions() {
       showSettings: () => {
         if (nativeCommandAllowed("showSettings")) openSettings(elements.settingsOpen);
       },
-      showCapabilities: () => {
-        showNativeView("showCapabilities");
-      },
       showBoard: () => {
         showNativeView("showBoard");
       },
@@ -7627,30 +6927,9 @@ elements.agentWorkflowForm.addEventListener("submit", (event) => {
 		"Could not prepare workflow proposal",
 	);
 });
-elements.navCapabilities.addEventListener("click", () => setView("capabilities"));
-
 window.addEventListener("focus", () => {
   if (workspaceController.state.status !== "open") return;
-  if (view === "capabilities") void loadCapabilities();
-  else void loadSnapshot(board?.planId || 0, true);
-});
-
-elements.capabilityKind.addEventListener("change", syncCapabilityScopeFields);
-elements.capabilityForm.addEventListener("input", invalidateCapabilityForm);
-elements.capabilityHelp.addEventListener("click", () => {
-  openHelpDestination("capabilities");
-});
-elements.capabilityNew.addEventListener("click", resetCapabilityForm);
-elements.capabilityClear.addEventListener("click", resetCapabilityForm);
-elements.capabilityPreviewButton.addEventListener("click", () =>
-  void previewCapability(),
-);
-elements.capabilityTestButton.addEventListener("click", () =>
-  void testCapability(),
-);
-elements.capabilityForm.addEventListener("submit", (event) => {
-  event.preventDefault();
-  void saveCapability();
+  void loadSnapshot(board?.planId || 0, true);
 });
 
 elements.paletteInput.addEventListener("input", schedulePaletteSearch);
@@ -7858,10 +7137,6 @@ elements.settingsOpenUpdates.addEventListener("click", () => {
   const invoker = elements.settingsOpen;
   closeSettings();
   openAboutUpdates(invoker);
-});
-elements.settingsOpenCapabilities.addEventListener("click", () => {
-  closeSettings();
-  setView("capabilities", true);
 });
 elements.settingsReset.addEventListener("click", () => void resetPreferences());
 elements.planLaunchAgent.addEventListener("click", (event) => {
@@ -8111,7 +7386,6 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault();
     if (command === "board") setView("board", true);
     if (command === "overview") setView("overview", true);
-    if (command === "capabilities") setView("capabilities", true);
     if (command === "addTask") {
       setView("board");
       elements.taskTitle.focus();

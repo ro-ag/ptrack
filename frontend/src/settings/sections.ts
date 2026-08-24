@@ -59,9 +59,8 @@ export interface ResetConfirmationCopy {
 }
 
 // Both resets live only in Data & Diagnostics. Reset Window Layout is
-// non-destructive; Reset Application State names the capability grants because
-// re-granting them is real work, and names what survives because a reset that
-// reads as "erase everything" is one nobody dares run.
+// non-destructive; Reset Application State names what survives because a
+// reset that reads as "erase everything" is one nobody dares run.
 export const resetWindowLayoutConfirmation: ResetConfirmationCopy = {
   eyebrow: "Window layout",
   heading: "Reset the window layout?",
@@ -75,7 +74,7 @@ export const resetApplicationStateConfirmation: ResetConfirmationCopy = {
   eyebrow: "Application state",
   heading: "Reset all application state?",
   detail:
-    "This clears your settings, the automatic update-check opt-in, the window and layout state, and every saved terminal workspace. Network capability grants live in the project and are revoked in the open project, and must be granted again before any network access works. Plans, tasks, notes, and Recent projects are not touched.",
+    "This clears your settings, the automatic update-check opt-in, the window and layout state, and every saved terminal workspace. Plans, tasks, notes, and Recent projects are not touched.",
   cancel: "Keep Application State",
   submit: "Reset Application State",
 };
@@ -88,17 +87,10 @@ export function resetApplicationStateMessage(result: unknown): string {
     : {};
   const records = (Array.isArray(response.records) ? response.records : [])
     .filter((record): record is string => typeof record === "string" && record !== "");
-  const count = Number(response.capabilityGrants);
-  const grants = Number.isFinite(count) && count > 0 ? Math.trunc(count) : 0;
   const cleared = records.length === 0
     ? "No stored records were cleared"
     : `Cleared ${records.join(", ")}`;
-  const revoked = grants === 0
-    ? "No network capability grants were revoked"
-    : `${grants} network capability grant${grants === 1 ? "" : "s"} ${
-      grants === 1 ? "was" : "were"
-    } revoked and must be granted again`;
-  return `${cleared}. ${revoked}. Plans, tasks, notes, and Recent projects were not touched.`;
+  return `${cleared}. Plans, tasks, notes, and Recent projects were not touched.`;
 }
 
 export interface DiagnosticsRow {
@@ -143,8 +135,6 @@ function segment(path: string, fromEnd: number): string {
 
 // A null section is never dropped. Only `paths.project` states a reason, because
 // it is the one field the report derives directly from the open workspace.
-// `capabilities` is also documented as "no project open" but is observed null
-// with one open, so it gets the claim the data actually supports.
 function absentValue(key: string): string {
   return key === "project" ? "No project open" : "Not available";
 }
@@ -225,9 +215,9 @@ function receiptRows(value: unknown): DiagnosticsRow[] {
   });
 }
 
-// flatten handles the sections that really are scalars — paths, runtime,
-// capabilities — without assuming a field list, so a runtime that reports more
-// detail still renders. A list it has no shape for is summarized, never dropped.
+// flatten handles the sections that really are scalars — paths and runtime —
+// without assuming a field list, so a runtime that reports more detail still
+// renders. A list it has no shape for is summarized, never dropped.
 function flatten(report: unknown, prefix = "", depth = 0): DiagnosticsRow[] {
   const rows: DiagnosticsRow[] = [];
   for (const [key, value] of Object.entries(fields(report))) {
@@ -263,11 +253,11 @@ function flatten(report: unknown, prefix = "", depth = 0): DiagnosticsRow[] {
 // The bounded sections come first and the two ledgers last, because the cap
 // below cuts from the end: the only thing it may ever drop is the 26th backup,
 // never a whole section nobody will notice is missing.
-const reportOrder = ["paths", "runtime", "capabilities", "backups", "migration"];
+const reportOrder = ["paths", "runtime", "backups", "migration"];
 
-// The realistic worst case is 63 rows — 8 paths, 1 runtime, 2 capabilities,
-// 25 backups, 2 quarantine stores, 25 receipts — which left the old cap of 64
-// one backend field of headroom. The cap is a runaway guard, not a budget.
+// The realistic worst case is 61 rows — 8 paths, 1 runtime, 25 backups,
+// 2 quarantine stores, 25 receipts — which left the old cap of 64 a few
+// backend fields of headroom. The cap is a runaway guard, not a budget.
 const maxDiagnosticsRows = 128;
 
 export function diagnosticsRows(report: unknown): DiagnosticsRow[] {
@@ -277,8 +267,12 @@ export function diagnosticsRows(report: unknown): DiagnosticsRow[] {
     ...reportOrder.filter((key) => key in sections),
     ...Object.keys(sections).filter((key) => !reportOrder.includes(key)),
   ];
+  // The runtime still reports the deprecated capability broker; the dialog no
+  // longer displays it.
+  const skipped = ["capabilities"];
   const rows: DiagnosticsRow[] = [];
   for (const key of keys) {
+    if (skipped.includes(key)) continue;
     const value = sections[key];
     if (key === "backups") rows.push(...backupRows(value));
     else if (key === "migration") {
