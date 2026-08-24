@@ -156,7 +156,7 @@ impl NextView {
             )
             .expect("writing to String cannot fail"),
             None => {
-                writeln!(&mut output, "{}", self.message).expect("writing to String cannot fail")
+                writeln!(&mut output, "{}", self.message).expect("writing to String cannot fail");
             }
         }
         for skip in &self.skipped {
