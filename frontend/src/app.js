@@ -688,6 +688,8 @@ let paletteSequence = 0;
 let paletteReturnFocus = null;
 let pendingDetailTaskId = 0;
 let heatmapRequested = false;
+let repoStatsRequested = false;
+let repoStats = null;
 let capabilityViews = [];
 let capabilityPreview = null;
 let capabilityRequest = 0;
@@ -1080,15 +1082,30 @@ function renderMemory() {
   elements.goal.textContent = board.goal || "No north star set for this project.";
   elements.summary.textContent =
     board.summary || "No rolling summary yet. Agents can update it with ptrack summary set.";
-  elements.stats.replaceChildren(
+  // The Overview is project-wide: totals never change with the selected
+  // plan (the per-plan numbers stay on the board header).
+  const tiles = [
+    statElement(`${board.stats.tasksDone}/${board.stats.tasks}`, "Tasks done"),
+    statElement(`${board.stats.plansDone}/${board.stats.plans}`, "Plans done"),
     statElement(board.stats.tasksOpen, "Open tasks"),
     statElement(board.stats.tasksBlocked, "Blocked"),
     statElement(board.stats.notes, "Notes"),
     statElement(board.stats.commits, "Commits"),
     statElement(board.stats.openIssues, "Open issues"),
-    statElement(`${board.stats.planTasksDone}/${board.stats.planTasks}`, "Plan done"),
-  );
-  renderPlanRing(board.stats.planTasksDone, board.stats.planTasks);
+  ];
+  if (board.stats.milestones) {
+    tiles.push(
+      statElement(`${board.stats.milestonesDone}/${board.stats.milestones}`, "Milestones"),
+    );
+  }
+  if (repoStats?.available) {
+    tiles.push(
+      statElement(repoStats.files.toLocaleString(), "Tracked files"),
+      statElement(repoStats.lines.toLocaleString(), "Lines of code"),
+    );
+  }
+  elements.stats.replaceChildren(...tiles);
+  renderPlanRing(board.stats.tasksDone, board.stats.tasks);
 
   elements.issueTotal.textContent = board.stats.openIssues;
   elements.issues.replaceChildren();
@@ -1185,7 +1202,7 @@ function renderPlanRing(done, total) {
   svg.append(number, caption);
   elements.planRing.setAttribute(
     "aria-label",
-    `Active plan progress: ${done} of ${total} tasks done`,
+    `Project progress: ${done} of ${total} tasks done`,
   );
   elements.planRing.append(svg);
 }
@@ -1227,6 +1244,20 @@ function renderHeatmap(days) {
     });
   });
   elements.heatmap.append(svg);
+}
+
+// Repository code statistics follow the heatmap pattern: fetched lazily
+// once the Overview is shown, re-fetched after a snapshot reload.
+async function loadRepoStats(force = false) {
+  if (workspaceController.state.status !== "open") return;
+  if (repoStatsRequested && !force) return;
+  repoStatsRequested = true;
+  try {
+    repoStats = await api().GetRepoStatsV1();
+    if (board) renderMemory();
+  } catch {
+    repoStatsRequested = false;
+  }
 }
 
 // The heatmap is fetched lazily: only once the Overview is shown, and
@@ -2250,6 +2281,7 @@ async function loadSnapshot(
     renderIntelligence();
     openPendingTaskDetail();
     if (view === "overview" && heatmapRequested) void loadHeatmap(true);
+    if (view === "overview" && repoStatsRequested) void loadRepoStats(true);
     const now = new Date(response.capturedAt).toLocaleTimeString([], {
       hour: "numeric",
       minute: "2-digit",
@@ -6216,6 +6248,7 @@ function setView(nextView, focusHeading = false) {
   if (view === "overview") {
     requestAnimationFrame(fitRecentMemory);
     void loadHeatmap();
+    void loadRepoStats();
   }
   if (view === "capabilities") void loadCapabilities();
   recordProjectLayout();
@@ -6307,6 +6340,8 @@ function renderWorkspaceState(state, focus = false) {
   closeTaskDetail();
   closePalette();
   heatmapRequested = false;
+  repoStatsRequested = false;
+  repoStats = null;
   capabilityRequest += 1;
   capabilityFormRevision += 1;
   capabilityPreviewRequest += 1;
