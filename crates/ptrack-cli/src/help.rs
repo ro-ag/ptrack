@@ -116,6 +116,10 @@ const ROOT_CHILDREN: &[Child] = &[
         "Show or set the machine-wide ptrack user identity",
     ),
     child(
+        "checkpoint",
+        "Print the whole-picture re-evaluation block (goal, summary, open plans, issues)",
+    ),
+    child(
         "context",
         "Print the bounded restore digest (Markdown by default, --json for JSON)",
     ),
@@ -566,10 +570,18 @@ fn plan_leaf(name: &str) -> Spec {
     match name {
         "add" => leaf_spec(
             "plan add <title...>",
-            "Create a new active plan (optionally under a milestone)",
+            "Create a new active plan (optionally under a milestone); appends a final\n\"Integrate and verify\" task unless --no-verify-task",
             &[
+                flag(
+                    "    --force",
+                    "open the plan even while a started task is unfinished (recorded)",
+                ),
                 HELP_FLAG,
                 flag("    --milestone uint", "assign the plan to this milestone"),
+                flag(
+                    "    --no-verify-task",
+                    "skip the auto-appended integration task",
+                ),
             ],
         ),
         "list" => leaf_spec("plan list", "List plans", JSON_FLAGS),
@@ -580,8 +592,14 @@ fn plan_leaf(name: &str) -> Spec {
         ),
         "done" => leaf_spec(
             "plan done <id>",
-            "Mark a plan done (clears any hold on it)",
-            HELP_ONLY,
+            "Mark a plan done and print the re-evaluation checkpoint; errors while\nopen tasks remain",
+            &[
+                flag(
+                    "    --force",
+                    "close despite open tasks (recorded as an override note)",
+                ),
+                HELP_FLAG,
+            ],
         ),
         "use" => leaf_spec(
             "plan use <id>",
@@ -655,8 +673,12 @@ fn task_leaf(name: &str) -> Spec {
     match name {
         "add" => leaf_spec(
             "task add <title...>",
-            "Create a new todo task (defaults to the active plan)",
+            "Create a new todo task (defaults to the active plan); errors while a\nstarted task is unfinished",
             &[
+                flag(
+                    "    --force",
+                    "add even while a started task is unfinished (recorded)",
+                ),
                 HELP_FLAG,
                 flag(
                     "    --plan uint",
@@ -684,13 +706,29 @@ fn task_leaf(name: &str) -> Spec {
         ),
         "start" => leaf_spec(
             "task start <id>",
-            "Mark a task in progress (doing)",
-            HELP_ONLY,
+            "Mark a task in progress (doing); errors while another started task is\nunfinished",
+            &[
+                flag(
+                    "    --force",
+                    "start even while another task is in progress (recorded)",
+                ),
+                HELP_FLAG,
+            ],
         ),
         "done" => leaf_spec(
             "task done <id>",
-            "Mark a task done (clears any hold on it)",
-            HELP_ONLY,
+            "Mark a task done (clears any hold on it); requires --summary and at\nleast one linked commit (#<id> in a commit message or 'commit record')",
+            &[
+                flag(
+                    "    --force",
+                    "close without summary/commit (recorded as an override note)",
+                ),
+                HELP_FLAG,
+                flag(
+                    "    --summary string",
+                    "what changed, where it is wired in, what remains",
+                ),
+            ],
         ),
         "block" => leaf_spec("task block <id>", "Mark a task blocked", HELP_ONLY),
         "hold" => leaf_spec(
@@ -909,6 +947,11 @@ fn root_leaf(name: &str) -> Spec {
         "next" => leaf_spec(
             "next",
             "Print the single most-actionable task (active plan: doing, else todo)",
+            JSON_FLAGS,
+        ),
+        "checkpoint" => leaf_spec(
+            "checkpoint",
+            "Print the whole-picture re-evaluation block (goal, summary, open plans, issues)",
             JSON_FLAGS,
         ),
         "search" => leaf_spec(

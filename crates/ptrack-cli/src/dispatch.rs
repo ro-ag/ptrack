@@ -14,14 +14,14 @@ use ptrack_app::{
 };
 use ptrack_core::{
     IssueStatus, LEGACY_ACTOR, MilestoneStatus, NoteTarget, PlanStatus, Severity, TaskStatus,
-    Timestamp, board_for, check_hold_reason, claim_marker, context, hold_marker, next, search,
-    show_issue, show_milestone, show_plan, show_task,
+    Timestamp, board_for, check_hold_reason, checkpoint, claim_marker, context, hold_marker,
+    id_list, next, search, show_issue, show_milestone, show_plan, show_task,
 };
 
 use crate::compat_json::{
-    BoardJson, CommitJson, ConfigUserJson, DepRow, DigestJson, IssueJson, IssueShowJson,
-    MilestoneJson, MilestoneShowJson, NextJson, NoteRow, PlanRow, PlanShowJson, ProjectJson,
-    SearchJson, StatusJson, TaskRow, TaskShowJson, raw_or_null, timestamp,
+    BoardJson, CheckpointJson, CommitJson, ConfigUserJson, DepRow, DigestJson, IssueJson,
+    IssueShowJson, MilestoneJson, MilestoneShowJson, NextJson, NoteRow, PlanRow, PlanShowJson,
+    ProjectJson, SearchJson, StatusJson, TaskRow, TaskShowJson, raw_or_null, timestamp,
 };
 use crate::error::CliError;
 use crate::output;
@@ -122,6 +122,7 @@ fn dispatch(
         ["context"] => context_command(leaf, application, io),
         ["guide"] => guide(leaf, application, io),
         ["next"] => next_command(leaf, application, io),
+        ["checkpoint"] => checkpoint_command(leaf, application, io),
         ["search"] => search_command(leaf, application, io),
         ["board"] => board(leaf, application, io),
         ["gui"] => Ok(RunOutcome::LaunchGui {
@@ -355,6 +356,7 @@ fn plan(
 ) -> Result<RunOutcome, CliError> {
     match command {
         "add" => {
+            let override_note = wip_gate(application, 0, matches.get_flag("force"))?;
             let milestone_id = parse_flag_u64("milestone", option(matches, "milestone"))?;
             let result = application.mutate(Mutation::AddPlan {
                 title: values(matches, "title").join(" "),
@@ -363,10 +365,32 @@ fn plan(
             let MutationResult::Plan(value) = result else {
                 return Err(internal_result());
             };
+            if let Some(body) = override_note {
+                add_override_note(application, NoteTarget::Plan, value.id, body)?;
+            }
             output::line(
                 io.stdout,
                 format_args!("plan #{} {}", value.id, value.title),
             )?;
+            if !matches.get_flag("no-verify-task") {
+                let goal = application.snapshot()?.meta.goal;
+                let title = if goal.is_empty() {
+                    "Integrate and verify against the project goal".to_owned()
+                } else {
+                    format!("Integrate and verify against goal: {goal}")
+                };
+                let result = application.mutate(Mutation::AddTask {
+                    plan_id: value.id,
+                    title,
+                })?;
+                let MutationResult::Task(task) = result else {
+                    return Err(internal_result());
+                };
+                output::line(
+                    io.stdout,
+                    format_args!("task #{} {} (plan {})", task.id, task.title, task.plan_id),
+                )?;
+            }
         }
         "list" => {
             let snapshot = application.snapshot()?;
@@ -419,10 +443,38 @@ fn plan(
             }
         }
         "done" => {
+            let id = parse_u64(first(matches, "id")?)?;
+            let force = matches.get_flag("force");
+            let open: Vec<u64> = application
+                .snapshot()?
+                .tasks_for_plan(id)
+                .filter(|task| task.status.is_open())
+                .map(|task| task.id)
+                .collect();
+            if !open.is_empty() && !force {
+                return Err(CliError::message(format!(
+                    "cannot close plan #{id}: open tasks remain ({}); finish them or pass --force",
+                    id_list(&open)
+                )));
+            }
             expect_none(application.mutate(Mutation::SetPlanStatus {
-                id: parse_u64(first(matches, "id")?)?,
+                id,
                 status: PlanStatus::Done,
             })?)?;
+            if !open.is_empty() {
+                add_override_note(
+                    application,
+                    NoteTarget::Plan,
+                    id,
+                    format!(
+                        "override: closed via --force with open tasks {}",
+                        id_list(&open)
+                    ),
+                )?;
+            }
+            output::line(io.stdout, format_args!("Plan #{id} done.\n"))?;
+            let view = checkpoint(&application.snapshot()?, Some(id));
+            output::text(io.stdout, &view.markdown())?;
         }
         "use" => {
             let id = parse_u64(first(matches, "id")?)?;
@@ -705,6 +757,64 @@ fn task_dep(
     Ok(RunOutcome::ExitSuccess)
 }
 
+/// The started task blocking new work, when one exists: the caller's own when
+/// an identity is configured, otherwise any (single-agent projects).
+/// ponytail: check-then-act, not atomic with the mutation; single-writer local
+/// DB makes the race window irrelevant.
+fn wip_task(
+    application: &mut dyn ApplicationPort,
+    exempt: u64,
+) -> Result<Option<(u64, String)>, CliError> {
+    let actor = application.identity()?.map(|identity| identity.id);
+    let snapshot = application.snapshot()?;
+    Ok(snapshot
+        .tasks
+        .iter()
+        .filter(|task| task.status == TaskStatus::Doing && task.id != exempt)
+        .find(|task| {
+            actor
+                .as_deref()
+                .is_none_or(|id| task.actor.as_deref() == Some(id))
+        })
+        .map(|task| (task.id, task.title.clone())))
+}
+
+/// Refuses to open new work while a started task is unfinished, unless forced.
+/// Returns the override-note body to attach when the gate was forced past.
+fn wip_gate(
+    application: &mut dyn ApplicationPort,
+    exempt: u64,
+    force: bool,
+) -> Result<Option<String>, CliError> {
+    let Some((id, title)) = wip_task(application, exempt)? else {
+        return Ok(None);
+    };
+    if force {
+        return Ok(Some(format!(
+            "override: opened via --force while task #{id} was in progress"
+        )));
+    }
+    Err(CliError::message(format!(
+        "task #{id} {title} is still in progress; close it (ptrack task done {id} --summary \"...\") \
+         or park it (ptrack task hold {id} \"reason\") before opening new work, or pass --force"
+    )))
+}
+
+/// Attaches an override note recording that a gate was bypassed with --force.
+fn add_override_note(
+    application: &mut dyn ApplicationPort,
+    target: NoteTarget,
+    target_id: u64,
+    body: String,
+) -> Result<(), CliError> {
+    application.mutate(Mutation::AddNote {
+        target,
+        target_id,
+        body,
+    })?;
+    Ok(())
+}
+
 fn task(
     command: &str,
     matches: &ArgMatches,
@@ -713,6 +823,7 @@ fn task(
 ) -> Result<RunOutcome, CliError> {
     match command {
         "add" => {
+            let override_note = wip_gate(application, 0, matches.get_flag("force"))?;
             let mut plan_id = parse_flag_u64("plan", option(matches, "plan"))?;
             if plan_id == 0 {
                 plan_id = application.snapshot()?.meta.active_plan;
@@ -727,6 +838,9 @@ fn task(
             let MutationResult::Task(value) = result else {
                 return Err(internal_result());
             };
+            if let Some(body) = override_note {
+                add_override_note(application, NoteTarget::Task, value.id, body)?;
+            }
             output::line(
                 io.stdout,
                 format_args!(
@@ -782,15 +896,72 @@ fn task(
                 output::text(io.stdout, &view.markdown())?;
             }
         }
-        "start" | "done" | "block" => {
-            let status = match command {
-                "start" => TaskStatus::Doing,
-                "done" => TaskStatus::Done,
-                _ => TaskStatus::Blocked,
-            };
+        "start" => {
+            let id = parse_u64(first(matches, "id")?)?;
+            let override_note = wip_gate(application, id, matches.get_flag("force"))?;
+            expect_none(application.mutate(Mutation::SetTaskStatus {
+                id,
+                status: TaskStatus::Doing,
+            })?)?;
+            if let Some(body) = override_note {
+                add_override_note(application, NoteTarget::Task, id, body)?;
+            }
+        }
+        "done" => {
+            let id = parse_u64(first(matches, "id")?)?;
+            let force = matches.get_flag("force");
+            let summary = option(matches, "summary")
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty());
+            let linked_commits = application
+                .snapshot()?
+                .commits
+                .iter()
+                .filter(|commit| commit.task_id == id)
+                .count();
+            let mut missing = Vec::new();
+            if summary.is_none() {
+                missing.push(
+                    "--summary \"what changed, where it is wired in, what remains\" is required",
+                );
+            }
+            if linked_commits == 0 {
+                missing.push(
+                    "no commit is linked: put #<task-id> in the commit message \
+                     (ptrack hook install records it) or run ptrack commit record",
+                );
+            }
+            if !missing.is_empty() && !force {
+                return Err(CliError::message(format!(
+                    "cannot close task #{id}: {} (or pass --force)",
+                    missing.join("; ")
+                )));
+            }
+            expect_none(application.mutate(Mutation::SetTaskStatus {
+                id,
+                status: TaskStatus::Done,
+            })?)?;
+            if let Some(summary) = summary {
+                application.mutate(Mutation::AddNote {
+                    target: NoteTarget::Task,
+                    target_id: id,
+                    body: format!("closeout: {summary}"),
+                })?;
+            }
+            if !missing.is_empty() {
+                add_override_note(
+                    application,
+                    NoteTarget::Task,
+                    id,
+                    format!("override: closed via --force ({})", missing.join("; ")),
+                )?;
+            }
+            output::line(io.stdout, format_args!("Linked commits: {linked_commits}"))?;
+        }
+        "block" => {
             expect_none(application.mutate(Mutation::SetTaskStatus {
                 id: parse_u64(first(matches, "id")?)?,
-                status,
+                status: TaskStatus::Blocked,
             })?)?;
         }
         "rename" => {
@@ -1287,6 +1458,20 @@ fn next_command(
     let view = next(&application.snapshot()?)?;
     if matches.get_flag("json") {
         output::json(io.stdout, &NextJson::from(&view))?;
+    } else {
+        output::text(io.stdout, &view.markdown())?;
+    }
+    Ok(RunOutcome::ExitSuccess)
+}
+
+fn checkpoint_command(
+    matches: &ArgMatches,
+    application: &mut dyn ApplicationPort,
+    io: &mut Io<'_>,
+) -> Result<RunOutcome, CliError> {
+    let view = checkpoint(&application.snapshot()?, None);
+    if matches.get_flag("json") {
+        output::json(io.stdout, &CheckpointJson::from(&view))?;
     } else {
         output::text(io.stdout, &view.markdown())?;
     }

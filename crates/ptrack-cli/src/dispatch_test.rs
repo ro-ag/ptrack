@@ -9,8 +9,8 @@ use ptrack_app::{
     RelocateRequest, RelocateResult,
 };
 use ptrack_core::{
-    Meta, Plan, PlanStatus, ProjectRef, ProjectSnapshot, Task, TaskStatus, Timestamp,
-    would_create_cycle,
+    Commit, MemoryKind, Meta, Note, Plan, PlanStatus, ProjectRef, ProjectSnapshot, Task,
+    TaskStatus, Timestamp, would_create_cycle,
 };
 
 use crate::{Io, RunOutcome, run};
@@ -194,6 +194,107 @@ impl ApplicationPort for FakeApplication {
                     )));
                 }
                 plan.deps.retain(|&dep| dep != dep_id);
+            }
+            // Mirrors the store closely enough to exercise the close/open
+            // gates: adds return the created record, status changes mutate in
+            // place, notes accumulate in the snapshot.
+            Mutation::AddPlan {
+                title,
+                milestone_id,
+            } => {
+                let id = self
+                    .snapshot
+                    .plans
+                    .iter()
+                    .map(|plan| plan.id)
+                    .max()
+                    .unwrap_or(0)
+                    + 1;
+                let plan = Plan {
+                    id,
+                    title,
+                    status: PlanStatus::Active,
+                    milestone_id,
+                    order: i64::try_from(id).expect("small fixture id fits i64"),
+                    created_at: Timestamp::Zero,
+                    updated_at: Timestamp::Zero,
+                    hold_reason: None,
+                    actor: None,
+                    claim_conflict: false,
+                    claim_epoch: 0,
+                    claim_owner: None,
+                    ulid: None,
+                    deps: Vec::new(),
+                };
+                self.snapshot.plans.push(plan.clone());
+                return Ok(MutationResult::Plan(plan));
+            }
+            Mutation::AddTask { plan_id, title } => {
+                let id = self
+                    .snapshot
+                    .tasks
+                    .iter()
+                    .map(|task| task.id)
+                    .max()
+                    .unwrap_or(0)
+                    + 1;
+                let task = Task {
+                    id,
+                    plan_id,
+                    title,
+                    status: TaskStatus::Todo,
+                    order: i64::try_from(id).expect("small fixture id fits i64"),
+                    created_at: Timestamp::Zero,
+                    updated_at: Timestamp::Zero,
+                    hold_reason: None,
+                    actor: None,
+                    ulid: None,
+                    deps: Vec::new(),
+                };
+                self.snapshot.tasks.push(task.clone());
+                return Ok(MutationResult::Task(task));
+            }
+            Mutation::SetTaskStatus { id, status } => {
+                self.snapshot
+                    .tasks
+                    .iter_mut()
+                    .find(|task| task.id == id)
+                    .ok_or(AppError::NotImplemented("test task"))?
+                    .status = status;
+            }
+            Mutation::SetPlanStatus { id, status } => {
+                self.snapshot
+                    .plans
+                    .iter_mut()
+                    .find(|plan| plan.id == id)
+                    .ok_or(AppError::NotImplemented("test plan"))?
+                    .status = status;
+            }
+            Mutation::AddNote {
+                target,
+                target_id,
+                body,
+            } => {
+                let id = self
+                    .snapshot
+                    .notes
+                    .iter()
+                    .map(|note| note.id)
+                    .max()
+                    .unwrap_or(0)
+                    + 1;
+                let note = Note {
+                    id,
+                    target,
+                    target_id,
+                    kind: MemoryKind::Legacy,
+                    body,
+                    created_at: Timestamp::Zero,
+                    actor: None,
+                    ulid: None,
+                };
+                self.snapshot.notes.push(note.clone());
+                return Ok(MutationResult::Note(note));
             }
             Mutation::SetActivePlan(id) => self.snapshot.meta.active_plan = id,
             Mutation::StealPlan(_) => self.claim_owner = Some("fake-actor"),
@@ -459,7 +560,9 @@ fn task_hold_and_resume_round_trip_through_every_surface() {
     assert!(stdout.contains("\"hold_reason\": null"));
 
     let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "task", "show", "1"]);
-    assert!(stdout.starts_with("# Task #1 context command [todo] [on hold: waiting on review]\n"));
+    assert!(stdout.starts_with(
+        "Goal: ship\n# Task #1 context command [todo] [on hold: waiting on review]\n"
+    ));
 
     let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "status"]);
     assert!(stdout.contains("tasks: 1 todo, 0 doing, 1 done, 0 blocked (1 on hold)\n"));
@@ -468,7 +571,10 @@ fn task_hold_and_resume_round_trip_through_every_surface() {
 
     // A held task is never the next pick even though it is still todo.
     let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "next"]);
-    assert_eq!(stdout, "no actionable task in the active plan\n");
+    assert_eq!(
+        stdout,
+        "Goal: ship\nno actionable task in the active plan\n"
+    );
 
     let (result, stdout, _) = invoke_with(&mut application, &["ptrack", "task", "resume", "1"]);
     assert_eq!(result.expect("resume"), RunOutcome::ExitSuccess);
@@ -478,7 +584,7 @@ fn task_hold_and_resume_round_trip_through_every_surface() {
     let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "next"]);
     assert_eq!(
         stdout,
-        "next: [todo] #1 context command (plan: Build CLI)\n"
+        "Goal: ship\nnext: [todo] #1 context command (plan: Build CLI)\n"
     );
 }
 
@@ -502,13 +608,13 @@ fn plan_hold_and_resume_round_trip_through_every_surface() {
     assert!(stdout.starts_with("# Plan #1 Build CLI [active] [on hold: budget freeze]\n"));
 
     let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "next"]);
-    assert_eq!(stdout, "active plan on hold: budget freeze\n");
+    assert_eq!(stdout, "Goal: ship\nactive plan on hold: budget freeze\n");
 
     // Agents read the reason from a field, not by parsing the message prose.
     let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "next", "--json"]);
     assert_eq!(
         stdout,
-        "{\n  \"task\": null,\n  \"plan_title\": \"Build CLI\",\n  \
+        "{\n  \"goal\": \"ship\",\n  \"task\": null,\n  \"plan_title\": \"Build CLI\",\n  \
          \"message\": \"active plan on hold: budget freeze\",\n  \
          \"plan_hold_reason\": \"budget freeze\"\n}\n"
     );
@@ -532,7 +638,7 @@ fn plan_hold_and_resume_round_trip_through_every_surface() {
     let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "next"]);
     assert_eq!(
         stdout,
-        "next: [todo] #1 context command (plan: Build CLI)\n"
+        "Goal: ship\nnext: [todo] #1 context command (plan: Build CLI)\n"
     );
 }
 
@@ -558,7 +664,7 @@ fn dep_blocked_tasks_surface_in_next_and_context_on_both_formats() {
     let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "next"]);
     assert_eq!(
         stdout,
-        "next: [todo] #3 publish docs (plan: Build CLI)\nskipped: #1 (waiting on #3)\n"
+        "Goal: ship\nnext: [todo] #3 publish docs (plan: Build CLI)\nskipped: #1 (waiting on #3)\n"
     );
 
     let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "next", "--json"]);
@@ -1226,4 +1332,214 @@ fn relocate_routes_the_root_flag_and_prints_the_new_registration() {
     assert_eq!(result.unwrap(), RunOutcome::ExitSuccess);
     assert_eq!(stdout, "project re-registered at /cwd/project\n");
     assert_eq!(application.relocate_requests, [RelocateRequest::default()]);
+}
+
+fn commit_for_task(id: u64, task_id: u64) -> Commit {
+    Commit {
+        id,
+        sha: format!("sha{id}"),
+        subject: "wire it in".to_owned(),
+        plan_id: 1,
+        task_id,
+        created_at: Timestamp::Zero,
+        actor: None,
+        ulid: None,
+    }
+}
+
+#[test]
+fn task_done_requires_summary_and_linked_commit() {
+    let mut application = seeded();
+    let (result, _, _) = invoke_with(&mut application, &["ptrack", "task", "done", "1"]);
+    let message = result.expect_err("gated").to_string();
+    assert!(message.contains("--summary"), "{message}");
+    assert!(message.contains("no commit is linked"), "{message}");
+    assert_eq!(application.snapshot.tasks[0].status, TaskStatus::Todo);
+
+    // Summary alone is not enough while no commit is linked.
+    let (result, _, _) = invoke_with(
+        &mut application,
+        &["ptrack", "task", "done", "1", "--summary", "wired into CLI"],
+    );
+    assert!(result.is_err());
+
+    application.snapshot.commits.push(commit_for_task(1, 1));
+    let (result, stdout, _) = invoke_with(
+        &mut application,
+        &["ptrack", "task", "done", "1", "--summary", "wired into CLI"],
+    );
+    assert_eq!(result.expect("close"), RunOutcome::ExitSuccess);
+    assert_eq!(stdout, "Linked commits: 1\n");
+    assert_eq!(application.snapshot.tasks[0].status, TaskStatus::Done);
+    assert!(
+        application
+            .snapshot
+            .notes
+            .iter()
+            .any(|note| note.target_id == 1 && note.body == "closeout: wired into CLI")
+    );
+}
+
+#[test]
+fn task_done_force_bypasses_the_gate_and_records_the_override() {
+    let mut application = seeded();
+    let (result, stdout, _) = invoke_with(
+        &mut application,
+        &["ptrack", "task", "done", "1", "--force"],
+    );
+    assert_eq!(result.expect("forced close"), RunOutcome::ExitSuccess);
+    assert_eq!(stdout, "Linked commits: 0\n");
+    assert_eq!(application.snapshot.tasks[0].status, TaskStatus::Done);
+    assert!(
+        application.snapshot.notes.iter().any(
+            |note| note.target_id == 1 && note.body.starts_with("override: closed via --force")
+        )
+    );
+}
+
+#[test]
+fn a_started_task_blocks_opening_new_work_until_finished_or_parked() {
+    let mut application = seeded();
+    application.snapshot.tasks[0].status = TaskStatus::Doing;
+
+    for args in [
+        &["ptrack", "task", "add", "new work"][..],
+        &["ptrack", "task", "start", "2"][..],
+        &["ptrack", "plan", "add", "next plan"][..],
+    ] {
+        let (result, _, _) = invoke_with(&mut application, args);
+        let message = result.expect_err("wip gate").to_string();
+        assert!(message.contains("task #1"), "{message}");
+        assert!(message.contains("--force"), "{message}");
+    }
+
+    // Parking the started task reopens the gate.
+    let (result, _, _) = invoke_with(
+        &mut application,
+        &["ptrack", "task", "hold", "1", "waiting", "on", "review"],
+    );
+    assert_eq!(result.expect("hold"), RunOutcome::ExitSuccess);
+    application.snapshot.tasks[0].status = TaskStatus::Blocked;
+    let (result, _, _) = invoke_with(&mut application, &["ptrack", "task", "add", "new work"]);
+    assert_eq!(result.expect("add"), RunOutcome::ExitSuccess);
+}
+
+#[test]
+fn wip_gate_force_records_the_override_on_the_new_item() {
+    let mut application = seeded();
+    application.snapshot.tasks[0].status = TaskStatus::Doing;
+    let (result, stdout, _) = invoke_with(
+        &mut application,
+        &["ptrack", "task", "add", "new work", "--force"],
+    );
+    assert_eq!(result.expect("forced add"), RunOutcome::ExitSuccess);
+    assert!(stdout.contains("task #3 new work"));
+    assert!(
+        application
+            .snapshot
+            .notes
+            .iter()
+            .any(|note| note.target_id == 3 && note.body.contains("--force while task #1"))
+    );
+}
+
+#[test]
+fn wip_gate_scopes_to_the_configured_identity() {
+    let mut application = seeded();
+    application.snapshot.tasks[0].status = TaskStatus::Doing;
+    application.snapshot.tasks[0].actor = Some("someone-else".to_owned());
+    application.identity = Some(ActorIdentity {
+        id: "me".to_owned(),
+        name: "Me".to_owned(),
+    });
+
+    // Another agent's in-progress work never blocks this identity.
+    let (result, _, _) = invoke_with(&mut application, &["ptrack", "task", "add", "my work"]);
+    assert_eq!(result.expect("add"), RunOutcome::ExitSuccess);
+
+    // The caller's own started task does.
+    application.snapshot.tasks[0].actor = Some("me".to_owned());
+    let (result, _, _) = invoke_with(&mut application, &["ptrack", "task", "add", "more work"]);
+    assert!(result.is_err());
+}
+
+#[test]
+fn plan_done_blocks_open_tasks_then_prints_the_checkpoint() {
+    let mut application = seeded();
+    let (result, _, _) = invoke_with(&mut application, &["ptrack", "plan", "done", "1"]);
+    let message = result.expect_err("open tasks").to_string();
+    assert!(message.contains("open tasks remain (#1)"), "{message}");
+    assert_eq!(application.snapshot.plans[0].status, PlanStatus::Active);
+
+    application.snapshot.tasks[0].status = TaskStatus::Done;
+    let (result, stdout, _) = invoke_with(&mut application, &["ptrack", "plan", "done", "1"]);
+    assert_eq!(result.expect("close"), RunOutcome::ExitSuccess);
+    assert_eq!(application.snapshot.plans[0].status, PlanStatus::Done);
+    assert!(stdout.starts_with("Plan #1 done.\n"), "{stdout}");
+    assert!(stdout.contains("Goal: ship"), "{stdout}");
+    assert!(stdout.contains("Remaining open plans: none"), "{stdout}");
+    assert!(
+        stdout.contains("CHECKPOINT — before continuing"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn plan_done_force_closes_over_open_tasks_and_records_the_override() {
+    let mut application = seeded();
+    let (result, stdout, _) = invoke_with(
+        &mut application,
+        &["ptrack", "plan", "done", "1", "--force"],
+    );
+    assert_eq!(result.expect("forced close"), RunOutcome::ExitSuccess);
+    assert_eq!(application.snapshot.plans[0].status, PlanStatus::Done);
+    assert!(stdout.contains("CHECKPOINT"), "{stdout}");
+    assert!(
+        application
+            .snapshot
+            .notes
+            .iter()
+            .any(|note| note.target_id == 1
+                && note.body == "override: closed via --force with open tasks #1")
+    );
+}
+
+#[test]
+fn plan_add_appends_the_integration_task_unless_skipped() {
+    let mut application = seeded();
+    let (result, stdout, _) = invoke_with(&mut application, &["ptrack", "plan", "add", "Storage"]);
+    assert_eq!(result.expect("add"), RunOutcome::ExitSuccess);
+    assert!(stdout.contains("plan #2 Storage"), "{stdout}");
+    assert!(
+        stdout.contains("task #3 Integrate and verify against goal: ship (plan 2)"),
+        "{stdout}"
+    );
+
+    let (result, stdout, _) = invoke_with(
+        &mut application,
+        &["ptrack", "plan", "add", "API", "--no-verify-task"],
+    );
+    assert_eq!(result.expect("add"), RunOutcome::ExitSuccess);
+    assert!(!stdout.contains("Integrate and verify"), "{stdout}");
+}
+
+#[test]
+fn checkpoint_renders_the_whole_picture_on_both_formats() {
+    let mut application = seeded();
+    let (result, stdout, _) = invoke_with(&mut application, &["ptrack", "checkpoint"]);
+    assert_eq!(result.expect("checkpoint"), RunOutcome::ExitSuccess);
+    assert!(stdout.starts_with("Goal: ship\n"), "{stdout}");
+    assert!(
+        stdout.contains("Remaining open plans: #1 Build CLI"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("Open issues: 0 (0 high)"), "{stdout}");
+    assert!(
+        stdout.contains("CHECKPOINT — before continuing"),
+        "{stdout}"
+    );
+
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "checkpoint", "--json"]);
+    assert!(stdout.contains("\"goal\": \"ship\""), "{stdout}");
+    assert!(stdout.contains("\"open_plans\""), "{stdout}");
 }

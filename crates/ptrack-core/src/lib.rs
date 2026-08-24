@@ -30,7 +30,7 @@ pub use model::{
 };
 pub use report::{
     DepWait, Digest, IssueLine, NoteLine, PlanBrief, ReportError, TaskLine, claim_marker, context,
-    hold_marker, open_plan_deps, open_task_deps,
+    hold_marker, id_list, open_plan_deps, open_task_deps,
 };
 pub use search::{SearchView, search};
 pub use snapshot::ProjectSnapshot;
@@ -39,8 +39,9 @@ pub use validation::{
     check_hold_reason, check_identity_name, is_identity_id,
 };
 pub use views::{
-    Board, DepSkip, IssueShow, MilestoneRef, MilestoneShow, NextView, PlanRef, PlanShow, TaskShow,
-    board_for, next, show_issue, show_milestone, show_plan, show_task,
+    Board, CheckpointView, DepSkip, IssueShow, MilestoneProgress, MilestoneRef, MilestoneShow,
+    NextView, PlanRef, PlanShow, TaskShow, board_for, checkpoint, next, show_issue, show_milestone,
+    show_plan, show_task,
 };
 
 #[cfg(test)]

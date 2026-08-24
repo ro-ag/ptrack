@@ -62,11 +62,15 @@ pub fn root() -> Command {
                 ],
             )
             .mut_subcommand("add", |c| {
-                c.arg(positional("title", 1..)).arg(option("milestone"))
+                c.arg(positional("title", 1..)).args([
+                    option("milestone"),
+                    flag("no-verify-task"),
+                    flag("force"),
+                ])
             })
             .mut_subcommand("list", |c| c.arg(flag("json")))
             .mut_subcommand("show", |c| c.arg(positional("id", 1)).arg(flag("json")))
-            .mut_subcommand("done", |c| c.arg(positional("id", 1)))
+            .mut_subcommand("done", |c| c.arg(positional("id", 1)).arg(flag("force")))
             .mut_subcommand("use", |c| c.arg(positional("id", 1)).arg(flag("steal")))
             .mut_subcommand("release", |c| c.arg(positional("id", 1)))
             .mut_subcommand("rename", |c| c.arg(positional("values", 2..)))
@@ -92,14 +96,18 @@ pub fn root() -> Command {
                 ],
             )
             .mut_subcommand("add", |c| {
-                c.arg(positional("title", 1..)).arg(option("plan"))
+                c.arg(positional("title", 1..))
+                    .args([option("plan"), flag("force")])
             })
             .mut_subcommand("list", |c| {
                 c.args([option("plan"), option("status"), flag("json")])
             })
             .mut_subcommand("show", |c| c.arg(positional("id", 1)).arg(flag("json")))
-            .mut_subcommand("start", |c| c.arg(positional("id", 1)))
-            .mut_subcommand("done", |c| c.arg(positional("id", 1)))
+            .mut_subcommand("start", |c| c.arg(positional("id", 1)).arg(flag("force")))
+            .mut_subcommand("done", |c| {
+                c.arg(positional("id", 1))
+                    .args([option("summary"), flag("force")])
+            })
             .mut_subcommand("block", |c| c.arg(positional("id", 1)))
             .mut_subcommand("rename", |c| c.arg(positional("values", 2..)))
             .mut_subcommand("move", |c| c.arg(positional("id", 1)).arg(option("plan")))
@@ -165,6 +173,7 @@ pub fn root() -> Command {
         .subcommand(leaf("context").arg(flag("json")))
         .subcommand(leaf("guide").arg(flag("print")))
         .subcommand(leaf("next").arg(flag("json")))
+        .subcommand(leaf("checkpoint").arg(flag("json")))
         .subcommand(
             leaf("search")
                 .arg(positional("term", 1..))
