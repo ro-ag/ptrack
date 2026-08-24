@@ -57,6 +57,28 @@ steps, tool output, or restate the code.\n\
 commit links to it (`ptrack hook install` records commits automatically; each\n\
 commit's `#<id>` links it to that task, otherwise the active plan).\n\
 \n\
+**Closing work is gated.** `ptrack task done <id> --summary \"what changed,\n\
+where it is wired in, what remains\"` — the summary is required and the task\n\
+must have at least one linked commit (`#<id>` in the commit message, or\n\
+`ptrack commit record`); otherwise `task done` errors. Building a feature is\n\
+not done until something calls it — the summary must answer \"what calls this\n\
+now?\".\n\
+\n\
+**One task in progress at a time.** Finish the started task properly, or park\n\
+it (`task hold`/`task block` with a reason), before `task start`, `task add`,\n\
+or `plan add` — they error while a started task is unfinished.\n\
+\n\
+**Plans close through their checkpoint.** Every new plan ends with an\n\
+auto-added \"Integrate and verify\" task, and `plan done` errors while any task\n\
+is open. After every `plan done`, act on the printed CHECKPOINT block:\n\
+re-evaluate the remaining roadmap against the goal, refresh\n\
+`ptrack summary set`, and add or adjust plans and issues. `ptrack checkpoint`\n\
+re-prints the block on demand.\n\
+\n\
+**`--force` is an audited exception.** Each gate accepts `--force` for genuine\n\
+exceptions (abandoned work, external changes); every use is recorded as a note\n\
+on the record. Do not use it to skip the workflow.\n\
+\n\
 **Before ending** — save the narrative for the next agent:\n\
 - `ptrack summary set \"where we are\"`\n\
 \n\

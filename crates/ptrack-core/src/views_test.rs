@@ -10,7 +10,7 @@ fn next_matches_active_plan_priority_and_messages() {
     assert_eq!(view.task.as_ref().map(|task| task.id), Some(1));
     assert_eq!(
         view.markdown(),
-        "next: [doing] #1 context command (plan: Build CLI)\n"
+        "Goal: Ship the widget service\nnext: [doing] #1 context command (plan: Build CLI)\n"
     );
 
     let no_active = ProjectSnapshot::new(
@@ -26,7 +26,7 @@ fn next_matches_active_plan_priority_and_messages() {
         next(&no_active)
             .expect("no active plan is not an error")
             .markdown(),
-        "no active plan (set one with 'ptrack plan use <id>')\n"
+        "Goal: Ship the widget service\nno active plan (set one with 'ptrack plan use <id>')\n"
     );
 
     let no_action = ProjectSnapshot::new(
@@ -43,7 +43,7 @@ fn next_matches_active_plan_priority_and_messages() {
     );
     assert_eq!(
         next(&no_action).expect("active plan exists").markdown(),
-        "no actionable task in the active plan\n"
+        "Goal: Ship the widget service\nno actionable task in the active plan\n"
     );
 }
 
@@ -54,7 +54,7 @@ fn next_skips_held_tasks_and_stops_at_a_held_active_plan() {
     held.tasks[1].hold_reason = Some("waiting on review".to_owned());
     assert_eq!(
         next(&held).expect("active plan exists").markdown(),
-        "no actionable task in the active plan\n"
+        "Goal: Ship the widget service\nno actionable task in the active plan\n"
     );
 
     held.tasks.push(task(5, 1, "fallback", TaskStatus::Todo, 5));
@@ -65,7 +65,10 @@ fn next_skips_held_tasks_and_stops_at_a_held_active_plan() {
     held_plan.plans[0].hold_reason = Some("budget freeze".to_owned());
     let view = next(&held_plan).expect("active plan exists");
     assert!(view.task.is_none());
-    assert_eq!(view.markdown(), "active plan on hold: budget freeze\n");
+    assert_eq!(
+        view.markdown(),
+        "Goal: Ship the widget service\nactive plan on hold: budget freeze\n"
+    );
     // The reason is a field, not something a consumer parses out of the prose.
     assert_eq!(view.plan_hold_reason.as_deref(), Some("budget freeze"));
     assert!(
@@ -109,7 +112,7 @@ fn next_skips_a_dep_blocked_task_and_names_its_blockers() {
     );
     assert_eq!(
         view.markdown(),
-        "next: [todo] #2 ship crate (plan: Build CLI)\nskipped: #1 (waiting on #3)\n"
+        "Goal: Ship the widget service\nnext: [todo] #2 ship crate (plan: Build CLI)\nskipped: #1 (waiting on #3)\n"
     );
 }
 
@@ -126,7 +129,7 @@ fn next_reports_nothing_actionable_when_every_candidate_waits_on_deps() {
     assert!(view.task.is_none());
     assert_eq!(
         view.markdown(),
-        "no actionable task in the active plan\nskipped: #1 (waiting on #2, #3)\n"
+        "Goal: Ship the widget service\nno actionable task in the active plan\nskipped: #1 (waiting on #2, #3)\n"
     );
 }
 
@@ -140,7 +143,7 @@ fn a_task_becomes_actionable_once_its_dep_target_is_done() {
     assert!(view.skipped.is_empty());
     assert_eq!(
         view.markdown(),
-        "next: [todo] #1 write docs (plan: Build CLI)\n"
+        "Goal: Ship the widget service\nnext: [todo] #1 write docs (plan: Build CLI)\n"
     );
 }
 
@@ -160,7 +163,10 @@ fn open_plan_deps_block_every_task_of_the_active_plan() {
     let view = next(&snapshot).expect("active plan exists");
     assert!(view.task.is_none());
     assert_eq!(view.plan_waiting_on, vec![2]);
-    assert_eq!(view.markdown(), "active plan waiting on #2\n");
+    assert_eq!(
+        view.markdown(),
+        "Goal: Ship the widget service\nactive plan waiting on #2\n"
+    );
 
     // Finishing the dep plan unblocks the active plan's tasks.
     snapshot.plans[1].status = PlanStatus::Done;
@@ -216,7 +222,7 @@ fn holds_render_as_one_marker_in_plan_and_task_views() {
     );
     assert_eq!(
         show_task(&held, 1).expect("task exists").markdown(),
-        "# Task #1 context command [doing] [on hold: waiting on review]\n\
+        "Goal: Ship the widget service\n# Task #1 context command [doing] [on hold: waiting on review]\n\
 \n\
 Plan: #1 Build CLI [on hold: budget freeze]\n\
 \n\
@@ -270,7 +276,7 @@ fn show_plan_and_task_markdown_are_byte_exact() {
     );
     assert_eq!(
         show_task(&snapshot, 1).expect("task exists").markdown(),
-        "# Task #1 context command [doing]\n\
+        "Goal: Ship the widget service\n# Task #1 context command [doing]\n\
 \n\
 Plan: #1 Build CLI\n\
 \n\
@@ -436,4 +442,37 @@ fn reference_resolution_is_tolerant_but_requested_roots_are_required() {
             id: 7,
         })
     );
+}
+
+#[test]
+fn checkpoint_reports_the_whole_picture_with_milestone_progress() {
+    let view = crate::checkpoint(&snapshot(), Some(1));
+    assert_eq!(view.open_plans, vec![(1, "Build CLI".to_owned())]);
+    assert_eq!((view.open_issues, view.high_issues), (1, 1));
+    assert_eq!(
+        view.markdown(),
+        "Goal: Ship the widget service\n\
+         Rolling summary: Storage layer landed; wiring CLI\n\
+         Remaining open plans: #1 Build CLI\n\
+         Open issues: 1 (1 high)\n\
+         Milestone: Ship beta — 0/1 plans done\n\
+         \n\
+         CHECKPOINT — before continuing, re-evaluate:\n\
+         - Does the remaining roadmap still reach the goal? Missing plans? Obsolete ones?\n\
+         - What did this plan change that the next plans must know?\n\
+         - Update: ptrack summary set \"...\" | ptrack plan add \"...\" | ptrack issue add \"...\"\n"
+    );
+}
+
+#[test]
+fn checkpoint_names_the_missing_goal_and_summary_and_skips_the_milestone() {
+    let mut bare = snapshot();
+    bare.meta.goal = String::new();
+    bare.meta.summary = String::new();
+    let view = crate::checkpoint(&bare, None);
+    let markdown = view.markdown();
+    assert!(markdown.starts_with(
+        "Goal: (not set — set one with 'ptrack goal set \"...\"')\nRolling summary: (not set)\n"
+    ));
+    assert!(!markdown.contains("Milestone:"));
 }

@@ -76,6 +76,7 @@ pub const LEAVES: &[LeafSpec] = &[
     leaf(&["context"], ArgCount::None),
     leaf(&["guide"], ArgCount::None),
     leaf(&["next"], ArgCount::None),
+    leaf(&["checkpoint"], ArgCount::None),
     leaf(&["search"], ArgCount::Minimum(1)),
     leaf(&["board"], ArgCount::None),
     leaf(&["gui"], ArgCount::Maximum(1)),

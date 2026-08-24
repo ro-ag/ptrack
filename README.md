@@ -451,15 +451,40 @@ inventory without dumping the whole project.
 
 ```sh
 ptrack context                # restore the bounded resume digest
-ptrack next                   # choose the next task
+ptrack next                   # choose the next task (led by the goal line)
 ptrack task show 12           # drill into one item
 ptrack note add "..." --task 12
-ptrack task done 12
+ptrack task done 12 --summary "what changed, where it is wired in"
 ptrack summary set "..."      # update the rolling project summary
 ```
 
 Read commands render Markdown by default because it is compact for an LLM.
 Add `--json` at automation boundaries.
+
+### Closing work is gated
+
+The two classic agent failure modes—drifting off the goal mid-plan, and
+"done" features that nothing actually calls—are countered structurally, not
+with guide prose:
+
+- `ptrack next` and `ptrack task show` lead with the project goal, so every
+  decision point re-anchors to the north star.
+- `ptrack task done <id>` requires `--summary` (what changed, where it is
+  wired in, what remains) **and** at least one linked commit (`#<id>` in the
+  commit message, or `ptrack commit record`); otherwise it errors.
+- One task in progress at a time: while a started task is unfinished,
+  `task start`, `task add`, and `plan add` are refused—finish it properly or
+  park it with `task hold`/`task block`. With an identity configured the gate
+  only considers your own started tasks.
+- `ptrack plan add` appends a final *"Integrate and verify against goal"*
+  task (skip with `--no-verify-task`), and `ptrack plan done` errors while
+  any task in the plan is open.
+- After every `plan done`, p-track prints a CHECKPOINT block—goal, rolling
+  summary, remaining open plans, open issues, milestone progress—prompting a
+  roadmap re-evaluation. `ptrack checkpoint` re-prints it on demand.
+
+Each gate accepts `--force` for genuine exceptions; every use is recorded as
+an override note on the record, so the audit trail shows the bypass.
 
 ### Transfer work to another agent
 
@@ -532,14 +557,15 @@ Put `#<task-id>` in a commit message to link the commit to that task.
 | `ptrack summary show\|set S` | Show or update the rolling project summary. |
 | `ptrack config set user <name>\|show` | Set or show the per-machine identity used to claim plans. |
 | `ptrack milestone add\|list\|show\|done\|open\|due\|rename` | Manage checkpoints that group plans. |
-| `ptrack plan add\|list\|show\|done\|use\|release\|rename\|delete\|move\|copy\|dep\|hold\|resume` | Manage plans; `delete <id> --force` cascades to tasks and notes (issues detach, commit records survive unlinked); `move <id> --to <project>` relocates a plan subtree (copy-first, never lossy; `--as` renames on arrival); `copy` duplicates one (needs `--as` without `--to`); `dep add\|remove\|list` makes one plan wait on another. |
-| `ptrack task add\|list\|show\|start\|done\|block\|rename\|move\|convert\|dep\|hold\|resume` | Manage tasks; move them between plans, convert them into plans, put one on hold with a reason, or make one wait on another with `dep add\|remove\|list`. |
+| `ptrack plan add\|list\|show\|done\|use\|release\|rename\|delete\|move\|copy\|dep\|hold\|resume` | Manage plans; `add` appends an "Integrate and verify" task (`--no-verify-task` skips it); `done` errors while tasks are open and prints the checkpoint block; `delete <id> --force` cascades to tasks and notes (issues detach, commit records survive unlinked); `move <id> --to <project>` relocates a plan subtree (copy-first, never lossy; `--as` renames on arrival); `copy` duplicates one (needs `--as` without `--to`); `dep add\|remove\|list` makes one plan wait on another. |
+| `ptrack task add\|list\|show\|start\|done\|block\|rename\|move\|convert\|dep\|hold\|resume` | Manage tasks; `done <id> --summary "..."` requires the summary and a linked commit; `add`/`start` are refused while another started task is unfinished (`--force` overrides, recorded); move them between plans, convert them into plans, put one on hold with a reason, or make one wait on another with `dep add\|remove\|list`. |
 | `ptrack issue add\|list\|show\|close\|open\|severity\|rename` | Track issues and bugs, optionally linked to tasks. |
 | `ptrack note add\|list` | Attach or list project, plan, and task notes. |
 | `ptrack commit add\|list\|show\|record` | Browse the recorded git audit trail; `show` prints the diff. |
 | `ptrack hook install` | Install the post-commit hook that records commits. |
 | `ptrack context [--json]` | Print the bounded resume digest. |
-| `ptrack next [--json]` | Print the most-actionable task in the active plan. |
+| `ptrack next [--json]` | Print the most-actionable task in the active plan, led by the goal. |
+| `ptrack checkpoint [--json]` | Print the whole-picture re-evaluation block (goal, summary, open plans, issues). |
 | `ptrack gui [PATH]` | Open the canonical desktop project workspace; PATH defaults to the current directory. |
 | `ptrack board [--plan N] [--json] [--gui]` | Print a kanban board or open it as a Tauri desktop GUI. |
 | `ptrack search <term> [--json]` | Search plan and task titles plus note bodies. |

@@ -464,7 +464,8 @@ fn on_hold_clause(count: usize) -> String {
 
 /// Renders IDs as `#1, #3` for waiting-on markers, shared by every text
 /// surface that names dependency blockers.
-pub(crate) fn id_list(ids: &[u64]) -> String {
+#[must_use]
+pub fn id_list(ids: &[u64]) -> String {
     ids.iter()
         .map(|id| format!("#{id}"))
         .collect::<Vec<_>>()

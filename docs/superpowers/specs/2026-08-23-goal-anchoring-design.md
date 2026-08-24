@@ -150,10 +150,12 @@ match.
 ## Data flow
 
 All pieces read the existing `ProjectSnapshot` (goal, summary, plans, tasks,
-issues, milestones, notes, commits). Writes: new note kinds (closeout,
-override) and one auto-created task per plan. Gate checks live at the
-mutation boundary (`ptrack-store`) so CLI, TUI, GUI, and MCP all enforce the
-same rules; the CLI renders the friendly errors. Desktop GUI and TUI render
+issues, milestones, notes, commits). Writes: ordinary notes whose bodies are
+prefixed `closeout:` / `override:` (reusing the plain note kind avoids a wire
+enum change that would break older readers) and one auto-created task per
+plan. Gate checks live in the CLI dispatch layer — the agent surface. The
+desktop GUI and TUI are human surfaces and keep their direct mutation paths;
+the capability MCP exposes no task mutations. Both GUIs render
 closeout/override notes and the auto task like any other note/task.
 
 ## Error handling

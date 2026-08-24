@@ -1,7 +1,7 @@
 use ptrack_core::{
-    Board, Commit, Counts, DepSkip, DepWait, Digest, Issue, IssueLine, IssueShow, Milestone,
-    MilestoneRef, MilestoneShow, NextView, NoteLine, PlanRef, PlanShow, ProjectRef, SearchView,
-    TaskLine, TaskShow, Timestamp,
+    Board, CheckpointView, Commit, Counts, DepSkip, DepWait, Digest, Issue, IssueLine, IssueShow,
+    Milestone, MilestoneRef, MilestoneShow, NextView, NoteLine, PlanRef, PlanShow, ProjectRef,
+    SearchView, TaskLine, TaskShow, Timestamp,
 };
 use serde::Serialize;
 
@@ -375,6 +375,8 @@ impl<'a> From<&'a Digest> for DigestJson<'a> {
 
 #[derive(Serialize)]
 pub struct NextJson<'a> {
+    #[serde(skip_serializing_if = "str::is_empty")]
+    goal: &'a str,
     task: Option<TaskLineJson<'a>>,
     #[serde(skip_serializing_if = "str::is_empty")]
     plan_title: &'a str,
@@ -411,6 +413,7 @@ impl<'a> From<&'a DepSkip> for DepSkipJson<'a> {
 impl<'a> From<&'a NextView> for NextJson<'a> {
     fn from(value: &'a NextView) -> Self {
         Self {
+            goal: &value.goal,
             task: value.task.as_ref().map(Into::into),
             plan_title: &value.plan_title,
             message: &value.message,
@@ -440,6 +443,8 @@ impl<'a> From<&'a PlanShow> for PlanShowJson<'a> {
 
 #[derive(Serialize)]
 pub struct TaskShowJson<'a> {
+    #[serde(skip_serializing_if = "str::is_empty")]
+    goal: &'a str,
     task: TaskLineJson<'a>,
     plan: Option<PlanRefJson<'a>>,
     notes: Option<Vec<NoteLineJson<'a>>>,
@@ -448,9 +453,60 @@ pub struct TaskShowJson<'a> {
 impl<'a> From<&'a TaskShow> for TaskShowJson<'a> {
     fn from(value: &'a TaskShow) -> Self {
         Self {
+            goal: &value.goal,
             task: (&value.task).into(),
             plan: value.plan.as_ref().map(Into::into),
             notes: nonempty(value.notes.iter().map(Into::into).collect()),
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct CheckpointJson<'a> {
+    #[serde(skip_serializing_if = "str::is_empty")]
+    goal: &'a str,
+    #[serde(skip_serializing_if = "str::is_empty")]
+    summary: &'a str,
+    open_plans: Vec<CheckpointPlanJson<'a>>,
+    open_issues: usize,
+    high_issues: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    milestone: Option<MilestoneProgressJson<'a>>,
+}
+
+#[derive(Serialize)]
+struct CheckpointPlanJson<'a> {
+    id: u64,
+    title: &'a str,
+}
+
+#[derive(Serialize)]
+struct MilestoneProgressJson<'a> {
+    title: &'a str,
+    plans_done: usize,
+    plans_total: usize,
+}
+
+impl<'a> From<&'a CheckpointView> for CheckpointJson<'a> {
+    fn from(value: &'a CheckpointView) -> Self {
+        Self {
+            goal: &value.goal,
+            summary: &value.summary,
+            open_plans: value
+                .open_plans
+                .iter()
+                .map(|(id, title)| CheckpointPlanJson { id: *id, title })
+                .collect(),
+            open_issues: value.open_issues,
+            high_issues: value.high_issues,
+            milestone: value
+                .milestone
+                .as_ref()
+                .map(|progress| MilestoneProgressJson {
+                    title: &progress.title,
+                    plans_done: progress.plans_done,
+                    plans_total: progress.plans_total,
+                }),
         }
     }
 }
