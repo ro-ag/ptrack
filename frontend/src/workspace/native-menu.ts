@@ -10,7 +10,6 @@ export interface NativeMenuActions {
   switchProject(): void;
   closeProject(): void;
   showSettings(): void;
-  showCapabilities(): void;
   showBoard(): void;
   showIntelligence(): void;
   toggleTerminalPanel(): void;
@@ -21,16 +20,15 @@ export interface NativeMenuActions {
 
 export type NativeMenuCommand = keyof NativeMenuActions;
 
-export type NativeMenuView = "board" | "overview" | "capabilities";
+export type NativeMenuView = "board" | "overview";
 
 // Settings is an application dialog, not a view, so showSettings has no view
-// target. The Capabilities page keeps its own route.
+// target.
 export function nativeMenuViewTarget(
   command: NativeMenuCommand,
 ): NativeMenuView | null {
   if (command === "showBoard") return "board";
   if (command === "showIntelligence") return "overview";
-  if (command === "showCapabilities") return "capabilities";
   return null;
 }
 
@@ -69,7 +67,6 @@ const nativeMenuBindings: ReadonlyArray<
   ["workspace:switch-requested", "switchProject"],
   ["workspace:close-requested", "closeProject"],
   ["workspace:settings-requested", "showSettings"],
-  ["workspace:capabilities-requested", "showCapabilities"],
   ["workspace:board-requested", "showBoard"],
   ["workspace:intelligence-requested", "showIntelligence"],
   ["workspace:terminal-panel-toggle-requested", "toggleTerminalPanel"],

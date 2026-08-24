@@ -418,12 +418,8 @@ describe("production asset layout", () => {
     expect(index).toMatch(
       /id="terminal-help"[\s\S]*aria-label="Open terminal guide"/,
     );
-    expect(index).toMatch(
-      /class="capabilities-heading-actions"[\s\S]*id="capability-help"[\s\S]*>Capability guide<\/button>/,
-    );
     expect(app).toContain("OpenHelpDestination");
     expect(appSource).toContain('openHelpDestination("terminals")');
-    expect(appSource).toContain('openHelpDestination("capabilities")');
     expect(appSource).not.toContain("ro-ag.github.io/ptrack/help");
     expect(index).toMatch(
       /id="terminal-close"[\s\S]*class="terminal-action-button terminal-action-stop"[\s\S]*aria-label="Close terminal"/,
@@ -593,10 +589,7 @@ describe("production asset layout", () => {
     expect(styles).toMatch(/data-application-overlay-layer=(?:active|"active")/);
     expect(styles).toMatch(/data-application-overlay-layer=(?:underlay|"underlay")/);
     expect(index).toMatch(
-      /<main[^>]*id="main-content"[^>]*class="canvas-main"[^>]*aria-label="Workspace content"[\s\S]*id="capabilities-page"[^>]*aria-labelledby="capabilities-heading"[\s\S]*id="capabilities-heading"[^>]*tabindex="-1"/,
-    );
-    expect(index).toMatch(
-      /<main[^>]*id="main-content"[^>]*class="canvas-main"[\s\S]*id="overview-page"[^>]*aria-label="Project overview"/,
+      /<main[^>]*id="main-content"[^>]*class="canvas-main"[^>]*aria-label="Workspace content"[\s\S]*id="overview-page"[^>]*aria-label="Project overview"/,
     );
     expect(index).toMatch(
       /class="section-label">Rolling project summary<\/p>[\s\S]*id="summary"[^>]*>No rolling summary yet\.<\/p>/,
@@ -608,33 +601,12 @@ describe("production asset layout", () => {
     expect(styles).toMatch(
       /\.canvas-main\s*\{[^}]*min-width:\s*0[^}]*min-height:\s*0[^}]*flex:\s*1 1 auto[^}]*display:\s*flex[^}]*flex-direction:\s*column/s,
     );
-    expect(index).toMatch(
-      /id="capability-status"[^>]*role="status"[^>]*aria-live="polite"[^>]*aria-atomic="true"/,
-    );
-    expect(index).toMatch(
-      /class="memory-section capability-editor"[^>]*aria-labelledby="capability-editor-title"[\s\S]*id="capability-preview-result"[^>]*aria-labelledby="capability-preview-heading"/,
-    );
-    expect(index).toMatch(
-      /class="memory-section capability-list-section"[^>]*aria-labelledby="capability-list-heading"[\s\S]*id="capability-audit-list"[^>]*aria-labelledby="capability-audit-heading"/,
-    );
-    expect(index).toMatch(
-      /id="capability-git-fields"[^>]*hidden[^>]*disabled[\s\S]*id="capability-ssh-fields"[^>]*hidden[^>]*disabled/,
-    );
-    expect(appSource).toContain("setCapabilityStatus(action, phase)");
-    expect(appSource).toContain("showCapabilityError(action)");
-    expect(appSource).toContain(
-      'showError(new Error(capabilityAnnouncement(action, "failure")))',
-    );
-    for (const action of ["audit", "test", "preview"]) {
-      expect(appSource).toContain(`showCapabilityError("${action}")`);
-    }
-    expect(appSource).toContain("capabilityFocusRestoreKey(");
+    // The deprecated Capabilities view is gone; capability brokering is
+    // delegated to the companion project pam.
+    expect(index).not.toContain('id="capabilities-page"');
+    expect(index).not.toContain('id="nav-capabilities"');
+    expect(appSource).not.toContain('setView("capabilities"');
     expect(appSource).toContain('empty.setAttribute("role", "listitem")');
-    expect(appSource).toContain("fieldset.disabled = !active");
-    expect(appSource).toContain('EnableCapabilityV2(generation, Number(view.capability.id), digest)');
-    expect(appSource).toContain("canEnableCapability(view, digest)");
-    expect(appSource).toContain('setView("capabilities", true)');
-    expect(appSource).not.toContain('setStatus("Testing connection');
     expect(appSource).not.toContain('setView("settings"');
     expect(index).toMatch(
       /id="settings-open"[^>]*aria-label="Open Settings"[\s\S]*aria-haspopup="dialog"[\s\S]*aria-controls="settings-modal"/,
@@ -677,9 +649,6 @@ describe("production asset layout", () => {
     // instead of promising the project database is untouched.
     expect(index).toContain(
       "Neither reset touches plans, tasks, notes, or Recent projects.",
-    );
-    expect(index).toMatch(
-      /id="settings-reset-help"[^<>]*>[^<]*revokes every network capability grant in the\s+open project/,
     );
     expect(styles).toMatch(/\.settings-reset-actions\{[^}]*flex-wrap:wrap/);
     expect(styles).toMatch(

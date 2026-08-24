@@ -48,10 +48,10 @@ export function sidebarWidthFromKey(
 // single SetLayoutState command takes. The record's `usedAt` eviction counter
 // is backend-owned, so it is never read here and can never be sent back.
 
-export type LayoutView = "board" | "overview" | "capabilities";
+export type LayoutView = "board" | "overview";
 export type LayoutStorageStatus = "ok" | "defaults" | "unreadable";
 
-const layoutViews: readonly LayoutView[] = ["board", "overview", "capabilities"];
+const layoutViews: readonly LayoutView[] = ["board", "overview"];
 const boardLanes: readonly string[] = ["blocked", "doing", "done", "todo"];
 
 export interface LayoutProjectState {

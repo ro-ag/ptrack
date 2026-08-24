@@ -301,7 +301,6 @@ fn menu_event_and_help_allowlists_are_exact() {
         "workspace:switch-requested",
         "workspace:close-requested",
         "workspace:settings-requested",
-        "workspace:capabilities-requested",
         "workspace:board-requested",
         "workspace:intelligence-requested",
         "workspace:terminal-panel-toggle-requested",

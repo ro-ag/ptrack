@@ -59,10 +59,9 @@ pub enum MenuDispatch {
     Ignore,
 }
 
-const MENU_EVENTS: [&str; 11] = [
+const MENU_EVENTS: [&str; 10] = [
     "update:open-requested",
     "workspace:board-requested",
-    "workspace:capabilities-requested",
     "workspace:close-requested",
     "workspace:command-palette-requested",
     "workspace:install-shell-command-requested",
@@ -73,7 +72,7 @@ const MENU_EVENTS: [&str; 11] = [
     "workspace:terminal-panel-toggle-requested",
 ];
 
-const HELP_URLS: [(&str, &str); 5] = [
+const HELP_URLS: [(&str, &str); 4] = [
     ("help-center", "https://ro-ag.github.io/ptrack/help/"),
     (
         "keyboard-shortcuts",
@@ -82,10 +81,6 @@ const HELP_URLS: [(&str, &str); 5] = [
     (
         "terminals",
         "https://ro-ag.github.io/ptrack/help/terminals/",
-    ),
-    (
-        "capabilities",
-        "https://ro-ag.github.io/ptrack/help/agents-and-capabilities/#capability-model",
     ),
     ("report-issue", "https://github.com/ro-ag/ptrack/issues/new"),
 ];
@@ -118,18 +113,11 @@ pub fn menu_spec(platform: DesktopPlatform) -> Vec<MenuSpec> {
             command("workspace:close-requested", "Close Project", None),
         ],
     };
-    let mut project_entries = vec![
-        command(
-            "workspace:settings-requested",
-            "Settings…",
-            Some("CmdOrCtrl+,"),
-        ),
-        command(
-            "workspace:capabilities-requested",
-            "Network Capabilities…",
-            None,
-        ),
-    ];
+    let mut project_entries = vec![command(
+        "workspace:settings-requested",
+        "Settings…",
+        Some("CmdOrCtrl+,"),
+    )];
     if platform == DesktopPlatform::MacOs {
         project_entries.extend([
             MenuEntrySpec::Separator,
@@ -152,11 +140,6 @@ pub fn menu_spec(platform: DesktopPlatform) -> Vec<MenuSpec> {
                 "workspace:intelligence-requested",
                 "Intelligence",
                 Some("CmdOrCtrl+2"),
-            ),
-            command(
-                "workspace:capabilities-requested",
-                "Capabilities",
-                Some("CmdOrCtrl+3"),
             ),
             MenuEntrySpec::Separator,
             command(
