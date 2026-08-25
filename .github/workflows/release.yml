@@ -9,18 +9,23 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  test:
+  validate:
+    # The tag commit already passed the full native-acceptance suite on main;
+    # a release re-validates metadata, it does not redo CI.
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0 # ancestry check
 
       - name: Validate stable release tag
         shell: bash
@@ -30,57 +35,60 @@ jobs:
             exit 1
           fi
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@1.89.0
-        with:
-          components: rustfmt, clippy
+      - name: Require green native-acceptance run on the tag commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Peel annotated tags to the commit ($GITHUB_SHA is the tag object).
+          sha=$(git rev-list -n 1 "$GITHUB_REF")
+          git fetch --quiet origin main
+          git merge-base --is-ancestor "$sha" origin/main || {
+            echo "::error::tag ${GITHUB_REF_NAME} (${sha}) is not on origin/main"
+            exit 1
+          }
+          run_id=$(gh run list --workflow native-acceptance.yml --branch main \
+            --commit "$sha" --status success --limit 1 \
+            --json databaseId --jq '.[0].databaseId')
+          if [ -z "$run_id" ]; then
+            echo "::error::no green native-acceptance run on ${sha}"
+            exit 1
+          fi
+          echo "Trusting native-acceptance run ${run_id} on ${sha}"
 
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+  frontend:
+    # Build the web assets once; every build-matrix leg downloads this dist/.
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Install Linux desktop libraries
-        shell: bash
-        run: |
-          # Mirror stalls have hung this step past the job timeout; bound and retry.
-          for attempt in 1 2 3; do
-            if sudo timeout 300 apt-get -o Acquire::Retries=3 update \
-              && sudo timeout 600 apt-get -o Acquire::Retries=3 install --yes \
-                libgtk-3-dev libwebkit2gtk-4.1-dev \
-                libayatana-appindicator3-dev librsvg2-dev patchelf; then
-              exit 0
-            fi
-            echo "apt attempt ${attempt} failed; retrying" >&2
-            sleep 20
-          done
-          exit 1
-
-      - name: Install and test frontend
+      - name: Build frontend assets
         working-directory: frontend
         run: |
           npm ci
-          npm test
           npm run build
 
-      - name: Test Rust runtime and release producer
-        shell: bash
-        run: |
-          cargo fmt --all -- --check
-          cargo test --workspace --all-targets --no-fail-fast
-          cargo clippy --workspace --all-targets -- -D warnings
-          RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
-          python3 -B -m unittest tools.help_check_test tools.release_contract_test
-          python3 -B tools/help_check.py all
+      - name: Upload frontend dist
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          if-no-files-found: error
+          retention-days: 1
 
   build:
     name: build (${{ matrix.archive_os }}/${{ matrix.arch }})
-    needs: test
+    needs: [validate, frontend]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 35
     strategy:
@@ -116,7 +124,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Require updater-compatible macOS credentials
         if: runner.os == 'macOS'
@@ -128,25 +136,34 @@ jobs:
           fi
 
       - name: Set up Rust target
-        uses: dtolnay/rust-toolchain@1.89.0
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master 2026-08-05
         with:
+          toolchain: "1.89.0"
           targets: ${{ matrix.rust_target }}
 
       - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          # One cache family per OS, shared with native-acceptance so the tag
+          # build starts warm from the main-branch run.
+          shared-key: rust-${{ runner.os }}
 
       - name: Set up Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Build frontend assets
+      - name: Restore frontend dependencies
         working-directory: frontend
-        run: |
-          npm ci
-          npm run build
+        run: npm ci
+
+      - name: Download frontend dist
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: frontend-dist
+          path: frontend/dist
 
       - name: Install Linux desktop libraries
         if: runner.os == 'Linux'
@@ -173,7 +190,7 @@ jobs:
           export PTRACK_BUILD_VERSION="${version}"
           npm --prefix frontend run tauri -- build \
             --target "${{ matrix.rust_target }}" --no-bundle --ci \
-            --config "{\"version\":\"${version}\"}" -- --locked
+            --config "{\"version\":\"${version}\",\"build\":{\"beforeBuildCommand\":\"\"}}" -- --locked
           python3 tools/release_contract.py validate-binary \
             "target/${{ matrix.rust_target }}/release/ptrack" \
             "${version}" linux "${{ matrix.arch }}"
@@ -184,7 +201,7 @@ jobs:
         run: |
           $version = $env:GITHUB_REF_NAME.TrimStart("v")
           $env:PTRACK_BUILD_VERSION = $version
-          $config = "{`"version`":`"$version`"}"
+          $config = "{`"version`":`"$version`",`"build`":{`"beforeBuildCommand`":`"`"}}"
           npm --prefix frontend run tauri -- build `
             --target "${{ matrix.rust_target }}" --no-bundle --ci `
             --config $config -- --locked
@@ -200,7 +217,7 @@ jobs:
           export PTRACK_BUILD_VERSION="${version}"
           npm --prefix frontend run tauri -- build \
             --target "${{ matrix.rust_target }}" --bundles app --no-sign --ci \
-            --config "{\"version\":\"${version}\"}" -- --locked
+            --config "{\"version\":\"${version}\",\"build\":{\"beforeBuildCommand\":\"\"}}" -- --locked
           app="target/${{ matrix.rust_target }}/release/bundle/macos/p-track.app"
           test -f "$app/Contents/MacOS/ptrack"
           python3 tools/release_contract.py validate-binary \
@@ -327,7 +344,7 @@ jobs:
           Remove-Item -Recurse -Force "dist/$archive"
 
       - name: Upload exact packaged assets
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-${{ matrix.archive_os }}-${{ matrix.arch }}
           path: |
@@ -342,10 +359,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Download packaged assets
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: release-*
           path: dist
