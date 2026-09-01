@@ -73,6 +73,26 @@ export const initialRecentProjectsState: RecentProjectsState = Object.freeze({
 export const RECENT_RELOCATION_UNCONFIRMED =
   "Project opened, but p-track could not confirm the recent-entry update. The bounded registry list was reloaded without replaying the open.";
 
+/**
+ * Picks the newly authorized version of the row the user chose.
+ *
+ * Recent-row authorization is deliberately short-lived. A Welcome screen can
+ * stay open longer than that lease, so Open refreshes the bounded list before
+ * it asks the backend to mutate workspace state. The canonical path and
+ * availability must still describe the exact action the user selected; a
+ * changed row is rendered for another explicit choice instead.
+ */
+export function refreshedRecentProjectForOpen(
+  projects: RecentProjectEntry[],
+  selected: Pick<RecentProjectEntry, "entryId" | "canonicalPath">,
+): RecentProjectEntry | null {
+  return projects.find((project) =>
+    project.entryId === selected.entryId &&
+    project.canonicalPath === selected.canonicalPath &&
+    project.availability === "available"
+  ) ?? null;
+}
+
 export type RecentProjectsEvent =
   | { type: "loadStarted" }
   | { type: "loaded"; projects: RecentProjectEntry[]; announcement?: string }

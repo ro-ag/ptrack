@@ -242,6 +242,15 @@ fn tauri_uses_the_existing_frontend_and_exact_window_contract() {
         "p-track Project Workspace"
     );
     assert_eq!(config["app"]["windows"][0]["backgroundColor"], "#080d12");
+    // The web layout owns the top 44px drag strip. Keep the native macOS
+    // controls inset into it instead of restoring a detached legacy titlebar.
+    assert_eq!(config["app"]["windows"][0]["decorations"], true);
+    assert_eq!(config["app"]["windows"][0]["titleBarStyle"], "Overlay");
+    assert_eq!(config["app"]["windows"][0]["hiddenTitle"], true);
+    assert_eq!(
+        config["app"]["windows"][0]["trafficLightPosition"],
+        serde_json::json!({ "x": 16, "y": 17 })
+    );
     // Hidden at launch so the restored geometry is the first painted rect; the
     // shell shows the window in its setup once the replay has run.
     assert_eq!(config["app"]["windows"][0]["visible"], false);

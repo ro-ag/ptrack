@@ -156,6 +156,7 @@ import {
   RECENT_RELOCATION_UNCONFIRMED,
   recentProjectFocusKey,
   recentProjectPrimaryAction,
+  refreshedRecentProjectForOpen,
   reduceRecentProjects,
 } from "./workspace/recent-projects";
 import {
@@ -4589,15 +4590,13 @@ async function reconcileRecentProjectOpenFailure(ticket, entry, resolution, erro
       return;
     }
     if (!recentProjectOperationMatches(ticket)) return;
-    setRecentProjectsState({
-      type: "failed",
-      message:
-        `p-track could not confirm that “${entry.name}” opened. The recent entry was not replayed: ${messageFrom(error)}`,
-    });
-    restoreRecentProjectFocus(
-      recentProjectFocusKey(entry.entryId, ticket.intent),
-      ticket.operationId,
-    );
+    const focusKey = recentProjectFocusKey(entry.entryId, ticket.intent);
+    const reason = messageFrom(error);
+    const message = reason === "recent-project-entry-stale"
+      ? `The Recent projects list for “${entry.name}” changed or expired. p-track refreshed it without replaying Open. Review the row and choose again.`
+      : `p-track could not confirm that “${entry.name}” opened. The recent entry was not replayed: ${reason}`;
+    setRecentProjectsState({ type: "settled" });
+    void loadRecentProjects({ focusKey, errorMessage: message });
   } catch (stateError) {
     workspaceController.publish({ status: "error", generation: 0 });
     renderWorkspaceState(
@@ -4676,14 +4675,29 @@ async function openResolvedRecentProject(ticket, entry, resolution) {
 async function openAvailableRecentProject(entry) {
   const ticket = beginRecentProjectOperation(entry, "open");
   if (!ticket) return;
-  await openResolvedRecentProject(ticket, entry, {
-    entryId: entry.entryId,
-    base: entry.base,
-    canonicalRoot: entry.canonicalPath,
-    name: entry.name,
-    resolution: "ready",
-    confirmationToken: "",
-  });
+  const focusKey = recentProjectFocusKey(entry.entryId, "open");
+  try {
+    // A rendered row can outlive the backend's bounded listing lease. Refresh
+    // before Open so a screen left idle does not become permanently stale.
+    const projects = parseRecentProjects(await api().GetRecentProjectsV1());
+    if (!recentProjectOperationIsCurrent(ticket)) return;
+    const refreshed = refreshedRecentProjectForOpen(projects, entry);
+    if (!refreshed) {
+      throw new Error(
+        "The recent project changed while p-track refreshed it. Review the updated list and choose again.",
+      );
+    }
+    await openResolvedRecentProject(ticket, refreshed, {
+      entryId: refreshed.entryId,
+      base: refreshed.base,
+      canonicalRoot: refreshed.canonicalPath,
+      name: refreshed.name,
+      resolution: "ready",
+      confirmationToken: "",
+    });
+  } catch (error) {
+    failRecentProjectOperation(ticket, error, focusKey);
+  }
 }
 
 async function retryRecentProject(entry) {
