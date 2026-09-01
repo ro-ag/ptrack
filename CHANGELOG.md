@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.33.1] - 2026-09-01
+
+### Fixed
+- Restored the integrated macOS titlebar with inset traffic-light controls so
+  the desktop window uses the current p-track chrome instead of a detached
+  legacy title bar.
+- Recent-project Open now refreshes its short-lived authorization before
+  opening, and stale rows reload with actionable guidance instead of exposing
+  the `recent-project-entry-stale` backend error.
+
 ## [0.33.0] - 2026-08-24
 
 ### Added
