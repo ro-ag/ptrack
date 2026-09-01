@@ -248,6 +248,12 @@ describe("production asset layout", () => {
     expect(appSource).toContain("registryStatus === \"stale\"");
     expect(appSource).toContain("await refreshRecentProjectsAfterOpen()");
     expect(appSource).toContain("RECENT_RELOCATION_UNCONFIRMED");
+    expect(appSource).toMatch(
+      /async function openAvailableRecentProject[\s\S]*?GetRecentProjectsV1\(\)[\s\S]*?refreshedRecentProjectForOpen\(projects, entry\)[\s\S]*?openResolvedRecentProject\(ticket, refreshed/,
+    );
+    expect(appSource).toContain(
+      "p-track refreshed it without replaying Open. Review the row and choose again.",
+    );
     expect(recentProjectsSource).toContain("bounded registry list");
     expect(appSource).toMatch(
       /CancelWorkspaceChange\(result\.open\.confirmationToken\)[\s\S]*setRecentProjectsState\(\{[\s\S]*type: "settled"[\s\S]*renderWorkspaceState\(result\.open\.state, false\)[\s\S]*restoreRecentProjectFocus/,

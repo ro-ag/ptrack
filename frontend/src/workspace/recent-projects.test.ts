@@ -10,6 +10,7 @@ import {
   preselectedRecentProject,
   RECENT_RELOCATION_UNCONFIRMED,
   recentProjectFocusKey,
+  refreshedRecentProjectForOpen,
   reduceRecentProjects,
 } from "./recent-projects";
 
@@ -172,6 +173,23 @@ describe("recent project recovery", () => {
       .toBe("");
     expect(preselectedRecentProject([other], on)).toBe("");
     expect(preselectedRecentProject([], on)).toBe("");
+  });
+
+  it("refreshes an expired Open lease only for the exact available row", () => {
+    const refreshed = {
+      ...entry,
+      base: "fresh-base",
+      lastOpenedAt: "2026-08-14T10:05:00Z",
+      availability: "available" as const,
+    };
+    expect(refreshedRecentProjectForOpen([refreshed], entry)).toBe(refreshed);
+    expect(refreshedRecentProjectForOpen([
+      { ...refreshed, canonicalPath: "/work/replaced" },
+    ], entry)).toBeNull();
+    expect(refreshedRecentProjectForOpen([
+      { ...refreshed, availability: "changed" },
+    ], entry)).toBeNull();
+    expect(refreshedRecentProjectForOpen([], entry)).toBeNull();
   });
 
   it("treats relocation as unconfirmed after a lost response despite bounded reload", () => {
