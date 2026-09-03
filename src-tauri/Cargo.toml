@@ -19,6 +19,7 @@ ptrack-tui = { path = "../crates/ptrack-tui" }
 serde_json.workspace = true
 tauri = { version = "=2.11.5", default-features = false, features = ["wry", "x11"] }
 tauri-plugin-dialog = "=2.7.2"
+tauri-plugin-notification = "=2.3.3"
 tauri-plugin-opener = "=2.5.4"
 
 [lints.rust]

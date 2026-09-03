@@ -1,5 +1,11 @@
 use std::path::PathBuf;
 
+use ptrack_app::{
+    ActivityState, AgentHandoffEnvelopeV2, AgentHandoffInbox, AgentIntelligenceDetail,
+    AgentRunObservationV1, AgentRunsV2, AgentRuntimeSummary, AgentTimestamp, BoundedSnapshot,
+    HandoffPreview, IntelligenceConfidence, IntelligenceState, LeaseState, ProcessState,
+    RegistrationKind, RunState, RuntimeAssociation,
+};
 use ptrack_core::{
     Commit, Issue, IssueStatus, MemoryKind, Meta, Milestone, MilestoneStatus, Note, NoteTarget,
     Plan, PlanStatus, ProjectSnapshot, Severity, Task, TaskStatus, Timestamp,
@@ -209,6 +215,63 @@ fn populated_model() -> Model {
     Model::new(snapshot, model().context)
 }
 
+fn agent_summary(id: &str, state: ActivityState) -> AgentRuntimeSummary {
+    AgentRuntimeSummary {
+        run_id: id.to_owned(),
+        registration_kind: RegistrationKind::External,
+        terminal_id: String::new(),
+        terminal_backed: false,
+        terminal_present: false,
+        corresponding_terminal: false,
+        state: RunState::Running,
+        process_state: ProcessState::Unknown,
+        lease_state: LeaseState::Active,
+        live: true,
+        activity_state: state,
+        association: Some(RuntimeAssociation {
+            plan_id: 26,
+            task_id: 209,
+            revision: 3,
+        }),
+        intelligence: None,
+    }
+}
+
+fn agent_model() -> Model {
+    let mut value = model();
+    value.welcome = false;
+    value.tab = Tab::Agents;
+    value.replace_agent_state(
+        Some(AgentRunsV2 {
+            generation: 7,
+            runs: vec![agent_summary("source-run-123", ActivityState::Waiting)],
+            bounds: BoundedSnapshot::new(1, 3),
+        }),
+        Some(AgentHandoffInbox {
+            items: vec![AgentHandoffEnvelopeV2 {
+                id: "handoff-1".to_owned(),
+                generation: 7,
+                source_run_id: "source-run-123".to_owned(),
+                target_run_id: "target-run-456".to_owned(),
+                source_association: None,
+                target_association: None,
+                preview: HandoffPreview {
+                    text: "Ready for review".to_owned(),
+                    included_event_ids: Vec::new(),
+                    considered_events: 2,
+                    truncated: false,
+                },
+                created_at: AgentTimestamp::from_unix_seconds(1_700_000_000),
+                expires_at: AgentTimestamp::from_unix_seconds(1_700_001_800),
+            }],
+            bounds: BoundedSnapshot::new(1, 2),
+            incomplete: true,
+        }),
+        String::new(),
+    );
+    value
+}
+
 #[test]
 fn welcome_and_command_menu_render_directly_to_cells() {
     let mut value = model();
@@ -226,6 +289,113 @@ fn welcome_and_command_menu_render_directly_to_cells() {
         "Create backup",
     ] {
         assert!(menu.contains(label), "missing {label}");
+    }
+}
+
+#[test]
+fn agents_screen_exposes_all_categories_at_wide_and_narrow_sizes() {
+    let mut value = agent_model();
+    let wide = rendered(&value, 100, 30);
+    for expected in [
+        "6 Agents",
+        "Registered runs",
+        "source-r",
+        "waiting",
+        "external",
+        "live",
+        "P#26 T#209",
+        "bounds: showing 1/3 · 2 more",
+        "Pending handoffs",
+        "proposal only",
+        "source-r → target-r",
+        "Created",
+        "Expires",
+        "Ready for review",
+        "analysis: incomplete",
+    ] {
+        assert!(wide.contains(expected), "wide screen missing {expected:?}");
+    }
+
+    let narrow_runs = rendered(&value, 60, 18);
+    assert!(narrow_runs.contains("Registered runs"));
+    assert!(narrow_runs.contains("source-r"));
+    update(&mut value, &Key::Right);
+    let narrow_handoffs = rendered(&value, 60, 18);
+    for expected in [
+        "Pending handoffs",
+        "proposal only",
+        "source-r → target-r",
+        "Ready for review",
+        "analysis: incomplete",
+    ] {
+        assert!(
+            narrow_handoffs.contains(expected),
+            "narrow screen missing {expected:?}"
+        );
+    }
+}
+
+#[test]
+fn agents_screen_names_unavailable_and_empty_states() {
+    let mut unavailable = model();
+    unavailable.welcome = false;
+    unavailable.tab = Tab::Agents;
+    unavailable.agent_error = "no active agent coordination host for this project".to_owned();
+    assert!(
+        rendered(&unavailable, 60, 18)
+            .contains("no active agent coordination host for this project")
+    );
+
+    unavailable.replace_agent_state(
+        Some(AgentRunsV2 {
+            generation: 7,
+            runs: Vec::new(),
+            bounds: BoundedSnapshot::new(0, 0),
+        }),
+        Some(AgentHandoffInbox {
+            items: Vec::new(),
+            bounds: BoundedSnapshot::new(0, 0),
+            incomplete: false,
+        }),
+        String::new(),
+    );
+    let empty_runs = rendered(&unavailable, 60, 18);
+    assert!(empty_runs.contains("no registered agent runs"));
+    update(&mut unavailable, &Key::Right);
+    let empty_inbox = rendered(&unavailable, 60, 18);
+    assert!(empty_inbox.contains("no pending agent handoffs"));
+    assert!(empty_inbox.contains("analysis: complete"));
+}
+
+#[test]
+fn selected_agent_intelligence_detail_is_bounded_and_visible() {
+    let mut value = agent_model();
+    value.agent_detail = Some(AgentRunObservationV1 {
+        generation: 7,
+        run: agent_summary("source-run-123", ActivityState::Waiting),
+        intelligence: AgentIntelligenceDetail {
+            state: IntelligenceState::Waiting,
+            confidence: IntelligenceConfidence::High,
+            evidence: Vec::new(),
+            event_count: 4,
+            last_event_at: Some(AgentTimestamp::from_unix_seconds(1_700_000_000)),
+        },
+        event_bounds: BoundedSnapshot::new(4, 6),
+    });
+    let screen = rendered(&value, 60, 18);
+    for expected in [
+        "Agent intelligence",
+        "Origin",
+        "Lifecycle",
+        "Activity",
+        "Association",
+        "State",
+        "Confidence",
+        "4/6 retained · 4 inferred",
+        "Last event",
+        "Evidence",
+    ] {
+        assert!(screen.contains(expected), "detail missing {expected:?}");
     }
 }
 
@@ -659,7 +829,7 @@ fn panels_clip_rows_and_input_cursor_stays_in_the_terminal() {
     let mut value = populated_model();
     value.welcome = false;
     value.menu = true;
-    value.menu_cursor = 11;
+    value.menu_cursor = 12;
     let menu = rendered_buffer(&value, 34, 18);
     let (_, backup) = row_containing(&menu, "Create backup");
     assert_eq!(

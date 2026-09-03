@@ -10,7 +10,9 @@ use ptrack_core::{
     Timestamp, open_plan_deps, open_task_deps,
 };
 
-use crate::model::{BOARD_STATUSES, BOARD_TITLES, DetailTarget, Model, PaneFocus, TAB_NAMES, Tab};
+use crate::model::{
+    AgentPane, BOARD_STATUSES, BOARD_TITLES, DetailTarget, Model, PaneFocus, TAB_NAMES, Tab,
+};
 
 const ACCENT: Color = Color::Rgb(0x3d, 0xd6, 0xa3);
 const ACCENT_DIM: Color = Color::Rgb(0x2a, 0xa7, 0xa1);
@@ -29,12 +31,13 @@ const DARK_CYAN: Color = Color::Rgb(0x17, 0x8f, 0x95);
 const BLUE_GREEN: Color = Color::Rgb(0x3c, 0xd1, 0xa5);
 const NIGHT: Color = Color::Rgb(0x0c, 0x10, 0x16);
 
-const MENU: [(&str, &str, &str, &str); 12] = [
+const MENU: [(&str, &str, &str, &str); 13] = [
     ("Navigate", "1", "Overview", "Plans and tasks"),
     ("Navigate", "2", "Board", "Kanban workflow"),
     ("Navigate", "3", "Milestones", "Project checkpoints"),
     ("Navigate", "4", "Issues", "Problems and bugs"),
     ("Navigate", "5", "Maintenance", "Storage health and upkeep"),
+    ("Navigate", "6", "Agents", "Live runs and handoffs"),
     ("Project", "g", "Edit goal", "Update the north star"),
     ("Project", "m", "Edit summary", "Refresh handoff context"),
     (
@@ -83,6 +86,8 @@ pub fn draw(frame: &mut Frame<'_>, model: &Model) {
     draw_tabs(frame, chunks[1], model);
     if model.menu {
         draw_menu(frame, chunks[2], model);
+    } else if model.agent_detail.is_some() {
+        draw_agent_detail(frame, chunks[2], model);
     } else if model.detail.is_some() {
         draw_detail(frame, chunks[2], model);
     } else {
@@ -92,6 +97,7 @@ pub fn draw(frame: &mut Frame<'_>, model: &Model) {
             Tab::Milestones => draw_milestones(frame, chunks[2], model),
             Tab::Issues => draw_issues(frame, chunks[2], model),
             Tab::Maintenance => draw_maintenance(frame, chunks[2], model),
+            Tab::Agents => draw_agents(frame, chunks[2], model),
         }
     }
     draw_footer(frame, chunks[3], model);
@@ -147,7 +153,7 @@ fn draw_welcome(frame: &mut Frame<'_>, area: Rect) {
         Line::raw(""),
         selected(" ENTER  Open dashboard", true, true, TEXT, menu_width),
         Line::from(vec![
-            key("1–5"),
+            key("1–6"),
             Span::styled(" screens    ", Style::default().fg(GRAY)),
             key("?"),
             Span::styled(" menu    ", Style::default().fg(GRAY)),
@@ -743,6 +749,298 @@ fn draw_maintenance(frame: &mut Frame<'_>, area: Rect, model: &Model) {
             ]),
         ],
     );
+}
+
+fn draw_agents(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    if model.agent_runs.is_none() && model.agent_inbox.is_none() {
+        draw_panel(
+            frame,
+            area,
+            "Agents · unavailable",
+            None,
+            true,
+            "r retry",
+            vec![Line::styled(
+                if model.agent_error.is_empty() {
+                    "no active agent coordination host for this project"
+                } else {
+                    model.agent_error.as_str()
+                }
+                .to_owned(),
+                Style::default().fg(AMBER),
+            )],
+        );
+        return;
+    }
+    if area.width < 80 {
+        match model.agent_pane {
+            AgentPane::Runs => draw_agent_runs_panel(frame, area, model, true),
+            AgentPane::Handoffs => draw_handoffs_panel(frame, area, model, true),
+        }
+        return;
+    }
+    let chunks = Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)])
+        .spacing(1)
+        .split(area);
+    draw_agent_runs_panel(frame, chunks[0], model, model.agent_pane == AgentPane::Runs);
+    draw_handoffs_panel(
+        frame,
+        chunks[1],
+        model,
+        model.agent_pane == AgentPane::Handoffs,
+    );
+}
+
+fn draw_agent_runs_panel(frame: &mut Frame<'_>, area: Rect, model: &Model, focused: bool) {
+    let mut rows = Vec::new();
+    let Some(snapshot) = &model.agent_runs else {
+        rows.push(Line::styled(
+            "registered runs unavailable",
+            Style::default().fg(AMBER),
+        ));
+        draw_panel(
+            frame,
+            area,
+            "Registered runs",
+            None,
+            focused,
+            "h/l pane · r refresh",
+            rows,
+        );
+        return;
+    };
+    let visible = usize::from(area.height.saturating_sub(4)).max(1);
+    let range = window_range(snapshot.runs.len(), model.agent_cursor, visible);
+    let width = panel_content_width(area);
+    rows.extend(
+        snapshot
+            .runs
+            .iter()
+            .enumerate()
+            .skip(range.0)
+            .take(range.1.saturating_sub(range.0))
+            .map(|(index, run)| {
+                let lifecycle = if run.live { "live" } else { run.state.as_str() };
+                selected(
+                    &format!(
+                        "{}  {:<9} {:<8} {:<7} {}",
+                        short_agent_id(&run.run_id),
+                        activity_name(run.activity_state),
+                        run.registration_kind.as_str(),
+                        lifecycle,
+                        agent_association(run.association)
+                    ),
+                    index == model.agent_cursor,
+                    focused,
+                    agent_state_color(run.activity_state),
+                    width,
+                )
+            }),
+    );
+    if snapshot.runs.is_empty() {
+        rows.push(Line::styled(
+            "no registered agent runs",
+            Style::default().fg(DIM),
+        ));
+    }
+    rows.push(Line::styled(
+        format!(
+            "bounds: showing {}/{} · {} more",
+            snapshot.bounds.shown, snapshot.bounds.total, snapshot.bounds.more
+        ),
+        Style::default().fg(DIM),
+    ));
+    draw_panel(
+        frame,
+        area,
+        "Registered runs",
+        Some(snapshot.bounds.total),
+        focused,
+        "h/l pane · j/k row · enter intelligence · r refresh",
+        rows,
+    );
+}
+
+fn draw_handoffs_panel(frame: &mut Frame<'_>, area: Rect, model: &Model, focused: bool) {
+    let mut rows = vec![Line::styled(
+        "proposal only · no action executed",
+        Style::default().fg(ACCENT_DIM),
+    )];
+    let Some(inbox) = &model.agent_inbox else {
+        rows.push(Line::styled(
+            "pending handoffs unavailable",
+            Style::default().fg(AMBER),
+        ));
+        draw_panel(
+            frame,
+            area,
+            "Pending handoffs",
+            None,
+            focused,
+            "h/l pane · r refresh",
+            rows,
+        );
+        return;
+    };
+    if inbox.items.is_empty() {
+        rows.push(Line::styled(
+            "no pending agent handoffs",
+            Style::default().fg(DIM),
+        ));
+    } else {
+        let visible = usize::from(area.height.saturating_sub(7)).max(1);
+        let range = window_range(inbox.items.len(), model.handoff_cursor, visible);
+        for (index, handoff) in inbox
+            .items
+            .iter()
+            .enumerate()
+            .skip(range.0)
+            .take(range.1.saturating_sub(range.0))
+        {
+            rows.push(selected(
+                &format!(
+                    "{} → {}",
+                    short_agent_id(&handoff.source_run_id),
+                    short_agent_id(&handoff.target_run_id)
+                ),
+                index == model.handoff_cursor,
+                focused,
+                LAVENDER,
+                panel_content_width(area),
+            ));
+            if index == model.handoff_cursor {
+                rows.push(line_kv("Created", &handoff.created_at.to_string()));
+                rows.push(line_kv("Expires", &handoff.expires_at.to_string()));
+                rows.push(Line::styled("Preview", Style::default().fg(DIM)));
+                for line in handoff.preview.text.lines() {
+                    rows.push(Line::styled(line.to_owned(), Style::default().fg(TEXT)));
+                }
+            }
+        }
+    }
+    rows.push(Line::styled(
+        format!(
+            "bounds: showing {}/{} · {} more",
+            inbox.bounds.shown, inbox.bounds.total, inbox.bounds.more
+        ),
+        Style::default().fg(DIM),
+    ));
+    rows.push(Line::styled(
+        if inbox.incomplete {
+            "analysis: incomplete"
+        } else {
+            "analysis: complete"
+        },
+        Style::default().fg(if inbox.incomplete { AMBER } else { DIM }),
+    ));
+    draw_panel(
+        frame,
+        area,
+        "Pending handoffs",
+        Some(inbox.bounds.total),
+        focused,
+        "h/l pane · j/k row · r refresh",
+        rows,
+    );
+}
+
+fn draw_agent_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
+    let detail = model.agent_detail.as_ref().expect("agent detail exists");
+    let mut rows = vec![
+        line_kv("Run", &detail.run.run_id),
+        line_kv("Origin", detail.run.registration_kind.as_str()),
+        line_kv("Lifecycle", detail.run.state.as_str()),
+        line_kv("Activity", activity_name(detail.run.activity_state)),
+        line_kv("Association", &agent_association(detail.run.association)),
+        line_kv("State", detail.intelligence.state.as_str()),
+        line_kv(
+            "Confidence",
+            confidence_name(detail.intelligence.confidence),
+        ),
+        line_kv(
+            "Events",
+            &format!(
+                "{}/{} retained · {} inferred",
+                detail.event_bounds.shown,
+                detail.event_bounds.total,
+                detail.intelligence.event_count
+            ),
+        ),
+        line_kv("Evidence", &detail.intelligence.evidence.len().to_string()),
+        line_kv(
+            "Last event",
+            &detail
+                .intelligence
+                .last_event_at
+                .map_or_else(|| "none".to_owned(), |value| value.to_string()),
+        ),
+        Line::raw(""),
+        Line::styled("Evidence", Style::default().fg(ACCENT_DIM)),
+    ];
+    if detail.intelligence.evidence.is_empty() {
+        rows.push(Line::styled("none", Style::default().fg(DIM)));
+    } else {
+        rows.extend(detail.intelligence.evidence.iter().map(|evidence| {
+            Line::styled(format!("• {}", evidence.reason), Style::default().fg(TEXT))
+        }));
+    }
+    let visible = usize::from(area.height.saturating_sub(2)).max(1);
+    let maximum = rows.len().saturating_sub(visible);
+    let offset = model.agent_detail_offset.min(maximum);
+    draw_panel(
+        frame,
+        area,
+        &format!(
+            "Agent intelligence · {}",
+            short_agent_id(&detail.run.run_id)
+        ),
+        None,
+        true,
+        "j/k scroll · esc back · r refresh",
+        rows.into_iter().skip(offset).take(visible).collect(),
+    );
+}
+
+fn short_agent_id(value: &str) -> String {
+    value.chars().take(8).collect()
+}
+
+fn agent_association(association: Option<ptrack_app::RuntimeAssociation>) -> String {
+    match association {
+        Some(value) if value.task_id != 0 => format!("P#{} T#{}", value.plan_id, value.task_id),
+        Some(value) if value.plan_id != 0 => format!("P#{}", value.plan_id),
+        _ => "unassociated".to_owned(),
+    }
+}
+
+const fn activity_name(state: ptrack_app::ActivityState) -> &'static str {
+    match state {
+        ptrack_app::ActivityState::Running => "running",
+        ptrack_app::ActivityState::Waiting => "waiting",
+        ptrack_app::ActivityState::Blocked => "blocked",
+        ptrack_app::ActivityState::Completed => "completed",
+        ptrack_app::ActivityState::Failed => "failed",
+        ptrack_app::ActivityState::Stale => "stale",
+        ptrack_app::ActivityState::Unknown => "unknown",
+    }
+}
+
+const fn confidence_name(value: ptrack_app::IntelligenceConfidence) -> &'static str {
+    match value {
+        ptrack_app::IntelligenceConfidence::Unset => "unset",
+        ptrack_app::IntelligenceConfidence::Low => "low",
+        ptrack_app::IntelligenceConfidence::Medium => "medium",
+        ptrack_app::IntelligenceConfidence::High => "high",
+    }
+}
+
+const fn agent_state_color(state: ptrack_app::ActivityState) -> Color {
+    match state {
+        ptrack_app::ActivityState::Running | ptrack_app::ActivityState::Completed => GREEN,
+        ptrack_app::ActivityState::Waiting | ptrack_app::ActivityState::Blocked => AMBER,
+        ptrack_app::ActivityState::Failed => RED,
+        ptrack_app::ActivityState::Stale | ptrack_app::ActivityState::Unknown => DIM,
+    }
 }
 
 fn draw_menu(frame: &mut Frame<'_>, area: Rect, model: &Model) {

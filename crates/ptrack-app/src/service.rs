@@ -9,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+use ptrack_agent::{AgentHandoffInbox, AgentObservationClient, AgentRunObservationV1, AgentRunsV2};
 use ptrack_capability::{
     McpCancellation, McpServeOutcome, ToolCall, client_for_project, serve_mcp,
     validate_session_environment,
@@ -272,6 +273,109 @@ pub enum MutationResult {
     Commit(Commit),
 }
 
+/// Receipt for the shared agent-facing task completion use case.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompleteTaskResult {
+    pub task_id: u64,
+    pub linked_commits: usize,
+    pub closeout_note: Option<Note>,
+    pub override_note: Option<Note>,
+}
+
+/// Completes one task while enforcing the agent workflow's evidence gate.
+///
+/// A nonblank summary and at least one linked commit are required unless
+/// `force` is set. Forced omissions are recorded as an override note.
+///
+/// # Errors
+/// Returns an application error when evidence is missing, the task is absent or
+/// inaccessible, or either the status or audit-note mutation fails.
+pub fn complete_task(
+    application: &mut dyn ApplicationPort,
+    task_id: u64,
+    summary: Option<String>,
+    force: bool,
+) -> AppResult<CompleteTaskResult> {
+    let summary = summary
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    let snapshot = application.snapshot()?;
+    let linked_commits = snapshot
+        .commits
+        .iter()
+        .filter(|commit| commit.task_id == task_id)
+        .count();
+    let mut missing = Vec::new();
+    if summary.is_none() {
+        missing.push("--summary \"what changed, where it is wired in, what remains\" is required");
+    }
+    if linked_commits == 0 {
+        missing.push(
+            "no commit is linked: put #<task-id> in the commit message \
+             (ptrack hook install records it) or run ptrack commit record",
+        );
+    }
+    if !missing.is_empty() && !force {
+        return Err(AppError::Message(format!(
+            "cannot close task #{task_id}: {} (or pass --force)",
+            missing.join("; ")
+        )));
+    }
+
+    let closeout_note = summary
+        .map(|summary| {
+            expect_note_result(application.mutate(Mutation::AddNote {
+                target: NoteTarget::Task,
+                target_id: task_id,
+                body: format!("closeout: {summary}"),
+            })?)
+        })
+        .transpose()?;
+    let override_note = if missing.is_empty() {
+        None
+    } else {
+        Some(expect_note_result(application.mutate(
+            Mutation::AddNote {
+                target: NoteTarget::Task,
+                target_id: task_id,
+                body: format!("override: closed via --force ({})", missing.join("; ")),
+            },
+        )?)?)
+    };
+    // Required audit evidence must exist before the irreversible status
+    // transition. A note-write failure therefore leaves the task open.
+    expect_no_mutation_result(&application.mutate(Mutation::SetTaskStatus {
+        id: task_id,
+        status: TaskStatus::Done,
+    })?)?;
+    Ok(CompleteTaskResult {
+        task_id,
+        linked_commits,
+        closeout_note,
+        override_note,
+    })
+}
+
+fn expect_no_mutation_result(result: &MutationResult) -> AppResult<()> {
+    if matches!(result, &MutationResult::None) {
+        Ok(())
+    } else {
+        Err(AppError::Message(
+            "internal mutation result mismatch".to_owned(),
+        ))
+    }
+}
+
+fn expect_note_result(result: MutationResult) -> AppResult<Note> {
+    if let MutationResult::Note(note) = result {
+        Ok(note)
+    } else {
+        Err(AppError::Message(
+            "internal mutation result mismatch".to_owned(),
+        ))
+    }
+}
+
 /// A plan lifecycle operation: destructive delete, or a transfer of the whole
 /// plan subtree into another project (or back into this one, as a copy).
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -382,6 +486,15 @@ pub trait ApplicationPort {
         output: &mut dyn Write,
         cancellation: &CapabilityCancellation,
     ) -> AppResult<CapabilityMcpOutcome>;
+    fn agent_runs(&mut self) -> AppResult<AgentRunsV2> {
+        Err(no_coordination_host())
+    }
+    fn agent_run(&mut self, _run_id: &str) -> AppResult<AgentRunObservationV1> {
+        Err(no_coordination_host())
+    }
+    fn agent_inbox(&mut self) -> AppResult<AgentHandoffInbox> {
+        Err(no_coordination_host())
+    }
 }
 
 /// Fail-closed process placeholder used until the activation-marker owner has
@@ -456,6 +569,10 @@ fn unavailable() -> AppError {
     AppError::Message("active runtime binding is unavailable".to_owned())
 }
 
+fn no_coordination_host() -> AppError {
+    AppError::Message("no active agent coordination host for this project".to_owned())
+}
+
 pub struct LocalApplication {
     bindings: WorkspaceBindings,
     capability_environment: Option<CapabilitySessionEnvironment>,
@@ -498,6 +615,19 @@ impl LocalApplication {
 
     fn project(&self) -> AppResult<&ProjectEndpoint> {
         self.bindings.project.as_ref().ok_or(AppError::NoProject)
+    }
+
+    fn agent_client(&self) -> AppResult<AgentObservationClient> {
+        let endpoint = self.project()?;
+        AgentObservationClient::for_project(&self.bindings.global_home, &endpoint.root).map_err(
+            |error| {
+                if error.to_string() == "no active agent coordination host" {
+                    no_coordination_host()
+                } else {
+                    AppError::Message(error.to_string())
+                }
+            },
+        )
     }
 
     fn with_project<R>(
@@ -765,6 +895,24 @@ impl ApplicationPort for LocalApplication {
 
     fn snapshot(&mut self) -> AppResult<ProjectSnapshot> {
         self.with_project(|store| Ok(store.snapshot()?))
+    }
+
+    fn agent_runs(&mut self) -> AppResult<AgentRunsV2> {
+        self.agent_client()?
+            .runs()
+            .map_err(|error| AppError::Message(error.to_string()))
+    }
+
+    fn agent_run(&mut self, run_id: &str) -> AppResult<AgentRunObservationV1> {
+        self.agent_client()?
+            .run(run_id)
+            .map_err(|error| AppError::Message(error.to_string()))
+    }
+
+    fn agent_inbox(&mut self) -> AppResult<AgentHandoffInbox> {
+        self.agent_client()?
+            .inbox()
+            .map_err(|error| AppError::Message(error.to_string()))
     }
 
     // One flat arm per mutation; splitting it would only hide the dispatch.

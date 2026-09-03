@@ -7,6 +7,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- Desktop OS notifications can now be enabled independently for handoff
+  arrivals, run failures or run-scoped drift, and explicit run completion.
+  Delivery is background-only and identifier-only, with retained-event
+  baselines and stable deduplication.
 - Installed agent discovery now includes Cursor Agent and Kimi Code, with Kimi
   hook events normalized into the bounded agent activity model.
 

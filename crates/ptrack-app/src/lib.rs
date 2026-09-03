@@ -12,6 +12,7 @@ mod identity;
 mod layout_state;
 mod preferences;
 mod production;
+mod project_mcp;
 mod service;
 mod shell_command;
 mod terminal_runtime;
@@ -29,9 +30,10 @@ pub use agent_runtime::{
 pub use desktop_runtime::{
     ActiveResourceSummary, BoundDesktopWorkspace, CreateFirstPlanResultV1, CreateFirstTaskResultV1,
     DesktopAdmissionFence, DesktopAgentRuntime, DesktopCommandRequest, DesktopEvent,
-    DesktopEventSink, DesktopInitializationService, DesktopNativeActionLease, DesktopRuntime,
-    DesktopRuntimeConfig, DesktopTerminalEventSink, DesktopUpdateEventSink, DesktopWorkspace,
-    DesktopWorkspaceFactory, FirstPlanV1, FirstRunWorkspaceStateV1, FirstTaskV1,
+    DesktopEventSink, DesktopInitializationService, DesktopNativeActionLease,
+    DesktopNotificationEventV1, DesktopNotificationKindV1, DesktopNotificationSnapshotV1,
+    DesktopRuntime, DesktopRuntimeConfig, DesktopTerminalEventSink, DesktopUpdateEventSink,
+    DesktopWorkspace, DesktopWorkspaceFactory, FirstPlanV1, FirstRunWorkspaceStateV1, FirstTaskV1,
     ForgetRecentProjectResultV1, InitializationCheckpointV1, InitializationOutcomeV1,
     InitializationStatusV1, InitializeProjectRequestV1, InitializeProjectResultV1,
     NoDesktopInitializationService, NoDesktopWorkspaceFactory, NoRecentProjectsProvider,
@@ -51,6 +53,14 @@ pub use production::{
     ProductionRecentProjects, RoutedApplication, RuntimeBindingState, StartupProjectV1,
     production_desktop_runtime, resolve_global_home, resolved_startup_project, startup_project,
 };
+pub use project_mcp::serve_project_mcp;
+pub use ptrack_agent::{
+    ActivityState, AgentHandoffEnvelopeV2, AgentHandoffInbox, AgentIntelligenceDetail,
+    AgentIntelligenceEvidence, AgentIntelligenceSummary, AgentRunObservationV1, AgentRunsV2,
+    AgentRuntimeSummary, BoundedSnapshot, HandoffPreview, IntelligenceConfidence,
+    IntelligenceState, LeaseState, ProcessState, RegistrationKind, RunState, RuntimeAssociation,
+    Timestamp as AgentTimestamp,
+};
 pub use ptrack_store::ActorIdentity;
 /// Re-exported so a presentation layer can strip the store's claim- or
 /// hold-refusal prefix off an [`AppError`] without depending on
@@ -59,10 +69,10 @@ pub use ptrack_store::{INVALID_CLAIM_PREFIX, INVALID_HOLD_PREFIX};
 pub use ptrack_store::{PlanDeleteSummary, PlanSubtree};
 pub use service::{
     AppError, AppResult, ApplicationPort, CapabilityCancellation, CapabilityMcpOutcome,
-    CapabilitySessionEnvironment, GuideAction, HookAction, HookResult, InitRequest, InitResult,
-    LocalApplication, Mutation, MutationResult, PlanLifecycleOutcome, PlanLifecycleRequest,
-    PlanTransferSummary, ProcessOutput, ProjectEndpoint, RelocateRequest, RelocateResult,
-    UnavailableApplication, WorkspaceBindings,
+    CapabilitySessionEnvironment, CompleteTaskResult, GuideAction, HookAction, HookResult,
+    InitRequest, InitResult, LocalApplication, Mutation, MutationResult, PlanLifecycleOutcome,
+    PlanLifecycleRequest, PlanTransferSummary, ProcessOutput, ProjectEndpoint, RelocateRequest,
+    RelocateResult, UnavailableApplication, WorkspaceBindings, complete_task,
 };
 pub use shell_command::{ShellCommandInstallResult, install_shell_command};
 pub use terminal_runtime::{
@@ -92,6 +102,8 @@ mod layout_state_test;
 mod preferences_test;
 #[cfg(test)]
 mod production_test;
+#[cfg(test)]
+mod project_mcp_test;
 #[cfg(test)]
 mod service_test;
 #[cfg(test)]

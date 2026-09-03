@@ -30,7 +30,7 @@ pub use git::{GitError, GitExecutor, GitRequest, GitResult, classify_git_exit};
 pub use http::{
     ConnectionClass, HttpDiagnostics, HttpError, HttpExecutor, HttpRequest, HttpResponse,
 };
-pub use mcp::{MCP_PROTOCOL_VERSION, McpServeOutcome, serve_mcp};
+pub use mcp::{MCP_PROTOCOL_VERSION, McpServeOutcome, serve_mcp, serve_mcp_with_tools};
 pub use server::{
     BrokerClient, BrokerDescriptor, BrokerServer, BrokerServerConfig, ServerError,
     SessionEnvironment, client_for_project, read_broker_descriptor, validate_session_environment,

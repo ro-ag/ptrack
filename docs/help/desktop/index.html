@@ -127,15 +127,17 @@
           </figure>
 
           <h2 id="settings">Open Settings</h2>
-          <p>Settings is an application dialog, not a project view. Open it with <kbd>Cmd+,</kbd> or <kbd>Ctrl+,</kbd>, from <strong>Project ▸ Settings…</strong>, or with the <strong>Settings</strong> button in the workspace toolbar. It opens with or without a project open and holds no project-scoped state. Its five sections are:</p>
+          <p>Settings is an application dialog, not a project view. Open it with <kbd>Cmd+,</kbd> or <kbd>Ctrl+,</kbd>, from <strong>Project ▸ Settings…</strong>, or with the <strong>Settings</strong> button in the workspace toolbar. It opens with or without a project open and holds no project-scoped state. Its six sections are:</p>
           <ul>
             <li><strong>Startup</strong> — whether p-track reopens the last project on launch. Off by default.</li>
             <li><strong>Appearance</strong> — color theme, density, and reduced motion.</li>
             <li><strong>Terminal</strong> — default profile, font family, font size, Unicode mode, scrollback, and renderer for terminals you open next.</li>
+            <li><strong>Notifications</strong> — three independent opt-ins for handoff arrivals, run failures or run-scoped drift, and explicit run completion. All are off by default.</li>
             <li><strong>Updates</strong> — the automatic-check opt-in; check, download, and install stay in <strong>About &amp; Updates</strong>.</li>
             <li><strong>Data &amp; Diagnostics</strong> — read-only data paths, backup and migration records, recovery status, and the two <a href="#reset-state">reset actions</a>.</li>
           </ul>
           <p>Changes are saved as you make them and a status line reports each save. <strong>Reset to defaults</strong> discards the stored record; the next read returns the documented defaults. If a stored settings record cannot be read, Settings says so and keeps showing defaults instead of overwriting it.</p>
+          <p>OS notifications appear only while every p-track window is in the background. Enabling a category is the first time p-track asks for OS notification permission; denial leaves all categories off. Notifications contain only a shortened agent ID and available plan or task IDs. They never contain task text, paths, terminal output, handoff previews, provider content, or credentials. Retained events are baselined at startup, when an opt-in is enabled, and after a project switch, so they are not replayed.</p>
 
           <h2 id="restore-state">Reopen where you left off</h2>
           <p>Desktop remembers how its window and workspace were arranged, and can optionally reopen the project you were last working in.</p>

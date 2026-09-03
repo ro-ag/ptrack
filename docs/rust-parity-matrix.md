@@ -48,7 +48,7 @@ code in that audit checkout. A `v0.21.0:` prefix locates tag-specific source
 where later commits changed the behavior. Contract values always describe
 the tag, regardless of reference form.
 
-There are **762 contract rows**: 722 from the nine subsystem
+There are **766 contract rows**: 726 from the nine subsystem
 inventories, 26 updater rows, and 14 packaging/release rows.
 A row can overlap another subsystem's boundary; every row still requires its
 own evidence because the producer and consumer may fail independently.
@@ -85,20 +85,20 @@ updater and release rows additionally use `docs/updater-acceptance.md`.
 
 ## CLI command surface
 
-78 contracts. The table is both the compatibility specification and the parity acceptance matrix for this subsystem.
+80 contracts. The table is both the compatibility specification and the parity acceptance matrix for this subsystem.
 
 ### Process-level conventions
 
 | ID | Subsystem | Checkable contract | Verification method | Go freeze source / evidence |
 |---|---|---|---|---|
-| `CLI-001` | CLI | Every subcommand is non-interactive (no prompts, no stdin reads except `capability mcp`); success exits 0, any error exits exactly 1 | New automated test needed | internal/cli/open.go:1-3 (package doc), main.go:44-47 |
+| `CLI-001` | CLI | Every subcommand is non-interactive (no prompts, no stdin reads except stdio MCP servers); success exits 0, any error exits exactly 1. The Rust-only top-level `mcp` extension in CLI-079 is the second protocol-only stdin consumer. | New automated test needed | internal/cli/open.go:1-3 (package doc), main.go:44-47 |
 | `CLI-002` | CLI | All errors are printed to **stderr only**, as the bare error message followed by `\n`, with no usage text and no `Error:` prefix (cobra `SilenceErrors`/`SilenceUsage` set recursively on the whole tree; main.go does `fmt.Fprintln(os.Stderr, err); os.Exit(1)`) | New automated test needed | main.go:44-47, internal/cli/root.go:40,67-79 |
 | `CLI-003` | CLI | All normal output goes to **stdout** via `cmd.OutOrStdout()`; nothing writes to stderr except errors (and `commit show`'s passthrough of git's stderr, CLI-058) | Existing automated test — internal/cli/cli_test.go runCmd (captures out/err separately) | every command file (e.g. internal/cli/task.go:49), main.go:45 |
 | `CLI-004` | CLI | Unknown command produces cobra's `unknown command "<x>" for "ptrack"` plus `Did you mean this?` suggestion block on stderr, exit 1 | New automated test needed | internal/cli/root.go:28-41 (no custom unknown-command handler; cobra default) |
 | `CLI-005` | CLI | Argument-count violations produce cobra's standard messages (e.g. `accepts 1 arg(s), received 0`, `requires at least 1 arg(s), only received 0`, `unknown command ... for "ptrack"`) on stderr, exit 1, no usage text | New automated test needed | `Args:` validators throughout (e.g. internal/cli/task.go:24,115) + internal/cli/root.go:67-79 |
 | `CLI-006` | CLI | `-h`/`--help` prints cobra-generated help to stdout, exit 0; root also gets `-v`/`--version` printing `ptrack version <v>` (cobra default from `root.Version`) | New automated test needed | internal/cli/root.go:29-41 |
 | `CLI-007` | CLI | Cobra's implicit `completion` (bash/zsh/fish/powershell) and `help` commands exist and appear in root help output; they are NOT in the pinned subcommand list | New automated test needed | internal/cli/root.go:43-68 (no `CompletionOptions` disable) |
-| `CLI-008` | CLI | Root command set is exactly these 21 named subcommands: init, goal, summary, milestone (alias ms), plan, task, issue, note, commit, hook, context, guide, next, search, board, gui, status, projects, backup, capability, version | Existing automated test (partial) — internal/cli/cli_test.go TestRootHasSubcommands (checks 16; exact set not asserted)<br>New automated test needed | internal/cli/root.go:43-65 |
+| `CLI-008` | CLI | Go root command set is exactly these 21 named subcommands: init, goal, summary, milestone (alias ms), plan, task, issue, note, commit, hook, context, guide, next, search, board, gui, status, projects, backup, capability, version. Rust additionally exposes the documented `mcp` and `agent` extensions in CLI-079 and CLI-080. | Existing automated test (partial) — internal/cli/cli_test.go TestRootHasSubcommands (checks 16; exact set not asserted)<br>New automated test needed | internal/cli/root.go:43-65 |
 | `CLI-009` | CLI | Root help Long text: `p-track keeps project plans alive across human and AI sessions. It stores\ngoals, plans, tasks, issues, milestones, notes, and commit context in an embedded\nbbolt database so a fresh agent can reload project context. Every subcommand is\nnon-interactive and exits non-zero on error.`; Short: `p-track keeps project plans alive across human and AI sessions` | Fixture/golden needed | internal/cli/root.go:29-35 |
 | `CLI-010` | CLI | `ptrack` with no subcommand: desktop build (main.go) launches the TUI; if no project found it prints the NoProjectHint text to **stdout** and exits 0 (not an error) | Manual acceptance `MANUAL-CLI-010` | main.go:36-43 |
 | `CLI-011` | CLI | NoProjectHint exact text: `p-track  ·  persistent project memory\n──────────────────────────────────────\n\nNo p-track project here yet.\n\nGET STARTED\n  ptrack init                 create one in this directory (or the git root)\n  ptrack init --goal "..."     create one and set the goal\n  ptrack --help               browse all commands\n\nOnce a project exists, run `ptrack` to open the dashboard.\n` | Fixture/golden needed — internal/cli/hint_test.go TestNoProjectHint (substring checks only) | internal/cli/hint.go:5-14 |
@@ -254,6 +254,13 @@ updater and release rows additionally use `docs/updater-acceptance.md`.
 | ID | Subsystem | Checkable contract | Verification method | Go freeze source / evidence |
 |---|---|---|---|---|
 | `CLI-078` | CLI | `guide` installs/refreshes the agent guide into `AGENTS.md`/`CLAUDE.md` at the project root (requires an existing project); prints `wrote agent guide to <file>\n` per file or `agent guide already up to date\n`; `--print` instead writes the rendered guide (with global extra appended) to stdout and touches no files | Existing automated test — internal/cli/guide_test.go TestGuidePrint | internal/cli/guide.go:31-73 |
+
+### project MCP (Rust extension)
+
+| ID | Subsystem | Checkable contract | Verification method | Go freeze source / evidence |
+|---|---|---|---|---|
+| `CLI-079` | CLI | Rust-only `mcp` is a cwd-bound newline-delimited MCP stdio server exposing exactly `get_context`, `get_next_task`, `complete_task`, and `add_note`. Inputs are closed and bounded, successes include structured content, note targets must exist, and completion preserves CLI summary/linked-commit gates plus closeout/override notes. It calls the application/store API directly and never shells out. | Rust automated tests — `project_mcp_test`, `project_mcp_is_a_top_level_protocol_only_stdio_command`, `task_done_requires_summary_and_linked_commit` | Rust extension required by Plan #26 task #211; `crates/ptrack-app/src/project_mcp.rs`, `crates/ptrack-cli/src/dispatch.rs` |
+| `CLI-080` | CLI | Rust-only `agent list`, `agent show <run-id>`, and `agent inbox` are read-only views of the active project's live coordination host, with human and `--json` output. The client accepts only a private, process-live, canonical-project descriptor, loopback HTTP, its bearer token, and the descriptor-owned runtime generation; responses are bounded and expose sanitized DTOs rather than PID, CWD, provider data, terminal content, or authority. | Rust automated tests — `observation_client_is_authenticated_generation_fenced_and_sanitized`, `agent_commands_render_safe_text_json_and_complete_help`, `agent_observation_requires_the_active_project_host` | Rust extension required by Plan #26 task #209; `crates/ptrack-agent/src/integration.rs`, `crates/ptrack-cli/src/dispatch.rs` |
 
 ## Storage and on-disk compatibility
 
@@ -465,7 +472,7 @@ updater and release rows additionally use `docs/updater-acceptance.md`.
 
 ## Terminal user interface
 
-58 contracts. The table is both the compatibility specification and the parity acceptance matrix for this subsystem.
+59 contracts. The table is both the compatibility specification and the parity acceptance matrix for this subsystem.
 
 ### Entry / exit / process behavior
 
@@ -584,10 +591,11 @@ updater and release rows additionally use `docs/updater-acceptance.md`.
 | `TUI-056` | TUI | Palette (lipgloss hex colors, `internal/tui/theme.go:16-30`): accent `#3DD6A3`, accent-dim `#2AA7A1`, ink `#081316`, lavender `#AFA8FF` (todo/open milestones), blue `#5FAFFF` (active plans/medium), green `#5FFF87` (done), amber `#FFD75F` (doing/high/status toast), red `#FF5F87` (blocked/critical/open issues), text `#E6E9F0`, gray `#B7C0D8`, dim `#727A8E`, faint `#313244`, border `#45475A`. House gradient chrome: `#178F95` → `#3CD1A5` (`internal/tui/theme.go:38-43`). | Fixture/golden needed | internal/tui/theme.go:16-30, internal/tui/theme.go:38-43 |
 | `TUI-057` | TUI | Status toast: footer shows `● <status>` in amber docked right (falls back to left of the key hints when space is tight); the footer keys line is `? menu · tab switch · 1–5 jump · [←/→ ↑/↓ navigate] · g goal · m summary · r reload · B backup · q quit` (navigate hint hidden while menu/detail open) (`internal/tui/view.go:631-649`). | New automated test needed | internal/tui/view.go:631-649 |
 | `TUI-058` | TUI | Truncation is rune-aware with a `…` ellipsis; list windows keep the cursor centered (`windowRange`); all width math is ANSI-aware (`internal/tui/theme.go:209-240,65-71`). | Existing automated test — `tui_test.go:TestViewFitsWindow` | internal/tui/theme.go:209-240,65-71 |
+| `TUI-059` | TUI | Rust adds a sixth `Agents` tab backed by the same authenticated read-only observation client as CLI-080. `6`, Tab/BackTab, `h`/`l`, `j`/`k`, Enter, and `r` navigate panes, open bounded intelligence detail, and refresh while preserving or clamping identity-based selection. The screen renders explicit unavailable, empty, incomplete, bounds, and proposal-only states at normal and narrow terminal sizes and never mutates run or handoff state. | Rust automated tests — `agent_pane_row_and_detail_navigation_are_explicit`, `agents_screen_exposes_all_categories_at_wide_and_narrow_sizes`, `agents_screen_names_unavailable_and_empty_states`, `reload_refreshes_agent_data_and_preserves_or_clamps_selected_identity` | Rust extension required by Plan #26 task #210; `crates/ptrack-tui/src/model.rs`, `crates/ptrack-tui/src/reducer.rs`, `crates/ptrack-tui/src/render.rs`, `crates/ptrack-tui/src/runtime.rs` |
 
 ## GUI bridge and desktop lifecycle
 
-136 contracts. The table is both the compatibility specification and the parity acceptance matrix for this subsystem.
+137 contracts. The table is both the compatibility specification and the parity acceptance matrix for this subsystem.
 
 ### A. Bound methods — transport & shared fencing
 
@@ -759,6 +767,7 @@ updater and release rows additionally use `docs/updater-acceptance.md`.
 | `GUI-136` | GUI bridge | Capability and updater dialogs expose labeled headings, bounded progress/status announcements, keyboard-safe focus restoration, confirmation controls, and no secret-bearing diagnostic data. Unknown update phases fail closed and older revisions never replace newer presentation state. | Existing automated test — frontend/src/capabilities/presentation.test.js, frontend/src/updates/presentation.test.js, frontend/src/build.test.js | frontend/index.html, frontend/src/capabilities/presentation.js, frontend/src/updates/presentation.js |
 | `GUI-137` | GUI bridge | The desktop is usable at the native minimum 880×560 and at 200% text zoom: sidebar/board/terminal split controls remain reachable, overlays scroll within the viewport, and no fixed width creates horizontal page overflow. The native window contract is 1440×900 with minimum 880×560 and background `#080d12`. | Existing automated test — frontend/src/responsive-layout.test.ts<br>New automated test — src-tauri/tests/security_contract.rs<br>Manual acceptance `MANUAL-GUI-137` | internal/gui/run.go, frontend/src/style.css, src-tauri/tauri.conf.json |
 | `GUI-138` | GUI bridge | Help Center entry points exist in the native Help menu, terminal toolbar, and capability settings; frontend callers pass symbolic destinations only and contain no documentation URL. Opening Help is non-mutating, uses the fixed allowlist, and never grants ambient shell or filesystem authority. | Existing automated test — frontend/src/build.test.js<br>New automated test — crates/ptrack-app/src/desktop_runtime_test.rs, src-tauri/tests/security_contract.rs | internal/gui/project_menu.go, frontend/src/app.js, src-tauri/src/main.rs |
+| `GUI-139` | GUI bridge | OS notifications have exactly three durable independent opt-ins, all false by default: handoff arrival; run failure or current run-scoped task drift; explicit run completion. The Rust-only native shell requests OS permission only on an enable transition, disables every category when permission is denied or unavailable, suppresses delivery while any p-track window is focused, baselines retained state at startup/enable/project-generation change, and deduplicates stable event IDs. Copy contains only category, shortened run ID, and available numeric plan/task IDs; no preview, task text, path/CWD, provider data, terminal content, token, or credential is admitted. A clean exit alone is not completion and project-unattributed Git drift is not an OS event. | Existing automated test — `crates/ptrack-app/src/preferences_test.rs`, `frontend/src/settings/preferences.test.ts`, `src-tauri/src/notification_runtime_test.rs`, `src-tauri/tests/security_contract.rs`<br>Manual packaged acceptance on each supported OS | `crates/ptrack-app/src/preferences.rs`, `crates/ptrack-app/src/desktop_runtime.rs`, `frontend/index.html`, `src-tauri/src/notification_runtime.rs` |
 
 ## Embedded terminal
 

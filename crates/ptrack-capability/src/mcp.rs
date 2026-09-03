@@ -36,6 +36,31 @@ pub fn serve_mcp<E: fmt::Display>(
     input: Box<dyn Read + Send>,
     output: &mut dyn Write,
     cancellation: &CancellationToken,
+    call: impl FnMut(&CancellationToken, ToolCall) -> Result<Value, E>,
+) -> Result<McpServeOutcome, McpError> {
+    serve_mcp_with_tools(
+        input,
+        output,
+        cancellation,
+        "p-track-capabilities",
+        "1",
+        &tool_definitions(),
+        call,
+    )
+}
+
+/// Serves a caller-supplied MCP tool surface over newline-delimited stdio.
+///
+/// # Errors
+/// Returns only framing or output errors. Tool failures are encoded inside the
+/// `tools/call` result as required by MCP.
+pub fn serve_mcp_with_tools<E: fmt::Display>(
+    input: Box<dyn Read + Send>,
+    output: &mut dyn Write,
+    cancellation: &CancellationToken,
+    server_name: &str,
+    server_version: &str,
+    tools: &[crate::ToolDefinition],
     mut call: impl FnMut(&CancellationToken, ToolCall) -> Result<Value, E>,
 ) -> Result<McpServeOutcome, McpError> {
     let Some(reader_slot) = acquire_reader_slot(cancellation) else {
@@ -61,7 +86,15 @@ pub fn serve_mcp<E: fmt::Display>(
         let request = serde_json::from_slice::<McpRequest>(&line);
         let response = match request {
             Ok(request) if request.jsonrpc == "2.0" && !request.method.is_empty() => {
-                handle_request(request, &mut initialized, cancellation, &mut call)
+                handle_request(
+                    request,
+                    &mut initialized,
+                    cancellation,
+                    server_name,
+                    server_version,
+                    tools,
+                    &mut call,
+                )
             }
             _ => Some(McpResponse::error(None, -32700, "parse error")),
         };
@@ -132,12 +165,22 @@ fn handle_request<E: fmt::Display>(
     request: McpRequest,
     initialized: &mut bool,
     cancellation: &CancellationToken,
+    server_name: &str,
+    server_version: &str,
+    tools: &[crate::ToolDefinition],
     call: &mut impl FnMut(&CancellationToken, ToolCall) -> Result<Value, E>,
 ) -> Option<McpResponse> {
     let notification = request.id.is_none();
     let id = request.id;
     match request.method.as_str() {
-        "initialize" => handle_initialize(id, notification, request.params, initialized),
+        "initialize" => handle_initialize(
+            id,
+            notification,
+            request.params,
+            initialized,
+            server_name,
+            server_version,
+        ),
         "notifications/initialized" => None,
         "ping" => {
             if notification {
@@ -153,10 +196,7 @@ fn handle_request<E: fmt::Display>(
             if !*initialized {
                 return Some(McpResponse::error(id, -32002, "server is not initialized"));
             }
-            Some(McpResponse::result(
-                id,
-                json!({"tools": tool_definitions()}),
-            ))
+            Some(McpResponse::result(id, json!({"tools": tools})))
         }
         "tools/call" => handle_tool_call(
             id,
@@ -164,6 +204,7 @@ fn handle_request<E: fmt::Display>(
             request.params,
             *initialized,
             cancellation,
+            tools,
             call,
         ),
         _ if notification => None,
@@ -176,6 +217,8 @@ fn handle_initialize(
     notification: bool,
     params: Option<Value>,
     initialized: &mut bool,
+    server_name: &str,
+    server_version: &str,
 ) -> Option<McpResponse> {
     if notification {
         return None;
@@ -197,7 +240,7 @@ fn handle_initialize(
         json!({
             "protocolVersion": protocol,
             "capabilities": {"tools": {"listChanged": false}},
-            "serverInfo": {"name": "p-track-capabilities", "version": "1"}
+            "serverInfo": {"name": server_name, "version": server_version}
         }),
     ))
 }
@@ -212,6 +255,7 @@ fn handle_tool_call<E: fmt::Display>(
     params: Option<Value>,
     initialized: bool,
     cancellation: &CancellationToken,
+    tools: &[crate::ToolDefinition],
     call: &mut impl FnMut(&CancellationToken, ToolCall) -> Result<Value, E>,
 ) -> Option<McpResponse> {
     if notification {
@@ -222,11 +266,7 @@ fn handle_tool_call<E: fmt::Display>(
     }
     let params = params
         .and_then(|params| serde_json::from_value::<ToolParams>(params).ok())
-        .filter(|params| {
-            tool_definitions()
-                .iter()
-                .any(|tool| tool.name == params.name)
-        });
+        .filter(|params| tools.iter().any(|tool| tool.name == params.name));
     let Some(params) = params else {
         return Some(McpResponse::error(
             id,

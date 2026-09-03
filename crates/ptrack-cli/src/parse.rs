@@ -18,6 +18,7 @@ pub const ROOT_COMMANDS: &[&str] = &[
     "commit",
     "config",
     "hook",
+    "agent",
     "context",
     "guide",
     "next",
@@ -28,6 +29,7 @@ pub const ROOT_COMMANDS: &[&str] = &[
     "status",
     "projects",
     "backup",
+    "mcp",
     "capability",
     "version",
 ];
@@ -61,6 +63,7 @@ const GROUPS: &[(&str, &[&str])] = &[
     ("commit", &["add", "record", "list", "show"]),
     ("config", &["set", "show"]),
     ("hook", &["install", "uninstall", "status"]),
+    ("agent", &["list", "show", "inbox"]),
     ("capability", &["call", "mcp"]),
 ];
 
@@ -339,6 +342,7 @@ fn flag_names(path: &[String]) -> BTreeSet<(&'static str, bool)> {
         ["commit", "record"] => &[("sha", true), ("subject", true)],
         ["commit", "show"] => &[("stat", false)],
         ["config", "show"] => &[("json", false)],
+        ["agent", "list" | "show" | "inbox"] => &[("json", false)],
         ["context" | "next" | "checkpoint" | "search" | "status" | "projects"] => {
             &[("json", false)]
         }

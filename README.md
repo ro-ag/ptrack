@@ -179,6 +179,11 @@ observable Git and structured-event evidence. Explicit task ownership and
 overlap warnings are advisory. Agent handoffs are bounded, single-use,
 memory-only proposals that grant no authority and change no task.
 
+Desktop OS notifications are independently opt-in for handoff arrivals, run
+failures or run-scoped drift, and explicit completion. They are delivered only
+while every p-track window is in the background and contain identifiers only;
+retained events are baselined rather than replayed.
+
 ### Capabilities (deprecated)
 
 Capability brokering (deny-by-default HTTP, Git, and SSH scopes) is no longer
@@ -458,6 +463,18 @@ ptrack summary set "..."      # update the rolling project summary
 Read commands render Markdown by default because it is compact for an LLM.
 Add `--json` at automation boundaries.
 
+When Desktop is hosting the project coordination runtime, `ptrack agent list`,
+`ptrack agent show <run-id>`, and `ptrack agent inbox` expose its bounded live
+run, intelligence, and handoff views to scripts and remote shells. The TUI's
+Agents tab presents the same observation surface; neither interface starts an
+agent or mutates coordination state.
+
+For MCP-capable agents, launch `ptrack mcp` with the project directory as the
+server working directory. It exposes the same bounded `context` and `next`
+views as `get_context` and `get_next_task`, plus `complete_task` and `add_note`.
+The write tools use the same project database and completion gates as the CLI;
+the server never invokes a shell.
+
 ### Closing work is gated
 
 The two classic agent failure modes—drifting off the goal mid-plan, and
@@ -562,6 +579,8 @@ Put `#<task-id>` in a commit message to link the commit to that task.
 | `ptrack hook install` | Install the post-commit hook that records commits. |
 | `ptrack context [--json]` | Print the bounded resume digest. |
 | `ptrack next [--json]` | Print the most-actionable task in the active plan, led by the goal. |
+| `ptrack agent list\|show <run-id>\|inbox [--json]` | Inspect bounded live runs, inferred intelligence, and pending handoffs from the active project coordination host. |
+| `ptrack mcp` | Serve `get_context`, `get_next_task`, `complete_task`, and `add_note` over MCP stdio for the project selected by the server working directory. |
 | `ptrack checkpoint [--json]` | Print the whole-picture re-evaluation block (goal, summary, open plans, issues). |
 | `ptrack gui [PATH]` | Open the canonical desktop project workspace; PATH defaults to the current directory. |
 | `ptrack board [--plan N] [--json] [--gui]` | Print a kanban board or open it as a Tauri desktop GUI. |

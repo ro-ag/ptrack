@@ -2,9 +2,11 @@ use ptrack_app::{Mutation, MutationResult};
 use ptrack_core::{IssueStatus, MilestoneStatus, NoteTarget, PlanStatus, TaskStatus};
 
 use crate::input::Key;
-use crate::model::{BOARD_STATUSES, Effect, InputPurpose, Model, PaneFocus, Success, Tab};
+use crate::model::{
+    AgentPane, BOARD_STATUSES, Effect, InputPurpose, Model, PaneFocus, Success, Tab,
+};
 
-const MENU_LEN: usize = 12;
+const MENU_LEN: usize = 13;
 
 macro_rules! mutate {
     ($mutation:expr, $success:expr $(,)?) => {
@@ -29,6 +31,9 @@ pub fn update(model: &mut Model, key: &Key) -> Option<Effect> {
     if model.menu {
         return update_menu(model, key);
     }
+    if model.agent_detail.is_some() {
+        return update_agent_detail(model, key);
+    }
     if model.detail.is_some() {
         return update_detail(model, key);
     }
@@ -43,7 +48,7 @@ fn update_welcome(model: &mut Model, key: &Key) -> Option<Effect> {
             model.tab = Tab::Overview;
             None
         }
-        Key::Char(value @ '2'..='5') => {
+        Key::Char(value @ '2'..='6') => {
             model.tab = Tab::from_index(value.to_digit(10).unwrap_or(1) as usize - 1);
             None
         }
@@ -286,13 +291,14 @@ fn update_menu(model: &mut Model, key: &Key) -> Option<Effect> {
         Key::Char('3') => Some(2),
         Key::Char('4') => Some(3),
         Key::Char('5') => Some(4),
-        Key::Char('g') => Some(5),
-        Key::Char('m') => Some(6),
-        Key::Char('e') => Some(7),
-        Key::Char('M') => Some(8),
-        Key::Char('P') => Some(9),
-        Key::Char('r') => Some(10),
-        Key::Char('B') => Some(11),
+        Key::Char('6') => Some(5),
+        Key::Char('g') => Some(6),
+        Key::Char('m') => Some(7),
+        Key::Char('e') => Some(8),
+        Key::Char('M') => Some(9),
+        Key::Char('P') => Some(10),
+        Key::Char('r') => Some(11),
+        Key::Char('B') => Some(12),
         _ => None,
     };
     direct.and_then(|action| menu_action(model, action))
@@ -301,35 +307,67 @@ fn update_menu(model: &mut Model, key: &Key) -> Option<Effect> {
 fn menu_action(model: &mut Model, action: usize) -> Option<Effect> {
     model.menu = false;
     match action {
-        0..=4 => {
+        0..=5 => {
             model.detail = None;
             model.tab = Tab::from_index(action);
             None
         }
-        5 => {
+        6 => {
             let initial = model.snapshot.meta.goal.clone();
             model.start_input(InputPurpose::EditGoal, "Goal:", &initial);
             None
         }
-        6 => {
+        7 => {
             let initial = model.snapshot.meta.summary.clone();
             model.start_input(InputPurpose::EditSummary, "Summary:", &initial);
             None
         }
-        7 => start_rename(model, "nothing to edit"),
-        8 => {
+        8 => start_rename(model, "nothing to edit"),
+        9 => {
             model.detail = None;
             start_move(model)
         }
-        9 => {
+        10 => {
             model.detail = None;
             start_convert(model)
         }
-        10 => Some(Effect::Reload {
+        11 => Some(Effect::Reload {
             success: "project reloaded".to_owned(),
             reopen_detail: model.detail.is_some(),
         }),
-        11 => Some(Effect::Backup),
+        12 => Some(Effect::Backup),
+        _ => None,
+    }
+}
+
+fn update_agent_detail(model: &mut Model, key: &Key) -> Option<Effect> {
+    match key {
+        Key::Char('q') | Key::Ctrl('c') => Some(Effect::Quit),
+        Key::Escape | Key::Enter | Key::Backspace => {
+            model.agent_detail = None;
+            model.agent_detail_offset = 0;
+            None
+        }
+        Key::Up | Key::Char('k') => {
+            model.agent_detail_offset = model.agent_detail_offset.saturating_sub(1);
+            None
+        }
+        Key::Down | Key::Char('j') => {
+            model.agent_detail_offset = model.agent_detail_offset.saturating_add(1);
+            None
+        }
+        Key::PageUp => {
+            model.agent_detail_offset = model.agent_detail_offset.saturating_sub(10);
+            None
+        }
+        Key::PageDown | Key::Char(' ') => {
+            model.agent_detail_offset = model.agent_detail_offset.saturating_add(10);
+            None
+        }
+        Key::Char('r') => Some(Effect::Reload {
+            success: String::new(),
+            reopen_detail: true,
+        }),
         _ => None,
     }
 }
@@ -394,10 +432,10 @@ fn update_normal(model: &mut Model, key: &Key) -> Option<Effect> {
             return None;
         }
         Key::BackTab => {
-            model.tab = Tab::from_index(model.tab.index() + 4);
+            model.tab = Tab::from_index(model.tab.index() + 5);
             return None;
         }
-        Key::Char(value @ '1'..='5') => {
+        Key::Char(value @ '1'..='6') => {
             model.tab = Tab::from_index(value.to_digit(10).unwrap_or(1) as usize - 1);
             return None;
         }
@@ -413,6 +451,13 @@ fn update_normal(model: &mut Model, key: &Key) -> Option<Effect> {
         }
         Key::Char('e') => return start_rename(model, "nothing to rename"),
         Key::Enter => {
+            if model.tab == Tab::Agents {
+                if let Some(run_id) = model.selected_agent_run_id() {
+                    return Some(Effect::LoadAgentDetail(run_id.to_owned()));
+                }
+                "no agent run selected".clone_into(&mut model.status);
+                return None;
+            }
             model.detail = model.selected_detail();
             model.detail_offset = 0;
             if model.detail.is_none() {
@@ -435,7 +480,39 @@ fn update_normal(model: &mut Model, key: &Key) -> Option<Effect> {
         Tab::Milestones => update_milestones(model, key),
         Tab::Issues => update_issues(model, key),
         Tab::Maintenance => None,
+        Tab::Agents => update_agents(model, key),
     }
+}
+
+fn update_agents(model: &mut Model, key: &Key) -> Option<Effect> {
+    match key {
+        Key::Left | Key::Char('h') => model.agent_pane = AgentPane::Runs,
+        Key::Right | Key::Char('l') => model.agent_pane = AgentPane::Handoffs,
+        Key::Up | Key::Char('k') => match model.agent_pane {
+            AgentPane::Runs => model.agent_cursor = model.agent_cursor.saturating_sub(1),
+            AgentPane::Handoffs => {
+                model.handoff_cursor = model.handoff_cursor.saturating_sub(1);
+            }
+        },
+        Key::Down | Key::Char('j') => match model.agent_pane {
+            AgentPane::Runs => {
+                let len = model
+                    .agent_runs
+                    .as_ref()
+                    .map_or(0, |value| value.runs.len());
+                model.agent_cursor = (model.agent_cursor + 1).min(len.saturating_sub(1));
+            }
+            AgentPane::Handoffs => {
+                let len = model
+                    .agent_inbox
+                    .as_ref()
+                    .map_or(0, |value| value.items.len());
+                model.handoff_cursor = (model.handoff_cursor + 1).min(len.saturating_sub(1));
+            }
+        },
+        _ => {}
+    }
+    None
 }
 
 fn update_overview(model: &mut Model, key: &Key) -> Option<Effect> {

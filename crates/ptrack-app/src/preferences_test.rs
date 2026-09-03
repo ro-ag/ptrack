@@ -49,7 +49,7 @@ fn document(store: &GlobalStore) -> Value {
 fn defaults(storage: &str) -> Value {
     json!({
         "storage": storage,
-        "version": 1,
+        "version": 2,
         "appearance": { "theme": "system", "density": "comfortable", "reducedMotion": "system" },
         "terminal": {
             "defaultProfileId": null,
@@ -59,7 +59,12 @@ fn defaults(storage: &str) -> Value {
             "scrollback": 25_000,
             "renderer": "auto"
         },
-        "startup": { "restoreLastProject": false, "lastProjectRoot": null }
+        "startup": { "restoreLastProject": false, "lastProjectRoot": null },
+        "notifications": {
+            "handoffArrival": false,
+            "runFailureOrDrift": false,
+            "runCompletion": false
+        }
     })
 }
 
@@ -151,6 +156,34 @@ fn startup_restoration_is_off_by_default_and_the_last_project_root_clears_to_nul
 }
 
 #[test]
+fn notification_categories_are_independent_and_off_by_default() {
+    let directory = Temp::new("notifications");
+    let store = store(&directory);
+    assert_eq!(
+        document(&store)["notifications"],
+        defaults("defaults")["notifications"]
+    );
+
+    let enabled = serde_json::to_value(
+        set_preferences(
+            &store,
+            &json!({
+                "notifications": {
+                    "handoffArrival": true,
+                    "runFailureOrDrift": "yes",
+                    "runCompletion": true
+                }
+            }),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(enabled["notifications"]["handoffArrival"], true);
+    assert_eq!(enabled["notifications"]["runFailureOrDrift"], false);
+    assert_eq!(enabled["notifications"]["runCompletion"], true);
+}
+
+#[test]
 fn writes_merge_onto_the_whole_record_and_drop_unknown_members() {
     let directory = Temp::new("merge");
     let store = store(&directory);
@@ -168,7 +201,7 @@ fn writes_merge_onto_the_whole_record_and_drop_unknown_members() {
     )
     .unwrap();
     assert_eq!(first["storage"], "ok");
-    assert_eq!(first["version"], 1);
+    assert_eq!(first["version"], 2);
     assert_eq!(first["appearance"]["theme"], "dark");
     assert_eq!(first["terminal"]["fontSize"], 18);
     assert_eq!(first["terminal"]["defaultProfileId"], "zsh");
@@ -242,7 +275,7 @@ fn unreadable_and_newer_records_read_as_defaults_and_are_never_rewritten() {
     let directory = Temp::new("unreadable");
     let store = store(&directory);
     for record in [
-        br#"{"version":2,"appearance":{"theme":"dark"}}"#.to_vec(),
+        br#"{"version":3,"appearance":{"theme":"dark"}}"#.to_vec(),
         br#"{"appearance":{"theme":"dark"}}"#.to_vec(),
         b"not json".to_vec(),
         br#"["dark"]"#.to_vec(),
@@ -265,7 +298,8 @@ fn an_older_record_upgrades_in_memory_and_persists_on_the_next_write() {
         .unwrap();
     let upgraded = document(&store);
     assert_eq!(upgraded["storage"], "ok");
-    assert_eq!(upgraded["version"], 1);
+    assert_eq!(upgraded["version"], 2);
+    assert_eq!(upgraded["notifications"], defaults("ok")["notifications"]);
     assert_eq!(upgraded["terminal"]["fontSize"], 20);
     // Reading never rewrites the record.
     assert_eq!(
@@ -275,7 +309,7 @@ fn an_older_record_upgrades_in_memory_and_persists_on_the_next_write() {
 
     set_preferences(&store, &json!({})).unwrap();
     let stored: Value = serde_json::from_slice(&store.config(PREFERENCES_KEY).unwrap()).unwrap();
-    assert_eq!(stored["version"], 1);
+    assert_eq!(stored["version"], 2);
     assert_eq!(stored["terminal"]["fontSize"], 20);
 }
 

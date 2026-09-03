@@ -4,9 +4,11 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use ptrack_app::{
-    ActorIdentity, AppError, AppResult, ApplicationPort, CapabilityCancellation,
-    CapabilityMcpOutcome, GuideAction, HookAction, HookResult, InitRequest, InitResult, Mutation,
-    MutationResult, PlanLifecycleOutcome, PlanLifecycleRequest, ProcessOutput,
+    ActivityState, ActorIdentity, AgentHandoffInbox, AgentRunObservationV1, AgentRunsV2,
+    AgentRuntimeSummary, AppError, AppResult, ApplicationPort, BoundedSnapshot,
+    CapabilityCancellation, CapabilityMcpOutcome, GuideAction, HookAction, HookResult, InitRequest,
+    InitResult, LeaseState, Mutation, MutationResult, PlanLifecycleOutcome, PlanLifecycleRequest,
+    ProcessOutput, ProcessState, RegistrationKind, RunState,
 };
 use ptrack_core::{
     Meta, Plan, PlanStatus, ProjectRef, ProjectSnapshot, Task, TaskStatus, Timestamp,
@@ -20,6 +22,9 @@ struct FakeApplication {
     snapshot: ProjectSnapshot,
     mutation_fails: bool,
     snapshot_fails: bool,
+    agent_runs: Option<AgentRunsV2>,
+    agent_inbox: Option<AgentHandoffInbox>,
+    agent_detail: Option<AgentRunObservationV1>,
 }
 
 impl ApplicationPort for FakeApplication {
@@ -89,6 +94,24 @@ impl ApplicationPort for FakeApplication {
         _cancellation: &CapabilityCancellation,
     ) -> AppResult<CapabilityMcpOutcome> {
         unreachable!()
+    }
+
+    fn agent_runs(&mut self) -> AppResult<AgentRunsV2> {
+        self.agent_runs
+            .clone()
+            .ok_or_else(|| AppError::Message("no active agent coordination host".to_owned()))
+    }
+
+    fn agent_run(&mut self, _run_id: &str) -> AppResult<AgentRunObservationV1> {
+        self.agent_detail
+            .clone()
+            .ok_or_else(|| AppError::Message("AgentRun not found".to_owned()))
+    }
+
+    fn agent_inbox(&mut self) -> AppResult<AgentHandoffInbox> {
+        self.agent_inbox
+            .clone()
+            .ok_or_else(|| AppError::Message("no active agent coordination host".to_owned()))
     }
 }
 
@@ -200,6 +223,9 @@ fn board_column_commits_only_after_mutation_and_snapshot_both_succeed() {
         snapshot: snapshot(TaskStatus::Doing),
         mutation_fails: true,
         snapshot_fails: false,
+        agent_runs: None,
+        agent_inbox: None,
+        agent_detail: None,
     };
     assert!(!apply_effect(
         &mut mutation_failure,
@@ -213,6 +239,9 @@ fn board_column_commits_only_after_mutation_and_snapshot_both_succeed() {
         snapshot: snapshot(TaskStatus::Doing),
         mutation_fails: false,
         snapshot_fails: true,
+        agent_runs: None,
+        agent_inbox: None,
+        agent_detail: None,
     };
     assert!(!apply_effect(
         &mut reload_failure,
@@ -226,8 +255,87 @@ fn board_column_commits_only_after_mutation_and_snapshot_both_succeed() {
         snapshot: snapshot(TaskStatus::Doing),
         mutation_fails: false,
         snapshot_fails: false,
+        agent_runs: None,
+        agent_inbox: None,
+        agent_detail: None,
     };
     assert!(!apply_effect(&mut success, &mut value, move_effect()));
     assert_eq!(value.board_col, 1);
     assert_eq!(value.board_task().map(|task| task.id), Some(2));
+}
+
+#[test]
+fn reload_refreshes_agent_data_and_preserves_or_clamps_selected_identity() {
+    let mut value = model();
+    value.tab = Tab::Agents;
+    value.replace_agent_state(
+        Some(agent_runs(&["run-one", "run-two"])),
+        Some(empty_inbox()),
+        String::new(),
+    );
+    value.agent_cursor = 1;
+    let mut application = FakeApplication {
+        snapshot: snapshot(TaskStatus::Todo),
+        mutation_fails: false,
+        snapshot_fails: false,
+        agent_runs: Some(agent_runs(&["run-two"])),
+        agent_inbox: Some(empty_inbox()),
+        agent_detail: None,
+    };
+    assert!(!apply_effect(
+        &mut application,
+        &mut value,
+        Effect::Reload {
+            success: "reloaded".to_owned(),
+            reopen_detail: false,
+        }
+    ));
+    assert_eq!(value.agent_cursor, 0);
+    assert_eq!(value.selected_agent_run_id(), Some("run-two"));
+
+    application.agent_runs = Some(agent_runs(&[]));
+    assert!(!apply_effect(
+        &mut application,
+        &mut value,
+        Effect::Reload {
+            success: "reloaded".to_owned(),
+            reopen_detail: false,
+        }
+    ));
+    assert_eq!(value.agent_cursor, 0);
+    assert_eq!(value.selected_agent_run_id(), None);
+}
+
+fn agent_runs(ids: &[&str]) -> AgentRunsV2 {
+    AgentRunsV2 {
+        generation: 7,
+        runs: ids.iter().map(|id| agent_row(id)).collect(),
+        bounds: BoundedSnapshot::new(ids.len(), ids.len()),
+    }
+}
+
+fn agent_row(id: &str) -> AgentRuntimeSummary {
+    AgentRuntimeSummary {
+        run_id: id.to_owned(),
+        registration_kind: RegistrationKind::External,
+        terminal_id: String::new(),
+        terminal_backed: false,
+        terminal_present: false,
+        corresponding_terminal: false,
+        state: RunState::Running,
+        process_state: ProcessState::Unknown,
+        lease_state: LeaseState::Active,
+        live: true,
+        activity_state: ActivityState::Running,
+        association: None,
+        intelligence: None,
+    }
+}
+
+fn empty_inbox() -> AgentHandoffInbox {
+    AgentHandoffInbox {
+        items: Vec::new(),
+        bounds: BoundedSnapshot::new(0, 0),
+        incomplete: false,
+    }
 }

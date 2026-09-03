@@ -14,7 +14,7 @@ use serde_json::{Map, Value, json};
 use crate::{AppError, AppResult};
 
 const PREFERENCES_KEY: &[u8] = b"preferences";
-const PREFERENCES_VERSION: u64 = 1;
+const PREFERENCES_VERSION: u64 = 2;
 const FONT_FAMILY_DEFAULT: &str = "monospace";
 const FONT_SIZE_DEFAULT: u64 = 14;
 const FONT_SIZE_MINIMUM: u64 = 10;
@@ -109,6 +109,16 @@ pub struct StartupPreferencesV1 {
     pub last_project_root: Option<String>,
 }
 
+/// Explicit OS-notification opt-ins. Every category is independently off by
+/// default; permission to notify is never authority to enable a category.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationPreferencesV1 {
+    pub handoff_arrival: bool,
+    pub run_failure_or_drift: bool,
+    pub run_completion: bool,
+}
+
 /// The exact stored record. `version` is always the supported version because
 /// an older record upgrades in memory and a newer one never decodes.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -118,6 +128,7 @@ pub struct PreferencesV1 {
     pub appearance: AppearancePreferencesV1,
     pub terminal: TerminalPreferencesV1,
     pub startup: StartupPreferencesV1,
+    pub notifications: NotificationPreferencesV1,
 }
 
 /// The stored record plus how it was obtained.
@@ -207,6 +218,7 @@ fn defaults() -> PreferencesV1 {
         appearance: appearance(None),
         terminal: terminal(None),
         startup: startup(None),
+        notifications: notifications(None),
     }
 }
 
@@ -223,6 +235,7 @@ fn normalize(value: &Value) -> Option<PreferencesV1> {
         appearance: appearance(record.get("appearance")),
         terminal: terminal(record.get("terminal")),
         startup: startup(record.get("startup")),
+        notifications: notifications(record.get("notifications")),
     })
 }
 
@@ -232,6 +245,15 @@ fn appearance(section: Option<&Value>) -> AppearancePreferencesV1 {
         theme: enumerated(field(section, "theme")),
         density: enumerated(field(section, "density")),
         reduced_motion: enumerated(field(section, "reducedMotion")),
+    }
+}
+
+fn notifications(section: Option<&Value>) -> NotificationPreferencesV1 {
+    let section = section.and_then(Value::as_object);
+    NotificationPreferencesV1 {
+        handoff_arrival: boolean(field(section, "handoffArrival")),
+        run_failure_or_drift: boolean(field(section, "runFailureOrDrift")),
+        run_completion: boolean(field(section, "runCompletion")),
     }
 }
 
@@ -280,6 +302,13 @@ pub(crate) fn enumerated<T: Default + for<'de> Deserialize<'de>>(value: Option<&
     value
         .and_then(|value| serde_json::from_value(value.clone()).ok())
         .unwrap_or_default()
+}
+
+const fn boolean(value: Option<&Value>) -> bool {
+    match value {
+        Some(Value::Bool(value)) => *value,
+        _ => false,
+    }
 }
 
 /// Clamps an integer into its documented range. A non-integer is a wrong type

@@ -83,3 +83,17 @@ fn plan_lifecycle_leaves_validate_flags_and_arg_counts() {
     .expect("copy parses");
     assert!(matches!(result, Preflight::Run { path, .. } if path == ["plan", "copy"]));
 }
+
+#[test]
+fn agent_leaves_validate_json_and_run_id() {
+    let result = preflight(vec![
+        "ptrack".into(),
+        "agent".into(),
+        "list".into(),
+        "--json".into(),
+    ])
+    .unwrap();
+    assert!(matches!(result, Preflight::Run { path, .. } if path == ["agent", "list"]));
+    let error = preflight(vec!["ptrack".into(), "agent".into(), "show".into()]).unwrap_err();
+    assert_eq!(error.to_string(), "accepts 1 arg(s), received 0");
+}
