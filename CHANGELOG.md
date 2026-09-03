@@ -6,7 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-09-03
+
 ### Added
+- Shared issue intake and triage across agents, CLI, and Desktop. Capture and
+  edit full reports, severity, and status; search the Issues inbox; schedule
+  issues into plans; and link, unlink, or relink existing tasks without losing
+  report history. Issue, task, and plan views provide bidirectional navigation.
+- Agent context distinguishes unscheduled triage from scheduled issue work.
+  Scheduling creates a task and links its issue atomically, while linked-task
+  moves preserve evidence and refuse live terminal or agent associations.
 - Plans can now be completed, put on hold, and resumed from Desktop. Completing
   the final task prompts for plan closeout, shows the canonical project
   checkpoint, and advances the Board to the next open plan.
@@ -17,7 +26,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Installed agent discovery now includes Cursor Agent and Kimi Code, with Kimi
   hook events normalized into the bounded agent activity model.
 
+### Changed
+- Desktop workspace polish improves overview detail, Board legibility, task
+  memory, and terminal presentation, including compact layouts and both themes.
+
 ### Fixed
+- Concurrent issue edits and linking changes reject stale writes; unsaved
+  reports remain protected during navigation and scheduling.
+- Migration lock contention now explains when another p-track process is
+  keeping the legacy store busy.
 - The task drawer action row now reflows before its status selector can clip
   labels such as “Done”.
 - Terminal and linked-agent pickers now omit profiles whose executable is no
