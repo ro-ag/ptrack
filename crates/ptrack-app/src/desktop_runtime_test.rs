@@ -2344,6 +2344,10 @@ fn bound_workspace_projects_board_search_mutations_and_capability_preview() {
         .invoke("SearchV2", &[json!("generation")])
         .unwrap();
     assert_eq!(search[0]["kind"], "note");
+    let plan_search = workspace.invoke("SearchV2", &[json!("desktop")]).unwrap();
+    assert_eq!(plan_search[0]["status"], "active");
+    let task_search = workspace.invoke("SearchV2", &[json!("wire")]).unwrap();
+    assert_eq!(task_search[0]["status"], "todo");
     let added = workspace
         .invoke("AddTaskV2", &[json!(7), json!(1), json!("  Audit menus  ")])
         .unwrap();

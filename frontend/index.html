@@ -951,29 +951,39 @@
                 <span id="agent-activity-total" class="section-count">0</span>
               </div>
               <div id="agent-activity-summary" class="intelligence-summary"></div>
-              <form id="agent-handoff-form" class="agent-handoff-form">
-                <label>From <select id="agent-handoff-source" aria-label="Handoff source agent"></select></label>
-                <label>To <select id="agent-handoff-target" aria-label="Handoff target agent"></select></label>
-                <button id="agent-handoff-send" type="submit">Send handoff</button>
-              </form>
-              <p class="intelligence-meta">Handoffs are bounded proposals only; they grant no authority and change no task.</p>
-              <div id="agent-handoff-inbox" class="intelligence-list" aria-label="Agent handoff inbox"></div>
-				<form id="agent-workflow-form" class="agent-handoff-form">
-					<label>Agent <select id="agent-workflow-run" aria-label="Workflow agent"></select></label>
-					<label>Workflow
-						<select id="agent-workflow-kind" aria-label="Workflow kind">
-							<option value="validation">Validation</option>
-							<option value="commit">Commit</option>
-							<option value="pullRequest">Pull request</option>
-							<option value="merge">Merge</option>
-						</select>
-					</label>
-					<label>Target <select id="agent-workflow-target" aria-label="Workflow target branch"></select></label>
-					<button id="agent-workflow-prepare" type="submit">Prepare</button>
-				</form>
-				<p class="intelligence-meta">Workflow proposals and approvals execute nothing and grant no capability.</p>
-				<div id="agent-workflow-inbox" class="intelligence-list" aria-label="Agent workflow proposals"></div>
+              <div class="agent-coordination-section">
+                <p class="agent-subsection-label">Handoffs</p>
+                <p id="agent-handoff-empty" class="agent-empty-state" hidden>No live agents available. Register an agent to prepare a bounded handoff.</p>
+                <form id="agent-handoff-form" class="agent-handoff-form">
+                  <label>From <select id="agent-handoff-source" aria-label="Handoff source agent"></select></label>
+                  <label>To <select id="agent-handoff-target" aria-label="Handoff target agent"></select></label>
+                  <button id="agent-handoff-send" type="submit">Send handoff</button>
+                </form>
+                <p id="agent-handoff-meta" class="intelligence-meta">Handoffs are bounded proposals only; they grant no authority and change no task.</p>
+                <div id="agent-handoff-inbox" class="intelligence-list" aria-label="Agent handoff inbox"></div>
+              </div>
+              <div class="agent-coordination-section">
+                <p class="agent-subsection-label">Workflows</p>
+                <p id="agent-workflow-empty" class="agent-empty-state" hidden>No live agents available. Workflow proposals begin from a registered live run.</p>
+                <form id="agent-workflow-form" class="agent-handoff-form">
+                  <label>Agent <select id="agent-workflow-run" aria-label="Workflow agent"></select></label>
+                  <label>Workflow
+                    <select id="agent-workflow-kind" aria-label="Workflow kind">
+                      <option value="validation">Validation</option>
+                      <option value="commit">Commit</option>
+                      <option value="pullRequest">Pull request</option>
+                      <option value="merge">Merge</option>
+                    </select>
+                  </label>
+                  <label>Target <select id="agent-workflow-target" aria-label="Workflow target branch"></select></label>
+                  <button id="agent-workflow-prepare" type="submit">Prepare</button>
+                </form>
+                <p id="agent-workflow-meta" class="intelligence-meta">Workflow proposals and approvals execute nothing and grant no capability.</p>
+                <div id="agent-workflow-inbox" class="intelligence-list" aria-label="Agent workflow proposals"></div>
+              </div>
+              <p class="agent-subsection-label">Observable work</p>
               <div id="agent-drift" class="intelligence-list" aria-label="Observable work comparison"></div>
+              <p class="agent-subsection-label">Runs</p>
               <p id="agent-activity-live" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></p>
               <div id="agent-activity" class="intelligence-list" aria-label="Agent activity and notifications"></div>
             </section>

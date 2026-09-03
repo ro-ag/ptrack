@@ -10,12 +10,14 @@ import {
   confirmationCopy,
   focusCycleIndex,
   groupSearchResults,
+  groupDriftFindings,
   heatLevel,
   heatmapWeeks,
   handoffPreviewResponseIsCurrent,
   linkedTaskRuntimePresentation,
   mutationFocusFallback,
   paletteTarget,
+  paletteStatus,
   preserveSectionOnError,
   postProjectOnboardingActions,
   projectGuideRecoveryCopy,
@@ -493,6 +495,23 @@ describe("workspace presentation policy", () => {
     });
   });
 
+  it("groups repeated unlinked commits without hiding other drift findings", () => {
+    const drift = driftPresentation({
+      findings: [
+        { kind: "unlinkedCommit", severity: "info", scope: "projectUnattributed", sha: "abcdef0", evidenceCount: 1 },
+        { kind: "untrackedFile", severity: "warning", scope: "projectUnattributed", path: "frontend/new.ts", evidenceCount: 1 },
+        { kind: "unlinkedCommit", severity: "info", scope: "projectUnattributed", sha: "1234567", evidenceCount: 2 },
+      ],
+    });
+
+    const grouped = groupDriftFindings(drift.findings);
+    expect(grouped.findings.map((finding) => finding.kind)).toEqual(["untrackedFile"]);
+    expect(grouped.unlinkedCommits.map((finding) => finding.sha)).toEqual([
+      "abcdef0",
+      "1234567",
+    ]);
+  });
+
   it("accepts runtime refresh events only for the open generation", () => {
     expect(runtimeEventIsCurrent(7, 7, true)).toBe(true);
     expect(runtimeEventIsCurrent(6, 7, true)).toBe(false);
@@ -557,6 +576,18 @@ describe("workspace presentation policy", () => {
     expect(groups.map((group) => group.label)).toEqual(["Plans", "Tasks", "Notes"]);
     expect(groups[0].items[0].title).toBe("Board");
     expect(groupSearchResults([])).toEqual([]);
+  });
+
+  it("maps palette record statuses to distinct labelled glyphs", () => {
+    expect(paletteStatus({
+      kind: "task", id: 4, planId: 2, title: "Card", snippet: "", status: "doing",
+    })).toEqual({ glyph: "◐", label: "Doing", tone: "doing" });
+    expect(paletteStatus({
+      kind: "plan", id: 2, planId: 2, title: "Board", snippet: "", status: "active",
+    })).toEqual({ glyph: "●", label: "Active", tone: "active" });
+    expect(paletteStatus({
+      kind: "note", id: 9, planId: 0, title: "Task note", snippet: "…",
+    })).toBeNull();
   });
 
   it("maps palette results to their activation targets", () => {

@@ -4986,7 +4986,7 @@ fn search(snapshot: &ProjectSnapshot, query: &str) -> Vec<Value> {
     let mut results = Vec::new();
     for plan in &snapshot.plans {
         if plan.title.to_lowercase().contains(&needle) {
-            results.push(json!({ "kind": "plan", "id": plan.id, "planId": plan.id, "title": plan.title, "snippet": "" }));
+            results.push(json!({ "kind": "plan", "id": plan.id, "planId": plan.id, "title": plan.title, "snippet": "", "status": plan.status.as_str() }));
         }
         if results.len() == SEARCH_RESULT_LIMIT {
             return results;
@@ -4994,7 +4994,7 @@ fn search(snapshot: &ProjectSnapshot, query: &str) -> Vec<Value> {
     }
     for task in &snapshot.tasks {
         if task.title.to_lowercase().contains(&needle) {
-            results.push(json!({ "kind": "task", "id": task.id, "planId": task.plan_id, "title": task.title, "snippet": "" }));
+            results.push(json!({ "kind": "task", "id": task.id, "planId": task.plan_id, "title": task.title, "snippet": "", "status": task.status.as_str() }));
         }
         if results.len() == SEARCH_RESULT_LIMIT {
             return results;

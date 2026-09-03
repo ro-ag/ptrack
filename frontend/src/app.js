@@ -177,12 +177,14 @@ import {
   durableProjectGuideReviewCopy,
   firstRunRecoveryActions,
   focusCycleIndex,
+  groupDriftFindings,
   groupSearchResults,
   handoffPreviewResponseIsCurrent,
   heatmapWeeks,
   linkedTaskRuntimePresentation,
   mutationFocusFallback,
   paletteTarget,
+  paletteStatus,
   preserveSectionOnError,
   postProjectOnboardingActions,
   projectGuideRecoveryCopy,
@@ -434,11 +436,15 @@ const elements = {
   agentActivity: document.querySelector("#agent-activity"),
   agentActivityLive: document.querySelector("#agent-activity-live"),
   agentHandoffForm: document.querySelector("#agent-handoff-form"),
+  agentHandoffEmpty: document.querySelector("#agent-handoff-empty"),
+  agentHandoffMeta: document.querySelector("#agent-handoff-meta"),
   agentHandoffSource: document.querySelector("#agent-handoff-source"),
   agentHandoffTarget: document.querySelector("#agent-handoff-target"),
   agentHandoffSend: document.querySelector("#agent-handoff-send"),
   agentHandoffInbox: document.querySelector("#agent-handoff-inbox"),
 	agentWorkflowForm: document.querySelector("#agent-workflow-form"),
+	agentWorkflowEmpty: document.querySelector("#agent-workflow-empty"),
+	agentWorkflowMeta: document.querySelector("#agent-workflow-meta"),
 	agentWorkflowRun: document.querySelector("#agent-workflow-run"),
 	agentWorkflowKind: document.querySelector("#agent-workflow-kind"),
 	agentWorkflowTarget: document.querySelector("#agent-workflow-target"),
@@ -1635,7 +1641,8 @@ function renderDrift(section) {
     crossTaskPathOverlap: ["Possible cross-task path overlap", "Explicit owners on different tasks reported the same current path"],
     taskDriftSignal: ["Possible task drift", "Provider-neutral structured evidence indicates a current scope mismatch"],
   };
-  drift.findings.forEach((finding) => {
+  const grouped = groupDriftFindings(drift.findings);
+  grouped.findings.forEach((finding) => {
     const [title, meaning] = copy[finding.kind];
     const evidence = finding.path || finding.sha ||
       finding.runIds.map((runId) => runId.slice(0, 8)).join(", ") || "structured evidence";
@@ -1647,6 +1654,20 @@ function renderDrift(section) {
       ),
     );
   });
+  if (grouped.unlinkedCommits.length > 0) {
+    const commits = document.createElement("details");
+    commits.className = "drift-commit-summary";
+    const summary = document.createElement("summary");
+    summary.textContent = `${grouped.unlinkedCommits.length} unlinked commit${grouped.unlinkedCommits.length === 1 ? "" : "s"}`;
+    commits.append(summary);
+    grouped.unlinkedCommits.forEach((finding) => {
+      commits.append(intelligenceItem(
+        finding.sha.slice(0, 12),
+        `Exact SHA has no p-track commit link · ${finding.evidenceCount} evidence signal${finding.evidenceCount === 1 ? "" : "s"}. This is advisory, not proof of drift.`,
+      ));
+    });
+    elements.agentDrift.append(commits);
+  }
 }
 
 function renderGitIntelligence(section) {
@@ -1960,6 +1981,10 @@ function renderAgentWorkflows(items, inbox, targets, targetsIncomplete) {
 	const previousRun = elements.agentWorkflowRun.value;
 	const previousTarget = elements.agentWorkflowTarget.value;
 	const live = items.filter((item) => item.live && item.runId);
+	const hasLiveAgents = live.length > 0;
+	elements.agentWorkflowForm.hidden = !hasLiveAgents;
+	elements.agentWorkflowMeta.hidden = !hasLiveAgents;
+	elements.agentWorkflowEmpty.hidden = hasLiveAgents;
 	elements.agentWorkflowRun.replaceChildren();
 	live.forEach((item) => {
 		const option = document.createElement("option");
@@ -1995,7 +2020,9 @@ function renderAgentWorkflows(items, inbox, targets, targetsIncomplete) {
 		));
 	}
 	if (inbox.items.length === 0) {
-		elements.agentWorkflowInbox.append(emptyMemory("No workflow proposals. Nothing has been approved or executed."));
+		if (hasLiveAgents) {
+			elements.agentWorkflowInbox.append(emptyMemory("No workflow proposals. Nothing has been approved or executed."));
+		}
 		return;
 	}
 	inbox.items.forEach((proposal) => {
@@ -2046,6 +2073,10 @@ function renderAgentHandoffs(items, inbox) {
   elements.agentHandoffSource.replaceChildren();
   elements.agentHandoffTarget.replaceChildren();
   const live = items.filter((item) => item.live && item.runId);
+  const hasLiveAgents = live.length > 0;
+  elements.agentHandoffForm.hidden = !hasLiveAgents;
+  elements.agentHandoffMeta.hidden = !hasLiveAgents;
+  elements.agentHandoffEmpty.hidden = hasLiveAgents;
   live.forEach((item) => {
     const label = `Agent ${item.runId.slice(0, 8)} · ${runtimeAssociationLabel(item.association)}`;
     for (const select of [elements.agentHandoffSource, elements.agentHandoffTarget]) {
@@ -2068,7 +2099,9 @@ function renderAgentHandoffs(items, inbox) {
     );
   }
   if (inbox.items.length === 0) {
-    elements.agentHandoffInbox.append(emptyMemory("No pending handoff proposals."));
+    if (hasLiveAgents) {
+      elements.agentHandoffInbox.append(emptyMemory("No pending handoff proposals."));
+    }
     return;
   }
   inbox.items.forEach((handoff) => {
@@ -3404,6 +3437,17 @@ function renderPaletteResults() {
       badge.className = "palette-kind";
       badge.dataset.kind = result.kind;
       badge.textContent = paletteKindLabels[result.kind] || result.kind;
+      const status = paletteStatus(result);
+      const glyph = document.createElement("span");
+      glyph.className = "palette-status";
+      if (status) {
+        glyph.dataset.tone = status.tone;
+        glyph.textContent = status.glyph;
+        glyph.title = status.label;
+        glyph.setAttribute("aria-label", status.label);
+      } else {
+        glyph.hidden = true;
+      }
       const body = document.createElement("div");
       body.className = "palette-option-body";
       const title = document.createElement("p");
@@ -3417,7 +3461,7 @@ function renderPaletteResults() {
         snippet.textContent = result.snippet;
         body.append(snippet);
       }
-      option.append(badge, body);
+      option.append(glyph, badge, body);
       option.addEventListener("click", () => activatePaletteResult(result));
       option.addEventListener("mousemove", () => {
         if (paletteActive !== index) {

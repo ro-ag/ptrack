@@ -925,6 +925,20 @@ export function driftPresentation(section: unknown): {
   };
 }
 
+export type DriftFinding = ReturnType<typeof driftPresentation>["findings"][number];
+
+// Repeated unlinked commits carry the same advisory meaning. Keep the exact
+// SHAs available, but let the Overview render them behind one count summary.
+export function groupDriftFindings(findings: DriftFinding[]): {
+  findings: DriftFinding[];
+  unlinkedCommits: DriftFinding[];
+} {
+  return {
+    findings: findings.filter((finding) => finding.kind !== "unlinkedCommit"),
+    unlinkedCommits: findings.filter((finding) => finding.kind === "unlinkedCommit"),
+  };
+}
+
 // commandShortcut routes primary-modifier (⌘/Ctrl) chords. "palette" and
 // "settings" are global — Settings is an application dialog that opens with
 // no project open; the caller decides whether the view shortcuts are blocked
@@ -955,6 +969,25 @@ export interface PaletteResult {
   planId: number;
   title: string;
   snippet: string;
+  status?: string;
+}
+
+export interface PaletteStatus {
+  glyph: string;
+  label: string;
+  tone: string;
+}
+
+export function paletteStatus(result: PaletteResult): PaletteStatus | null {
+  const statuses: Record<string, PaletteStatus> = {
+    active: { glyph: "●", label: "Active", tone: "active" },
+    archived: { glyph: "◇", label: "Archived", tone: "archived" },
+    todo: { glyph: "○", label: "Todo", tone: "todo" },
+    doing: { glyph: "◐", label: "Doing", tone: "doing" },
+    blocked: { glyph: "!", label: "Blocked", tone: "blocked" },
+    done: { glyph: "✓", label: "Done", tone: "done" },
+  };
+  return statuses[result.status || ""] || null;
 }
 
 export interface PaletteGroup {

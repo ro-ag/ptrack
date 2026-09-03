@@ -1519,6 +1519,52 @@ select option {
   margin: var(--space-100) 0;
 }
 
+.agent-coordination-section {
+  margin-top: var(--space-150);
+  border-top: 1px solid var(--line-subtle);
+  padding-top: var(--space-100);
+}
+
+.agent-subsection-label {
+  margin: var(--space-150) 0 var(--space-075);
+  color: var(--muted);
+  font-size: 0.625rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.agent-coordination-section > .agent-subsection-label {
+  margin-top: 0;
+}
+
+.agent-empty-state {
+  margin: 0;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: var(--fill);
+  padding: var(--space-150);
+  color: var(--faint);
+  line-height: 1.45;
+}
+
+.drift-commit-summary {
+  border: 1px solid var(--line-subtle);
+  border-radius: 8px;
+  background: var(--fill);
+  padding: var(--space-100);
+}
+
+.drift-commit-summary summary {
+  cursor: pointer;
+  color: var(--text-soft);
+  font-weight: 700;
+}
+
+.drift-commit-summary[open] summary {
+  margin-bottom: var(--space-100);
+}
+
 .agent-handoff-form label {
   display: grid;
   gap: var(--space-050);
@@ -3187,6 +3233,28 @@ button.modal-backdrop:active {
   border-radius: 9px;
   padding: var(--space-100);
   cursor: pointer;
+}
+
+.palette-status {
+  width: 16px;
+  flex: 0 0 16px;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 900;
+  text-align: center;
+}
+
+.palette-status[data-tone="active"],
+.palette-status[data-tone="done"] {
+  color: var(--accent);
+}
+
+.palette-status[data-tone="doing"] {
+  color: var(--doing);
+}
+
+.palette-status[data-tone="blocked"] {
+  color: var(--blocked);
 }
 
 .palette-option.active {

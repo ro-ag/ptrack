@@ -516,6 +516,16 @@ describe("production asset layout", () => {
     expect(index).toMatch(
       /id="agent-activity-live"[^>]*role="status"[^>]*aria-live="polite"[^>]*aria-atomic="true"/,
     );
+    expect(index).toMatch(
+      /id="agent-handoff-empty"[^>]*hidden[^>]*>No live agents available\.[\s\S]*id="agent-handoff-form"/,
+    );
+    expect(index).toMatch(
+      /id="agent-workflow-empty"[^>]*hidden[^>]*>No live agents available\.[\s\S]*id="agent-workflow-form"/,
+    );
+    expect(appSource).toContain("elements.agentHandoffForm.hidden = !hasLiveAgents");
+    expect(appSource).toContain("elements.agentWorkflowForm.hidden = !hasLiveAgents");
+    expect(appSource).toContain('commits.className = "drift-commit-summary"');
+    expect(appSource).toContain('glyph.className = "palette-status"');
     expect(app).toContain("mutationFocusKey");
     expect(styles).toContain(".terminal-tab-indicator");
     expect(styles).toMatch(/\[data-indicator=(?:"failed"|failed)\]/);

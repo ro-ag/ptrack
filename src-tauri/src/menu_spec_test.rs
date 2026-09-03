@@ -25,6 +25,11 @@ fn platform_menu_specs_pin_order_roles_and_macos_only_accelerators() {
             MenuEntrySpec::Role(MenuRole::Quit),
         ]
     );
+    assert!(macos[4].entries.contains(&MenuEntrySpec::Command {
+        id: "workspace:intelligence-requested",
+        label: "Overview",
+        macos_accelerator: Some("CmdOrCtrl+2"),
+    }));
     let other = menu_spec(DesktopPlatform::Other);
     assert_eq!(
         other.iter().map(|menu| menu.label).collect::<Vec<_>>(),
