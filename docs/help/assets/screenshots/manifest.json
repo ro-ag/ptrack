@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "productVersion": "0.33.1",
+  "productVersion": "0.34.0",
   "capturedAt": "2026-09-03",
   "capture": {
     "app": "packaged macOS Desktop app",

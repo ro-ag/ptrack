@@ -6,8 +6,8 @@ Observe agent work, keep project state durable, and pass bounded context to
 the next agent—without a hosted service or cloud account.
 
 [![Rust](https://img.shields.io/badge/Rust-1.89%2B-CE6A3D?logo=rust&logoColor=white)](https://www.rust-lang.org/)
-[![Release](https://img.shields.io/badge/release-v0.33.1-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.33.1)
-[![Help Center](https://img.shields.io/badge/help-v0.33.1-3DD6A3)](https://ro-ag.github.io/ptrack/help/)
+[![Release](https://img.shields.io/badge/release-v0.34.0-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.34.0)
+[![Help Center](https://img.shields.io/badge/help-v0.34.0-3DD6A3)](https://ro-ag.github.io/ptrack/help/)
 [![License](https://img.shields.io/badge/License-Apache--2.0-3DD6A3)](LICENSE)
 [![Storage](https://img.shields.io/badge/Storage-local--first-AFA8FF)](#storage-and-safety)
 
@@ -130,6 +130,17 @@ immediately after another process changes the project.
 The GUI opens the database only for each action. The CLI and AI agents can
 therefore keep reading and writing the same project without the board retaining
 the database write lock.
+
+### Issue intake and scheduling
+
+Open **Issues** with `Cmd/Ctrl+3` to inspect the same durable reports agents
+capture through the CLI. Search and filter the inbox, edit full reports and
+severity, close or reopen issues, and follow links between issues and tasks.
+Schedule an issue into a plan to create its task atomically, or link it to an
+existing task. Unscheduled issues remain triage context rather than executable
+work; scheduling is an explicit choice. Linked tasks can move between plans
+without losing their issue history when no live terminal or agent association
+blocks the move.
 
 ### Registered agent runs
 
