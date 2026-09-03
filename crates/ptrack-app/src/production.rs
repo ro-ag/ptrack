@@ -356,7 +356,16 @@ impl RoutedApplication {
     fn bootstrap(&mut self, request: &InitRequest) -> AppResult<bool> {
         ensure_private_home(&self.global_home)?;
         let home = fs::canonicalize(&self.global_home)?;
-        let lease = acquire_cutover_lock(&home, CutoverLockMode::Exclusive).map_err(recovery)?;
+        let lease = match acquire_cutover_lock(&home, CutoverLockMode::Exclusive) {
+            Ok(lease) => lease,
+            Err(error) if error.to_string().contains("cutover lock is unavailable") => {
+                return Err(AppError::Message(
+                    "another p-track process holds the runtime lease; close p-track apps/sessions and retry"
+                        .to_owned(),
+                ));
+            }
+            Err(error) => return Err(recovery(error)),
+        };
         let existing = load_active_generation(&home, &lease).map_err(recovery)?;
         if let Some(marker) = &existing {
             validate_active_generation(&home, marker, &self.writer_version).map_err(recovery)?;
