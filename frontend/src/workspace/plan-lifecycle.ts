@@ -1,4 +1,18 @@
-export type PlanLifecycleAction = "rename" | "delete" | "move" | "copy";
+export type PlanLifecycleAction =
+  | "rename"
+  | "done"
+  | "hold"
+  | "resume"
+  | "delete"
+  | "move"
+  | "copy";
+
+export interface PlanLifecycleState {
+  status?: string;
+  holdReason?: string;
+  tasksTotal?: number;
+  tasksDone?: number;
+}
 
 export interface PlanMenuItem {
   action: PlanLifecycleAction;
@@ -7,13 +21,31 @@ export interface PlanMenuItem {
 }
 
 /** The plan context menu, identical for the sidebar and the board header. */
-export function planMenuItems(): PlanMenuItem[] {
-  return [
+export function planMenuItems(plan: PlanLifecycleState = {}): PlanMenuItem[] {
+  const items: PlanMenuItem[] = [
     { action: "rename", label: "Rename", destructive: false },
+  ];
+  if (!plan.status || plan.status === "active") {
+    items.push(
+      { action: "done", label: "Mark plan done…", destructive: false },
+      plan.holdReason
+        ? { action: "resume", label: "Resume", destructive: false }
+        : { action: "hold", label: "Put on hold…", destructive: false },
+    );
+  }
+  items.push(
     { action: "move", label: "Move to project…", destructive: false },
     { action: "copy", label: "Copy…", destructive: false },
     { action: "delete", label: "Delete…", destructive: true },
-  ];
+  );
+  return items;
+}
+
+/** A non-empty, active, unheld plan should prompt as soon as every task is done. */
+export function planReadyForCompletion(plan: PlanLifecycleState): boolean {
+  const total = Number(plan.tasksTotal || 0);
+  return plan.status === "active" && !plan.holdReason && total > 0 &&
+    Number(plan.tasksDone || 0) === total;
 }
 
 /**

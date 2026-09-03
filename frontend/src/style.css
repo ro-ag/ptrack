@@ -3080,6 +3080,19 @@ button.modal-backdrop:active {
   white-space: pre-wrap;
 }
 
+.plan-dialog-checkpoint {
+  max-height: min(50vh, 360px);
+  overflow: auto;
+  border: 1px solid var(--line-subtle);
+  border-radius: 9px;
+  background: var(--control-solid-bg);
+  padding: var(--space-150);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
 .dialog-danger {
   border-color: rgba(var(--blocked-rgb), 0.6);
   color: #fff;
@@ -3346,9 +3359,9 @@ button.modal-backdrop:active {
 }
 
 .drawer-actions {
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
   flex: 0 0 auto;
-  grid-template-columns: minmax(0, 1fr) repeat(3, auto);
   align-items: center;
   gap: var(--space-100);
   border-bottom: 1px solid var(--line-subtle);
@@ -3357,8 +3370,9 @@ button.modal-backdrop:active {
 }
 
 .drawer-actions select {
-  width: 100%;
-  min-width: 0;
+  flex: 1 1 96px;
+  width: auto;
+  min-width: 96px;
   border: 1px solid var(--line);
   border-radius: 8px;
   color: var(--text);

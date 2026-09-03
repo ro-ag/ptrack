@@ -57,6 +57,15 @@ describe("responsive desktop layout contracts", () => {
     );
   });
 
+  it("protects the full task status label and reflows drawer actions", () => {
+    expect(styles).toMatch(
+      /\.drawer-actions\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap;/,
+    );
+    expect(styles).toMatch(
+      /\.drawer-actions select\s*\{[^}]*flex:\s*1 1 96px;[^}]*width:\s*auto;[^}]*min-width:\s*96px;/,
+    );
+  });
+
   it("keeps a visible inward focus ring on clipped compact controls", () => {
     const focusRule = styles.match(
       /\.panel-toggle:focus-visible,[\s\S]*?\.terminal-context-menu button:focus-visible\s*\{([^}]*)\}/,

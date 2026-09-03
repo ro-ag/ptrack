@@ -102,6 +102,7 @@ import {
   clampMenuPosition,
   deleteConfirmationText,
   planMenuItems,
+  planReadyForCompletion,
   transferSubmitDisabled,
 } from "./workspace/plan-lifecycle";
 import {
@@ -551,10 +552,11 @@ let planContextMenu = null;
 let planContextMenuDispose = null;
 let planContextMenuReturnFocus = null;
 let planRenameActive = false;
-let planDialogMode = null; // "delete" | "move" | "copy"
+let planDialogMode = null; // "done" | "checkpoint" | "hold" | "delete" | "move" | "copy"
 let planDialogPlan = null;
 let planDialogTransferState = null;
 let planDialogReturnFocus = null;
+const promptedCompletedPlans = new Set();
 let toastTimer = null;
 let memoryModalReturnFocus = null;
 let settingsModalReturnFocus = null;
@@ -579,7 +581,8 @@ let terminalGeneration = 0;
 let terminalProjectRoot = "";
 let snapshotSequence = 0;
 let activeSnapshotRequest = null;
-let queuedSnapshotPlanId = 0;
+let queuedSnapshotPlanRequest;
+let explicitNoPlanSelection = false;
 let agentActivityAnnouncementKey = "";
 let detailTask = null;
 let detailRequest = 0;
@@ -2128,12 +2131,23 @@ function applicationOverlayChanges(records = []) {
 }
 
 function syncApplicationOverlayState(records = []) {
-  applicationOverlayCoordinator.reconcile(applicationOverlayChanges(records));
+  const changes = applicationOverlayChanges(records);
+  applicationOverlayCoordinator.reconcile(changes);
+  schedulePlanCompletionPrompt(changes);
 }
 
 function hideApplicationOverlay(overlay) {
   overlay.hidden = true;
-  applicationOverlayCoordinator.reconcile([{ overlay, open: false }]);
+  const changes = [{ overlay, open: false }];
+  applicationOverlayCoordinator.reconcile(changes);
+  schedulePlanCompletionPrompt(changes);
+}
+
+function schedulePlanCompletionPrompt(changes) {
+  if (!changes.some((change) => !change.open)) return;
+  queueMicrotask(() => {
+    if (!snapshotDialogIsOpen()) maybePromptForPlanCompletion();
+  });
 }
 
 const applicationOverlayCoordinator = new ApplicationOverlayCoordinator(() =>
@@ -2156,8 +2170,11 @@ async function loadSnapshot(
   queueIfBusy = true,
 ) {
   if (workspaceController.state.status !== "open") return false;
+  const planRequest = planId === null || (explicitNoPlanSelection && Number(planId) === 0)
+    ? null
+    : Number(planId);
   if (!refreshGate.tryBegin(!quiet && queueIfBusy)) {
-    if (!quiet && queueIfBusy) queuedSnapshotPlanId = Number(planId);
+    if (!quiet && queueIfBusy) queuedSnapshotPlanRequest = planRequest;
     return false;
   }
   if (
@@ -2177,13 +2194,14 @@ async function loadSnapshot(
   activeSnapshotRequest = request;
   if (!quiet) setStatus("Refreshing project snapshot…");
   try {
-    const response = await api().GetWorkspaceSnapshot(ticket.generation, Number(planId));
+    const response = await api().GetWorkspaceSnapshot(ticket.generation, planRequest);
     if (request !== snapshotSequence || !workspaceController.accepts(ticket, response.generation)) {
       return true;
     }
     response.git = preserveSectionOnError(snapshot?.git, response.git);
     snapshot = response;
     board = response.tracking.board;
+    explicitNoPlanSelection = planRequest === null;
     elements.workspace.dataset.snapshotState = "ready";
     renderBoard();
     recordProjectLayout();
@@ -2196,6 +2214,7 @@ async function loadSnapshot(
       minute: "2-digit",
     });
     setStatus(`Snapshot synced ${now}`);
+    maybePromptForPlanCompletion();
   } catch (error) {
     if (request !== snapshotSequence || ticket.epoch !== workspaceController.capture().epoch) return;
     if (snapshot) {
@@ -2209,9 +2228,13 @@ async function loadSnapshot(
     if (activeSnapshotRequest === request) activeSnapshotRequest = null;
     const rerun = refreshGate.finish();
     if (rerun && workspaceController.state.status === "open") {
-      const queuedPlan = queuedSnapshotPlanId || board?.planId || 0;
+      const queuedPlan = queuedSnapshotPlanRequest !== undefined
+        ? queuedSnapshotPlanRequest
+        : explicitNoPlanSelection
+          ? null
+          : board?.planId || 0;
       const queuedGeneration = workspaceController.state.generation;
-      queuedSnapshotPlanId = 0;
+      queuedSnapshotPlanRequest = undefined;
       queueMicrotask(() => {
         if (workspaceController.state.status === "open" &&
           workspaceController.state.generation === queuedGeneration) {
@@ -2569,7 +2592,7 @@ function openPlanContextMenu(plan, titleElement, invoker, position) {
   menu.className = "context-menu";
   menu.setAttribute("role", "menu");
   menu.style.visibility = "hidden";
-  planMenuItems().forEach((item) => {
+  planMenuItems(plan).forEach((item) => {
     const button = document.createElement("button");
     button.type = "button";
     button.setAttribute("role", "menuitem");
@@ -2578,6 +2601,9 @@ function openPlanContextMenu(plan, titleElement, invoker, position) {
     button.addEventListener("click", () => {
       closePlanContextMenu();
       if (item.action === "rename") beginPlanRename(titleElement, plan);
+      else if (item.action === "done") openPlanDoneDialog(plan);
+      else if (item.action === "hold") openPlanHoldDialog(plan);
+      else if (item.action === "resume") void resumePlan(plan);
       else if (item.action === "delete") void openPlanDeleteDialog(plan);
       else void openPlanTransferDialog(plan, item.action);
     });
@@ -2691,8 +2717,11 @@ function closePlanDialog() {
   planDialogMode = null;
   planDialogPlan = null;
   planDialogTransferState = null;
+  elements.planDialogBody.classList.remove("plan-dialog-checkpoint");
   elements.planDialogError.hidden = true;
   elements.planDialogError.textContent = "";
+  elements.planDialogCancel.hidden = false;
+  elements.planDialogCancel.textContent = "Cancel";
   elements.planDialogSubmit.classList.remove("dialog-danger");
 }
 
@@ -2706,8 +2735,111 @@ function openPlanDialogShell() {
     document.activeElement instanceof HTMLElement ? document.activeElement : null;
   elements.planDialogError.hidden = true;
   elements.planDialogError.textContent = "";
+  elements.planDialogBody.classList.remove("plan-dialog-checkpoint");
+  elements.planDialogCancel.hidden = false;
+  elements.planDialogCancel.textContent = "Cancel";
   elements.planDialogSubmit.classList.remove("dialog-danger");
   elements.planDialog.hidden = false;
+}
+
+function hidePlanDialogFields() {
+  elements.planDialogProjectLabel.hidden = true;
+  elements.planDialogProject.hidden = true;
+  elements.planDialogTitleLabel.hidden = true;
+  elements.planDialogTitle.hidden = true;
+}
+
+function completionPromptKey(plan) {
+  return `${workspaceController.state.generation}:${Number(plan.id)}`;
+}
+
+function maybePromptForPlanCompletion() {
+  const plan = currentBoardPlan();
+  if (!plan) return;
+  const key = completionPromptKey(plan);
+  if (!planReadyForCompletion(plan)) {
+    promptedCompletedPlans.delete(key);
+    return;
+  }
+  if (promptedCompletedPlans.has(key) || snapshotDialogIsOpen()) return;
+  promptedCompletedPlans.add(key);
+  openPlanDoneDialog(plan, true);
+}
+
+function openPlanDoneDialog(plan, automatic = false) {
+  if (workspaceController.state.status !== "open") return;
+  if (planReadyForCompletion(plan)) {
+    promptedCompletedPlans.add(completionPromptKey(plan));
+  }
+  const remaining = Math.max(0, Number(plan.tasksTotal) - Number(plan.tasksDone));
+  planDialogMode = "done";
+  planDialogPlan = plan;
+  planDialogTransferState = null;
+  openPlanDialogShell();
+  elements.planDialogEyebrow.textContent = "Complete plan";
+  elements.planDialogHeading.textContent = `Mark “${plan.title}” done?`;
+  elements.planDialogBody.textContent = remaining === 0
+    ? `All ${plan.tasksTotal} task${Number(plan.tasksTotal) === 1 ? " is" : "s are"} done. Close the plan and review the project checkpoint before continuing.`
+    : `${remaining} open task${remaining === 1 ? " remains" : "s remain"}. Finish every task before closing this plan.`;
+  hidePlanDialogFields();
+  elements.planDialogCancel.textContent = automatic ? "Not now" : "Cancel";
+  elements.planDialogSubmit.textContent = "Mark plan done";
+  elements.planDialogSubmit.disabled = remaining !== 0;
+  requestAnimationFrame(() => {
+    (remaining === 0 ? elements.planDialogSubmit : elements.planDialogCancel).focus();
+  });
+}
+
+function openPlanHoldDialog(plan) {
+  if (workspaceController.state.status !== "open") return;
+  planDialogMode = "hold";
+  planDialogPlan = plan;
+  planDialogTransferState = null;
+  openPlanDialogShell();
+  elements.planDialogEyebrow.textContent = "Put plan on hold";
+  elements.planDialogHeading.textContent = `Pause “${plan.title}”`;
+  elements.planDialogBody.textContent =
+    "Record why work is paused. The plan remains visible but will not prompt for completion until resumed.";
+  elements.planDialogProjectLabel.hidden = true;
+  elements.planDialogProject.hidden = true;
+  elements.planDialogTitleLabel.textContent = "Hold reason";
+  elements.planDialogTitleLabel.hidden = false;
+  elements.planDialogTitle.value = "";
+  elements.planDialogTitle.hidden = false;
+  elements.planDialogSubmit.textContent = "Put on hold";
+  elements.planDialogSubmit.disabled = true;
+  requestAnimationFrame(() => elements.planDialogTitle.focus());
+}
+
+function openPlanCheckpointDialog(plan, checkpoint) {
+  planDialogMode = "checkpoint";
+  planDialogPlan = null;
+  planDialogTransferState = null;
+  openPlanDialogShell();
+  elements.planDialogEyebrow.textContent = "Plan complete";
+  elements.planDialogHeading.textContent = `“${plan.title}” is done`;
+  elements.planDialogBody.textContent = checkpoint.markdown;
+  elements.planDialogBody.classList.add("plan-dialog-checkpoint");
+  hidePlanDialogFields();
+  elements.planDialogCancel.hidden = true;
+  elements.planDialogSubmit.textContent = "Close checkpoint";
+  elements.planDialogSubmit.disabled = false;
+  requestAnimationFrame(() => elements.planDialogSubmit.focus());
+}
+
+async function resumePlan(plan) {
+  if (workspaceController.state.status !== "open") return;
+  const ticket = workspaceController.capture();
+  setStatus(`Resuming plan #${plan.id}…`);
+  try {
+    const response = await api().ResumePlanV1(ticket.generation, Number(plan.id));
+    if (!workspaceController.accepts(ticket, Number(response.generation))) return;
+    await loadSnapshot(Number(plan.id));
+    setStatus(`Plan #${plan.id} resumed.`);
+  } catch (error) {
+    showError(error);
+    setStatus(`Could not resume plan #${plan.id}`);
+  }
 }
 
 async function openPlanDeleteDialog(plan) {
@@ -2729,21 +2861,23 @@ async function openPlanDeleteDialog(plan) {
   elements.planDialogEyebrow.textContent = "Delete plan";
   elements.planDialogHeading.textContent = `Delete “${response.summary.title}”?`;
   elements.planDialogBody.textContent = deleteConfirmationText(response.summary);
-  elements.planDialogProjectLabel.hidden = true;
-  elements.planDialogProject.hidden = true;
-  elements.planDialogTitleLabel.hidden = true;
-  elements.planDialogTitle.hidden = true;
+  hidePlanDialogFields();
   elements.planDialogSubmit.textContent = "Delete plan";
   elements.planDialogSubmit.classList.add("dialog-danger");
   elements.planDialogSubmit.disabled = false;
   requestAnimationFrame(() => elements.planDialogCancel.focus());
 }
 
-function syncPlanTransferState() {
-  if (!planDialogTransferState) return;
-  planDialogTransferState.targetPath = elements.planDialogProject.value;
-  planDialogTransferState.title = elements.planDialogTitle.value;
-  elements.planDialogSubmit.disabled = transferSubmitDisabled(planDialogTransferState);
+function syncPlanDialogState() {
+  if (planDialogMode === "hold") {
+    elements.planDialogSubmit.disabled = elements.planDialogTitle.value.trim() === "";
+    return;
+  }
+  if (planDialogTransferState) {
+    planDialogTransferState.targetPath = elements.planDialogProject.value;
+    planDialogTransferState.title = elements.planDialogTitle.value;
+    elements.planDialogSubmit.disabled = transferSubmitDisabled(planDialogTransferState);
+  }
 }
 
 async function openPlanTransferDialog(plan, mode) {
@@ -2791,10 +2925,11 @@ async function openPlanTransferDialog(plan, mode) {
   elements.planDialogTitle.value = "";
   elements.planDialogProjectLabel.hidden = false;
   elements.planDialogProject.hidden = false;
+  elements.planDialogTitleLabel.textContent = "New title (optional)";
   elements.planDialogTitleLabel.hidden = false;
   elements.planDialogTitle.hidden = false;
   elements.planDialogSubmit.textContent = "OK";
-  syncPlanTransferState();
+  syncPlanDialogState();
   requestAnimationFrame(() => elements.planDialogProject.focus());
 }
 
@@ -5669,7 +5804,8 @@ function renderWorkspaceState(state, focus = false) {
   elements.stateCard.removeAttribute("aria-busy");
   snapshotSequence += 1;
   activeSnapshotRequest = null;
-  queuedSnapshotPlanId = 0;
+  queuedSnapshotPlanRequest = undefined;
+  explicitNoPlanSelection = false;
   refreshGate.cancelQueued();
   runtimeRefreshes.cancel();
   agentActivityAnnouncementKey = "";
@@ -7191,7 +7327,13 @@ elements.confirmSubmit.addEventListener("click", () => finishWorkspaceConfirmati
 
 function currentBoardPlan() {
   if (!board?.planId) return null;
-  return { id: Number(board.planId), title: board.planTitle || `Plan #${board.planId}` };
+  return board.plans?.find((plan) => Number(plan.id) === Number(board.planId)) || {
+    id: Number(board.planId),
+    title: board.planTitle || `Plan #${board.planId}`,
+    status: "active",
+    tasksTotal: Number(board.stats?.planTasks || 0),
+    tasksDone: Number(board.stats?.planTasksDone || 0),
+  };
 }
 elements.planTitle.addEventListener("contextmenu", (event) => {
   const plan = currentBoardPlan();
@@ -7211,9 +7353,9 @@ elements.planTitleMenu.addEventListener("click", () => {
     y: rect.bottom + 4,
   });
 });
-elements.planDialogProject.addEventListener("input", syncPlanTransferState);
-elements.planDialogProject.addEventListener("change", syncPlanTransferState);
-elements.planDialogTitle.addEventListener("input", syncPlanTransferState);
+elements.planDialogProject.addEventListener("input", syncPlanDialogState);
+elements.planDialogProject.addEventListener("change", syncPlanDialogState);
+elements.planDialogTitle.addEventListener("input", syncPlanDialogState);
 elements.planDialogForm.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
   event.preventDefault();
@@ -7221,6 +7363,10 @@ elements.planDialogForm.addEventListener("keydown", (event) => {
 });
 elements.planDialogForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (planDialogMode === "checkpoint") {
+    closePlanDialog();
+    return;
+  }
   if (!planDialogPlan || !planDialogMode) return;
   const plan = planDialogPlan;
   const mode = planDialogMode;
@@ -7228,7 +7374,23 @@ elements.planDialogForm.addEventListener("submit", async (event) => {
   elements.planDialogSubmit.disabled = true;
   try {
     const ticket = workspaceController.capture();
-    if (mode === "delete") {
+    if (mode === "done") {
+      const response = await api().CompletePlanV1(ticket.generation, Number(plan.id));
+      if (!workspaceController.accepts(ticket, Number(response.generation))) return;
+      const nextPlan = response.checkpoint.openPlans
+        ?.find((candidate) => Number(candidate.id) !== Number(plan.id));
+      closePlanDialog();
+      openPlanCheckpointDialog(plan, response.checkpoint);
+      await loadSnapshot(nextPlan ? Number(nextPlan.id) : null);
+      return;
+    } else if (mode === "hold") {
+      const response = await api().HoldPlanV1(
+        ticket.generation,
+        Number(plan.id),
+        elements.planDialogTitle.value.trim(),
+      );
+      if (!workspaceController.accepts(ticket, Number(response.generation))) return;
+    } else if (mode === "delete") {
       await api().DeletePlanV1(ticket.generation, Number(plan.id), true);
     } else if (mode === "move") {
       await api().MovePlanV1(
@@ -7246,12 +7408,14 @@ elements.planDialogForm.addEventListener("submit", async (event) => {
       );
     }
     closePlanDialog();
-    await loadSnapshot(0);
+    await loadSnapshot(mode === "hold" ? Number(plan.id) : 0);
   } catch (error) {
     setPlanDialogError(error);
-    elements.planDialogSubmit.disabled = mode === "delete"
+    elements.planDialogSubmit.disabled = mode === "delete" || mode === "done"
       ? false
-      : transferSubmitDisabled(planDialogTransferState);
+      : mode === "hold"
+        ? elements.planDialogTitle.value.trim() === ""
+        : transferSubmitDisabled(planDialogTransferState);
   }
 });
 document.querySelectorAll("[data-close-plan-dialog]").forEach((element) => {

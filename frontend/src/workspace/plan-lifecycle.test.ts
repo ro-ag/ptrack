@@ -4,14 +4,40 @@ import {
   clampMenuPosition,
   deleteConfirmationText,
   planMenuItems,
+  planReadyForCompletion,
   transferSubmitDisabled,
 } from "./plan-lifecycle";
 
 describe("plan lifecycle menu", () => {
-  it("offers rename, move, copy, and destructive delete", () => {
-    const items = planMenuItems();
-    expect(items.map((item) => item.action)).toEqual(["rename", "move", "copy", "delete"]);
+  it("offers completion and hold beside the existing lifecycle actions", () => {
+    const items = planMenuItems({ status: "active", tasksTotal: 2, tasksDone: 1 });
+    expect(items.map((item) => item.action)).toEqual([
+      "rename", "done", "hold", "move", "copy", "delete",
+    ]);
     expect(items.filter((item) => item.destructive).map((item) => item.action)).toEqual(["delete"]);
+  });
+
+  it("offers resume for a held plan and no open-only actions for a done plan", () => {
+    expect(planMenuItems({ status: "active", holdReason: "Later" })
+      .map((item) => item.action)).toContain("resume");
+    expect(planMenuItems({ status: "done" }).map((item) => item.action)).toEqual([
+      "rename", "move", "copy", "delete",
+    ]);
+  });
+});
+
+describe("plan completion prompt", () => {
+  it("prompts only for non-empty active, unheld plans at 100%", () => {
+    expect(planReadyForCompletion({ status: "active", tasksTotal: 2, tasksDone: 2 })).toBe(true);
+    expect(planReadyForCompletion({ status: "active", tasksTotal: 0, tasksDone: 0 })).toBe(false);
+    expect(planReadyForCompletion({ status: "active", tasksTotal: 2, tasksDone: 1 })).toBe(false);
+    expect(planReadyForCompletion({
+      status: "active",
+      holdReason: "Waiting",
+      tasksTotal: 2,
+      tasksDone: 2,
+    })).toBe(false);
+    expect(planReadyForCompletion({ status: "done", tasksTotal: 2, tasksDone: 2 })).toBe(false);
   });
 });
 

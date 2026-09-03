@@ -10,12 +10,13 @@ use std::path::PathBuf;
 use clap::ArgMatches;
 use ptrack_app::{
     ApplicationPort, GuideAction, HookAction, HookResult, InitRequest, Mutation, MutationResult,
-    PlanLifecycleOutcome, PlanLifecycleRequest, RelocateRequest, complete_task, serve_project_mcp,
+    PlanLifecycleOutcome, PlanLifecycleRequest, RelocateRequest, complete_plan, complete_task,
+    serve_project_mcp,
 };
 use ptrack_core::{
-    IssueStatus, LEGACY_ACTOR, MilestoneStatus, NoteTarget, PlanStatus, Severity, TaskStatus,
-    Timestamp, board_for, check_hold_reason, checkpoint, claim_marker, context, hold_marker,
-    id_list, next, search, show_issue, show_milestone, show_plan, show_task,
+    IssueStatus, LEGACY_ACTOR, MilestoneStatus, NoteTarget, Severity, TaskStatus, Timestamp,
+    board_for, check_hold_reason, checkpoint, claim_marker, context, hold_marker, next, search,
+    show_issue, show_milestone, show_plan, show_task,
 };
 
 use crate::compat_json::{
@@ -451,36 +452,9 @@ fn plan(
         "done" => {
             let id = parse_u64(first(matches, "id")?)?;
             let force = matches.get_flag("force");
-            let open: Vec<u64> = application
-                .snapshot()?
-                .tasks_for_plan(id)
-                .filter(|task| task.status.is_open())
-                .map(|task| task.id)
-                .collect();
-            if !open.is_empty() && !force {
-                return Err(CliError::message(format!(
-                    "cannot close plan #{id}: open tasks remain ({}); finish them or pass --force",
-                    id_list(&open)
-                )));
-            }
-            expect_none(application.mutate(Mutation::SetPlanStatus {
-                id,
-                status: PlanStatus::Done,
-            })?)?;
-            if !open.is_empty() {
-                add_override_note(
-                    application,
-                    NoteTarget::Plan,
-                    id,
-                    format!(
-                        "override: closed via --force with open tasks {}",
-                        id_list(&open)
-                    ),
-                )?;
-            }
+            let result = complete_plan(application, id, force)?;
             output::line(io.stdout, format_args!("Plan #{id} done.\n"))?;
-            let view = checkpoint(&application.snapshot()?, Some(id));
-            output::text(io.stdout, &view.markdown())?;
+            output::text(io.stdout, &result.checkpoint.markdown())?;
         }
         "use" => {
             let id = parse_u64(first(matches, "id")?)?;

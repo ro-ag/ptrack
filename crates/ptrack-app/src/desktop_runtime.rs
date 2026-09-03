@@ -42,7 +42,7 @@ use crate::{
     ActiveRuntime, AgentRuntimeService, AppError, AppResult, ApplicationPort,
     LaunchedEventAuthority, LinkedAgentRuntimeHooks, Mutation, MutationResult,
     PlanLifecycleOutcome, PlanLifecycleRequest, ProjectEndpoint, TerminalRuntime,
-    WorkspaceBindings,
+    WorkspaceBindings, complete_plan,
 };
 
 const MAX_COMMAND_BYTES: usize = 1024 * 1024;
@@ -70,7 +70,7 @@ const WORKSPACE_OPERATION_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub const FIRST_RUN_GOAL_MAX_BYTES: usize = 4_096;
 
-const COMMANDS: [&str; 94] = [
+const COMMANDS: [&str; 97] = [
     "AcknowledgeAgentHandoffV2",
     "AddTask",
     "AddTaskNote",
@@ -87,6 +87,7 @@ const COMMANDS: [&str; 94] = [
     "CloseProject",
     "CloseTerminal",
     "CloseTerminalV2",
+    "CompletePlanV1",
     "CopyPlanV1",
     "CreateFirstPlanV1",
     "CreateFirstTaskV1",
@@ -121,6 +122,7 @@ const COMMANDS: [&str; 94] = [
     "GetUpdateState",
     "GetWorkspaceSnapshot",
     "GetWorkspaceState",
+    "HoldPlanV1",
     "InitializeProjectV1",
     "InstallShellCommand",
     "LaunchLinkedAgentV2",
@@ -150,6 +152,7 @@ const COMMANDS: [&str; 94] = [
     "ResizeTerminal",
     "ResizeTerminalV2",
     "ResolveRecentProjectV1",
+    "ResumePlanV1",
     "RollbackLinkedAgentLaunchV2",
     "SaveCapabilityV2",
     "SearchV2",
@@ -167,7 +170,7 @@ const COMMANDS: [&str; 94] = [
     "WriteTerminalMemoryV2",
 ];
 
-/// Exact current 93-method desktop bridge command allowlist.
+/// Exact current 97-method desktop bridge command allowlist.
 #[must_use]
 pub const fn allowed_desktop_commands() -> &'static [&'static str] {
     &COMMANDS
@@ -2492,7 +2495,7 @@ impl BoundDesktopWorkspace {
     #[allow(clippy::too_many_lines)] // One bounded storage capture keeps totals and rows aligned.
     fn bounded_snapshot_tracking(
         &self,
-        requested_plan: u64,
+        requested_plan: Option<u64>,
         deadline: Instant,
     ) -> AppResult<SnapshotTrackingCapture> {
         let store = self.project_store()?;
@@ -2501,14 +2504,11 @@ impl BoundDesktopWorkspace {
         meta.active_plan = meta.active_plan_for(identity.as_ref().map(|i| i.id.as_str()));
         ensure_snapshot_deadline(deadline)?;
         let plans = store.plans_bounded(SNAPSHOT_PLAN_LIMIT)?;
-        let selected_plan = if requested_plan == 0 {
-            if self.initial_plan == 0 {
-                meta.active_plan
-            } else {
-                self.initial_plan
-            }
-        } else {
-            requested_plan
+        let selected_plan = match requested_plan {
+            None => 0,
+            Some(0) if self.initial_plan == 0 => meta.active_plan,
+            Some(0) => self.initial_plan,
+            Some(plan_id) => plan_id,
         };
         let tasks = if selected_plan == 0 {
             ptrack_store::Bounded {
@@ -2560,14 +2560,24 @@ impl BoundDesktopWorkspace {
             commits.items,
         );
         let mut board = snapshot_board_view(&snapshot, self.project().name, selected_plan)?;
-        board.plans = plans
-            .items
+        let mut board_plans = plans.items.clone();
+        if selected_plan != 0 && !board_plans.iter().any(|plan| plan.id == selected_plan) {
+            board_plans.pop();
+            board_plans.push(
+                snapshot
+                    .plan(selected_plan)
+                    .ok_or_else(|| AppError::Message(format!("plan #{selected_plan} not found")))?
+                    .clone(),
+            );
+        }
+        board.plans = board_plans
             .iter()
             .map(|plan| {
                 let progress = plan_progress.get(&plan.id).copied().unwrap_or_default();
                 PlanSummaryView {
                     id: plan.id,
                     title: plan.title.clone(),
+                    status: plan.status.as_str().to_owned(),
                     is_active: plan.id == snapshot.meta.active_plan,
                     tasks_total: progress.total,
                     tasks_done: progress.done,
@@ -3515,6 +3525,46 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
                 })?;
                 Ok(json!({ "generation": self.generation }))
             }
+            "CompletePlanV1" => {
+                require_argument_count(method, arguments, 2)?;
+                let generation = u64_arg(arguments, 0)?;
+                self.require_generation(generation)?;
+                let plan_id = u64_arg(arguments, 1)?;
+                let mut application = lock(&self.application);
+                let result = complete_plan(application.as_mut(), plan_id, false)?;
+                Ok(json!({
+                    "generation": self.generation,
+                    "checkpoint": {
+                        "markdown": result.checkpoint.markdown(),
+                        "openPlans": result.checkpoint.open_plans
+                            .iter()
+                            .map(|(id, title)| json!({ "id": id, "title": title }))
+                            .collect::<Vec<_>>(),
+                    },
+                }))
+            }
+            "HoldPlanV1" => {
+                require_argument_count(method, arguments, 3)?;
+                let generation = u64_arg(arguments, 0)?;
+                self.require_generation(generation)?;
+                let reason =
+                    trimmed_nonempty(string_arg(arguments, 2)?, "hold reason cannot be empty")?;
+                lock(&self.application).mutate(Mutation::SetPlanHold {
+                    id: u64_arg(arguments, 1)?,
+                    reason: Some(reason),
+                })?;
+                Ok(json!({ "generation": self.generation }))
+            }
+            "ResumePlanV1" => {
+                require_argument_count(method, arguments, 2)?;
+                let generation = u64_arg(arguments, 0)?;
+                self.require_generation(generation)?;
+                lock(&self.application).mutate(Mutation::SetPlanHold {
+                    id: u64_arg(arguments, 1)?,
+                    reason: None,
+                })?;
+                Ok(json!({ "generation": self.generation }))
+            }
             "DeletePlanV1" => {
                 require_argument_count(method, arguments, 3)?;
                 let generation = u64_arg(arguments, 0)?;
@@ -3672,7 +3722,11 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
             "GetWorkspaceSnapshot" => {
                 let generation = u64_arg(arguments, 0)?;
                 self.require_generation(generation)?;
-                let plan_id = u64_arg(arguments, 1)?;
+                let plan_id = if arguments.get(1).is_some_and(Value::is_null) {
+                    None
+                } else {
+                    Some(u64_arg(arguments, 1)?)
+                };
                 let deadline = Instant::now() + WORKSPACE_SNAPSHOT_TIMEOUT;
                 let mut tracking = self.bounded_snapshot_tracking(plan_id, deadline)?;
                 let git = capture_git_snapshot(&self.endpoint.root, deadline);
@@ -4416,6 +4470,7 @@ pub(super) fn watch_workspace_data(
 struct PlanSummaryView {
     id: u64,
     title: String,
+    status: String,
     is_active: bool,
     tasks_total: usize,
     tasks_done: usize,
@@ -4678,6 +4733,7 @@ pub(super) fn board_view(
             PlanSummaryView {
                 id: plan.id,
                 title: plan.title.clone(),
+                status: plan.status.as_str().to_owned(),
                 is_active: plan.id == snapshot.meta.active_plan,
                 tasks_total: entry.0,
                 tasks_done: entry.1,
@@ -4747,6 +4803,7 @@ fn snapshot_board_view(
             PlanSummaryView {
                 id: plan.id,
                 title: plan.title.clone(),
+                status: plan.status.as_str().to_owned(),
                 is_active: false,
                 tasks_total: entry.0,
                 tasks_done: entry.1,

@@ -15,8 +15,9 @@ use ptrack_capability::{
     validate_session_environment,
 };
 use ptrack_core::{
-    Commit, Issue, IssueStatus, Milestone, MilestoneStatus, Note, NoteTarget, Plan, PlanStatus,
-    ProjectRef, ProjectSnapshot, Severity, Task, TaskStatus, Timestamp, render_guide,
+    CheckpointView, Commit, Issue, IssueStatus, Milestone, MilestoneStatus, Note, NoteTarget, Plan,
+    PlanStatus, ProjectRef, ProjectSnapshot, Severity, Task, TaskStatus, Timestamp, checkpoint,
+    id_list, render_guide,
 };
 use ptrack_store::{
     ActiveBinding, ActorIdentity, GlobalStore, PinnedProjectDirectory, PlanDeleteSummary,
@@ -280,6 +281,65 @@ pub struct CompleteTaskResult {
     pub linked_commits: usize,
     pub closeout_note: Option<Note>,
     pub override_note: Option<Note>,
+}
+
+/// Receipt for the shared plan completion use case.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompletePlanResult {
+    pub plan_id: u64,
+    pub checkpoint: CheckpointView,
+    pub override_note: Option<Note>,
+}
+
+/// Completes one plan only after all of its tasks are closed, then computes
+/// the same whole-project checkpoint shown by the CLI.
+///
+/// `force` is retained for CLI compatibility. Forced completion records the
+/// exact open task IDs before changing the terminal plan status.
+///
+/// # Errors
+/// Returns an application error when the plan is absent or inaccessible,
+/// open tasks remain without `force`, or an audit/status mutation fails.
+pub fn complete_plan(
+    application: &mut dyn ApplicationPort,
+    plan_id: u64,
+    force: bool,
+) -> AppResult<CompletePlanResult> {
+    let snapshot = application.snapshot()?;
+    let open_tasks = snapshot
+        .tasks_for_plan(plan_id)
+        .filter(|task| task.status.is_open())
+        .map(|task| task.id)
+        .collect::<Vec<_>>();
+    if !open_tasks.is_empty() && !force {
+        return Err(AppError::Message(format!(
+            "cannot close plan #{plan_id}: open tasks remain ({}); finish them or pass --force",
+            id_list(&open_tasks)
+        )));
+    }
+    expect_no_mutation_result(&application.mutate(Mutation::SetPlanStatus {
+        id: plan_id,
+        status: PlanStatus::Done,
+    })?)?;
+    let override_note = if open_tasks.is_empty() {
+        None
+    } else {
+        Some(expect_note_result(application.mutate(
+            Mutation::AddNote {
+                target: NoteTarget::Plan,
+                target_id: plan_id,
+                body: format!(
+                    "override: closed via --force with open tasks {}",
+                    id_list(&open_tasks)
+                ),
+            },
+        )?)?)
+    };
+    Ok(CompletePlanResult {
+        plan_id,
+        checkpoint: checkpoint(&application.snapshot()?, Some(plan_id)),
+        override_note,
+    })
 }
 
 /// Completes one task while enforcing the agent workflow's evidence gate.

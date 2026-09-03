@@ -7,6 +7,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- Plans can now be completed, put on hold, and resumed from Desktop. Completing
+  the final task prompts for plan closeout, shows the canonical project
+  checkpoint, and advances the Board to the next open plan.
 - Desktop OS notifications can now be enabled independently for handoff
   arrivals, run failures or run-scoped drift, and explicit run completion.
   Delivery is background-only and identifier-only, with retained-event
@@ -15,6 +18,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   hook events normalized into the bounded agent activity model.
 
 ### Fixed
+- The task drawer action row now reflows before its status selector can clip
+  labels such as “Done”.
 - Terminal and linked-agent pickers now omit profiles whose executable is no
   longer available, and macOS discovery is regression-tested across `PATH`,
   Homebrew, `~/.local/bin`, and the Kimi Code install directory.
