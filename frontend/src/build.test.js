@@ -516,6 +516,10 @@ describe("production asset layout", () => {
     expect(index).toMatch(
       /id="agent-activity-live"[^>]*role="status"[^>]*aria-live="polite"[^>]*aria-atomic="true"/,
     );
+    expect(index).toMatch(/id="agent-activity-heading"[^>]*tabindex="-1"/);
+    expect(index).toMatch(/id="agent-handoff-form"[^>]*hidden/);
+    expect(index).toMatch(/id="agent-workflow-form"[^>]*hidden/);
+    expect(appSource).toContain("hideAgentActionForms()");
     expect(app).toContain("mutationFocusKey");
     expect(styles).toContain(".terminal-tab-indicator");
     expect(styles).toMatch(/\[data-indicator=(?:"failed"|failed)\]/);

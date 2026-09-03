@@ -1462,6 +1462,28 @@ select option {
   margin-top: var(--space-100);
 }
 
+.drift-group {
+  border: 1px solid var(--line-subtle);
+  border-radius: 8px;
+  padding: var(--space-100);
+}
+
+.intelligence-section .drift-group summary {
+  color: var(--text-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.6875rem;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.intelligence-section .drift-group[open] summary {
+  margin-bottom: var(--space-100);
+}
+
+.drift-group .intelligence-item + .intelligence-item {
+  margin-top: 6px;
+}
+
 .intelligence-item {
   min-width: 0;
   border-left: 2px solid var(--line);
@@ -3235,6 +3257,39 @@ button.modal-backdrop:active {
   border-color: color-mix(in srgb, var(--info), transparent 65%);
   color: var(--info);
   background: color-mix(in srgb, var(--info), transparent 92%);
+}
+
+.palette-status {
+  display: inline-flex;
+  flex: 0 0 1rem;
+  justify-content: center;
+  width: 1rem;
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+.palette-status[data-status="active"] {
+  color: var(--info);
+}
+
+.palette-status[data-status="archived"] {
+  color: var(--faint);
+}
+
+.palette-status[data-status="todo"] {
+  color: var(--todo);
+}
+
+.palette-status[data-status="doing"] {
+  color: var(--doing);
+}
+
+.palette-status[data-status="blocked"] {
+  color: var(--blocked);
+}
+
+.palette-status[data-status="done"] {
+  color: var(--done);
 }
 
 .palette-option-body {

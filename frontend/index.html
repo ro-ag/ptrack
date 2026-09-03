@@ -947,18 +947,18 @@
 
             <section class="memory-section intelligence-section">
               <div class="section-heading">
-                <p class="section-label">Agent activity</p>
+                <p id="agent-activity-heading" class="section-label" tabindex="-1">Agent activity</p>
                 <span id="agent-activity-total" class="section-count">0</span>
               </div>
               <div id="agent-activity-summary" class="intelligence-summary"></div>
-              <form id="agent-handoff-form" class="agent-handoff-form">
+              <form id="agent-handoff-form" class="agent-handoff-form" hidden>
                 <label>From <select id="agent-handoff-source" aria-label="Handoff source agent"></select></label>
                 <label>To <select id="agent-handoff-target" aria-label="Handoff target agent"></select></label>
                 <button id="agent-handoff-send" type="submit">Send handoff</button>
               </form>
-              <p class="intelligence-meta">Handoffs are bounded proposals only; they grant no authority and change no task.</p>
+              <p id="agent-handoff-help" class="intelligence-meta" hidden>Handoffs are bounded proposals only; they grant no authority and change no task.</p>
               <div id="agent-handoff-inbox" class="intelligence-list" aria-label="Agent handoff inbox"></div>
-				<form id="agent-workflow-form" class="agent-handoff-form">
+				<form id="agent-workflow-form" class="agent-handoff-form" hidden>
 					<label>Agent <select id="agent-workflow-run" aria-label="Workflow agent"></select></label>
 					<label>Workflow
 						<select id="agent-workflow-kind" aria-label="Workflow kind">
@@ -971,7 +971,7 @@
 					<label>Target <select id="agent-workflow-target" aria-label="Workflow target branch"></select></label>
 					<button id="agent-workflow-prepare" type="submit">Prepare</button>
 				</form>
-				<p class="intelligence-meta">Workflow proposals and approvals execute nothing and grant no capability.</p>
+				<p id="agent-workflow-help" class="intelligence-meta" hidden>Workflow proposals and approvals execute nothing and grant no capability.</p>
 				<div id="agent-workflow-inbox" class="intelligence-list" aria-label="Agent workflow proposals"></div>
               <div id="agent-drift" class="intelligence-list" aria-label="Observable work comparison"></div>
               <p id="agent-activity-live" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></p>
