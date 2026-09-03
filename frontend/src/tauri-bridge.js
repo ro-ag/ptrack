@@ -6,6 +6,7 @@ import { terminalWindowLabel } from "./terminal/pop-out";
 const COMMANDS = Object.freeze([
   "AcknowledgeAgentHandoffV2",
   "AddIssueV1",
+  "AddPlanV1",
   "AddTask",
   "AddTaskNote",
   "AddTaskNoteV2",

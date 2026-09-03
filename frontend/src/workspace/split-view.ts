@@ -15,6 +15,7 @@ import {
 import type { WorkspaceAction } from "./reducer";
 import type { WorkspaceTabController } from "./tab-controller";
 import { workspaceTabElementIds } from "./tab-bar";
+import { terminalControlIcon, type TerminalControlIcon } from "../terminal/control-icon";
 
 export type PaneDirection = "left" | "right" | "up" | "down";
 
@@ -529,7 +530,7 @@ export class WorkspaceSplitView {
       workspaceTab?.association !== undefined,
       this.#linkedOriginForPane?.(pane.paneId) === true,
     );
-    const splitRight = this.#button("Split right", "→", linked || !policy.canSplitRight, () => {
+    const splitRight = this.#button("Split right", "split-right", linked || !policy.canSplitRight, () => {
       this.#controller.dispatch({
         type: "split-pane",
         tabId,
@@ -539,7 +540,7 @@ export class WorkspaceSplitView {
         cwd: pane.cwd,
       });
     });
-    const splitDown = this.#button("Split down", "↓", linked || !policy.canSplitDown, () => {
+    const splitDown = this.#button("Split down", "split-down", linked || !policy.canSplitDown, () => {
       this.#controller.dispatch({
         type: "split-pane",
         tabId,
@@ -549,7 +550,7 @@ export class WorkspaceSplitView {
         cwd: pane.cwd,
       });
     });
-    const close = this.#button("Close pane", "×", !policy.canClose, () => {
+    const close = this.#button("Close pane", "close", !policy.canClose, () => {
       this.#closePane({ type: "close-pane", tabId, paneId: pane.paneId });
     });
     chrome.append(select, splitRight, splitDown, close);
@@ -569,13 +570,13 @@ export class WorkspaceSplitView {
 
   #button(
     label: string,
-    text: string,
+    icon: TerminalControlIcon,
     disabled: boolean,
     action: () => void,
   ): HTMLButtonElement {
     const button = document.createElement("button");
     button.type = "button";
-    button.textContent = text;
+    button.append(terminalControlIcon(icon));
     button.setAttribute("aria-label", label);
     button.title = label;
     button.disabled = disabled;

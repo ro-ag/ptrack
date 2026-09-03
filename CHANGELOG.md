@@ -6,6 +6,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-09-03
+
+### Added
+- Create plans from the Desktop sidebar, filter loaded plans by title, ID, or
+  status, and see each plan's completed and total task counts.
+- Copy project, plan, and task context with stable references and commands for
+  reading current records before pasting it into an agent.
+
+### Changed
+- Project Overview groups completion metrics and supporting counts, separates
+  snapshot details, and adds labels, a legend, and summaries to the activity chart.
+- Terminal controls are grouped by scope, with close buttons on individual tabs,
+  consistent pane icons, and a separate Stop session action that keeps the tab.
+- The Issues inbox uses clearer typography, spacing, and compact report previews.
+
+### Fixed
+- Overview issue rows use readable theme colors instead of bright primary-button
+  styling, and sidebar task counters remain visible beside long plan titles.
+- Plan creation rejects invalid or stale requests and protects the form while
+  saving; switching projects prevents stale responses from changing the new view.
+
 ## [0.34.0] - 2026-09-03
 
 ### Added

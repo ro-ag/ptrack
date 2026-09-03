@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="description" content="Use p-track Desktop to see durable plan status beside registered agent activity, repository evidence, and terminals.">
-    <meta name="ptrack-version" content="0.34.0">
+    <meta name="ptrack-version" content="0.35.0">
     <title>Desktop · p-track Help Center</title>
     <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="../assets/style.css">
@@ -16,7 +16,7 @@
         <a class="brand" href="../" aria-label="p-track Help Center home">
           <span class="brand-mark" aria-hidden="true">p·</span>
           <span>p-track Help</span>
-          <span class="version-badge">v0.34.0</span>
+          <span class="version-badge">v0.35.0</span>
         </a>
         <nav class="primary-nav" aria-label="Primary">
           <ul>
@@ -79,7 +79,8 @@
             <li><strong>Overview</strong> to read project memory, progress, repository information, and agent coordination signals.</li>
             <li><strong>Issues</strong> to review full reports, edit evidence, and explicitly schedule or link issues to plan work.</li>
           </ul>
-          <p>The plan list shows each plan's ID, title, progress, and an indicator for the CLI active plan. Selecting a row loads that plan's Board snapshot only. The sidebar can be hidden or resized; the Board and terminal panels have independent visibility controls while Board is selected.</p>
+          <p>The plan list shows each plan's ID, title, completed/total task counter, progress, and an indicator for the CLI active plan. Selecting a row loads that plan's Board snapshot only. The sidebar can be hidden or resized; the Board and terminal panels have independent visibility controls while Board is selected.</p>
+          <p>Use <strong>+</strong> in the Plans header to create a plan, then add tasks on its Board. The filter icon reveals title/number search and status filters for the loaded plans; Clear filters restores the list. <strong>Copy context</strong> on the Board or a task copies references you can paste into an agent.</p>
           <p>The terminal is a dock inside Board, so moving to Overview or Issues hides the dock without closing its sessions.</p>
           <p>Each plan has a context menu, opened from the sidebar row or the Board header title (both carry a &#8942; trigger, and right-click also opens it). <strong>Rename</strong> edits the title inline. <strong>Mark plan done</strong> requires every task to be closed, then shows the same whole-project checkpoint as the CLI and moves the Board to the next open plan. <strong>Put on hold</strong> records a required reason; <strong>Resume</strong> returns a held plan to the normal workflow. <strong>Delete</strong> asks for a preview first — the exact tasks, notes, issue links, and commit records that will be affected — before offering a destructive confirmation; linked issues detach rather than delete, and commit records survive as an unlinked audit trail. <strong>Move</strong> and <strong>Copy</strong> open a dialog with a project picker fed by the registered-projects list; picking the current project for a move is refused (rename in place instead), and a same-project copy needs a new title. Any refusal from the store — a claimed plan, an unopenable target — is shown verbatim in the dialog rather than paraphrased.</p>
 
@@ -90,7 +91,7 @@
           <p>Dependencies recorded from the CLI (<code>ptrack task dep add</code>, <code>ptrack plan dep add</code>) surface the same way: a task waiting on open dependencies keeps its lane and gains a <strong>⛓ Waiting</strong> badge on its card, with the blocking IDs as the tooltip, and a plan waiting on another plan shows a ⛓ marker on its sidebar row. The badge clears on its own once every dependency target is done.</p>
           <p>Move a task by choosing a status from its menu or dragging the card to another lane. p-track checks the current task and linked-resource state before applying the move. If active resources are linked to that task, Desktop asks for one explicit confirmation and revalidates the state before changing only the task status. Canceling leaves the Board unchanged; a stale confirmation is rejected and the Board refreshes.</p>
           <figure class="screenshot-pair">
-            <img class="screenshot-dark" src="../assets/screenshots/board-dark.png" width="1552" height="1012" loading="lazy" decoding="async" alt="Dark p-track Board with six tasks distributed across four status lanes">
+            <img class="screenshot-dark" src="../assets/screenshots/board-dark.png" width="1552" height="1012" loading="lazy" decoding="async" alt="Dark p-track Board with a task, plan progress, context-copy controls, and four status lanes">
             <img class="screenshot-light" src="../assets/screenshots/board-light.png" width="1552" height="1012" loading="lazy" decoding="async" alt="Light p-track Board showing the same plan, progress, and task-status lanes">
             <figcaption>The Board presents the selected plan's current snapshot without changing the CLI active plan.</figcaption>
           </figure>
@@ -114,6 +115,7 @@
 
           <h2 id="overview">Read the Overview</h2>
           <p>Overview brings project memory and bounded repository observations together without changing the Board selection. It includes:</p>
+          <p>Project status groups task, plan, and milestone completion above the supporting counts. Expand <strong>Snapshot details</strong> to inspect loaded/total counts. The activity calendar includes month and weekday labels, an intensity legend, and totals for the displayed 16 weeks.</p>
           <ul>
             <li>the project goal, rolling project summary, project status, and plan progress;</li>
             <li>a 16-week notes-and-commits activity view, open issues, and recent memory;</li>

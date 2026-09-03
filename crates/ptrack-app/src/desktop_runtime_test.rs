@@ -903,6 +903,7 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
         [
             "AcknowledgeAgentHandoffV2",
             "AddIssueV1",
+            "AddPlanV1",
             "AddTask",
             "AddTaskNote",
             "AddTaskNoteV2",
@@ -2222,6 +2223,35 @@ fn empty_bound_workspace(directory: &TestDirectory) -> (BoundDesktopWorkspace, W
         ),
         bindings,
     )
+}
+
+#[test]
+fn add_plan_wire_supports_existing_projects_and_rejects_stale_or_invalid_requests() {
+    let directory = TestDirectory::new("add-plan-wire");
+    let (workspace, _) = empty_bound_workspace(&directory);
+    for arguments in [
+        vec![json!(0), json!("Plan")],
+        vec![json!(8), json!("Plan")],
+        vec![json!(7), json!("  ")],
+        vec![json!(7), json!("é".repeat(121))],
+        vec![json!(7), json!("Plan"), json!("extra")],
+    ] {
+        assert!(workspace.invoke("AddPlanV1", &arguments).is_err());
+    }
+    for (id, title) in [(1, "First plan"), (2, "Second plan")] {
+        let created = workspace
+            .invoke("AddPlanV1", &[json!(7), json!(format!("  {title}  "))])
+            .unwrap();
+        assert_eq!(created["generation"], 7);
+        assert_eq!(created["plan"]["id"], id);
+        assert_eq!(created["plan"]["title"], title);
+        assert_eq!(created["plan"]["status"], "active");
+    }
+    let board = workspace
+        .invoke("GetBoardV2", &[json!(7), json!(2)])
+        .unwrap();
+    assert_eq!(board["board"]["planId"], 2);
+    assert_eq!(board["board"]["plans"].as_array().unwrap().len(), 2);
 }
 
 #[test]

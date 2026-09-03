@@ -70,9 +70,10 @@ const WORKSPACE_OPERATION_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub const FIRST_RUN_GOAL_MAX_BYTES: usize = 4_096;
 
-const COMMANDS: [&str; 104] = [
+const COMMANDS: [&str; 105] = [
     "AcknowledgeAgentHandoffV2",
     "AddIssueV1",
+    "AddPlanV1",
     "AddTask",
     "AddTaskNote",
     "AddTaskNoteV2",
@@ -3450,6 +3451,19 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
                 Ok(
                     json!({ "generation": self.generation, "board": self.board(u64_arg(arguments, 1)?)? }),
                 )
+            }
+            "AddPlanV1" => {
+                require_argument_count(method, arguments, 2)?;
+                self.require_exact_generation(u64_arg(arguments, 0)?)?;
+                let title = first_run_title(string_arg(arguments, 1)?, "plan")?;
+                let result = lock(&self.application).mutate(Mutation::AddPlan {
+                    title,
+                    milestone_id: 0,
+                })?;
+                let MutationResult::Plan(plan) = result else {
+                    return Err(unavailable("plan mutation"));
+                };
+                Ok(json!({ "generation": self.generation, "plan": first_plan_view(&plan) }))
             }
             "CreateFirstPlanV1" => {
                 require_argument_count(method, arguments, 2)?;

@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "productVersion": "0.34.0",
+  "productVersion": "0.35.0",
   "capturedAt": "2026-09-03",
   "capture": {
-    "app": "packaged macOS Desktop app",
+    "app": "Desktop frontend in Chromium for board, overview, and terminal; retained packaged macOS captures for unchanged dialog workflows",
     "fixture": "isolated Northstar project with sanitized paths, tasks, notes, issues, and terminal text",
     "width": 1552,
     "height": 1012
@@ -14,10 +14,15 @@
     "frontend/src/style.css",
     "frontend/src/theme.js",
     "frontend/src/workspace/model.ts",
-    "frontend/src/workspace/presentation.ts"
+    "frontend/src/workspace/presentation.ts",
+    "frontend/src/workspace/tab-bar.ts",
+    "frontend/src/workspace/split-view.ts",
+    "frontend/src/terminal/control-icon.ts",
+    "frontend/src/workspace/plan-list.ts",
+    "frontend/src/workspace/copy-context.ts"
   ],
-  "uiSourceSha256": "013997e186cf2e1d449d6fc8667754719787e47bfdcaf2e0c4bf00e960116f06",
-  "sourceReview": "2026-09-03: existing workflow captures retained after issue-workflow review. The new Issues navigation and issue-detail editor are documented in desktop text; these older captures do not illustrate that new surface. Task issue rows now also show status and open the issue editor; their report identity and placement are unchanged.",
+  "uiSourceSha256": "01c4e31e41095d877ff1623d9c9c10020cc80ed28972285fa47d29ae5f4820a2",
+  "sourceReview": "2026-09-03: Board, Overview, and Terminal recaptured in both themes from the current frontend using isolated Northstar fixture data. Verified plan counters and filters, plan creation and error recovery, project/plan/task context copying, tab close intent, last-tab guard, and pane split/close behavior in the browser. Existing project-search, project-switch, and task-drawer captures retain their unchanged primary dialog content; the new task-drawer Copy context action is described in the desktop and terminal guides.",
   "requiredWorkflows": [
     "board",
     "overview",
@@ -34,7 +39,8 @@
       "route": "start-here/",
       "width": 1552,
       "height": 1012,
-      "sha256": "9d04906756d5a8673deffe625267decf93a8eb67b8844b4130dcff988d3f1b13"
+      "sha256": "145597416dda670138d336760197027dcde494317f3e8dded31c304d08c1f1b9",
+      "capture": "Chromium desktop frontend with sanitized Northstar fixtures"
     },
     {
       "file": "board-light.png",
@@ -43,7 +49,8 @@
       "route": "start-here/",
       "width": 1552,
       "height": 1012,
-      "sha256": "eace54fe746b9fe37aa808ffde3bd289df06951753e5bf3e2380acfc7c96b492"
+      "sha256": "db2359487f2c4c51cdcdf0a1051ca28e75ccb1b92d790127b6703fe4efca6211",
+      "capture": "Chromium desktop frontend with sanitized Northstar fixtures"
     },
     {
       "file": "overview-dark.png",
@@ -52,7 +59,8 @@
       "route": "desktop/#overview",
       "width": 1552,
       "height": 1012,
-      "sha256": "fb74c022df5e23e9ea8f25e91e425cf468b4803ba916bedd70a3bf52eeb392ca"
+      "sha256": "d6dc60bd629740eb19b4ac6f98e9fb5998128a27df259708ffd75a2d9f8fbe01",
+      "capture": "Chromium desktop frontend with sanitized Northstar fixtures"
     },
     {
       "file": "overview-light.png",
@@ -61,7 +69,8 @@
       "route": "desktop/#overview",
       "width": 1552,
       "height": 1012,
-      "sha256": "cd4c64d68022f81bf1a662ff24b42c82cb883498e84c243febf474628682ec15"
+      "sha256": "e3821238c014d165e463bd7b0bbe4be43b72793ca9bd4d8836344359e2031cc8",
+      "capture": "Chromium desktop frontend with sanitized Northstar fixtures"
     },
     {
       "file": "project-search-dark.png",
@@ -124,7 +133,8 @@
       "route": "terminals/",
       "width": 1552,
       "height": 1012,
-      "sha256": "9d04906756d5a8673deffe625267decf93a8eb67b8844b4130dcff988d3f1b13"
+      "sha256": "145597416dda670138d336760197027dcde494317f3e8dded31c304d08c1f1b9",
+      "capture": "Chromium desktop frontend with sanitized Northstar fixtures"
     },
     {
       "file": "terminal-light.png",
@@ -133,7 +143,8 @@
       "route": "terminals/",
       "width": 1552,
       "height": 1012,
-      "sha256": "eace54fe746b9fe37aa808ffde3bd289df06951753e5bf3e2380acfc7c96b492"
+      "sha256": "db2359487f2c4c51cdcdf0a1051ca28e75ccb1b92d790127b6703fe4efca6211",
+      "capture": "Chromium desktop frontend with sanitized Northstar fixtures"
     }
   ]
 }
