@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
 
+it("routes searchable issue reports to their own detail view", () => {
+  const issue = {kind: "issue" as const, id: 9, planId: 0, title: "triage", snippet: "", status: "open"};
+  expect(paletteTarget(issue)).toEqual({view: "issues", planId: 0, taskId: 0, issueId: 9});
+  expect(groupSearchResults([issue])).toEqual([{kind: "issue", label: "Issues", items: [issue]}]);
+});
+
 import {
   agentActivityAnnouncement,
   agentActivityPresentation,
@@ -596,7 +602,7 @@ describe("workspace presentation policy", () => {
     expect(commandShortcut({ key: "K", ctrl: true })).toBe("palette");
     expect(commandShortcut({ key: "1", meta: true })).toBe("board");
     expect(commandShortcut({ key: "2", meta: true })).toBe("overview");
-    expect(commandShortcut({ key: "3", meta: true })).toBeNull();
+    expect(commandShortcut({ key: "3", meta: true })).toBe("issues");
     expect(commandShortcut({ key: ",", meta: true })).toBe("settings");
     expect(commandShortcut({ key: ",", ctrl: true })).toBe("settings");
     expect(commandShortcut({ key: "n", meta: true })).toBe("addTask");

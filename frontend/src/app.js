@@ -222,8 +222,11 @@ const elements = {
   workspace: document.querySelector("#workspace"),
   overviewPage: document.querySelector("#overview-page"),
   overviewHeading: document.querySelector("#overview-heading"),
+  issuesPage: document.querySelector("#issues-page"),
+  issuesHeading: document.querySelector("#issues-heading"),
   navBoard: document.querySelector("#nav-board"),
   navOverview: document.querySelector("#nav-overview"),
+  navIssues: document.querySelector("#nav-issues"),
   stateScreen: document.querySelector("#workspace-state-screen"),
   stateCard: document.querySelector("#project-state-card"),
   welcomePanel: document.querySelector("#welcome-panel"),
@@ -392,6 +395,12 @@ const elements = {
   snapshotBounds: document.querySelector("#snapshot-bounds"),
   issues: document.querySelector("#issue-list"),
   issueTotal: document.querySelector("#issue-total"),
+  issuesInbox: document.querySelector("#issues-inbox"),
+  issuesFilter: document.querySelector("#issues-filter"),
+  issuesPrevious: document.querySelector("#issues-previous"),
+  issuesNext: document.querySelector("#issues-next"),
+  issuesNew: document.querySelector("#issues-new"),
+  issuesStatus: document.querySelector("#issues-status"),
   activity: document.querySelector("#activity-list"),
   activityMore: document.querySelector("#activity-more"),
   memoryModal: document.querySelector("#memory-modal"),
@@ -477,6 +486,31 @@ const elements = {
   drawerCommitsCount: document.querySelector("#drawer-commits-count"),
   drawerIssues: document.querySelector("#drawer-issues"),
   drawerIssuesCount: document.querySelector("#drawer-issues-count"),
+  issueDrawer: document.querySelector("#issue-drawer"),
+  issueDrawerEyebrow: document.querySelector("#issue-drawer-eyebrow"),
+  issueDrawerHeading: document.querySelector("#issue-drawer-heading"),
+  issueDrawerUpdated: document.querySelector("#issue-drawer-updated"),
+  issueDrawerClose: document.querySelector("#issue-drawer-close"),
+  issueForm: document.querySelector("#issue-form"),
+  issueTitle: document.querySelector("#issue-title"),
+  issueBody: document.querySelector("#issue-body"),
+  issueSeverity: document.querySelector("#issue-severity"),
+  issueStatusSelect: document.querySelector("#issue-status-select"),
+  issueFormMessage: document.querySelector("#issue-form-message"),
+  issueMove: document.querySelector("#issue-move"),
+  issueMoveHelp: document.querySelector("#issue-move-help"),
+  issueScheduling: document.querySelector("#issue-scheduling"),
+  issueSchedulingState: document.querySelector("#issue-scheduling-state"),
+  issueLinkSummary: document.querySelector("#issue-link-summary"),
+  issuePlanSelect: document.querySelector("#issue-plan-select"),
+  issueTargetSearch: document.querySelector("#issue-target-search"),
+  issueTargetFind: document.querySelector("#issue-target-find"),
+  issueTargetBounds: document.querySelector("#issue-target-bounds"),
+  issueTaskSelect: document.querySelector("#issue-task-select"),
+  issueSchedule: document.querySelector("#issue-schedule"),
+  issueLink: document.querySelector("#issue-link"),
+  issueUnlink: document.querySelector("#issue-unlink"),
+  issueOpenTask: document.querySelector("#issue-open-task"),
   agentLaunchModal: document.querySelector("#agent-launch-modal"),
   agentLaunchForm: document.querySelector("#agent-launch-form"),
   agentLaunchHeading: document.querySelector("#agent-launch-heading"),
@@ -548,6 +582,12 @@ let recentProjectsState = { ...initialRecentProjectsState };
 let view = "board";
 let snapshot = null;
 let board = null;
+let issuesState = { issues: [], bounds: { shown: 0, total: 0 } };
+let issuesOffset = 0;
+let issuesRequest = 0;
+let issueDetail = null;
+let issueRequest = 0;
+let issueReturnFocus = null;
 let draggedTask = null;
 let editingTask = null;
 let dialogMode = "rename";
@@ -1029,7 +1069,8 @@ function renderMemory() {
     elements.issues.append(emptyMemory("No open issues. The path is clear."));
   } else {
     board.openIssues.forEach((issue) => {
-      const item = document.createElement("article");
+      const item = document.createElement("button");
+      item.type = "button";
       item.className = "issue";
       item.style.setProperty("--issue-color", severityColors[issue.severity] || "var(--muted)");
       const marker = document.createElement("span");
@@ -1044,6 +1085,8 @@ function renderMemory() {
       meta.textContent = `${issue.severity} · #${issue.id}${issue.taskId ? ` · task #${issue.taskId}` : ""}`;
       content.append(title, meta);
       item.append(marker, content);
+      item.setAttribute("aria-label", `Open issue #${issue.id}: ${issue.title}`);
+      item.addEventListener("click", () => openIssueDetail(issue.id, item));
       elements.issues.append(item);
     });
   }
@@ -1062,6 +1105,245 @@ function renderMemory() {
     });
     requestAnimationFrame(fitRecentMemory);
   }
+}
+
+function renderIssuesInbox() {
+  const filter = elements.issuesFilter.value;
+  const issues = issuesState.issues;
+  elements.issuesInbox.replaceChildren();
+  elements.issuesInbox.setAttribute("aria-busy", "false");
+  const total = Number(issuesState.bounds?.total || issuesState.issues.length);
+  const shown = Number(issuesState.bounds?.shown || issuesState.issues.length);
+  elements.issuesStatus.textContent = total > shown
+    ? `Showing ${Number(issuesState.offset || 0) + 1}–${Number(issuesState.offset || 0) + shown} of ${total} ${filter} issues.`
+    : `${issues.length} ${filter === "all" ? "total" : filter} issue${issues.length === 1 ? "" : "s"}.`;
+  elements.issuesPrevious.disabled = issuesOffset === 0;
+  elements.issuesNext.disabled = issuesOffset + shown >= total;
+  if (issues.length === 0) {
+    elements.issuesInbox.append(emptyMemory(
+      filter === "unscheduled"
+        ? "No unscheduled issues. New reports remain triage-only until you schedule them."
+        : `No ${filter === "all" ? "" : `${filter} `}issues.`,
+    ));
+    return;
+  }
+  issues.forEach((issue) => {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "issue-inbox-row";
+    row.style.setProperty("--issue-color", severityColors[issue.severity] || "var(--muted)");
+    row.setAttribute(
+      "aria-label",
+      `Issue #${issue.id}: ${issue.title}. ${issue.severity} severity, ${issue.status}, ${issue.taskId ? `scheduled as task #${issue.taskId}` : "unscheduled"}.`,
+    );
+    const marker = document.createElement("span");
+    marker.className = "issue-inbox-marker";
+    marker.setAttribute("aria-hidden", "true");
+    const content = document.createElement("div");
+    const title = document.createElement("p");
+    title.className = "issue-inbox-title";
+    title.textContent = `#${issue.id} ${issue.title}`;
+    const meta = document.createElement("p");
+    meta.className = "issue-inbox-meta";
+    meta.textContent = `${issue.severity} · ${issue.status} · ${relativeTime(issue.updatedAt)}`;
+    content.append(title, meta);
+    const schedule = document.createElement("p");
+    schedule.className = "issue-inbox-plan";
+    schedule.textContent = issue.taskId
+      ? `Plan #${issue.planId} ${issue.planTitle} · task #${issue.taskId}`
+      : "Unscheduled · triage only";
+    row.append(marker, content, schedule);
+    row.addEventListener("click", () => openIssueDetail(issue.id, row));
+    const item = document.createElement("div");
+    item.setAttribute("role", "listitem");
+    item.append(row);
+    elements.issuesInbox.append(item);
+  });
+}
+
+async function loadIssues(quiet = false) {
+  if (workspaceController.state.status !== "open") return false;
+  const ticket = workspaceController.capture();
+  const request = ++issuesRequest;
+  if (!quiet) {
+    elements.issuesInbox.setAttribute("aria-busy", "true");
+    elements.issuesStatus.textContent = "Loading issues…";
+  }
+  try {
+    const response = await api().GetIssuesV1(ticket.generation, elements.issuesFilter.value, issuesOffset);
+    if (request !== issuesRequest || !workspaceController.accepts(ticket, Number(response.generation))) return false;
+    if (issuesOffset > 0 && response.issues.length === 0) {
+      issuesOffset = Math.max(0, issuesOffset - 50);
+      return loadIssues(quiet);
+    }
+    issuesState = response;
+    renderIssuesInbox();
+    return true;
+  } catch (error) {
+    if (request !== issuesRequest || ticket.epoch !== workspaceController.capture().epoch) return false;
+    elements.issuesInbox.setAttribute("aria-busy", "false");
+    elements.issuesStatus.textContent = "Issues are unavailable.";
+    if (!quiet) showError(error);
+    return false;
+  }
+}
+
+function populateIssueAssociationOptions(detail) {
+  elements.issuePlanSelect.replaceChildren();
+  (detail.plans || []).forEach((plan) => {
+    const option = document.createElement("option");
+    option.value = plan.id;
+    option.textContent = `#${plan.id} ${plan.title}${plan.holdReason ? " · on hold" : ""}`;
+    elements.issuePlanSelect.append(option);
+  });
+  elements.issueTaskSelect.replaceChildren();
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "Choose a task…";
+  elements.issueTaskSelect.append(none);
+  (detail.tasks || []).forEach((task) => {
+    const option = document.createElement("option");
+    option.value = task.id;
+    option.textContent = `#${task.id} ${task.title} · plan #${task.planId} · ${task.status}`;
+    option.selected = Number(task.id) === Number(detail.issue.taskId);
+    elements.issueTaskSelect.append(option);
+  });
+  elements.issuePlanSelect.disabled = !detail.plans?.length;
+  elements.issueSchedule.disabled = Boolean(detail.issue.taskId) || detail.issue.status !== "open" || !detail.plans?.length;
+  elements.issueMove.disabled = !elements.issuePlanSelect.value || Number(elements.issuePlanSelect.value) === Number(detail.issue.planId);
+  elements.issueLink.disabled = !elements.issueTaskSelect.value || Number(elements.issueTaskSelect.value) === Number(detail.issue.taskId);
+  elements.issueTargetBounds.textContent = `${detail.plans?.length || 0} plans and ${detail.tasks?.length || 0} tasks shown. Search by title or exact #ID to find any target.`;
+}
+
+function renderIssueDetail(detail) {
+  issueDetail = detail;
+  const issue = detail.issue;
+  elements.issueDrawerEyebrow.textContent = `Issue · #${issue.id}`;
+  elements.issueDrawerHeading.textContent = issue.title;
+  elements.issueDrawerUpdated.textContent = `updated ${relativeTime(issue.updatedAt)}`;
+  elements.issueTitle.value = issue.title;
+  elements.issueBody.value = issue.body || "";
+  elements.issueSeverity.value = issue.severity;
+  elements.issueStatusSelect.value = issue.status;
+  elements.issueFormMessage.textContent = "";
+  elements.issueScheduling.hidden = false;
+  elements.issueTargetSearch.value = "";
+  populateIssueAssociationOptions(detail);
+  const scheduled = Number(issue.taskId) !== 0;
+  elements.issueSchedulingState.textContent = scheduled ? "Scheduled" : "Unscheduled";
+  elements.issueLinkSummary.textContent = scheduled
+    ? `Linked to task #${issue.taskId} ${issue.taskTitle} in plan #${issue.planId} ${issue.planTitle}.`
+    : "This issue is triage context only until you schedule or link it.";
+  elements.issueSchedule.disabled = scheduled || issue.status !== "open" || !detail.plans?.length;
+  elements.issueSchedule.hidden = scheduled;
+  elements.issueMove.hidden = !scheduled;
+  elements.issueMoveHelp.hidden = !scheduled;
+  elements.issuePlanSelect.disabled = !detail.plans?.length;
+  if (scheduled) elements.issuePlanSelect.value = String(issue.planId);
+  elements.issueMove.disabled = !elements.issuePlanSelect.value || Number(elements.issuePlanSelect.value) === Number(issue.planId);
+  elements.issueLink.disabled = !elements.issueTaskSelect.value || Number(elements.issueTaskSelect.value) === Number(issue.taskId);
+  elements.issueUnlink.disabled = !scheduled;
+  elements.issueOpenTask.disabled = !scheduled;
+}
+
+function openNewIssue(invoker = elements.issuesNew) {
+  issueRequest += 1;
+  issueReturnFocus = invoker;
+  issueDetail = { newIssue: true };
+  elements.issueForm.inert = false;
+  elements.issueDrawerEyebrow.textContent = "New issue";
+  elements.issueDrawerHeading.textContent = "Capture a detailed issue";
+  elements.issueDrawerUpdated.textContent = "Unscheduled · triage only";
+  elements.issueTitle.value = "";
+  elements.issueBody.value = "";
+  elements.issueSeverity.value = "medium";
+  elements.issueStatusSelect.value = "open";
+  elements.issueStatusSelect.disabled = true;
+  elements.issueFormMessage.textContent = "Saving creates an unscheduled issue and does not change plan work.";
+  elements.issueScheduling.hidden = true;
+  elements.issueDrawer.hidden = false;
+  requestAnimationFrame(() => elements.issueTitle.focus());
+}
+
+async function openIssueDetail(issueId, invoker = document.activeElement) {
+  if (workspaceController.state.status !== "open") return;
+  const request = ++issueRequest;
+  const ticket = workspaceController.capture();
+  issueReturnFocus = invoker instanceof HTMLElement ? invoker : null;
+  issueDetail = null;
+  elements.issueScheduling.inert = false;
+  elements.issueForm.inert = true;
+  elements.issueDrawerEyebrow.textContent = `Issue · #${issueId}`;
+  elements.issueDrawerHeading.textContent = "Loading issue…";
+  elements.issueDrawerUpdated.textContent = "";
+  elements.issueFormMessage.textContent = "Loading full report…";
+  elements.issueScheduling.hidden = true;
+  elements.issueDrawer.hidden = false;
+  requestAnimationFrame(() => elements.issueDrawerClose.focus());
+  try {
+    const detail = await api().GetIssueDetailV1(ticket.generation, Number(issueId));
+    if (request !== issueRequest || !workspaceController.accepts(ticket, Number(detail.generation))) return;
+    elements.issueStatusSelect.disabled = false;
+    renderIssueDetail(detail);
+    elements.issueForm.inert = false;
+  } catch (error) {
+    if (request !== issueRequest || ticket.epoch !== workspaceController.capture().epoch) return;
+    showError(error);
+    closeIssueDetail();
+  }
+}
+
+function closeIssueDetail(restoreFocus = true) {
+  if (elements.issueDrawer.hidden) return;
+  hideApplicationOverlay(elements.issueDrawer);
+  issueRequest += 1;
+  issueDetail = null;
+  elements.issueStatusSelect.disabled = false;
+  elements.issueForm.inert = false;
+  const returnFocus = issueReturnFocus;
+  if (restoreFocus) requestAnimationFrame(() => {
+    if (returnFocus?.isConnected) returnFocus.focus();
+    else if (!elements.drawer.hidden) elements.drawerClose.focus();
+    else elements.navIssues.focus();
+  });
+  issueReturnFocus = null;
+}
+
+async function runIssueMutation(operation, progress) {
+  if (workspaceController.state.status !== "open" || !issueDetail) return null;
+  const ticket = workspaceController.capture();
+  const request = issueRequest;
+  elements.issueForm.inert = true;
+  elements.issueScheduling.inert = true;
+  elements.issueDrawerClose.focus();
+  elements.issueFormMessage.textContent = progress;
+  try {
+    const result = await operation(ticket.generation);
+    if (!workspaceController.accepts(ticket, Number(result.generation))) return null;
+    await loadSnapshot(board?.planId || 0);
+    await loadIssues(true);
+    if (request !== issueRequest || elements.issueDrawer.hidden) return null;
+    return result;
+  } catch (error) {
+    if (request === issueRequest && ticket.epoch === workspaceController.capture().epoch) {
+      elements.issueFormMessage.textContent = messageFrom(error);
+      showError(error);
+    }
+    return null;
+  } finally {
+    if (request === issueRequest) {
+      elements.issueForm.inert = false;
+      elements.issueScheduling.inert = issueReportDirty();
+    }
+  }
+}
+
+function issueReportDirty() {
+  const issue = issueDetail?.issue;
+  return Boolean(issue && (
+    elements.issueTitle.value !== issue.title || elements.issueBody.value !== (issue.body || "") ||
+    elements.issueSeverity.value !== issue.severity || elements.issueStatusSelect.value !== issue.status
+  ));
 }
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -2255,6 +2537,7 @@ async function loadSnapshot(
     recordProjectLayout();
     renderIntelligence();
     openPendingTaskDetail();
+    if (view === "issues") void loadIssues(true);
     if (view === "overview" && heatmapRequested) void loadHeatmap(true);
     if (view === "overview" && repoStatsRequested) void loadRepoStats(true);
     const now = new Date(response.capturedAt).toLocaleTimeString([], {
@@ -3502,6 +3785,7 @@ function selectSettingsSection(section, focus = false) {
 }
 
 const paletteKindLabels = {
+  issue: "Issue",
   plan: "Plan",
   task: "Task",
   note: "Note",
@@ -3665,6 +3949,11 @@ function activatePaletteResult(result) {
   if (!result) return;
   const target = paletteTarget(result);
   closePalette();
+  if (target.view === "issues") {
+    setView("issues");
+    void openIssueDetail(target.issueId, elements.navIssues);
+    return;
+  }
   if (target.view === "overview") {
     setView("overview");
     return;
@@ -3686,8 +3975,17 @@ function openPendingTaskDetail() {
   const task = board.columns
     .flatMap((column) => column.tasks)
     .find((candidate) => Number(candidate.id) === Number(pendingDetailTaskId));
+  const taskId = pendingDetailTaskId;
   pendingDetailTaskId = 0;
-  if (task) openTaskDetail(task);
+  if (task) { openTaskDetail(task); return; }
+  const request = ++detailRequest;
+  const ticket = workspaceController.capture();
+  void api().GetTaskDetailV2(ticket.generation, taskId).then((detail) => {
+    if (request !== detailRequest || !workspaceController.accepts(ticket, Number(detail.generation)) || view !== "board") return;
+    openTaskDetail(detail.task);
+  }).catch((error) => {
+    if (request === detailRequest && workspaceController.accepts(ticket, ticket.generation)) showError(error);
+  });
 }
 
 function drawerEmptyState(message) {
@@ -3878,7 +4176,8 @@ function drawerCommitElement(commit) {
 }
 
 function drawerIssueElement(issue) {
-  const item = document.createElement("article");
+  const item = document.createElement("button");
+  item.type = "button";
   item.className = "drawer-issue";
   item.style.setProperty(
     "--issue-color",
@@ -3889,8 +4188,12 @@ function drawerIssueElement(issue) {
   title.textContent = issue.title;
   const meta = document.createElement("span");
   meta.className = "drawer-item-meta";
-  meta.textContent = `${issue.severity} · issue #${issue.id}`;
+  meta.textContent = `${issue.severity} · ${issue.status || "open"} · issue #${issue.id}`;
   item.append(title, meta);
+  item.setAttribute("aria-label", `Open issue #${issue.id}: ${issue.title}`);
+  item.addEventListener("click", () => {
+    void openIssueDetail(issue.id, item);
+  });
   return item;
 }
 
@@ -3962,7 +4265,7 @@ function openTaskDetail(task) {
   void loadTaskDetail(task);
 }
 
-function closeTaskDetail() {
+function closeTaskDetail(restoreFocus = true) {
   if (elements.drawer.hidden) return;
   hideApplicationOverlay(elements.drawer);
   detailRequest += 1;
@@ -3971,7 +4274,7 @@ function closeTaskDetail() {
   const card =
     taskId &&
     document.querySelector(`.card[data-task-id="${taskId}"] .card-drag-zone`);
-  (card || drawerReturnFocus)?.focus?.();
+  if (restoreFocus) (card || drawerReturnFocus)?.focus?.();
   drawerReturnFocus = null;
 }
 
@@ -5436,12 +5739,14 @@ function renderFirstPlanOnboarding(focus = false) {
   elements.stateScreen.hidden = false;
   elements.workspace.hidden = true;
   elements.overviewPage.hidden = true;
+  elements.issuesPage.hidden = true;
   elements.welcomePanel.hidden = true;
   elements.welcomePanel.inert = true;
   elements.setupPanel.hidden = true;
   elements.setupPanel.inert = true;
   elements.navBoard.disabled = true;
   elements.navOverview.disabled = true;
+  elements.navIssues.disabled = true;
   elements.switchProject.disabled = true;
   elements.closeProject.disabled = true;
 
@@ -5551,8 +5856,11 @@ async function finishFirstPlanOnboarding(planId = firstPlanState.planId) {
   elements.workspace.removeAttribute("aria-busy");
   elements.overviewPage.inert = false;
   elements.overviewPage.removeAttribute("aria-busy");
+  elements.issuesPage.inert = false;
+  elements.issuesPage.removeAttribute("aria-busy");
   elements.navBoard.disabled = false;
   elements.navOverview.disabled = false;
+  elements.navIssues.disabled = false;
   elements.switchProject.disabled = false;
   elements.closeProject.disabled = false;
   view = "board";
@@ -5780,24 +6088,29 @@ function applyView() {
   const open = workspaceState.status === "open";
   elements.workspace.hidden = !open || view !== "board";
   elements.overviewPage.hidden = !open || view !== "overview";
+  elements.issuesPage.hidden = !open || view !== "issues";
   elements.navBoard.classList.toggle("active", view === "board");
   elements.navOverview.classList.toggle("active", view === "overview");
+  elements.navIssues.classList.toggle("active", view === "issues");
   if (view === "board") elements.navBoard.setAttribute("aria-current", "page");
   else elements.navBoard.removeAttribute("aria-current");
   if (view === "overview") elements.navOverview.setAttribute("aria-current", "page");
   else elements.navOverview.removeAttribute("aria-current");
+  if (view === "issues") elements.navIssues.setAttribute("aria-current", "page");
+  else elements.navIssues.removeAttribute("aria-current");
   terminalHandle?.setVisible(open && view === "board");
 }
 
 function setView(nextView, focusHeading = false) {
   if (firstPlanState.phase !== "idle") return;
-  view = nextView === "overview" ? "overview" : "board";
+  view = ["overview", "issues"].includes(nextView) ? nextView : "board";
   applyView();
   if (view === "overview") {
     requestAnimationFrame(fitRecentMemory);
     void loadHeatmap();
     void loadRepoStats();
   }
+  if (view === "issues") void loadIssues();
   recordProjectLayout();
   if (focusHeading) {
     const focusedView = view;
@@ -5806,6 +6119,7 @@ function setView(nextView, focusHeading = false) {
       const heading = {
         board: elements.planTitle,
         overview: elements.overviewHeading,
+        issues: elements.issuesHeading,
       }[focusedView];
       heading?.focus();
     });
@@ -5830,6 +6144,7 @@ function renderWorkspaceState(state, focus = false) {
   elements.stateScreen.hidden = open;
   elements.navBoard.disabled = !open;
   elements.navOverview.disabled = !open;
+  elements.navIssues.disabled = !open;
   elements.switchProject.hidden = !open;
   elements.closeProject.hidden = !open;
   elements.openProject.hidden = true;
@@ -5837,6 +6152,8 @@ function renderWorkspaceState(state, focus = false) {
   elements.workspace.inert = false;
   elements.overviewPage.removeAttribute("aria-busy");
   elements.overviewPage.inert = false;
+  elements.issuesPage.removeAttribute("aria-busy");
+  elements.issuesPage.inert = false;
   elements.switchProject.disabled = false;
   elements.closeProject.disabled = false;
 
@@ -5883,12 +6200,16 @@ function renderWorkspaceState(state, focus = false) {
   closeTaskTransition(false, false, true);
   disposeTerminalDock();
   closeTaskDetail();
+  closeIssueDetail(false);
   closePalette();
   heatmapRequested = false;
   repoStatsRequested = false;
   repoStats = null;
   board = null;
   snapshot = null;
+  issuesState = { issues: [], bounds: { shown: 0, total: 0 } };
+  issuesOffset = 0;
+  issuesRequest += 1;
   elements.projectName.textContent = "Project workspace";
   elements.planTotal.textContent = "0";
   elements.planList.replaceChildren(emptyMemory("No project open."));
@@ -5922,6 +6243,8 @@ function publishBackendState(state, transition, focus = false, keepInert = false
     elements.workspace.setAttribute("aria-busy", "true");
     elements.overviewPage.inert = true;
     elements.overviewPage.setAttribute("aria-busy", "true");
+    elements.issuesPage.inert = true;
+    elements.issuesPage.setAttribute("aria-busy", "true");
   }
   if (state.status === "open" && !keepInert) {
     void loadSnapshot(restoredPlanId(state.project?.root));
@@ -5940,6 +6263,8 @@ function beginWorkspaceTransition() {
     elements.workspace.setAttribute("aria-busy", "true");
     elements.overviewPage.inert = true;
     elements.overviewPage.setAttribute("aria-busy", "true");
+    elements.issuesPage.inert = true;
+    elements.issuesPage.setAttribute("aria-busy", "true");
     elements.switchProject.disabled = true;
     elements.closeProject.disabled = true;
     setStatus("Preparing project transition…");
@@ -6984,7 +7309,7 @@ function trapModalFocus(event) {
         '[tabindex]:not([tabindex="-1"])',
       ].join(", "),
     ),
-  ).filter((item) => !item.hidden && !item.closest("[hidden]"));
+  ).filter((item) => !item.hidden && !item.closest("[hidden], [inert]"));
   if (focusable.length === 0) return;
   const first = focusable[0];
   const current = focusable.indexOf(document.activeElement);
@@ -7010,6 +7335,7 @@ function closeActiveApplicationOverlay(event) {
   else if (escapeAction === "settings") closeSettings();
   else if (escapeAction === "updates") closeAboutUpdates();
   else if (escapeAction === "drawer") closeTaskDetail();
+  else if (escapeAction === "issue-drawer") closeIssueDetail();
   else if (escapeAction === "agent-launch") closeAgentLaunchPicker();
   else if (escapeAction === "terminal-association") {
     closeTerminalAssociationEditor();
@@ -7062,6 +7388,9 @@ function registerNativeProjectActions() {
       showIntelligence: () => {
         showNativeView("showIntelligence");
       },
+      showIssues: () => {
+        showNativeView("showIssues");
+      },
       toggleTerminalPanel: () => {
         if (nativeCommandAllowed("toggleTerminalPanel")) {
           document.querySelector("#terminal-panel-toggle")?.click();
@@ -7110,6 +7439,150 @@ window.addEventListener("resize", () => setSidebarWidth(sidebarWidth, false));
 
 elements.navBoard.addEventListener("click", () => setView("board"));
 elements.navOverview.addEventListener("click", () => setView("overview"));
+elements.navIssues.addEventListener("click", () => setView("issues"));
+elements.issuesFilter.addEventListener("change", () => { issuesOffset = 0; void loadIssues(); });
+elements.issuesPrevious.addEventListener("click", () => { issuesOffset = Math.max(0, issuesOffset - 50); void loadIssues(); });
+elements.issuesNext.addEventListener("click", () => { issuesOffset += 50; void loadIssues(); });
+let issueTargetRequest = 0;
+async function findIssueTargets() {
+  const issueId = issueDetail?.issue?.id;
+  if (!issueId) return;
+  const request = ++issueTargetRequest;
+  const detailRequest = issueRequest;
+  const ticket = workspaceController.capture();
+  elements.issueTargetBounds.textContent = "Finding targets…";
+  try {
+    const detail = await api().GetIssueDetailV1(ticket.generation, Number(issueId), elements.issueTargetSearch.value.trim());
+    if (request !== issueTargetRequest || detailRequest !== issueRequest || ticket.epoch !== workspaceController.capture().epoch) return;
+    populateIssueAssociationOptions(detail);
+  } catch (error) {
+    if (request !== issueTargetRequest || detailRequest !== issueRequest || ticket.epoch !== workspaceController.capture().epoch) return;
+    elements.issueTargetBounds.textContent = "Targets are unavailable. Try again.";
+    showError(error);
+  }
+}
+elements.issueTargetFind.addEventListener("click", () => void findIssueTargets());
+elements.issueTargetSearch.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  void findIssueTargets();
+});
+elements.issuePlanSelect.addEventListener("change", () => {
+  elements.issueMove.disabled = !elements.issuePlanSelect.value || Number(elements.issuePlanSelect.value) === Number(issueDetail?.issue?.planId);
+});
+elements.issueMove.addEventListener("click", async () => {
+  const issue = issueDetail?.issue;
+  const planId = Number(elements.issuePlanSelect.value);
+  if (!issue?.taskId || !planId) return;
+  const result = await runIssueMutation(
+    (generation) => api().MoveIssueTaskV1(generation, Number(issue.id), Number(issue.taskId), Number(issue.planId), planId),
+    `Moving task #${issue.taskId} and its linked issues…`,
+  );
+  if (result) void openIssueDetail(issue.id, issueReturnFocus);
+});
+elements.issuesNew.addEventListener("click", (event) => openNewIssue(event.currentTarget));
+elements.issueDrawerClose.addEventListener("click", () => closeIssueDetail());
+document.querySelectorAll("[data-close-issue-drawer]").forEach((element) => {
+  element.addEventListener("click", () => closeIssueDetail());
+});
+elements.issueTaskSelect.addEventListener("change", () => {
+  if (!issueDetail?.issue) return;
+  elements.issueLink.disabled = !elements.issueTaskSelect.value ||
+    Number(elements.issueTaskSelect.value) === Number(issueDetail.issue.taskId);
+});
+elements.issueForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!issueDetail) return;
+  const title = elements.issueTitle.value.trim();
+  if (!title) {
+    elements.issueFormMessage.textContent = "Issue title cannot be empty.";
+    elements.issueTitle.focus();
+    return;
+  }
+  if (issueDetail.newIssue) {
+    const result = await runIssueMutation(
+      (generation) => api().AddIssueV1(
+        generation,
+        title,
+        elements.issueBody.value,
+        elements.issueSeverity.value,
+      ),
+      "Saving unscheduled issue…",
+    );
+    if (result) void openIssueDetail(result.issue.id, issueReturnFocus);
+    return;
+  }
+  const id = issueDetail.issue.id;
+  const expectedUpdatedAt = issueDetail.issue.updatedAt;
+  const result = await runIssueMutation(
+    (generation) => api().UpdateIssueV1(
+      generation,
+      Number(id),
+      title,
+      elements.issueBody.value,
+      elements.issueSeverity.value,
+      elements.issueStatusSelect.value,
+      expectedUpdatedAt,
+    ),
+    `Saving issue #${id}…`,
+  );
+  if (result) void openIssueDetail(id, issueReturnFocus);
+});
+elements.issueForm.addEventListener("input", () => {
+  const dirty = issueReportDirty();
+  elements.issueScheduling.inert = dirty;
+  elements.issueFormMessage.textContent = dirty ? "Unsaved report changes. Save issue before changing its scheduling or opening its task." : "";
+});
+elements.issueSchedule.addEventListener("click", async () => {
+  const issue = issueDetail?.issue;
+  const planId = Number(elements.issuePlanSelect.value);
+  if (!issue || !planId) return;
+  const result = await runIssueMutation(
+    (generation) => api().ScheduleIssueV1(generation, Number(issue.id), planId, ""),
+    `Scheduling issue #${issue.id}…`,
+  );
+  if (result) void openIssueDetail(issue.id, issueReturnFocus);
+});
+elements.issueLink.addEventListener("click", async () => {
+  const issue = issueDetail?.issue;
+  const taskId = Number(elements.issueTaskSelect.value);
+  if (!issue || !taskId) return;
+  const result = await runIssueMutation(
+    (generation) => api().SetIssueTaskV1(
+      generation,
+      Number(issue.id),
+      Number(issue.taskId || 0),
+      taskId,
+    ),
+    `Linking issue #${issue.id}…`,
+  );
+  if (result) void openIssueDetail(issue.id, issueReturnFocus);
+});
+elements.issueUnlink.addEventListener("click", async () => {
+  const issue = issueDetail?.issue;
+  if (!issue?.taskId) return;
+  const result = await runIssueMutation(
+    (generation) => api().SetIssueTaskV1(
+      generation,
+      Number(issue.id),
+      Number(issue.taskId),
+      0,
+    ),
+    `Unlinking issue #${issue.id}…`,
+  );
+  if (result) void openIssueDetail(issue.id, issueReturnFocus);
+});
+elements.issueOpenTask.addEventListener("click", () => {
+  const issue = issueDetail?.issue;
+  if (!issue?.taskId || !issue.planId) return;
+  const taskId = Number(issue.taskId);
+  const planId = Number(issue.planId);
+  closeIssueDetail(false);
+  pendingDetailTaskId = taskId;
+  setView("board");
+  if (Number(board?.planId) === planId) openPendingTaskDetail();
+  else selectPlan(planId);
+});
 elements.agentHandoffForm.addEventListener("submit", (event) => {
   event.preventDefault();
   const sourceRunId = elements.agentHandoffSource.value;
@@ -7665,6 +8138,7 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault();
     if (command === "board") setView("board", true);
     if (command === "overview") setView("overview", true);
+    if (command === "issues") setView("issues", true);
     if (command === "addTask") {
       setView("board");
       elements.taskTitle.focus();

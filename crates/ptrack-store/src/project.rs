@@ -860,7 +860,7 @@ impl ProjectStore {
                 if doomed_issues.contains(&issue.id) {
                     if detach_issues {
                         issue.task_id = 0;
-                        issue.updated_at = now;
+                        issue.updated_at = issue_update_timestamp(issue.updated_at, now)?;
                         typed::put(transaction, RecordKey::Id(issue.id), &issue)?;
                     } else {
                         transaction.delete(Collection::Issues, RecordKey::Id(issue.id))?;
@@ -1450,7 +1450,7 @@ impl ProjectStore {
             for mut issue in typed::scan_write::<Issue>(transaction)? {
                 if issue.task_id == id {
                     issue.task_id = 0;
-                    issue.updated_at = now;
+                    issue.updated_at = issue_update_timestamp(issue.updated_at, now)?;
                     typed::put(transaction, RecordKey::Id(issue.id), &issue)?;
                 }
             }
@@ -1547,14 +1547,14 @@ impl ProjectStore {
     }
 
     pub fn set_issue_status(&self, id: u64, status: IssueStatus) -> StoreResult<()> {
-        self.mutate_id::<Issue>(id, |value, now| {
+        self.mutate_issue(id, |value, now| {
             value.status = status;
             value.updated_at = now;
         })
     }
 
     pub fn set_issue_severity(&self, id: u64, severity: Severity) -> StoreResult<()> {
-        self.mutate_id::<Issue>(id, |value, now| {
+        self.mutate_issue(id, |value, now| {
             value.severity = severity;
             value.updated_at = now;
         })
@@ -1562,9 +1562,166 @@ impl ProjectStore {
 
     pub fn set_issue_title(&self, id: u64, title: impl Into<String>) -> StoreResult<()> {
         let title = title.into();
-        self.mutate_id::<Issue>(id, |value, now| {
+        self.mutate_issue(id, |value, now| {
             value.title = title;
             value.updated_at = now;
+        })
+    }
+
+    /// Replaces the editable issue report fields in one transaction.
+    /// The observed timestamp fences all editable fields against stale writes.
+    pub fn update_issue(
+        &self,
+        id: u64,
+        expected_updated_at: Timestamp,
+        title: impl Into<String>,
+        body: impl Into<String>,
+        severity: Severity,
+        status: IssueStatus,
+    ) -> StoreResult<Issue> {
+        let title = title.into();
+        if title.trim().is_empty() {
+            return Err(StoreError::InvalidIssue(
+                "issue title cannot be empty".to_owned(),
+            ));
+        }
+        let body = body.into();
+        let now = self.clock.now_local();
+        self.write(|transaction| {
+            let mut issue = required_write::<Issue>(transaction, RecordKey::Id(id))?;
+            if !same_instant(issue.updated_at, expected_updated_at) {
+                return Err(StoreError::InvalidIssue(format!(
+                    "issue #{id} changed before it could be saved; reload and retry"
+                )));
+            }
+            issue.title = title;
+            issue.body = body;
+            issue.severity = severity;
+            issue.status = status;
+            issue.updated_at = issue_update_timestamp(issue.updated_at, now)?;
+            issue.stamp_actor(self.actor_id());
+            typed::put(transaction, RecordKey::Id(id), &issue)?;
+            Ok(issue)
+        })
+    }
+
+    /// Links, relinks, or unlinks an issue without mutating the task.
+    pub fn set_issue_task(
+        &self,
+        id: u64,
+        expected_task_id: u64,
+        task_id: u64,
+    ) -> StoreResult<Issue> {
+        let now = self.clock.now_local();
+        self.write(|transaction| {
+            if task_id != 0 {
+                require_id_write::<Task>(transaction, task_id)?;
+            }
+            let mut issue = required_write::<Issue>(transaction, RecordKey::Id(id))?;
+            if issue.task_id != expected_task_id {
+                return Err(StoreError::InvalidIssue(format!(
+                    "issue #{id} link changed from task #{expected_task_id} to task #{}; reload and retry",
+                    issue.task_id
+                )));
+            }
+            issue.task_id = task_id;
+            issue.updated_at = issue_update_timestamp(issue.updated_at, now)?;
+            issue.stamp_actor(self.actor_id());
+            typed::put(transaction, RecordKey::Id(id), &issue)?;
+            Ok(issue)
+        })
+    }
+
+    /// Moves the observed linked task; every issue on that task follows it.
+    pub fn move_issue_task(
+        &self,
+        id: u64,
+        expected_task_id: u64,
+        expected_plan_id: u64,
+        plan_id: u64,
+    ) -> StoreResult<Issue> {
+        let now = self.clock.now_local();
+        self.write(|transaction| {
+            let issue = required_write::<Issue>(transaction, RecordKey::Id(id))?;
+            if issue.task_id == 0 || issue.task_id != expected_task_id {
+                return Err(StoreError::InvalidIssue(
+                    "issue link changed; reload and retry".to_owned(),
+                ));
+            }
+            let mut task = required_write::<Task>(transaction, RecordKey::Id(issue.task_id))?;
+            if task.plan_id != expected_plan_id {
+                return Err(StoreError::InvalidIssue(
+                    "linked task moved; reload and retry".to_owned(),
+                ));
+            }
+            let source = required_write::<Plan>(transaction, RecordKey::Id(task.plan_id))?;
+            let target = required_write::<Plan>(transaction, RecordKey::Id(plan_id))?;
+            if target.status == PlanStatus::Done {
+                return Err(StoreError::InvalidIssue("target plan is done".to_owned()));
+            }
+            require_claim_access(transaction, &source, self.actor_id())?;
+            require_claim_access(transaction, &target, self.actor_id())?;
+            task.plan_id = plan_id;
+            task.updated_at = now;
+            task.stamp_actor(self.actor_id());
+            typed::put(transaction, RecordKey::Id(task.id), &task)?;
+            Ok(issue)
+        })
+    }
+
+    /// Creates one todo task and links the open issue to it atomically.
+    pub fn schedule_issue(
+        &self,
+        id: u64,
+        plan_id: u64,
+        task_title: impl Into<String>,
+    ) -> StoreResult<(Issue, Task)> {
+        let task_title = task_title.into();
+        if task_title.trim().is_empty() {
+            return Err(StoreError::InvalidIssue(
+                "task title cannot be empty".to_owned(),
+            ));
+        }
+        let now = self.clock.now_local();
+        self.write(|transaction| {
+            let mut issue = required_write::<Issue>(transaction, RecordKey::Id(id))?;
+            if issue.task_id != 0 {
+                return Err(StoreError::InvalidIssue(format!(
+                    "issue #{id} is already linked to task #{}; unlink or relink it instead",
+                    issue.task_id
+                )));
+            }
+            if issue.status != IssueStatus::Open {
+                return Err(StoreError::InvalidIssue(format!(
+                    "issue #{id} is closed and cannot be scheduled"
+                )));
+            }
+            let plan = required_write::<Plan>(transaction, RecordKey::Id(plan_id))?;
+            if plan.status == PlanStatus::Done {
+                return Err(StoreError::InvalidIssue(format!(
+                    "plan #{plan_id} is done and cannot receive scheduled work"
+                )));
+            }
+            require_claim_access(transaction, &plan, self.actor_id())?;
+            let task = Task {
+                id: transaction.next_id(Collection::Tasks)?,
+                plan_id,
+                title: task_title,
+                status: TaskStatus::Todo,
+                order: count_write::<Task>(transaction)?,
+                created_at: now,
+                updated_at: now,
+                hold_reason: None,
+                actor: self.actor_id().map(str::to_owned),
+                ulid: None,
+                deps: Vec::new(),
+            };
+            typed::put(transaction, RecordKey::Id(task.id), &task)?;
+            issue.task_id = task.id;
+            issue.updated_at = issue_update_timestamp(issue.updated_at, now)?;
+            issue.stamp_actor(self.actor_id());
+            typed::put(transaction, RecordKey::Id(id), &issue)?;
+            Ok((issue, task))
         })
     }
 
@@ -2026,6 +2183,17 @@ impl ProjectStore {
         })
     }
 
+    fn mutate_issue(&self, id: u64, mutate: impl FnOnce(&mut Issue, Timestamp)) -> StoreResult<()> {
+        self.write(|transaction| {
+            let mut issue = required_write::<Issue>(transaction, RecordKey::Id(id))?;
+            let now = issue_update_timestamp(issue.updated_at, self.clock.now_local())?;
+            mutate(&mut issue, now);
+            issue.stamp_actor(self.actor_id());
+            typed::put(transaction, RecordKey::Id(id), &issue)?;
+            Ok(())
+        })
+    }
+
     fn mutate_id<R: StoredRecord + ActorStamped>(
         &self,
         id: u64,
@@ -2327,6 +2495,22 @@ fn same_instant(left: Timestamp, right: Timestamp) -> bool {
         (None, None) => true,
         _ => false,
     }
+}
+
+fn issue_update_timestamp(previous: Timestamp, now: Timestamp) -> StoreResult<Timestamp> {
+    let Some(previous) = previous.unix_nanoseconds() else {
+        return Ok(now);
+    };
+    if now.unix_nanoseconds().is_some_and(|now| now > previous) {
+        return Ok(now);
+    }
+    let next = previous + 1;
+    Ok(Timestamp::Fixed {
+        seconds: i64::try_from(next.div_euclid(1_000_000_000))
+            .map_err(|_| StoreError::InvalidIssue("issue timestamp overflow".to_owned()))?,
+        nanoseconds: u32::try_from(next.rem_euclid(1_000_000_000)).expect("nanosecond remainder"),
+        offset_seconds: 0,
+    })
 }
 
 fn capability_security_changed(left: &Capability, right: &Capability) -> bool {

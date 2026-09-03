@@ -16,7 +16,8 @@
     "frontend/src/workspace/model.ts",
     "frontend/src/workspace/presentation.ts"
   ],
-  "uiSourceSha256": "b161057a6e927219acd681356b6711887f6c20a9d54f2622f9a829ab2df63d63",
+  "uiSourceSha256": "013997e186cf2e1d449d6fc8667754719787e47bfdcaf2e0c4bf00e960116f06",
+  "sourceReview": "2026-09-03: existing workflow captures retained after issue-workflow review. The new Issues navigation and issue-detail editor are documented in desktop text; these older captures do not illustrate that new surface. Task issue rows now also show status and open the issue editor; their report identity and placement are unchanged.",
   "requiredWorkflows": [
     "board",
     "overview",

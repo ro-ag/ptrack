@@ -26,7 +26,7 @@ Storage layer landed; wiring CLI\n\
 ## Blocked (project-wide)\n\
 - #3 publish release (plan 1)\n\
 \n\
-## Open issues\n\
+## Scheduled issues\n\
 - #1 [high] Release blocker (task 3)\n\
 \n\
 ## Recent decisions\n\
@@ -38,6 +38,40 @@ Storage layer landed; wiring CLI\n\
 1 milestones (0 done) · 2 plans (1 done) · 4 tasks (1 done · 1 blocked · 3 open) · 2 issues (1 open) · 3 notes\n\
 \n\
 Drill deeper: `ptrack next` · `ptrack milestone list` · `ptrack plan show <id>` · `ptrack task show <id>` · `ptrack task list --status doing,blocked` · `ptrack issue list` · `ptrack note list` · `ptrack search <term>` · `ptrack board`\n"
+    );
+}
+
+#[test]
+fn issue_buckets_are_independently_bounded_and_closed_reports_are_excluded() {
+    let mut data = snapshot();
+    data.issues.clear();
+    for id in 1..=20 {
+        data.issues.push(issue(
+            id,
+            "report",
+            "evidence",
+            IssueStatus::Open,
+            Severity::High,
+            u64::from(id > 10),
+        ));
+    }
+    data.issues.push(issue(
+        21,
+        "closed",
+        "",
+        IssueStatus::Closed,
+        Severity::Low,
+        0,
+    ));
+    let digest = context(&data);
+    assert_eq!(digest.unscheduled_issues.len(), 8);
+    assert_eq!(digest.unscheduled_issues_more, 2);
+    assert_eq!(digest.scheduled_issues.len(), 8);
+    assert_eq!(digest.scheduled_issues_more, 2);
+    assert!(
+        digest
+            .markdown()
+            .contains("Unscheduled issues (triage only)")
     );
 }
 

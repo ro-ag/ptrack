@@ -46,6 +46,198 @@ impl Drop for Temp {
 
 #[derive(Clone, Copy)]
 struct FixedClock(Timestamp);
+
+#[test]
+fn issue_capture_is_ungated_but_scheduling_and_moves_respect_plan_claims() {
+    let temp = Temp::new();
+    let path = temp.path("issue-claims.redb");
+    let store = ProjectStore::create_new_with_clock(
+        &path,
+        binding(&path, StoreKind::Project, "issue-claims"),
+        "test",
+        clock(),
+    )
+    .unwrap();
+    let source = store.add_plan("claimed", 0).unwrap();
+    let target = store.add_plan("unclaimed", 0).unwrap();
+    let task = store.add_task(source.id, "work").unwrap();
+    drop(store);
+    let a = reopen_as(&path, "issue-claims", Some(actor_a()));
+    a.use_plan(source.id, false).unwrap();
+    drop(a);
+    let b = reopen_as(&path, "issue-claims", Some(actor_b()));
+    let issue = b
+        .add_issue("cross-developer report", "evidence", None, 0)
+        .unwrap();
+    assert!(matches!(
+        b.schedule_issue(issue.id, source.id, "fix"),
+        Err(StoreError::InvalidClaim(_))
+    ));
+    assert_eq!(b.issue(issue.id).unwrap().task_id, 0);
+    assert_eq!(b.snapshot().unwrap().tasks.len(), 1);
+    b.set_issue_task(issue.id, 0, task.id).unwrap();
+    assert!(matches!(
+        b.move_issue_task(issue.id, task.id, source.id, target.id),
+        Err(StoreError::InvalidClaim(_))
+    ));
+    b.set_issue_task(issue.id, task.id, 0).unwrap();
+    let (_, task) = b.schedule_issue(issue.id, target.id, "fix").unwrap();
+    assert!(matches!(
+        b.move_issue_task(issue.id, task.id, target.id, source.id),
+        Err(StoreError::InvalidClaim(_))
+    ));
+}
+
+#[test]
+fn issue_edits_remain_fenced_when_the_clock_does_not_advance() {
+    use ptrack_core::{IssueStatus, Severity};
+    let temp = Temp::new();
+    let path = temp.path("issue-clock.redb");
+    let store = ProjectStore::create_new_with_clock(
+        &path,
+        binding(&path, StoreKind::Project, "clock"),
+        "test",
+        clock(),
+    )
+    .unwrap();
+    let issue = store.add_issue("old", "", None, 0).unwrap();
+    store
+        .update_issue(
+            issue.id,
+            issue.updated_at,
+            "new",
+            "evidence",
+            Severity::High,
+            IssueStatus::Open,
+        )
+        .unwrap();
+    assert!(
+        store
+            .update_issue(
+                issue.id,
+                issue.updated_at,
+                "stale",
+                "",
+                Severity::Low,
+                IssueStatus::Open
+            )
+            .is_err()
+    );
+    let current = store.issue(issue.id).unwrap();
+    store
+        .set_issue_status(issue.id, IssueStatus::Closed)
+        .unwrap();
+    assert!(
+        store
+            .update_issue(
+                issue.id,
+                current.updated_at,
+                "stale",
+                "",
+                Severity::Low,
+                IssueStatus::Open
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn issue_workflow_is_atomic_preserves_evidence_and_rejects_stale_writes() {
+    use ptrack_core::{IssueStatus, Severity};
+    let temp = Temp::new();
+    let path = temp.path("issues.redb");
+    let store = ProjectStore::create_new_with_clock(
+        &path,
+        binding(&path, StoreKind::Project, "issues"),
+        "test",
+        SteppingClock::new(100),
+    )
+    .unwrap();
+    let plan = store.add_plan("first", 0).unwrap();
+    let target = store.add_plan("second", 0).unwrap();
+    let issue = store
+        .add_issue(
+            "problem",
+            "steps\nexpected\nevidence",
+            Some(Severity::High),
+            0,
+        )
+        .unwrap();
+    let edited = store
+        .update_issue(
+            issue.id,
+            issue.updated_at,
+            "revised",
+            "complete evidence",
+            Severity::Critical,
+            IssueStatus::Open,
+        )
+        .unwrap();
+    assert!(
+        store
+            .update_issue(
+                issue.id,
+                issue.updated_at,
+                "stale",
+                "lost",
+                Severity::Low,
+                IssueStatus::Closed
+            )
+            .is_err()
+    );
+    assert_eq!(store.issue(issue.id).unwrap(), edited);
+    assert!(store.schedule_issue(issue.id, 999, "fix").is_err());
+    assert!(store.snapshot().unwrap().tasks.is_empty());
+    let (scheduled, task) = store.schedule_issue(issue.id, plan.id, "fix").unwrap();
+    assert_eq!(task.id, 1);
+    assert_eq!(scheduled.body, edited.body);
+    assert_eq!(scheduled.created_at, issue.created_at);
+    assert_eq!(scheduled.task_id, task.id);
+    assert!(
+        store
+            .schedule_issue(issue.id, plan.id, "duplicate")
+            .is_err()
+    );
+    assert_eq!(store.snapshot().unwrap().tasks.len(), 1);
+    assert!(store.set_issue_task(issue.id, 0, task.id).is_err());
+    assert!(store.set_issue_task(issue.id, task.id, 999).is_err());
+    assert!(
+        store
+            .move_issue_task(issue.id, task.id, 999, target.id)
+            .is_err()
+    );
+    store
+        .move_issue_task(issue.id, task.id, plan.id, target.id)
+        .unwrap();
+    assert_eq!(store.task(task.id).unwrap().plan_id, target.id);
+    assert_eq!(store.issue(issue.id).unwrap(), scheduled);
+    store
+        .set_issue_status(issue.id, IssueStatus::Closed)
+        .unwrap();
+    assert_eq!(store.task(task.id).unwrap().status, TaskStatus::Todo);
+    store.set_issue_status(issue.id, IssueStatus::Open).unwrap();
+    store.set_task_status(task.id, TaskStatus::Done).unwrap();
+    assert_eq!(store.issue(issue.id).unwrap().status, IssueStatus::Open);
+    store.set_issue_task(issue.id, task.id, 0).unwrap();
+    assert_eq!(store.task(task.id).unwrap().status, TaskStatus::Done);
+    store.set_issue_task(issue.id, 0, task.id).unwrap();
+    store.delete_plan(target.id).unwrap();
+    let detached = store.issue(issue.id).unwrap();
+    assert_eq!(detached.task_id, 0);
+    assert_eq!(detached.body, edited.body);
+    assert_eq!(detached.created_at, issue.created_at);
+    store
+        .set_issue_status(issue.id, IssueStatus::Closed)
+        .unwrap();
+    assert!(store.schedule_issue(issue.id, plan.id, "closed").is_err());
+    store.set_issue_status(issue.id, IssueStatus::Open).unwrap();
+    store.set_plan_status(plan.id, PlanStatus::Done).unwrap();
+    assert!(
+        store
+            .schedule_issue(issue.id, plan.id, "done plan")
+            .is_err()
+    );
+}
 impl Clock for FixedClock {
     fn now_local(&self) -> Timestamp {
         self.0

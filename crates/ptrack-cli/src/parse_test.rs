@@ -1,6 +1,37 @@
 use crate::parse::{Preflight, parse_u64, preflight};
 
 #[test]
+fn issue_workflow_leaves_accept_their_owned_flags() {
+    for args in [
+        vec![
+            "edit",
+            "9",
+            "--title",
+            "revised",
+            "--body",
+            "steps\nevidence",
+            "--severity",
+            "high",
+            "--status",
+            "closed",
+        ],
+        vec!["link", "9", "--task", "3"],
+        vec!["unlink", "9"],
+        vec!["schedule", "9", "--plan", "2", "--title", "fix it"],
+    ] {
+        let verb = args[0];
+        let argv = [vec!["ptrack", "issue"], args]
+            .concat()
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        assert!(
+            matches!(preflight(argv).unwrap(), Preflight::Run {path, ..} if path == ["issue", verb])
+        );
+    }
+}
+
+#[test]
 fn cobra_argument_errors_are_owned_and_stable() {
     let error =
         preflight(vec!["ptrack".into(), "context".into(), "extra".into()]).expect_err("extra arg");

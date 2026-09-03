@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use ptrack_capability::{
     McpCancellation, McpServeOutcome, ToolCall, ToolDefinition, serve_mcp_with_tools,
 };
-use ptrack_core::{Digest, NextView, NoteTarget, TaskLine, context, next};
+use ptrack_core::{Digest, IssueLine, NextView, NoteTarget, TaskLine, context, next};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -304,6 +304,10 @@ fn context_value(digest: &Digest) -> Value {
             "task_id": issue.task_id
         })).collect::<Vec<_>>(),
         "open_issues_more": digest.open_issues_more,
+        "unscheduled_issues": digest.unscheduled_issues.iter().map(issue_line_value).collect::<Vec<_>>(),
+        "unscheduled_issues_more": digest.unscheduled_issues_more,
+        "scheduled_issues": digest.scheduled_issues.iter().map(issue_line_value).collect::<Vec<_>>(),
+        "scheduled_issues_more": digest.scheduled_issues_more,
         "recent_notes": digest.recent_notes.iter().map(|note| json!({
             "id": note.id,
             "target": note.target,
@@ -334,6 +338,7 @@ fn next_value(view: &NextView) -> Value {
     json!({
         "goal": view.goal,
         "task": view.task.as_ref().map(task_line_value),
+        "issues": view.issues.iter().map(issue_line_value).collect::<Vec<_>>(),
         "plan_title": view.plan_title,
         "message": view.message,
         "plan_hold_reason": view.plan_hold_reason,
@@ -343,4 +348,8 @@ fn next_value(view: &NextView) -> Value {
             "waiting_on": entry.waiting_on
         })).collect::<Vec<_>>()
     })
+}
+
+fn issue_line_value(issue: &IssueLine) -> Value {
+    json!({"id": issue.id, "title": issue.title, "severity": issue.severity, "status": issue.status, "task_id": issue.task_id})
 }

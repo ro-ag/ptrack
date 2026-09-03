@@ -119,7 +119,10 @@ pub fn root() -> Command {
         .subcommand(
             group(
                 "issue",
-                &["add", "list", "show", "close", "open", "severity", "rename"],
+                &[
+                    "add", "list", "show", "close", "open", "severity", "rename", "edit", "link",
+                    "unlink", "schedule",
+                ],
             )
             .mut_subcommand("add", |c| {
                 c.arg(positional("title", 1..)).args([
@@ -133,6 +136,20 @@ pub fn root() -> Command {
             .mut_subcommand("close", |c| c.arg(positional("id", 1)))
             .mut_subcommand("open", |c| c.arg(positional("id", 1)))
             .mut_subcommand("severity", |c| c.arg(positional("values", 2)))
+            .mut_subcommand("edit", |c| {
+                c.arg(positional("id", 1)).args([
+                    option("title"),
+                    option("body"),
+                    option("severity"),
+                    option("status"),
+                ])
+            })
+            .mut_subcommand("link", |c| c.arg(positional("id", 1)).arg(option("task")))
+            .mut_subcommand("unlink", |c| c.arg(positional("id", 1)))
+            .mut_subcommand("schedule", |c| {
+                c.arg(positional("id", 1))
+                    .args([option("plan"), option("title")])
+            })
             .mut_subcommand("rename", |c| c.arg(positional("values", 2..))),
         )
         .subcommand(
