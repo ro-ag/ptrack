@@ -529,6 +529,44 @@ fn routed_init_publishes_marker_before_user_writes_and_nested_cwd_resolves() {
 }
 
 #[test]
+fn routed_init_reports_a_live_runtime_lease_as_another_process() {
+    let temp = Temp::new();
+    let home = temp.0.join("home");
+    let first_project = temp.0.join("first-project");
+    let second_project = temp.0.join("second-project");
+    fs::create_dir(&home).unwrap();
+    fs::create_dir(&first_project).unwrap();
+    fs::create_dir(&second_project).unwrap();
+    private_directory(&home);
+
+    let mut running = RoutedApplication::new(home.clone(), first_project.clone(), "test");
+    running
+        .initialize(InitRequest {
+            root: Some(first_project),
+            goal: String::new(),
+            force: false,
+            no_guide: true,
+        })
+        .unwrap();
+
+    let mut second = RoutedApplication::new(home, second_project.clone(), "test");
+    let error = second
+        .initialize(InitRequest {
+            root: Some(second_project),
+            goal: String::new(),
+            force: false,
+            no_guide: true,
+        })
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        error,
+        "another p-track process holds the runtime lease; close p-track apps/sessions and retry"
+    );
+    assert!(!error.contains("runtime recovery is required"));
+}
+
+#[test]
 fn routed_init_uses_an_explicit_root_outside_the_process_cwd() {
     let temp = Temp::new();
     let home = temp.0.join("home");
