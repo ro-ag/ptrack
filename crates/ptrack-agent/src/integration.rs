@@ -1,6 +1,8 @@
 use std::convert::Infallible;
 use std::fmt;
 use std::future::Future;
+use std::io::{Read, Write};
+use std::net::TcpStream as StdTcpStream;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -18,6 +20,7 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioIo, TokioTimer};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -27,11 +30,13 @@ use tokio::task::JoinSet;
 
 use crate::persistence::{absolute_clean, remove_integration_descriptor_if_owned};
 use crate::{
+    AgentHandoffInbox, AgentObservation, AgentRunObservationV1, AgentRunsV2, CoordinationError,
     Event, IntegrationDescriptor, ProviderEvent, Registration, Registry, RegistryError, Timestamp,
-    publish_runtime_json,
+    publish_runtime_json, read_integration_descriptor,
 };
 
 const MAX_INTEGRATION_BODY_BYTES: usize = 16 * 1_024;
+const MAX_OBSERVATION_RESPONSE_BYTES: usize = 1_024 * 1_024;
 const INTEGRATION_READ_TIMEOUT: Duration = Duration::from_secs(5);
 const INTEGRATION_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 const INTEGRATION_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -55,6 +60,8 @@ pub struct IntegrationConfig {
     pub global_home: PathBuf,
     pub project_root: PathBuf,
     pub generation: u64,
+    /// Live generation owner used only for authenticated read-only projections.
+    pub observer: Option<Arc<dyn AgentObservation>>,
     /// Host-owned exact mutation counter; unlike the bounded refresh channel,
     /// it cannot lose increments under notification pressure.
     pub mutation_revision: Option<Arc<AtomicU64>>,
@@ -77,6 +84,7 @@ impl std::error::Error for IntegrationError {}
 
 struct ServerState {
     registry: Arc<Registry>,
+    observer: Option<Arc<dyn AgentObservation>>,
     registration_token: String,
     mutation_revision: Option<Arc<AtomicU64>>,
     runtime_changed: Option<SyncSender<()>>,
@@ -138,6 +146,7 @@ impl IntegrationServer {
         let (shutdown_sender, shutdown_receiver) = watch::channel(false);
         let state = Arc::new(ServerState {
             registry,
+            observer: config.observer,
             registration_token: registration_token.clone(),
             mutation_revision: config.mutation_revision,
             runtime_changed: config.runtime_changed,
@@ -268,6 +277,174 @@ pub fn start_integration_server(
     config: IntegrationConfig,
 ) -> Result<IntegrationServer, IntegrationError> {
     IntegrationServer::start(registry, config)
+}
+
+/// Proxy-independent observer for one validated live coordination host.
+#[derive(Clone, Debug)]
+pub struct AgentObservationClient {
+    descriptor: IntegrationDescriptor,
+    address: SocketAddr,
+}
+
+impl AgentObservationClient {
+    /// Loads and validates the private descriptor for one canonical project.
+    ///
+    /// # Errors
+    /// Refuses missing, stale, cross-project, non-loopback, or malformed data. The
+    /// live descriptor owns the runtime generation used for each request.
+    pub fn for_project(global_home: &Path, project_root: &Path) -> Result<Self, IntegrationError> {
+        let canonical = project_root.canonicalize().map_err(|_| {
+            IntegrationError("agent coordination project is unavailable".to_owned())
+        })?;
+        let descriptor = read_integration_descriptor(global_home, project_root)
+            .map_err(|_| IntegrationError("no active agent coordination host".to_owned()))?;
+        let descriptor_root = Path::new(&descriptor.project_root)
+            .canonicalize()
+            .map_err(|_| {
+                IntegrationError("agent coordination host descriptor is invalid".to_owned())
+            })?;
+        if descriptor_root != canonical {
+            return Err(IntegrationError(
+                "agent coordination host belongs to another project".to_owned(),
+            ));
+        }
+        if descriptor.registration_token.is_empty()
+            || descriptor
+                .registration_token
+                .bytes()
+                .any(|byte| byte.is_ascii_control())
+        {
+            return Err(IntegrationError(
+                "agent coordination host descriptor is invalid".to_owned(),
+            ));
+        }
+        let address = loopback_address(&descriptor.url)?;
+        Ok(Self {
+            descriptor,
+            address,
+        })
+    }
+
+    /// Returns the bounded live run registry projection.
+    ///
+    /// # Errors
+    /// Returns a bounded connection, authentication, generation, or response error.
+    pub fn runs(&self) -> Result<AgentRunsV2, IntegrationError> {
+        self.call(
+            "/v1/observe/runs",
+            &ObservationRequest {
+                generation: self.descriptor.generation,
+                run_id: String::new(),
+            },
+        )
+    }
+
+    /// Returns one sanitized live run and its inferred intelligence.
+    ///
+    /// # Errors
+    /// Returns not-found or a bounded host/response error.
+    pub fn run(&self, run_id: &str) -> Result<AgentRunObservationV1, IntegrationError> {
+        self.call(
+            "/v1/observe/run",
+            &ObservationRequest {
+                generation: self.descriptor.generation,
+                run_id: run_id.to_owned(),
+            },
+        )
+    }
+
+    /// Returns the live memory-only handoff inbox.
+    ///
+    /// # Errors
+    /// Returns a bounded host or response error.
+    pub fn inbox(&self) -> Result<AgentHandoffInbox, IntegrationError> {
+        self.call(
+            "/v1/observe/inbox",
+            &ObservationRequest {
+                generation: self.descriptor.generation,
+                run_id: String::new(),
+            },
+        )
+    }
+
+    fn call<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        request: &ObservationRequest,
+    ) -> Result<T, IntegrationError> {
+        let body = serde_json::to_vec(request)
+            .map_err(|_| IntegrationError("agent coordination request is invalid".to_owned()))?;
+        let mut stream = StdTcpStream::connect_timeout(&self.address, INTEGRATION_READ_TIMEOUT)
+            .map_err(|_| IntegrationError("agent coordination host is unavailable".to_owned()))?;
+        stream
+            .set_read_timeout(Some(INTEGRATION_READ_TIMEOUT))
+            .map_err(|_| IntegrationError("agent coordination host is unavailable".to_owned()))?;
+        stream
+            .set_write_timeout(Some(INTEGRATION_WRITE_TIMEOUT))
+            .map_err(|_| IntegrationError("agent coordination host is unavailable".to_owned()))?;
+        let mut wire = Vec::with_capacity(body.len().saturating_add(512));
+        write!(
+            wire,
+            "POST {path} HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            self.address,
+            self.descriptor.registration_token,
+            body.len()
+        )
+        .map_err(|_| IntegrationError("agent coordination request is invalid".to_owned()))?;
+        wire.extend_from_slice(&body);
+        stream
+            .write_all(&wire)
+            .map_err(|_| IntegrationError("agent coordination request failed".to_owned()))?;
+        let mut response = Vec::new();
+        stream
+            .take((MAX_OBSERVATION_RESPONSE_BYTES + 1) as u64)
+            .read_to_end(&mut response)
+            .map_err(|_| IntegrationError("agent coordination response is invalid".to_owned()))?;
+        if response.len() > MAX_OBSERVATION_RESPONSE_BYTES {
+            return Err(IntegrationError(
+                "agent coordination response is too large".to_owned(),
+            ));
+        }
+        decode_observation_response(&response)
+    }
+}
+
+fn loopback_address(url: &str) -> Result<SocketAddr, IntegrationError> {
+    let address = url
+        .strip_prefix("http://")
+        .filter(|value| !value.contains('/'))
+        .and_then(|value| value.parse::<SocketAddr>().ok())
+        .filter(|value| value.ip().is_loopback())
+        .ok_or_else(|| {
+            IntegrationError("agent coordination host descriptor is invalid".to_owned())
+        })?;
+    Ok(address)
+}
+
+fn decode_observation_response<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, IntegrationError> {
+    let split = bytes
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or_else(|| IntegrationError("agent coordination response is invalid".to_owned()))?;
+    let headers = std::str::from_utf8(&bytes[..split])
+        .map_err(|_| IntegrationError("agent coordination response is invalid".to_owned()))?;
+    let status = headers
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|value| value.parse::<u16>().ok())
+        .ok_or_else(|| IntegrationError("agent coordination response is invalid".to_owned()))?;
+    match status {
+        200 => serde_json::from_slice(&bytes[split + 4..])
+            .map_err(|_| IntegrationError("agent coordination response is invalid".to_owned())),
+        404 => Err(IntegrationError("AgentRun not found".to_owned())),
+        409 => Err(IntegrationError(
+            "agent coordination host generation changed".to_owned(),
+        )),
+        _ => Err(IntegrationError(
+            "agent coordination host rejected the request".to_owned(),
+        )),
+    }
 }
 
 async fn serve(
@@ -485,6 +662,9 @@ async fn wait_for_idle(mut activity: watch::Receiver<tokio::time::Instant>) {
 #[derive(Clone, Copy)]
 enum Route<'request> {
     Register,
+    ObserveRuns,
+    ObserveRun,
+    ObserveInbox,
     Run {
         id: &'request str,
         action: &'request str,
@@ -497,6 +677,9 @@ fn route(path: &str) -> Route<'_> {
     match path {
         "/v1/runs/register" => Route::Register,
         "/v1/events" => Route::LaunchedEvent,
+        "/v1/observe/runs" => Route::ObserveRuns,
+        "/v1/observe/run" => Route::ObserveRun,
+        "/v1/observe/inbox" => Route::ObserveInbox,
         _ => {
             let Some(rest) = path.strip_prefix("/v1/runs/") else {
                 return Route::NotFound;
@@ -530,6 +713,9 @@ async fn handle_request(
                 handle_register(request, &state, read_deadline).await
             }
         }
+        Route::ObserveRuns | Route::ObserveRun | Route::ObserveInbox => {
+            handle_observation(route, request, &state, read_deadline).await
+        }
         Route::Run { id, action } => handle_run(id, action, request, &state, read_deadline).await,
         Route::LaunchedEvent => {
             if rejected_method_or_origin(&request) {
@@ -539,6 +725,68 @@ async fn handle_request(
             }
         }
         Route::NotFound => unreachable!(),
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ObservationRequest {
+    generation: u64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    run_id: String,
+}
+
+async fn handle_observation(
+    route: Route<'_>,
+    request: Request<Incoming>,
+    state: &ServerState,
+    read_deadline: tokio::time::Instant,
+) -> Response<ResponseBody> {
+    if rejected_method_or_origin(&request) {
+        return error_response(StatusCode::FORBIDDEN, "AgentRun request rejected");
+    }
+    if !authorized(&request, &state.registration_token) {
+        return error_response(StatusCode::UNAUTHORIZED, "AgentRun request rejected");
+    }
+    let Some(observer) = &state.observer else {
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "AgentRun observation unavailable",
+        );
+    };
+    let observation: ObservationRequest = match decode_json(request, read_deadline).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let result = match route {
+        Route::ObserveRuns => observer
+            .observe_runs(observation.generation)
+            .map(|value| json_response(StatusCode::OK, &value)),
+        Route::ObserveRun if !observation.run_id.is_empty() => observer
+            .observe_run(observation.generation, &observation.run_id)
+            .map(|value| json_response(StatusCode::OK, &value)),
+        Route::ObserveInbox => observer
+            .observe_handoffs(observation.generation)
+            .map(|value| json_response(StatusCode::OK, &value)),
+        Route::ObserveRun => Err(CoordinationError::RunNotFound),
+        _ => unreachable!(),
+    };
+    result.unwrap_or_else(|error| observation_error_response(&error))
+}
+
+fn observation_error_response(error: &CoordinationError) -> Response<ResponseBody> {
+    match error {
+        CoordinationError::RunNotFound => {
+            error_response(StatusCode::NOT_FOUND, "AgentRun not found")
+        }
+        CoordinationError::StaleGeneration { .. } => error_response(
+            StatusCode::CONFLICT,
+            "AgentRun observation generation changed",
+        ),
+        _ => error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "AgentRun observation unavailable",
+        ),
     }
 }
 

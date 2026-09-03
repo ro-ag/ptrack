@@ -121,8 +121,10 @@ ptrack context</code></pre>
             <dd>No. It changes the Desktop view only. Use <code>ptrack plan use &lt;id&gt;</code> to change the CLI active plan.</dd>
             <dt>Does p-track check for updates automatically?</dt>
             <dd>Not by default. Automatic checks remain off until you explicitly opt in from <strong>Settings ▸ Updates</strong> or <strong>About &amp; Updates</strong>; a manual check does not silently download or install.</dd>
+            <dt>Why did an OS notification not appear?</dt>
+            <dd>Each category is off by default under <strong>Settings ▸ Notifications</strong>, and notifications are suppressed while any p-track window is focused. Check the operating system's notification permission for p-track. Linux also needs a running desktop notification service. Permission denial or an unavailable service does not interrupt agent tracking.</dd>
             <dt>Does <strong>Reset Application State</strong> delete my plans or tasks?</dt>
-            <dd>No. It clears settings, the startup and update-check opt-ins, window and layout state, and saved terminal workspaces. Plans, tasks, notes, and Recent projects are not touched.</dd>
+            <dd>No. It clears settings, the startup, notification, and update-check opt-ins, window and layout state, and saved terminal workspaces. Plans, tasks, notes, and Recent projects are not touched.</dd>
             <dt>Does <code>ptrack backup</code> capture everything, and can p-track restore it?</dt>
             <dd>No. It copies the project database, not runtime state or WebView <code>localStorage</code>, and there is no built-in restore command. Follow the documented <a href="../install-and-safety/#backup">backup limits</a>; this page does not prescribe an unverified restore procedure.</dd>
             <dt>Are interactive terminal paths verified on every platform?</dt>

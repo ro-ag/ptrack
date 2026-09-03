@@ -574,6 +574,18 @@ impl ApplicationPort for RoutedApplication {
         self.local()?.snapshot()
     }
 
+    fn agent_runs(&mut self) -> AppResult<ptrack_agent::AgentRunsV2> {
+        self.local()?.agent_runs()
+    }
+
+    fn agent_run(&mut self, run_id: &str) -> AppResult<ptrack_agent::AgentRunObservationV1> {
+        self.local()?.agent_run(run_id)
+    }
+
+    fn agent_inbox(&mut self) -> AppResult<ptrack_agent::AgentHandoffInbox> {
+        self.local()?.agent_inbox()
+    }
+
     fn mutate(&mut self, mutation: Mutation) -> AppResult<MutationResult> {
         self.local()?.mutate(mutation)
     }

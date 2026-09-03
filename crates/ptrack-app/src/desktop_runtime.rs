@@ -10,9 +10,9 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ptrack_agent::{
     AgentRuntimeSummary, AgentWorkflowKind, AssociationCatalog, AssociationHost,
-    AssociationPointer as AgentAssociationPointer, BoundedItems, LaunchContextStore, LeaseState,
-    ProcessState, RegistrationKind, Run, RunState, RuntimeAssociation, ScanBoundedItems,
-    build_launch_context, contains_potential_credential,
+    AssociationPointer as AgentAssociationPointer, BoundedItems, IntelligenceState,
+    LaunchContextStore, LeaseState, ProcessState, RegistrationKind, Run, RunState,
+    RuntimeAssociation, ScanBoundedItems, build_launch_context, contains_potential_credential,
 };
 use ptrack_capability::{Broker, ConnectionDiagnostic, ConnectionTester};
 use ptrack_capability_policy::{
@@ -380,6 +380,36 @@ pub struct WorkspaceState {
     pub error: String,
 }
 
+/// Native-shell notification categories. They intentionally exclude provider
+/// text, paths, handoff previews, and terminal output.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DesktopNotificationKindV1 {
+    HandoffArrival,
+    RunFailure,
+    RunDrift,
+    RunCompletion,
+}
+
+/// One stable, identifier-only event for native notification policy.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopNotificationEventV1 {
+    pub id: String,
+    pub kind: DesktopNotificationKindV1,
+    pub run_id: String,
+    pub plan_id: u64,
+    pub task_id: u64,
+}
+
+/// Bounded current notification state for one project generation.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopNotificationSnapshotV1 {
+    pub generation: u64,
+    pub events: Vec<DesktopNotificationEventV1>,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActiveResourceSummary {
@@ -585,6 +615,9 @@ pub trait DesktopWorkspace: Send + Sync {
     }
     fn drain_runtime_invalidations(&self) -> AppResult<bool> {
         Ok(false)
+    }
+    fn notification_snapshot(&self) -> AppResult<DesktopNotificationSnapshotV1> {
+        Ok(DesktopNotificationSnapshotV1::default())
     }
     fn shutdown(&self) -> AppResult<()>;
 }
@@ -1390,6 +1423,42 @@ impl DesktopRuntime {
         state_view(&state, &self.version)
     }
 
+    /// Returns the bounded identifier-only state consumed by the native OS
+    /// notification policy. Welcome/closed workspaces are an empty baseline.
+    ///
+    /// # Errors
+    /// Returns lifecycle or coordinator projection errors.
+    pub fn notification_snapshot(&self) -> AppResult<DesktopNotificationSnapshotV1> {
+        let (generation, workspace) = {
+            let mut state = lock(&self.state);
+            if state.shutting_down {
+                return Err(shutting_down());
+            }
+            if state.authority_changing {
+                return Err(AppError::Message(
+                    "runtime authority is changing".to_owned(),
+                ));
+            }
+            let generation = state.generation;
+            let Some(workspace) = state
+                .workspace
+                .clone()
+                .filter(|_| state.status == WorkspaceStatus::Open)
+            else {
+                return Ok(DesktopNotificationSnapshotV1 {
+                    generation,
+                    events: Vec::new(),
+                });
+            };
+            state.active_calls = state.active_calls.saturating_add(1);
+            (generation, workspace)
+        };
+        let _lease = DesktopCallLease { runtime: self };
+        let mut snapshot = workspace.notification_snapshot()?;
+        snapshot.generation = generation;
+        Ok(snapshot)
+    }
+
     /// Fences new calls, drains active leases, and tears down the workspace.
     ///
     /// # Errors
@@ -1630,7 +1699,6 @@ impl DesktopRuntime {
                 request: request.clone(),
                 result: result.clone(),
             });
-            self.emit(DesktopEvent::WorkspaceDataChanged(next_generation));
             Ok(result)
         })();
 
@@ -1644,6 +1712,9 @@ impl DesktopRuntime {
         }
         drop(state);
         self.calls_changed.notify_all();
+        if let Ok(result) = &initialized {
+            self.emit(DesktopEvent::WorkspaceDataChanged(result.state.generation));
+        }
         initialized
     }
 
@@ -3299,6 +3370,58 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
         }
     }
 
+    fn notification_snapshot(&self) -> AppResult<DesktopNotificationSnapshotV1> {
+        let _workspace_call = self.begin_workspace_call()?;
+        let Some(agent) = &self.agent else {
+            return Ok(DesktopNotificationSnapshotV1 {
+                generation: self.generation,
+                events: Vec::new(),
+            });
+        };
+        let candidates = agent.agent_runtime_candidates(self.generation)?;
+        let handoffs = agent.handoff_inbox(self.generation)?;
+        let mut events = handoffs
+            .items
+            .into_iter()
+            .map(|handoff| {
+                let association = handoff.target_association.unwrap_or_default();
+                DesktopNotificationEventV1 {
+                    id: format!("handoff:{}", handoff.id),
+                    kind: DesktopNotificationKindV1::HandoffArrival,
+                    run_id: handoff.target_run_id,
+                    plan_id: association.plan_id,
+                    task_id: association.task_id,
+                }
+            })
+            .collect::<Vec<_>>();
+        for run in candidates.runs {
+            let Some(intelligence) = run.intelligence.as_ref() else {
+                continue;
+            };
+            let kind = match intelligence.state {
+                IntelligenceState::Failed => DesktopNotificationKindV1::RunFailure,
+                IntelligenceState::Completed => DesktopNotificationKindV1::RunCompletion,
+                IntelligenceState::PotentiallyDrifting if run.live && run.association.is_some() => {
+                    DesktopNotificationKindV1::RunDrift
+                }
+                _ => continue,
+            };
+            let association = run.association.unwrap_or_default();
+            events.push(DesktopNotificationEventV1 {
+                id: notification_evidence_id(&run, kind),
+                kind,
+                run_id: run.run_id,
+                plan_id: association.plan_id,
+                task_id: association.task_id,
+            });
+        }
+        events.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(DesktopNotificationSnapshotV1 {
+            generation: self.generation,
+            events,
+        })
+    }
+
     #[allow(clippy::too_many_lines)]
     fn invoke(&self, method: &str, arguments: &[Value]) -> AppResult<Value> {
         let _workspace_call = self.begin_workspace_call()?;
@@ -4099,6 +4222,23 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
             Err(AppError::Message(errors.join("\n")))
         }
     }
+}
+
+fn notification_evidence_id(run: &AgentRuntimeSummary, kind: DesktopNotificationKindV1) -> String {
+    let intelligence = run
+        .intelligence
+        .as_ref()
+        .expect("notification evidence requires intelligence");
+    let observed = intelligence
+        .last_event_at
+        .as_ref()
+        .and_then(|value| serde_json::to_string(value).ok())
+        .unwrap_or_else(|| "none".to_owned());
+    let association_revision = run.association.map_or(0, |value| value.revision);
+    format!(
+        "run:{}:{kind:?}:{association_revision}:{}:{}:{observed}",
+        run.run_id, intelligence.evidence_count, intelligence.event_count
+    )
 }
 
 fn terminal_task_resources(

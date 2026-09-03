@@ -97,6 +97,10 @@ const JSON_FLAG: Flag = Flag {
 };
 
 const ROOT_CHILDREN: &[Child] = &[
+    child(
+        "agent",
+        "Inspect live registered runs and handoff proposals",
+    ),
     child("backup", "Back up the current project database"),
     child(
         "board",
@@ -143,6 +147,7 @@ const ROOT_CHILDREN: &[Child] = &[
         "milestone",
         "Manage milestones (high-level checkpoints grouping plans)",
     ),
+    child("mcp", "Serve project planning tools over MCP stdio"),
     child(
         "next",
         "Print the single most-actionable task (active plan: doing, else todo)",
@@ -282,6 +287,11 @@ const CAPABILITY_CHILDREN: &[Child] = &[
         "Call a capability tool through the active host broker",
     ),
     child("mcp", "Serve provider-compatible MCP tools over stdio"),
+];
+const AGENT_CHILDREN: &[Child] = &[
+    child("inbox", "List pending memory-only handoff proposals"),
+    child("list", "List live registered agent runs"),
+    child("show", "Show one run and its inferred intelligence"),
 ];
 const COMPLETION_CHILDREN: &[Child] = &[
     child("bash", "Generate the autocompletion script for bash"),
@@ -426,7 +436,7 @@ fn specification(path: &[String]) -> Spec {
         ),
         [
             group @ ("goal" | "summary" | "milestone" | "plan" | "task" | "issue" | "note"
-            | "commit" | "config" | "hook" | "capability"),
+            | "commit" | "config" | "hook" | "agent" | "capability"),
         ] => {
             let (text, children) = match *group {
                 "goal" => ("Show or set the project's north-star goal", GOAL_CHILDREN),
@@ -450,6 +460,10 @@ fn specification(path: &[String]) -> Spec {
                 "hook" => (
                     "Manage the git post-commit hook that auto-records commits",
                     HOOK_CHILDREN,
+                ),
+                "agent" => (
+                    "Inspect the active project's live agent coordination host",
+                    AGENT_CHILDREN,
                 ),
                 _ => (
                     "Manage and invoke explicit project host capabilities",
@@ -512,6 +526,7 @@ fn specification(path: &[String]) -> Spec {
         ["commit", leaf] => commit_leaf(leaf),
         ["config", leaf] => config_leaf(leaf),
         ["hook", leaf] => hook_leaf(leaf),
+        ["agent", leaf] => agent_leaf(leaf),
         ["capability", leaf] => capability_leaf(leaf),
         [leaf] => root_leaf(leaf),
         _ => group_spec("ptrack", ROOT_LONG, ROOT_CHILDREN),
@@ -926,12 +941,37 @@ fn capability_leaf(name: &str) -> Spec {
     }
 }
 
+fn agent_leaf(name: &str) -> Spec {
+    match name {
+        "list" => leaf_spec(
+            "agent list",
+            "List bounded live registered runs and inferred activity",
+            JSON_FLAGS,
+        ),
+        "show" => leaf_spec(
+            "agent show <run-id>",
+            "Show one sanitized run and its bounded inferred intelligence",
+            JSON_FLAGS,
+        ),
+        _ => leaf_spec(
+            "agent inbox",
+            "List pending memory-only handoff proposals",
+            JSON_FLAGS,
+        ),
+    }
+}
+
 fn root_leaf(name: &str) -> Spec {
     match name {
         "context" => leaf_spec(
             "context",
             "Print the bounded restore digest (Markdown by default, --json for JSON)",
             JSON_FLAGS,
+        ),
+        "mcp" => leaf_spec(
+            "mcp",
+            "Serve get_context, get_next_task, complete_task, and add_note over MCP stdio",
+            HELP_ONLY,
         ),
         "guide" => leaf_spec(
             "guide",
@@ -1057,6 +1097,7 @@ fn group_children(name: &str) -> Option<&'static [&'static str]> {
         "note" => Some(&["add", "list"]),
         "commit" => Some(&["add", "list", "record", "show"]),
         "hook" => Some(&["install", "status", "uninstall"]),
+        "agent" => Some(&["inbox", "list", "show"]),
         "capability" => Some(&["call", "mcp"]),
         "completion" => Some(&["bash", "fish", "powershell", "zsh"]),
         _ => None,

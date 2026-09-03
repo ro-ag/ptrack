@@ -5,6 +5,7 @@ export type SettingsSectionId =
   | "startup"
   | "appearance"
   | "terminal"
+  | "notifications"
   | "updates"
   | "data";
 
@@ -16,6 +17,7 @@ export const settingsSections: ReadonlyArray<
   { id: "startup", label: "Startup" },
   { id: "appearance", label: "Appearance" },
   { id: "terminal", label: "Terminal" },
+  { id: "notifications", label: "Notifications" },
   { id: "updates", label: "Updates" },
   { id: "data", label: "Data & Diagnostics" },
 ];
@@ -74,7 +76,7 @@ export const resetApplicationStateConfirmation: ResetConfirmationCopy = {
   eyebrow: "Application state",
   heading: "Reset all application state?",
   detail:
-    "This clears your settings, the automatic update-check opt-in, the window and layout state, and every saved terminal workspace. Plans, tasks, notes, and Recent projects are not touched.",
+    "This clears your settings, notification and automatic update-check opt-ins, the window and layout state, and every saved terminal workspace. Plans, tasks, notes, and Recent projects are not touched.",
   cancel: "Keep Application State",
   submit: "Reset Application State",
 };

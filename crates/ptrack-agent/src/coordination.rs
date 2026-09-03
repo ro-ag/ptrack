@@ -34,7 +34,7 @@ const RAW_URL_ALPHABET: &[u8; 64] =
 type Clock = Arc<dyn Fn() -> Timestamp + Send + Sync>;
 type Random = Arc<dyn Fn(&mut [u8]) -> Result<(), String> + Send + Sync>;
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BoundedSnapshot {
     pub shown: usize,
@@ -53,7 +53,7 @@ impl BoundedSnapshot {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeAssociation {
     #[serde(skip_serializing_if = "is_zero_u64")]
@@ -383,7 +383,7 @@ pub struct TerminalRuntimeSummary {
     pub association: Option<RuntimeAssociation>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentIntelligenceSummary {
     pub state: IntelligenceState,
@@ -419,10 +419,10 @@ pub struct AgentSuggestion {
     pub evidence_event_ids: Vec<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentIntelligenceEvidence {
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub event_id: String,
     #[serde(skip_serializing_if = "is_unset_event_kind")]
     pub kind: crate::EventKind,
@@ -433,7 +433,7 @@ pub struct AgentIntelligenceEvidence {
     pub reason: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentIntelligenceDetail {
     pub state: IntelligenceState,
@@ -457,13 +457,13 @@ pub struct AgentIntelligenceV2 {
     pub bounds: BoundedSnapshot,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(clippy::struct_excessive_bools)] // Exact established GUI wire contract.
 pub struct AgentRuntimeSummary {
     pub run_id: String,
     pub registration_kind: RegistrationKind,
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub terminal_id: String,
     pub terminal_backed: bool,
     pub terminal_present: bool,
@@ -479,7 +479,7 @@ pub struct AgentRuntimeSummary {
     pub intelligence: Option<AgentIntelligenceSummary>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentRunsV2 {
     pub generation: u64,
@@ -603,7 +603,7 @@ pub struct AgentActivityConflict {
     pub bounds: BoundedSnapshot,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentHandoffEnvelopeV2 {
     pub id: String,
@@ -619,12 +619,45 @@ pub struct AgentHandoffEnvelopeV2 {
     pub expires_at: Timestamp,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentHandoffInbox {
     pub items: Vec<AgentHandoffEnvelopeV2>,
     pub bounds: BoundedSnapshot,
     pub incomplete: bool,
+}
+
+/// Safe, bounded detail returned to non-owning CLI and TUI observers.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentRunObservationV1 {
+    pub generation: u64,
+    pub run: AgentRuntimeSummary,
+    pub intelligence: AgentIntelligenceDetail,
+    pub event_bounds: BoundedSnapshot,
+}
+
+/// Read-only view of the live, generation-owned coordinator.
+pub trait AgentObservation: Send + Sync {
+    /// Returns the bounded registered-run projection.
+    ///
+    /// # Errors
+    /// Returns generation, shutdown, registry, session, or evidence errors.
+    fn observe_runs(&self, generation: u64) -> Result<AgentRunsV2, CoordinationError>;
+    /// Returns one run and its bounded inferred-intelligence detail.
+    ///
+    /// # Errors
+    /// Returns generation, shutdown, run, registry, session, or evidence errors.
+    fn observe_run(
+        &self,
+        generation: u64,
+        run_id: &str,
+    ) -> Result<AgentRunObservationV1, CoordinationError>;
+    /// Returns pending, memory-only handoff proposals.
+    ///
+    /// # Errors
+    /// Returns generation, shutdown, registry, session, or evidence errors.
+    fn observe_handoffs(&self, generation: u64) -> Result<AgentHandoffInbox, CoordinationError>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -1066,6 +1099,46 @@ impl Coordinator {
             suggestions,
             bounds: BoundedSnapshot::new(suggestion_total.min(SUGGESTION_LIMIT), suggestion_total),
         })
+    }
+
+    /// Returns one sanitized run row with its bounded intelligence detail.
+    ///
+    /// # Errors
+    /// Returns generation, shutdown, run, registry, or evidence errors.
+    pub fn run_observation(
+        &self,
+        generation: u64,
+        run_id: &str,
+    ) -> Result<AgentRunObservationV1, CoordinationError> {
+        let runs = self.agent_runtime_candidates(generation)?;
+        let run = runs
+            .runs
+            .into_iter()
+            .find(|run| run.run_id == run_id)
+            .ok_or(CoordinationError::RunNotFound)?;
+        let detail = self.agent_intelligence(generation, run_id)?;
+        Ok(AgentRunObservationV1 {
+            generation: self.generation,
+            run,
+            intelligence: detail.intelligence,
+            event_bounds: detail.event_bounds,
+        })
+    }
+
+    /// Returns the bounded memory-only handoff inbox without a Git snapshot.
+    ///
+    /// # Errors
+    /// Returns generation, shutdown, registry, session, or evidence errors.
+    pub fn handoff_inbox(&self, generation: u64) -> Result<AgentHandoffInbox, CoordinationError> {
+        self.check_generation(generation)?;
+        let projection = self.projection()?;
+        let mut state = lock(&self.state);
+        prune_handoffs(&mut state.handoffs, (self.now)());
+        Ok(project_handoffs(
+            &mut state.handoffs,
+            &projection,
+            self.generation,
+        ))
     }
 
     /// Builds the bounded activity/notification/inbox projection.
@@ -2085,6 +2158,24 @@ impl Coordinator {
         if let Some(sender) = &self.runtime_changed {
             let _ = sender.try_send(());
         }
+    }
+}
+
+impl AgentObservation for Coordinator {
+    fn observe_runs(&self, generation: u64) -> Result<AgentRunsV2, CoordinationError> {
+        self.agent_runs(generation)
+    }
+
+    fn observe_run(
+        &self,
+        generation: u64,
+        run_id: &str,
+    ) -> Result<AgentRunObservationV1, CoordinationError> {
+        self.run_observation(generation, run_id)
+    }
+
+    fn observe_handoffs(&self, generation: u64) -> Result<AgentHandoffInbox, CoordinationError> {
+        self.handoff_inbox(generation)
     }
 }
 

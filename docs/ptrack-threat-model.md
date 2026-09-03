@@ -6,7 +6,7 @@ Plan 4 adds a privileged host broker that can make HTTP requests and invoke Git,
 
 ## Scope and assumptions
 
-- In scope: `ptrack-capability`, capability records in `ptrack-core` and `ptrack-store`, the `ptrack capability` bridge in `ptrack-cli`, terminal identity injection and workspace fencing in `ptrack-app` and `ptrack-terminal`, and the capability Settings UI in `frontend`.
+- In scope: `ptrack-capability`, capability records in `ptrack-core` and `ptrack-store`, the `ptrack capability` bridge and cwd-bound project `ptrack mcp` server in `ptrack-cli`, terminal identity injection and workspace fencing in `ptrack-app` and `ptrack-terminal`, and the capability Settings UI in `frontend`.
 - Runtime model: a single-user local desktop/CLI application launches agent profiles as child processes and exposes a random-port loopback broker for the active canonical project generation.
 - Data sensitivity: remote repository contents, HTTP request and response data, filesystem transfers, Git credential-helper access, and current ssh-agent identities may be sensitive.
 - Authentication expectation: a host-minted opaque bearer token represents one launched terminal's immutable project, generation, profile ID, and session. Caller-supplied profile names are not identity.
@@ -29,6 +29,7 @@ Plan 4 adds a privileged host broker that can make HTTP requests and invoke Git,
 - Operator → Settings API: grant drafts and approval intent cross the deny-by-default Tauri command bridge. Normalization produces the displayed effective scope and digest; enabling requires that exact digest. The API is generation-fenced.
 - Host → agent child: an opaque token plus canonical project, generation, and immutable profile ID cross the process environment. The terminal manager validates environment keys and values before launch.
 - Agent/MCP client → loopback broker: JSON or JSON-RPC tool name, capability ID, and typed arguments cross authenticated loopback HTTP or stdio. The broker rejects origins, non-POST requests, unknown fields, oversized frames, invalid or unbound tokens, and unknown tools.
+- Agent/MCP client → project database: the local `ptrack mcp` stdio child discovers its project only from its working directory. Closed schemas and bounded text limit its four tools, but the launching process is the authority boundary: `complete_task` and `add_note` intentionally mutate that project without a capability token or shell subprocess.
 - Broker → project database: capability IDs select project-local grants; the broker reopens the active project's database and does not accept a database path from the caller.
 - Broker → HTTP network: transient URL, headers, and body cross the system proxy and CA trust path. Authorization checks method, exact normalized origin, segment-bounded path, request size, redirects, timeout, response size, and concurrency.
 - Broker → Git/SSH/scp: typed operation fields become fixed executable/argument vectors without a local shell. Git re-reads repository and remote identity, then invokes the exact approved URL and head refs. SSH uses a pinned host key, ssh-agent-only authentication, exact commands/roots, bounded streamed downloads, and independently approved forwarding directions.
@@ -82,8 +83,10 @@ flowchart LR
 | Surface | How reached | Trust boundary | Notes | Evidence (repo path / symbol) |
 | --- | --- | --- | --- | --- |
 | Settings mutations | Tauri GUI commands | Operator → host | Preview digest and generation required | `crates/ptrack-app/src/desktop_runtime.rs` |
+| OS notifications | Rust-only Tauri notification plugin | Host → OS shell | Three explicit opt-ins; background-only; identifier-only copy; no WebView notification permission | `src-tauri/src/notification_runtime.rs` |
 | CLI helper | `ptrack capability call` | Agent → broker | Requires injected token and matching project descriptor | `crates/ptrack-cli/src/dispatch.rs` |
 | MCP stdio | `ptrack capability mcp` | Provider → bridge | Bounded newline JSON-RPC and known tools only | `crates/ptrack-capability/src/mcp.rs` |
+| Project MCP stdio | `ptrack mcp` | Provider → project database | Cwd-bound; four closed, bounded tools; task closeout gates preserved | `crates/ptrack-app/src/project_mcp.rs` |
 | Loopback HTTP | `/v1/tools/list`, `/v1/tools/call` | Local process → broker | POST, no Origin, bearer auth, bounded strict JSON | `crates/ptrack-capability/src/server.rs` |
 | HTTP executor | `ptrack_http_request` | Broker → network | Per-hop origin/path reauthorization and response bounds | `crates/ptrack-capability/src/http.rs` |
 | Git executor | `ptrack_git` | Broker → Git process | Fresh root/remote/rewrite checks and fixed operations | `crates/ptrack-capability/src/git.rs` |
@@ -102,6 +105,7 @@ flowchart LR
 7. Project symlink points an approved transfer root outside the project → canonical ancestor resolution detects the escape and denies before scp.
 8. Agent races disable, expiry, session close, or project switch against an in-flight call → broker cancellation stops tracked work and subsequent authorization re-reads current grant state.
 9. Remote response includes credentials or hostile diagnostics → only bounded transient output returns to the caller; audit persistence stores sanitized target and class only.
+10. Retained coordination state reaches the notification observer → startup, opt-in, and project-generation baselines consume it without delivery; stable IDs suppress repeats.
 
 ## Threat model table
 
@@ -139,10 +143,11 @@ flowchart LR
 | `internal/gui/terminal.go` | Host-minted identity injection and session revocation | TM-001, TM-002, TM-006 |
 | `internal/gui/workspace_context.go` | Project-generation cancellation and resource fencing | TM-002, TM-006 |
 | `internal/store/capabilities.go` | Approval update semantics and bounded audit retention | TM-006, TM-007 |
+| `src-tauri/src/notification_runtime.rs` | OS-facing copy, opt-in, focus suppression, baselines, and stable deduplication | TM-007 |
 
 ## Quality check
 
-- Covered Settings, CLI, MCP, loopback HTTP, database, HTTP, Git, SSH/scp, filesystem, terminal identity, and audit entry points.
+- Covered Settings, OS notifications, CLI, MCP, loopback HTTP, database, HTTP, Git, SSH/scp, filesystem, terminal identity, and audit entry points.
 - Represented every discovered runtime trust boundary in the abuse paths and threat table.
 - Kept runtime behavior separate from test/build/release tooling; release workflows are outside this feature threat model.
 - Reflected the user-supplied local deployment, explicit broker-only enforcement boundary, and excluded migration scope.

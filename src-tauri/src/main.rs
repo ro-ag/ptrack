@@ -1,5 +1,9 @@
 #![forbid(unsafe_code)]
 
+mod notification_runtime;
+#[cfg(test)]
+mod notification_runtime_test;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::channel;
@@ -25,12 +29,19 @@ use tauri::{AppHandle, Emitter, Manager, Runtime, WindowEvent};
 use tauri_plugin_dialog::DialogExt as _;
 use tauri_plugin_opener::OpenerExt as _;
 
+use notification_runtime::{NativeNotificationController, disabled_notification_patch};
+
 struct TauriEventSink {
     app: AppHandle,
+    notifications: Arc<NativeNotificationController>,
 }
 
 impl DesktopEventSink for TauriEventSink {
     fn emit(&self, event: DesktopEvent) {
+        let refresh_notifications = matches!(
+            event,
+            DesktopEvent::WorkspaceRuntimeChanged(_) | DesktopEvent::WorkspaceDataChanged(_)
+        );
         let result = match event {
             DesktopEvent::WorkspaceRuntimeChanged(generation) => {
                 self.app.emit("workspace:runtime-changed", generation)
@@ -43,6 +54,9 @@ impl DesktopEventSink for TauriEventSink {
             DesktopEvent::TerminalExit(exit) => self.app.emit("terminal:exit", exit),
         };
         let _ = result;
+        if refresh_notifications {
+            self.notifications.refresh(&self.app);
+        }
     }
 }
 
@@ -53,6 +67,7 @@ async fn gui_invoke(
     request: DesktopCommandRequest,
 ) -> Result<serde_json::Value, String> {
     let runtime = Arc::clone(runtime.inner());
+    let notifications = Arc::clone(app.state::<Arc<NativeNotificationController>>().inner());
     let shell_command = request.method == "InstallShellCommand";
     // Every command that answers with the whole normalized preference document
     // resyncs the native chrome. The read is in the set because
@@ -73,10 +88,27 @@ async fn gui_invoke(
         } else {
             None
         };
-        let result = runtime.invoke(request).map_err(|error| error.to_string())?;
-        if appearance {
-            apply_theme(&app, &result);
-        }
+        let request_permission = request.method == "SetPreferences";
+        let result = if appearance {
+            notifications.with_configuration(|| {
+                let mut result = runtime.invoke(request).map_err(|error| error.to_string())?;
+                apply_theme(&app, &result);
+                if notifications.configure(&app, &result, request_permission) {
+                    result = runtime
+                        .invoke(DesktopCommandRequest {
+                            method: "SetPreferences".to_owned(),
+                            arguments: vec![disabled_notification_patch()],
+                        })
+                        .map_err(|error| error.to_string())?;
+                    let _ = notifications.configure(&app, &result, false);
+                    apply_theme(&app, &result);
+                }
+                notifications.refresh(&app);
+                Ok::<_, String>(result)
+            })?
+        } else {
+            runtime.invoke(request).map_err(|error| error.to_string())?
+        };
         // Switching or closing a project takes its terminal windows with it:
         // the sessions they showed died with the workspace. The sweep is a
         // lock and a comparison while nothing changed.
@@ -628,10 +660,16 @@ fn run_desktop(initial_path: Option<PathBuf>, initial_plan: u64) {
     let capture = Arc::new(WindowStateCapture::new());
     let capture_events = Arc::clone(&capture);
     let capture_exit = Arc::clone(&capture);
+    let notifications = Arc::new(NativeNotificationController::default());
+    let notifications_setup = Arc::clone(&notifications);
+    let notifications_events = Arc::clone(&notifications);
+    let notifications_windows = Arc::clone(&notifications);
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
+            app.manage(Arc::clone(&notifications_setup));
             // The window is configured hidden so the restored rect is the first
             // one painted instead of a visible jump from the default geometry.
             // Restore and show run before every fallible step below: no `?` and
@@ -643,6 +681,7 @@ fn run_desktop(initial_path: Option<PathBuf>, initial_plan: u64) {
             }
             let sink: Arc<dyn DesktopEventSink> = Arc::new(TauriEventSink {
                 app: app.handle().clone(),
+                notifications: Arc::clone(&notifications_events),
             });
             // Nothing below may return Err: tauri turns a setup error into a
             // panic inside the platform's nounwind launch callback, which is
@@ -681,16 +720,25 @@ fn run_desktop(initial_path: Option<PathBuf>, initial_plan: u64) {
             // and the window contract fixes that after the show. The webview has
             // not painted yet either way, so the first frame the user reads
             // already carries the right chrome.
-            apply_theme(
-                app.handle(),
-                &runtime
+            let mut preferences = runtime
+                .invoke(DesktopCommandRequest {
+                    method: "GetPreferences".to_owned(),
+                    arguments: Vec::new(),
+                })
+                .unwrap_or_default();
+            if notifications_setup.configure(app.handle(), &preferences, false) {
+                preferences = runtime
                     .invoke(DesktopCommandRequest {
-                        method: "GetPreferences".to_owned(),
-                        arguments: Vec::new(),
+                        method: "SetPreferences".to_owned(),
+                        arguments: vec![disabled_notification_patch()],
                     })
-                    .unwrap_or_default(),
-            );
+                    .unwrap_or_default();
+                let _ = notifications_setup.configure(app.handle(), &preferences, false);
+            }
+            apply_theme(app.handle(), &preferences);
             app.manage(runtime);
+            notifications_setup.initialize_focus(app.handle());
+            notifications_setup.refresh(app.handle());
             Ok(())
         })
         .menu(build_menu)
@@ -702,6 +750,9 @@ fn run_desktop(initial_path: Option<PathBuf>, initial_plan: u64) {
             | WindowEvent::Moved(_)
             | WindowEvent::ScaleFactorChanged { .. } => {
                 capture_events.schedule_trailing(window);
+            }
+            WindowEvent::Focused(focused) => {
+                notifications_windows.set_window_focus(window.label(), *focused);
             }
             WindowEvent::CloseRequested { api, .. } => {
                 // Not sealed: a prevented close leaves the window alive, and
@@ -740,8 +791,11 @@ fn run_desktop(initial_path: Option<PathBuf>, initial_plan: u64) {
             // "Reconnecting…". The assignment is still the token — a window
             // destroyed by a project switch or by app quit had its assignment
             // cleared first, so this finds nothing and reports nothing.
-            WindowEvent::Destroyed if window.label() != MAIN_WINDOW_LABEL => {
-                pop_in_terminal_window(window.app_handle(), window.label());
+            WindowEvent::Destroyed => {
+                notifications_windows.remove_window(window.label());
+                if window.label() != MAIN_WINDOW_LABEL {
+                    pop_in_terminal_window(window.app_handle(), window.label());
+                }
             }
             _ => {}
         })

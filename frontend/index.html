@@ -1209,6 +1209,15 @@
               tabindex="-1"
             >Terminal</button>
             <button
+              id="settings-tab-notifications"
+              class="settings-section-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="settings-panel-notifications"
+              tabindex="-1"
+            >Notifications</button>
+            <button
               id="settings-tab-updates"
               class="settings-section-tab"
               type="button"
@@ -1382,6 +1391,47 @@
               <p id="settings-terminal-renderer-help" class="dialog-help">
                 Automatic uses WebGL when the platform allows it and falls back on its
                 own. Canvas and DOM both draw without acceleration.
+              </p>
+            </section>
+
+            <section
+              id="settings-panel-notifications"
+              class="settings-panel"
+              role="tabpanel"
+              aria-labelledby="settings-tab-notifications"
+              tabindex="0"
+              hidden
+            >
+              <h3 class="section-label">Notifications</h3>
+              <p class="dialog-help">
+                OS notifications appear only while every p-track window is in the
+                background. They contain identifiers only, never task text, paths,
+                terminal output, handoff previews, or provider content.
+              </p>
+              <label class="settings-check" for="settings-notifications-handoff">
+                <input id="settings-notifications-handoff" type="checkbox" />
+                <span>
+                  Handoff arrivals
+                  <small>Notify when a current handoff first reaches its target agent.</small>
+                </span>
+              </label>
+              <label class="settings-check" for="settings-notifications-failure-drift">
+                <input id="settings-notifications-failure-drift" type="checkbox" />
+                <span>
+                  Run failures or possible task drift
+                  <small>Drift is advisory and limited to current run-scoped evidence.</small>
+                </span>
+              </label>
+              <label class="settings-check" for="settings-notifications-completion">
+                <input id="settings-notifications-completion" type="checkbox" />
+                <span>
+                  Run completions
+                  <small>Requires explicit provider lifecycle completion; a clean exit alone is not enough.</small>
+                </span>
+              </label>
+              <p class="dialog-help">
+                Each category is off by default. Enabling one asks the operating system
+                for notification permission; denial leaves all categories off.
               </p>
             </section>
 

@@ -32,6 +32,7 @@ impl Fixture {
                 global_home: home.path().to_path_buf(),
                 project_root: root.path().to_path_buf(),
                 generation,
+                observer: None,
                 mutation_revision: None,
                 runtime_changed,
                 thread_factory: None,
@@ -501,6 +502,7 @@ fn descriptor_generation_and_token_fence_prevents_old_shutdown_cleanup() {
             global_home: home.path().to_path_buf(),
             project_root: root.path().to_path_buf(),
             generation: 1,
+            observer: None,
             mutation_revision: None,
             runtime_changed: None,
             thread_factory: None,
@@ -513,6 +515,7 @@ fn descriptor_generation_and_token_fence_prevents_old_shutdown_cleanup() {
             global_home: home.path().to_path_buf(),
             project_root: root.path().to_path_buf(),
             generation: 1,
+            observer: None,
             mutation_revision: None,
             runtime_changed: None,
             thread_factory: None,
@@ -529,6 +532,7 @@ fn descriptor_generation_and_token_fence_prevents_old_shutdown_cleanup() {
             global_home: home.path().to_path_buf(),
             project_root: root.path().to_path_buf(),
             generation: 2,
+            observer: None,
             mutation_revision: None,
             runtime_changed: None,
             thread_factory: None,
@@ -784,6 +788,151 @@ fn read_integration_descriptor_reports_missing_and_stale() {
     );
 }
 
+struct FixedObserver;
+
+impl AgentObservation for FixedObserver {
+    fn observe_runs(&self, generation: u64) -> Result<AgentRunsV2, CoordinationError> {
+        if generation != 7 {
+            return Err(CoordinationError::StaleGeneration {
+                expected: generation,
+                active: 7,
+            });
+        }
+        Ok(AgentRunsV2 {
+            generation,
+            runs: vec![observed_run()],
+            bounds: BoundedSnapshot::new(1, 1),
+        })
+    }
+
+    fn observe_run(
+        &self,
+        generation: u64,
+        run_id: &str,
+    ) -> Result<AgentRunObservationV1, CoordinationError> {
+        if generation != 7 {
+            return Err(CoordinationError::StaleGeneration {
+                expected: generation,
+                active: 7,
+            });
+        }
+        if run_id != "run-1" {
+            return Err(CoordinationError::RunNotFound);
+        }
+        Ok(AgentRunObservationV1 {
+            generation,
+            run: observed_run(),
+            intelligence: AgentIntelligenceDetail {
+                state: IntelligenceState::Waiting,
+                confidence: IntelligenceConfidence::High,
+                evidence: Vec::new(),
+                event_count: 2,
+                last_event_at: Some(Timestamp::from_unix_seconds(2)),
+            },
+            event_bounds: BoundedSnapshot::new(2, 2),
+        })
+    }
+
+    fn observe_handoffs(&self, generation: u64) -> Result<AgentHandoffInbox, CoordinationError> {
+        if generation != 7 {
+            return Err(CoordinationError::StaleGeneration {
+                expected: generation,
+                active: 7,
+            });
+        }
+        Ok(AgentHandoffInbox {
+            items: Vec::new(),
+            bounds: BoundedSnapshot::new(0, 0),
+            incomplete: false,
+        })
+    }
+}
+
+fn observed_run() -> AgentRuntimeSummary {
+    AgentRuntimeSummary {
+        run_id: "run-1".to_owned(),
+        registration_kind: RegistrationKind::External,
+        terminal_id: String::new(),
+        terminal_backed: false,
+        terminal_present: false,
+        corresponding_terminal: false,
+        state: RunState::Running,
+        process_state: ProcessState::Unknown,
+        lease_state: LeaseState::Active,
+        live: true,
+        activity_state: ActivityState::Waiting,
+        association: Some(RuntimeAssociation {
+            plan_id: 26,
+            task_id: 209,
+            revision: 3,
+        }),
+        intelligence: None,
+    }
+}
+
+#[test]
+fn observation_client_is_authenticated_generation_fenced_and_sanitized() {
+    let home = TempDirectory::new("ptrack-agent-observe-home");
+    let root = TempDirectory::new("ptrack-agent-observe-root");
+    let registry = Arc::new(Registry::new(RegistryConfig {
+        project_root: root.path().to_path_buf(),
+        ..RegistryConfig::default()
+    }));
+    let server = start_integration_server(
+        Arc::clone(&registry),
+        IntegrationConfig {
+            global_home: home.path().to_path_buf(),
+            project_root: root.path().to_path_buf(),
+            generation: 7,
+            observer: Some(Arc::new(FixedObserver)),
+            mutation_revision: None,
+            runtime_changed: None,
+            thread_factory: None,
+        },
+    )
+    .unwrap();
+    let descriptor: IntegrationDescriptor =
+        serde_json::from_slice(&fs::read(server.descriptor_path()).unwrap()).unwrap();
+    // The caller does not own the Desktop runtime generation. The authenticated
+    // live descriptor does, and every request reuses that exact value.
+    let client = AgentObservationClient::for_project(home.path(), root.path()).unwrap();
+    assert_eq!(client.runs().unwrap().runs, vec![observed_run()]);
+    assert_eq!(client.run("run-1").unwrap().intelligence.event_count, 2);
+    assert!(client.inbox().unwrap().items.is_empty());
+    assert_error(
+        json_request(
+            &descriptor,
+            "/v1/observe/runs",
+            "wrong",
+            &serde_json::json!({"generation": 7}),
+        ),
+        401,
+        "AgentRun request rejected\n",
+    );
+    assert_error(
+        json_request(
+            &descriptor,
+            "/v1/observe/runs",
+            &descriptor.registration_token,
+            &serde_json::json!({"generation": 6}),
+        ),
+        409,
+        "AgentRun observation generation changed\n",
+    );
+    let response = json_request(
+        &descriptor,
+        "/v1/observe/runs",
+        &descriptor.registration_token,
+        &serde_json::json!({"generation": 7}),
+    );
+    let body = String::from_utf8(response.body).unwrap();
+    assert!(!body.contains("pid"));
+    assert!(!body.contains("cwd"));
+    assert!(!body.contains("provider"));
+    server.shutdown().unwrap();
+    registry.shutdown().unwrap();
+}
+
 #[test]
 fn thread_start_failure_leaves_no_descriptor_or_live_listener() {
     let home = TempDirectory::new("ptrack-agent-http-thread-failure-home");
@@ -800,6 +949,7 @@ fn thread_start_failure_leaves_no_descriptor_or_live_listener() {
             global_home: home.path().to_path_buf(),
             project_root: root.path().to_path_buf(),
             generation: 13,
+            observer: None,
             mutation_revision: None,
             runtime_changed: None,
             thread_factory: Some(Arc::new(move |address, _task| {

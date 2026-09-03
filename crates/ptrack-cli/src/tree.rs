@@ -170,6 +170,12 @@ pub fn root() -> Command {
                 .mut_subcommand("show", |c| c.arg(flag("json"))),
         )
         .subcommand(group("hook", &["install", "uninstall", "status"]))
+        .subcommand(
+            group("agent", &["list", "show", "inbox"])
+                .mut_subcommand("list", |c| c.arg(flag("json")))
+                .mut_subcommand("show", |c| c.arg(positional("run-id", 1)).arg(flag("json")))
+                .mut_subcommand("inbox", |c| c.arg(flag("json"))),
+        )
         .subcommand(leaf("context").arg(flag("json")))
         .subcommand(leaf("guide").arg(flag("print")))
         .subcommand(leaf("next").arg(flag("json")))
@@ -184,6 +190,7 @@ pub fn root() -> Command {
         .subcommand(leaf("status").arg(flag("json")))
         .subcommand(leaf("projects").arg(flag("json")))
         .subcommand(leaf("backup"))
+        .subcommand(leaf("mcp"))
         .subcommand(
             group("capability", &["call", "mcp"]).mut_subcommand("call", |c| {
                 c.arg(positional("tool", 1)).arg(option("arguments"))

@@ -122,6 +122,7 @@ pub fn run(
     }
     let snapshot = application.snapshot()?;
     let mut model = Model::new(snapshot, context);
+    refresh_agents(application, &mut model);
     let _mode = TerminalMode::enter()?;
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
@@ -165,17 +166,42 @@ pub(crate) fn apply_effect(
         Effect::Reload {
             success,
             reopen_detail,
-        } => match application.snapshot() {
-            Ok(snapshot) => {
-                model.replace_snapshot(snapshot);
-                if reopen_detail {
-                    model.detail = model.selected_detail();
-                    model.detail_offset = 0;
+        } => {
+            let agent_detail_run = reopen_detail
+                .then(|| {
+                    model
+                        .agent_detail
+                        .as_ref()
+                        .map(|detail| detail.run.run_id.clone())
+                })
+                .flatten();
+            let snapshot = application.snapshot();
+            refresh_agents(application, model);
+            match snapshot {
+                Ok(snapshot) => {
+                    let mut reload_status = success;
+                    model.replace_snapshot(snapshot);
+                    if let Some(run_id) = agent_detail_run {
+                        match application.agent_run(&run_id) {
+                            Ok(detail) => {
+                                model.agent_detail = Some(detail);
+                                model.agent_detail_offset = 0;
+                            }
+                            Err(error) => {
+                                model.agent_detail = None;
+                                reload_status = error.to_string();
+                            }
+                        }
+                    }
+                    if reopen_detail {
+                        model.detail = model.selected_detail();
+                        model.detail_offset = 0;
+                    }
+                    model.status = reload_status;
                 }
-                model.status = success;
+                Err(error) => model.status = error.to_string(),
             }
-            Err(error) => model.status = error.to_string(),
-        },
+        }
         Effect::Backup => match application.backup() {
             Ok(path) => model.status = format!("backed up → {}", path.display()),
             Err(error) => model.status = format!("backup error: {error}"),
@@ -200,8 +226,32 @@ pub(crate) fn apply_effect(
             }
             Err(error) => model.status = error.to_string(),
         },
+        Effect::LoadAgentDetail(run_id) => match application.agent_run(&run_id) {
+            Ok(detail) => {
+                model.agent_detail = Some(detail);
+                model.agent_detail_offset = 0;
+            }
+            Err(error) => model.status = error.to_string(),
+        },
     }
     false
+}
+
+fn refresh_agents(application: &mut dyn ApplicationPort, model: &mut Model) {
+    let (runs, runs_error) = match application.agent_runs() {
+        Ok(value) => (Some(value), None),
+        Err(error) => (None, Some(error.to_string())),
+    };
+    let (inbox, inbox_error) = match application.agent_inbox() {
+        Ok(value) => (Some(value), None),
+        Err(error) => (None, Some(error.to_string())),
+    };
+    let error = runs_error
+        .into_iter()
+        .chain(inbox_error)
+        .collect::<Vec<_>>()
+        .join("; ");
+    model.replace_agent_state(runs, inbox, error);
 }
 
 fn translate_key(event: KeyEvent) -> Option<Key> {

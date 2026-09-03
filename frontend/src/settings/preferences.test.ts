@@ -65,6 +65,25 @@ describe("preferences normalization", () => {
     ).toEqual({ restoreLastProject: true, lastProjectRoot: "/work/app" });
   });
 
+  it("keeps every OS notification category independently opt-in", () => {
+    expect(defaultPreferences.notifications).toEqual({
+      handoffArrival: false,
+      runFailureOrDrift: false,
+      runCompletion: false,
+    });
+    expect(normalizePreferences({
+      notifications: {
+        handoffArrival: true,
+        runFailureOrDrift: "yes",
+        runCompletion: true,
+      },
+    }).notifications).toEqual({
+      handoffArrival: true,
+      runFailureOrDrift: false,
+      runCompletion: true,
+    });
+  });
+
   it("clamps the documented ranges", () => {
     expect(normalizePreferences({ terminal: { fontSize: 2 } }).terminal.fontSize).toBe(10);
     expect(normalizePreferences({ terminal: { fontSize: 99 } }).terminal.fontSize).toBe(24);

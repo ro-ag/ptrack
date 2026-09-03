@@ -85,6 +85,20 @@ fn configured(test: &TestDirectory, create_project: bool) -> (LocalApplication, 
 }
 
 #[test]
+fn agent_observation_requires_the_active_project_host() {
+    let directory = TestDirectory::new("ptrack-app-agent-observation");
+    let (mut application, _) = configured(&directory, true);
+    assert_eq!(
+        application.agent_runs().unwrap_err().to_string(),
+        "no active agent coordination host for this project"
+    );
+    assert_eq!(
+        application.agent_inbox().unwrap_err().to_string(),
+        "no active agent coordination host for this project"
+    );
+}
+
+#[test]
 fn operations_reopen_and_drop_the_store() {
     let directory = TestDirectory::new("reopen");
     let (mut application, endpoint) = configured(&directory, true);

@@ -2,11 +2,14 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use ptrack_app::{
-    ActorIdentity, AppError, AppResult, ApplicationPort, CapabilityCancellation,
-    CapabilityMcpOutcome, GuideAction, HookAction, HookResult, INVALID_CLAIM_PREFIX,
-    INVALID_HOLD_PREFIX, InitRequest, InitResult, Mutation, MutationResult, PlanDeleteSummary,
-    PlanLifecycleOutcome, PlanLifecycleRequest, PlanTransferSummary, ProcessOutput,
-    RelocateRequest, RelocateResult,
+    ActivityState, ActorIdentity, AgentHandoffInbox, AgentIntelligenceDetail,
+    AgentRunObservationV1, AgentRunsV2, AgentRuntimeSummary, AppError, AppResult, ApplicationPort,
+    BoundedSnapshot, CapabilityCancellation, CapabilityMcpOutcome, GuideAction, HookAction,
+    HookResult, INVALID_CLAIM_PREFIX, INVALID_HOLD_PREFIX, InitRequest, InitResult,
+    IntelligenceConfidence, IntelligenceState, LeaseState, Mutation, MutationResult,
+    PlanDeleteSummary, PlanLifecycleOutcome, PlanLifecycleRequest, PlanTransferSummary,
+    ProcessOutput, ProcessState, RegistrationKind, RelocateRequest, RelocateResult, RunState,
+    RuntimeAssociation,
 };
 use ptrack_core::{
     Commit, MemoryKind, Meta, Note, Plan, PlanStatus, ProjectRef, ProjectSnapshot, Task,
@@ -26,6 +29,7 @@ struct FakeApplication {
     lifecycle_requests: Vec<PlanLifecycleRequest>,
     lifecycle_results: Vec<AppResult<PlanLifecycleOutcome>>,
     relocate_requests: Vec<RelocateRequest>,
+    fail_notes: bool,
 }
 
 impl Default for FakeApplication {
@@ -59,6 +63,7 @@ impl Default for FakeApplication {
             lifecycle_requests: Vec::new(),
             lifecycle_results: Vec::new(),
             relocate_requests: Vec::new(),
+            fail_notes: false,
         }
     }
 }
@@ -275,6 +280,9 @@ impl ApplicationPort for FakeApplication {
                 target_id,
                 body,
             } => {
+                if self.fail_notes {
+                    return Err(AppError::Message("test note write failed".to_owned()));
+                }
                 let id = self
                     .snapshot
                     .notes
@@ -372,6 +380,62 @@ impl ApplicationPort for FakeApplication {
     ) -> AppResult<CapabilityMcpOutcome> {
         input.read_to_end(&mut self.mcp_input)?;
         Ok(CapabilityMcpOutcome::Complete)
+    }
+
+    fn agent_runs(&mut self) -> AppResult<AgentRunsV2> {
+        Ok(AgentRunsV2 {
+            generation: 7,
+            runs: vec![agent_run()],
+            bounds: BoundedSnapshot::new(1, 3),
+        })
+    }
+
+    fn agent_run(&mut self, run_id: &str) -> AppResult<AgentRunObservationV1> {
+        if run_id != "run-safe-123456" {
+            return Err(AppError::Message("AgentRun not found".to_owned()));
+        }
+        Ok(AgentRunObservationV1 {
+            generation: 7,
+            run: agent_run(),
+            intelligence: AgentIntelligenceDetail {
+                state: IntelligenceState::Waiting,
+                confidence: IntelligenceConfidence::High,
+                evidence: Vec::new(),
+                event_count: 4,
+                last_event_at: None,
+            },
+            event_bounds: BoundedSnapshot::new(4, 6),
+        })
+    }
+
+    fn agent_inbox(&mut self) -> AppResult<AgentHandoffInbox> {
+        Ok(AgentHandoffInbox {
+            items: Vec::new(),
+            bounds: BoundedSnapshot::new(0, 0),
+            incomplete: true,
+        })
+    }
+}
+
+fn agent_run() -> AgentRuntimeSummary {
+    AgentRuntimeSummary {
+        run_id: "run-safe-123456".to_owned(),
+        registration_kind: RegistrationKind::External,
+        terminal_id: String::new(),
+        terminal_backed: false,
+        terminal_present: false,
+        corresponding_terminal: false,
+        state: RunState::Running,
+        process_state: ProcessState::Unknown,
+        lease_state: LeaseState::Active,
+        live: true,
+        activity_state: ActivityState::Waiting,
+        association: Some(RuntimeAssociation {
+            plan_id: 26,
+            task_id: 209,
+            revision: 3,
+        }),
+        intelligence: None,
     }
 }
 
@@ -477,6 +541,37 @@ fn capability_mcp_uses_stdin_as_sole_protocol_input_and_emits_no_cli_text() {
     );
     assert!(stdout.is_empty());
     assert!(stderr.is_empty());
+}
+
+#[test]
+fn project_mcp_is_a_top_level_protocol_only_stdio_command() {
+    let mut application = seeded();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let input = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\"}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"get_next_task\",\"arguments\":{}}}\n"
+    );
+    let result = run(
+        ["ptrack", "mcp"].map(str::to_owned),
+        &mut application,
+        Io {
+            stdin: Box::new(std::io::Cursor::new(input.as_bytes().to_vec())),
+            stdout: &mut stdout,
+            stderr: &mut stderr,
+            cancellation: CapabilityCancellation::new(),
+        },
+    );
+    assert_eq!(result.unwrap(), RunOutcome::ExitSuccess);
+    assert!(stderr.is_empty());
+    let rows: Vec<serde_json::Value> = String::from_utf8(stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["result"]["serverInfo"]["name"], "p-track-project");
+    assert_eq!(rows[1]["result"]["structuredContent"]["task"]["id"], 1);
 }
 
 /// One active plan with a todo task #1 and a done task #2.
@@ -1222,6 +1317,36 @@ fn help_and_unknown_command_match_the_go_process_contract() {
 }
 
 #[test]
+fn agent_commands_render_safe_text_json_and_complete_help() {
+    let (result, stdout, _) = invoke(&["ptrack", "agent", "list"]);
+    assert_eq!(result.unwrap(), RunOutcome::ExitSuccess);
+    assert!(stdout.contains("run-safe-123456\twaiting\texternal\tlive\tplan #26 / task #209"));
+    assert!(stdout.contains("… 2 more registered run(s)"));
+
+    let (result, stdout, _) = invoke(&["ptrack", "agent", "show", "run-safe-123456", "--json"]);
+    assert_eq!(result.unwrap(), RunOutcome::ExitSuccess);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(json["intelligence"]["state"], "waiting");
+    assert!(json.get("pid").is_none());
+    assert!(!stdout.contains("cwd"));
+    assert!(!stdout.contains("provider"));
+
+    let (result, stdout, _) = invoke(&["ptrack", "agent", "inbox"]);
+    assert_eq!(result.unwrap(), RunOutcome::ExitSuccess);
+    assert!(stdout.contains("proposal only"));
+    assert!(stdout.contains("no pending agent handoffs"));
+    assert!(stdout.contains("analysis incomplete"));
+
+    let (_, stdout, _) = invoke(&["ptrack", "help", "agent"]);
+    for leaf in ["inbox", "list", "show"] {
+        assert!(stdout.contains(leaf), "missing agent help leaf {leaf}");
+    }
+    let (_, stdout, _) = invoke(&["ptrack", "agent", "show", "--help"]);
+    assert!(stdout.contains("agent show <run-id>"));
+    assert!(stdout.contains("--json"));
+}
+
+#[test]
 fn status_json_uses_go_key_order_and_html_escaping() {
     let (result, stdout, stderr) = invoke(&["ptrack", "status", "--json"]);
     assert_eq!(result.expect("status"), RunOutcome::ExitSuccess);
@@ -1378,6 +1503,21 @@ fn task_done_requires_summary_and_linked_commit() {
             .iter()
             .any(|note| note.target_id == 1 && note.body == "closeout: wired into CLI")
     );
+}
+
+#[test]
+fn task_done_keeps_the_task_open_when_required_evidence_cannot_be_written() {
+    let mut application = seeded();
+    application.snapshot.commits.push(commit_for_task(1, 1));
+    application.fail_notes = true;
+
+    let (result, _, _) = invoke_with(
+        &mut application,
+        &["ptrack", "task", "done", "1", "--summary", "wired into CLI"],
+    );
+
+    assert_eq!(result.unwrap_err().to_string(), "test note write failed");
+    assert_eq!(application.snapshot.tasks[0].status, TaskStatus::Todo);
 }
 
 #[test]

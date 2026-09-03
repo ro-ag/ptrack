@@ -75,6 +75,8 @@
                 <tr><td><code>context</code></td><td>Print a bounded resume digest.</td><td>Use at the start of a work session.</td></tr>
                 <tr><td><code>guide</code></td><td>Install or refresh managed agent guidance.</td><td><code>--print</code> writes the guide to standard output instead of files.</td></tr>
                 <tr><td><code>next</code></td><td>Choose the next actionable task in the active plan.</td><td>Read-only orientation; led by the goal line.</td></tr>
+                <tr><td><code>agent list|show|inbox</code></td><td>Inspect bounded live runs, inferred intelligence, and pending handoffs.</td><td>Reads the active project's coordination host; every command accepts <code>--json</code>.</td></tr>
+                <tr><td><code>mcp</code></td><td>Serve project-planning MCP tools over standard input and output.</td><td>Launch with the project directory as the working directory; exposes <code>get_context</code>, <code>get_next_task</code>, <code>complete_task</code>, and <code>add_note</code>.</td></tr>
                 <tr><td><code>checkpoint</code></td><td>Print the whole-picture re-evaluation block.</td><td>Goal, summary, open plans, open issues; also printed after <code>plan done</code>.</td></tr>
                 <tr><td><code>search &lt;term&gt;</code></td><td>Search project records.</td><td>Requires one search term.</td></tr>
                 <tr><td><code>board</code></td><td>Render the board or open its Desktop form.</td><td><code>--plan &lt;id&gt;</code>, <code>--gui</code>.</td></tr>

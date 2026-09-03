@@ -72,6 +72,7 @@ fn shell_has_only_the_bounded_adapter_commands() {
     assert!(!source.contains("windows_subsystem"));
     assert!(manifest.contains("name = \"ptrack\"\npath = \"src/main.rs\""));
     assert!(manifest.contains("tauri-plugin-dialog = \"=2.7.2\""));
+    assert!(manifest.contains("tauri-plugin-notification = \"=2.3.3\""));
     assert!(manifest.contains("tauri-plugin-opener = \"=2.5.4\""));
     assert!(!manifest.contains("tauri-plugin-shell"));
     assert!(!manifest.contains("tauri-plugin-http"));
@@ -108,6 +109,7 @@ fn main_window_has_only_one_way_event_subscription_authority() {
         "allow-emit-to",
         "image",
         "menu",
+        "notification",
         "tray",
         "window",
         "webview",
@@ -352,7 +354,7 @@ fn parity_matrix_counts_are_self_consistent() {
         .filter_map(|line| line.strip_prefix("| `"))
         .filter_map(|line| line.split_once('`').map(|(id, _)| id))
         .collect::<Vec<_>>();
-    assert_eq!(ids.len(), 762);
-    assert_eq!(ids.iter().filter(|id| id.starts_with("GUI-")).count(), 136);
+    assert_eq!(ids.len(), 766);
+    assert_eq!(ids.iter().filter(|id| id.starts_with("GUI-")).count(), 137);
     assert_eq!(ids.iter().filter(|id| id.starts_with("TERM-")).count(), 108);
 }

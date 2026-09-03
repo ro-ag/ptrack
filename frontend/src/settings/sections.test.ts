@@ -18,6 +18,7 @@ describe("settings sections", () => {
       "startup",
       "appearance",
       "terminal",
+      "notifications",
       "updates",
       "data",
     ]);
@@ -26,18 +27,18 @@ describe("settings sections", () => {
   });
 
   it("falls back to the first section for an unknown id", () => {
-    expect(settingsSectionIndex("updates")).toBe(3);
+    expect(settingsSectionIndex("updates")).toBe(4);
     expect(settingsSectionIndex("nonsense")).toBe(0);
   });
 
   it("wraps arrow traversal and jumps with Home and End", () => {
     expect(nextSettingsSectionIndex("ArrowDown", 0, 5)).toBe(1);
-    expect(nextSettingsSectionIndex("ArrowDown", 4, 5)).toBe(0);
-    expect(nextSettingsSectionIndex("ArrowUp", 0, 5)).toBe(4);
-    expect(nextSettingsSectionIndex("ArrowRight", 1, 5)).toBe(2);
-    expect(nextSettingsSectionIndex("ArrowLeft", 1, 5)).toBe(0);
-    expect(nextSettingsSectionIndex("Home", 2, 5)).toBe(0);
-    expect(nextSettingsSectionIndex("End", 0, 5)).toBe(4);
+    expect(nextSettingsSectionIndex("ArrowDown", 5, 6)).toBe(0);
+    expect(nextSettingsSectionIndex("ArrowUp", 0, 6)).toBe(5);
+    expect(nextSettingsSectionIndex("ArrowRight", 1, 6)).toBe(2);
+    expect(nextSettingsSectionIndex("ArrowLeft", 1, 6)).toBe(0);
+    expect(nextSettingsSectionIndex("Home", 2, 6)).toBe(0);
+    expect(nextSettingsSectionIndex("End", 0, 6)).toBe(5);
   });
 
   it("leaves other keys to the dialog", () => {

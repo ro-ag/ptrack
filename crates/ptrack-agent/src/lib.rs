@@ -41,7 +41,8 @@ pub use event::{
 };
 pub use handoff::{HandoffPreview, build_handoff_preview};
 pub use integration::{
-    IntegrationConfig, IntegrationError, IntegrationServer, start_integration_server,
+    AgentObservationClient, IntegrationConfig, IntegrationError, IntegrationServer,
+    start_integration_server,
 };
 pub use intelligence::{
     IntelligenceConfidence, IntelligenceEvidence, IntelligenceState, RunIntelligence,

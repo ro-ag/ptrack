@@ -342,6 +342,13 @@ const elements = {
   settingsTerminalUnicode: document.querySelector("#settings-terminal-unicode"),
   settingsTerminalScrollback: document.querySelector("#settings-terminal-scrollback"),
   settingsTerminalRenderer: document.querySelector("#settings-terminal-renderer"),
+  settingsNotificationsHandoff: document.querySelector("#settings-notifications-handoff"),
+  settingsNotificationsFailureDrift: document.querySelector(
+    "#settings-notifications-failure-drift",
+  ),
+  settingsNotificationsCompletion: document.querySelector(
+    "#settings-notifications-completion",
+  ),
   settingsUpdatesAutomatic: document.querySelector("#settings-updates-automatic"),
   settingsOpenUpdates: document.querySelector("#settings-open-updates"),
   settingsDiagnostics: document.querySelector("#settings-diagnostics"),
@@ -3010,6 +3017,10 @@ function renderPreferences() {
   elements.settingsTerminalUnicode.value = preferences.terminal.unicodeMode;
   elements.settingsTerminalScrollback.value = String(preferences.terminal.scrollback);
   elements.settingsTerminalRenderer.value = preferences.terminal.renderer;
+  elements.settingsNotificationsHandoff.checked = preferences.notifications.handoffArrival;
+  elements.settingsNotificationsFailureDrift.checked =
+    preferences.notifications.runFailureOrDrift;
+  elements.settingsNotificationsCompletion.checked = preferences.notifications.runCompletion;
 }
 
 // A stored default profile that no longer resolves is reported as
@@ -7137,6 +7148,21 @@ elements.settingsTerminalScrollback.addEventListener("change", (event) => {
 });
 elements.settingsTerminalRenderer.addEventListener("change", (event) => {
   void savePreferences({ terminal: { renderer: event.currentTarget.value } });
+});
+elements.settingsNotificationsHandoff.addEventListener("change", (event) => {
+  void savePreferences({
+    notifications: { handoffArrival: event.currentTarget.checked },
+  });
+});
+elements.settingsNotificationsFailureDrift.addEventListener("change", (event) => {
+  void savePreferences({
+    notifications: { runFailureOrDrift: event.currentTarget.checked },
+  });
+});
+elements.settingsNotificationsCompletion.addEventListener("change", (event) => {
+  void savePreferences({
+    notifications: { runCompletion: event.currentTarget.checked },
+  });
 });
 elements.settingsUpdatesAutomatic.addEventListener("change", (event) => {
   void setAutomaticUpdateChecks(event.currentTarget.checked);

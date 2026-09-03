@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::channel;
-use std::sync::{Arc, Barrier, Mutex};
+use std::sync::{Arc, Barrier, Mutex, Weak};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -406,6 +406,27 @@ impl DesktopEventSink for Events {
     }
 }
 
+#[derive(Default)]
+struct SnapshotEvents {
+    runtime: Mutex<Weak<DesktopRuntime>>,
+    snapshots: Mutex<Vec<Result<u64, String>>>,
+}
+
+impl DesktopEventSink for SnapshotEvents {
+    fn emit(&self, event: DesktopEvent) {
+        if matches!(event, DesktopEvent::WorkspaceDataChanged(_))
+            && let Some(runtime) = self.runtime.lock().unwrap().upgrade()
+        {
+            self.snapshots.lock().unwrap().push(
+                runtime
+                    .notification_snapshot()
+                    .map(|snapshot| snapshot.generation)
+                    .map_err(|error| error.to_string()),
+            );
+        }
+    }
+}
+
 struct RecordingUpdates {
     calls: Mutex<Vec<String>>,
     state: Mutex<UpdateState>,
@@ -574,6 +595,36 @@ fn initialize_project_v1_publishes_exactly_one_workspace_and_complete_status() {
             .unwrap()["outcome"],
         "complete"
     );
+}
+
+#[test]
+fn initialization_event_can_establish_the_notification_generation_baseline() {
+    let directory = TestDirectory::new("initialize-notification-baseline");
+    let project = directory.0.join("project");
+    std::fs::create_dir(&project).unwrap();
+    let factory = Arc::new(FakeFactory::default());
+    let initialization = RecordingInitialization::new(project.clone());
+    let events = Arc::new(SnapshotEvents::default());
+    let runtime = DesktopRuntime::new(DesktopRuntimeConfig {
+        version: "test".to_owned(),
+        factory,
+        event_sink: Some(events.clone()),
+        initial_workspace: None,
+        recent_projects: Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+        initialization,
+        update_service: UnavailableUpdateService::new("test"),
+        confirmation_ttl: Duration::from_secs(60),
+    });
+    *events.runtime.lock().unwrap() = Arc::downgrade(&runtime);
+
+    runtime
+        .invoke(initialize_request(
+            &project,
+            "establish notification baseline",
+        ))
+        .unwrap();
+
+    assert_eq!(events.snapshots.lock().unwrap().as_slice(), &[Ok(1)]);
 }
 
 #[test]

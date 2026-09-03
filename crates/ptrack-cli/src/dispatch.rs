@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use clap::ArgMatches;
 use ptrack_app::{
     ApplicationPort, GuideAction, HookAction, HookResult, InitRequest, Mutation, MutationResult,
-    PlanLifecycleOutcome, PlanLifecycleRequest, RelocateRequest,
+    PlanLifecycleOutcome, PlanLifecycleRequest, RelocateRequest, complete_task, serve_project_mcp,
 };
 use ptrack_core::{
     IssueStatus, LEGACY_ACTOR, MilestoneStatus, NoteTarget, PlanStatus, Severity, TaskStatus,
@@ -119,6 +119,7 @@ fn dispatch(
         ["commit", command] => commit(command, leaf, application, io),
         ["config", command] => config(command, leaf, application, io),
         ["hook", command] => hook(command, application, io),
+        ["agent", command] => agent(command, leaf, application, io),
         ["context"] => context_command(leaf, application, io),
         ["guide"] => guide(leaf, application, io),
         ["next"] => next_command(leaf, application, io),
@@ -134,6 +135,11 @@ fn dispatch(
         ["backup"] => {
             let path = application.backup()?;
             output::line(io.stdout, path.display())?;
+            Ok(RunOutcome::ExitSuccess)
+        }
+        ["mcp"] => {
+            let input = std::mem::replace(&mut io.stdin, Box::new(std::io::empty()));
+            serve_project_mcp(application, input, io.stdout, &io.cancellation)?;
             Ok(RunOutcome::ExitSuccess)
         }
         ["capability", "call"] => capability_call(leaf, application, io),
@@ -910,53 +916,12 @@ fn task(
         "done" => {
             let id = parse_u64(first(matches, "id")?)?;
             let force = matches.get_flag("force");
-            let summary = option(matches, "summary")
-                .map(|value| value.trim().to_owned())
-                .filter(|value| !value.is_empty());
-            let linked_commits = application
-                .snapshot()?
-                .commits
-                .iter()
-                .filter(|commit| commit.task_id == id)
-                .count();
-            let mut missing = Vec::new();
-            if summary.is_none() {
-                missing.push(
-                    "--summary \"what changed, where it is wired in, what remains\" is required",
-                );
-            }
-            if linked_commits == 0 {
-                missing.push(
-                    "no commit is linked: put #<task-id> in the commit message \
-                     (ptrack hook install records it) or run ptrack commit record",
-                );
-            }
-            if !missing.is_empty() && !force {
-                return Err(CliError::message(format!(
-                    "cannot close task #{id}: {} (or pass --force)",
-                    missing.join("; ")
-                )));
-            }
-            expect_none(application.mutate(Mutation::SetTaskStatus {
-                id,
-                status: TaskStatus::Done,
-            })?)?;
-            if let Some(summary) = summary {
-                application.mutate(Mutation::AddNote {
-                    target: NoteTarget::Task,
-                    target_id: id,
-                    body: format!("closeout: {summary}"),
-                })?;
-            }
-            if !missing.is_empty() {
-                add_override_note(
-                    application,
-                    NoteTarget::Task,
-                    id,
-                    format!("override: closed via --force ({})", missing.join("; ")),
-                )?;
-            }
-            output::line(io.stdout, format_args!("Linked commits: {linked_commits}"))?;
+            let result =
+                complete_task(application, id, option(matches, "summary").cloned(), force)?;
+            output::line(
+                io.stdout,
+                format_args!("Linked commits: {}", result.linked_commits),
+            )?;
         }
         "block" => {
             expect_none(application.mutate(Mutation::SetTaskStatus {
@@ -1651,6 +1616,163 @@ fn projects(
         }
     }
     Ok(RunOutcome::ExitSuccess)
+}
+
+fn agent(
+    command: &str,
+    matches: &ArgMatches,
+    application: &mut dyn ApplicationPort,
+    io: &mut Io<'_>,
+) -> Result<RunOutcome, CliError> {
+    match command {
+        "list" => {
+            let runs = application.agent_runs()?;
+            if matches.get_flag("json") {
+                output::json(io.stdout, &runs)?;
+            } else if runs.runs.is_empty() {
+                output::line(io.stdout, "no registered agent runs")?;
+            } else {
+                for run in runs.runs {
+                    output::line(
+                        io.stdout,
+                        format_args!(
+                            "{}\t{}\t{}\t{}\t{}",
+                            run.run_id,
+                            activity_name(run.activity_state),
+                            run.registration_kind.as_str(),
+                            if run.live { "live" } else { run.state.as_str() },
+                            association_label(run.association)
+                        ),
+                    )?;
+                }
+                if runs.bounds.more > 0 {
+                    output::line(
+                        io.stdout,
+                        format_args!("… {} more registered run(s)", runs.bounds.more),
+                    )?;
+                }
+            }
+        }
+        "show" => {
+            let detail = application.agent_run(first(matches, "run-id")?)?;
+            if matches.get_flag("json") {
+                output::json(io.stdout, &detail)?;
+            } else {
+                output::line(io.stdout, format_args!("run: {}", detail.run.run_id))?;
+                output::line(
+                    io.stdout,
+                    format_args!("origin: {}", detail.run.registration_kind.as_str()),
+                )?;
+                output::line(
+                    io.stdout,
+                    format_args!(
+                        "lifecycle: {} ({})",
+                        detail.run.state.as_str(),
+                        if detail.run.live { "live" } else { "not live" }
+                    ),
+                )?;
+                output::line(
+                    io.stdout,
+                    format_args!("activity: {}", activity_name(detail.run.activity_state)),
+                )?;
+                output::line(
+                    io.stdout,
+                    format_args!("association: {}", association_label(detail.run.association)),
+                )?;
+                output::line(
+                    io.stdout,
+                    format_args!(
+                        "intelligence: {} ({} confidence)",
+                        detail.intelligence.state.as_str(),
+                        confidence_name(detail.intelligence.confidence)
+                    ),
+                )?;
+                output::line(
+                    io.stdout,
+                    format_args!(
+                        "events: {}/{} · evidence: {}",
+                        detail.event_bounds.shown,
+                        detail.event_bounds.total,
+                        detail.intelligence.evidence.len()
+                    ),
+                )?;
+                if let Some(last) = detail.intelligence.last_event_at {
+                    output::line(io.stdout, format_args!("last event: {last}"))?;
+                }
+                for evidence in detail.intelligence.evidence {
+                    output::line(io.stdout, format_args!("- {}", evidence.reason))?;
+                }
+            }
+        }
+        "inbox" => {
+            let inbox = application.agent_inbox()?;
+            if matches.get_flag("json") {
+                output::json(io.stdout, &inbox)?;
+            } else {
+                output::line(io.stdout, "proposal only; no action was executed")?;
+                if inbox.items.is_empty() {
+                    output::line(io.stdout, "no pending agent handoffs")?;
+                }
+                for handoff in inbox.items {
+                    output::line(
+                        io.stdout,
+                        format_args!(
+                            "{} → {}\tcreated {}\texpires {}",
+                            handoff.source_run_id,
+                            handoff.target_run_id,
+                            handoff.created_at,
+                            handoff.expires_at
+                        ),
+                    )?;
+                    for line in handoff.preview.text.lines() {
+                        output::line(io.stdout, format_args!("  {line}"))?;
+                    }
+                }
+                if inbox.bounds.more > 0 {
+                    output::line(
+                        io.stdout,
+                        format_args!("… {} more handoff(s)", inbox.bounds.more),
+                    )?;
+                }
+                if inbox.incomplete {
+                    output::line(io.stdout, "handoff analysis incomplete")?;
+                }
+            }
+        }
+        _ => return Err(CliError::message("internal agent command mismatch")),
+    }
+    Ok(RunOutcome::ExitSuccess)
+}
+
+fn association_label(association: Option<ptrack_app::RuntimeAssociation>) -> String {
+    match association {
+        Some(value) if value.task_id != 0 => {
+            format!("plan #{} / task #{}", value.plan_id, value.task_id)
+        }
+        Some(value) if value.plan_id != 0 => format!("plan #{}", value.plan_id),
+        _ => "unassociated".to_owned(),
+    }
+}
+
+const fn activity_name(state: ptrack_app::ActivityState) -> &'static str {
+    match state {
+        ptrack_app::ActivityState::Running => "running",
+        ptrack_app::ActivityState::Waiting => "waiting",
+        ptrack_app::ActivityState::Blocked => "blocked",
+        ptrack_app::ActivityState::Completed => "completed",
+        ptrack_app::ActivityState::Failed => "failed",
+        ptrack_app::ActivityState::Stale => "stale",
+        ptrack_app::ActivityState::Unknown => "unknown",
+    }
+}
+
+const fn confidence_name(value: ptrack_app::IntelligenceConfidence) -> &'static str {
+    match value {
+        ptrack_app::IntelligenceConfidence::Unset => "unset",
+        ptrack_app::IntelligenceConfidence::Low => "low",
+        ptrack_app::IntelligenceConfidence::Medium => "medium",
+        ptrack_app::IntelligenceConfidence::High => "high",
+    }
 }
 
 fn capability_call(

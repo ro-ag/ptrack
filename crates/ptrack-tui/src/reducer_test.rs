@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
-use ptrack_app::Mutation;
+use ptrack_app::{
+    ActivityState, AgentHandoffInbox, AgentRunsV2, AgentRuntimeSummary, BoundedSnapshot,
+    LeaseState, Mutation, ProcessState, RegistrationKind, RunState,
+};
 use ptrack_core::{
     Meta, NoteTarget, Plan, PlanStatus, ProjectSnapshot, Task, TaskStatus, Timestamp,
 };
@@ -49,7 +52,7 @@ fn modal_precedence_and_input_ctrl_c_match_source_behavior() {
 }
 
 #[test]
-fn five_tabs_and_menu_layering_are_stable() {
+fn six_tabs_and_menu_layering_are_stable() {
     let mut value = model();
     update(&mut value, &Key::Char('5'));
     assert_eq!(value.tab, Tab::Maintenance);
@@ -58,6 +61,61 @@ fn five_tabs_and_menu_layering_are_stable() {
     update(&mut value, &Key::Char('2'));
     assert_eq!(value.tab, Tab::Board);
     assert!(!value.menu);
+
+    update(&mut value, &Key::Char('6'));
+    assert_eq!(value.tab, Tab::Agents);
+    update(&mut value, &Key::BackTab);
+    assert_eq!(value.tab, Tab::Maintenance);
+    update(&mut value, &Key::Tab);
+    assert_eq!(value.tab, Tab::Agents);
+}
+
+#[test]
+fn agent_pane_row_and_detail_navigation_are_explicit() {
+    let mut value = model();
+    value.welcome = false;
+    value.tab = Tab::Agents;
+    value.replace_agent_state(
+        Some(AgentRunsV2 {
+            generation: 7,
+            runs: vec![agent_row("run-one"), agent_row("run-two")],
+            bounds: BoundedSnapshot::new(2, 2),
+        }),
+        Some(AgentHandoffInbox {
+            items: Vec::new(),
+            bounds: BoundedSnapshot::new(0, 0),
+            incomplete: false,
+        }),
+        String::new(),
+    );
+    update(&mut value, &Key::Down);
+    assert_eq!(value.agent_cursor, 1);
+    assert_eq!(
+        update(&mut value, &Key::Enter),
+        Some(Effect::LoadAgentDetail("run-two".to_owned()))
+    );
+    update(&mut value, &Key::Right);
+    assert_eq!(value.agent_pane, crate::model::AgentPane::Handoffs);
+    update(&mut value, &Key::Left);
+    assert_eq!(value.agent_pane, crate::model::AgentPane::Runs);
+}
+
+fn agent_row(id: &str) -> AgentRuntimeSummary {
+    AgentRuntimeSummary {
+        run_id: id.to_owned(),
+        registration_kind: RegistrationKind::External,
+        terminal_id: String::new(),
+        terminal_backed: false,
+        terminal_present: false,
+        corresponding_terminal: false,
+        state: RunState::Running,
+        process_state: ProcessState::Unknown,
+        lease_state: LeaseState::Active,
+        live: true,
+        activity_state: ActivityState::Running,
+        association: None,
+        intelligence: None,
+    }
 }
 
 #[test]

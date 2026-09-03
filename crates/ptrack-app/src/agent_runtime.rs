@@ -256,6 +256,7 @@ pub trait AgentRuntimeService {
     fn agent_intelligence(&self, generation: u64, run_id: &str) -> AppResult<AgentIntelligenceV2>;
     fn activity(&self, generation: u64) -> AppResult<AgentActivitySnapshot>;
     fn notifications(&self, generation: u64) -> AppResult<AgentNotificationsV2>;
+    fn handoff_inbox(&self, generation: u64) -> AppResult<ptrack_agent::AgentHandoffInbox>;
     fn drift(&self, generation: u64) -> AppResult<ptrack_agent::DriftSnapshot>;
     fn preview_handoff(&self, generation: u64, run_id: &str) -> AppResult<AgentHandoffV2>;
     fn set_task_ownership(
@@ -422,7 +423,7 @@ impl Drop for OperationGuard {
 pub struct AgentRuntime {
     generation: u64,
     registry: Arc<Registry>,
-    coordinator: Coordinator,
+    coordinator: Arc<Coordinator>,
     catalog: ProjectCoordinationStore,
     integration: Box<dyn AgentIntegration>,
     git_cancellation: Option<CancellationToken>,
@@ -488,7 +489,7 @@ impl AgentRuntime {
         let store: Arc<dyn CoordinationStore> = Arc::new(catalog.clone());
         let (invalidation_sender, invalidation_receiver) = sync_channel(INVALIDATION_CAPACITY);
         let mutation_revision = Arc::new(AtomicU64::new(0));
-        let coordinator = Coordinator::new(CoordinationConfig {
+        let coordinator = Arc::new(Coordinator::new(CoordinationConfig {
             generation: config.generation,
             project_root: endpoint.root.clone(),
             registry: Arc::clone(&registry),
@@ -499,13 +500,14 @@ impl AgentRuntime {
             random: None,
             mutation_revision: Some(Arc::clone(&mutation_revision)),
             runtime_changed: Some(invalidation_sender.clone()),
-        });
+        }));
         let integration = match config.integration_factory.start(
             Arc::clone(&registry),
             IntegrationConfig {
                 global_home,
                 project_root: endpoint.root,
                 generation: config.generation,
+                observer: Some(Arc::clone(&coordinator) as Arc<dyn ptrack_agent::AgentObservation>),
                 mutation_revision: Some(Arc::clone(&mutation_revision)),
                 runtime_changed: Some(invalidation_sender.clone()),
             },
@@ -661,6 +663,11 @@ impl AgentRuntimeService for AgentRuntime {
             bounds: activity.notification_bounds,
             incomplete: activity.notifications_incomplete,
         })
+    }
+
+    fn handoff_inbox(&self, generation: u64) -> AppResult<ptrack_agent::AgentHandoffInbox> {
+        let _operation = self.begin(generation)?;
+        map_coordination(self.coordinator.handoff_inbox(generation))
     }
 
     fn drift(&self, generation: u64) -> AppResult<ptrack_agent::DriftSnapshot> {

@@ -40,14 +40,21 @@ export interface StartupPreferences {
   lastProjectRoot: string | null;
 }
 
+export interface NotificationPreferences {
+  handoffArrival: boolean;
+  runFailureOrDrift: boolean;
+  runCompletion: boolean;
+}
+
 export interface Preferences {
   version: number;
   appearance: AppearancePreferences;
   terminal: TerminalPreferences;
   startup: StartupPreferences;
+  notifications: NotificationPreferences;
 }
 
-export const preferencesVersion = 1;
+export const preferencesVersion = 2;
 
 export const defaultPreferences: Preferences = {
   version: preferencesVersion,
@@ -61,6 +68,11 @@ export const defaultPreferences: Preferences = {
     renderer: "auto",
   },
   startup: { restoreLastProject: false, lastProjectRoot: null },
+  notifications: {
+    handoffArrival: false,
+    runFailureOrDrift: false,
+    runCompletion: false,
+  },
 };
 
 export const terminalFontSizeRange = { minimum: 10, maximum: 24 } as const;
@@ -108,6 +120,7 @@ export function normalizePreferences(value: unknown): Preferences {
   const appearance = record(document.appearance);
   const terminal = record(document.terminal);
   const startup = record(document.startup);
+  const notifications = record(document.notifications);
   const profileId = terminal.defaultProfileId;
   const lastProjectRoot = startup.lastProjectRoot;
   return {
@@ -152,6 +165,11 @@ export function normalizePreferences(value: unknown): Preferences {
           lastProjectRoot.trim() !== ""
         ? lastProjectRoot
         : null,
+    },
+    notifications: {
+      handoffArrival: notifications.handoffArrival === true,
+      runFailureOrDrift: notifications.runFailureOrDrift === true,
+      runCompletion: notifications.runCompletion === true,
     },
   };
 }

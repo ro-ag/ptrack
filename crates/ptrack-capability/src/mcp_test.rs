@@ -6,7 +6,8 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-use super::mcp::{McpServeOutcome, serve_mcp};
+use super::mcp::{McpServeOutcome, serve_mcp, serve_mcp_with_tools};
+use crate::ToolDefinition;
 
 pub(super) fn assert_cap_085_through_087_mcp_contract() {
     let input = br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}
@@ -34,6 +35,45 @@ pub(super) fn assert_cap_085_through_087_mcp_contract() {
     assert_eq!(rows[1]["result"]["tools"].as_array().unwrap().len(), 3);
     assert_eq!(rows[2]["result"]["structuredContent"]["ok"], true);
     assert_eq!(rows[2]["result"]["isError"], false);
+}
+
+#[test]
+fn generic_mcp_surface_uses_supplied_identity_definitions_and_handler() {
+    let tools = [ToolDefinition {
+        name: "get_context".to_owned(),
+        title: "Get context".to_owned(),
+        description: "Read context".to_owned(),
+        input_schema: json!({"type":"object","additionalProperties":false}),
+        annotations: json!({"readOnlyHint":true}),
+    }];
+    let input = br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}
+{"jsonrpc":"2.0","id":2,"method":"tools/list"}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_context","arguments":{}}}
+"#
+    .to_vec();
+    let mut output = Vec::new();
+    serve_mcp_with_tools(
+        Box::new(std::io::Cursor::new(input)),
+        &mut output,
+        &CancellationToken::new(),
+        "p-track-project",
+        "1",
+        &tools,
+        |_, call| Ok::<_, &'static str>(json!({"called": call.name})),
+    )
+    .unwrap();
+    let rows: Vec<Value> = String::from_utf8(output)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(rows[0]["result"]["serverInfo"]["name"], "p-track-project");
+    assert_eq!(rows[1]["result"]["tools"].as_array().unwrap().len(), 1);
+    assert_eq!(rows[1]["result"]["tools"][0]["name"], "get_context");
+    assert_eq!(
+        rows[2]["result"]["structuredContent"]["called"],
+        "get_context"
+    );
 }
 
 #[test]

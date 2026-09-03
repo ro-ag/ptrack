@@ -1,11 +1,18 @@
 use std::path::PathBuf;
 
-use ptrack_app::Mutation;
+use ptrack_app::{AgentHandoffInbox, AgentRunObservationV1, AgentRunsV2, Mutation};
 use ptrack_core::{Issue, Milestone, Plan, ProjectSnapshot, Task, TaskStatus};
 
 use crate::InputEditor;
 
-pub const TAB_NAMES: [&str; 5] = ["Overview", "Board", "Milestones", "Issues", "Maintenance"];
+pub const TAB_NAMES: [&str; 6] = [
+    "Overview",
+    "Board",
+    "Milestones",
+    "Issues",
+    "Maintenance",
+    "Agents",
+];
 pub const BOARD_STATUSES: [TaskStatus; 4] = [
     TaskStatus::Todo,
     TaskStatus::Doing,
@@ -22,6 +29,7 @@ pub enum Tab {
     Milestones,
     Issues,
     Maintenance,
+    Agents,
 }
 
 impl Tab {
@@ -32,18 +40,27 @@ impl Tab {
             Self::Milestones => 2,
             Self::Issues => 3,
             Self::Maintenance => 4,
+            Self::Agents => 5,
         }
     }
 
     pub(crate) const fn from_index(value: usize) -> Self {
-        match value % 5 {
+        match value % 6 {
             0 => Self::Overview,
             1 => Self::Board,
             2 => Self::Milestones,
             3 => Self::Issues,
-            _ => Self::Maintenance,
+            4 => Self::Maintenance,
+            _ => Self::Agents,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum AgentPane {
+    #[default]
+    Runs,
+    Handoffs,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -105,6 +122,7 @@ pub enum Effect {
         reopen_detail: bool,
     },
     Backup,
+    LoadAgentDetail(String),
     Mutate {
         mutation: Mutation,
         success: Success,
@@ -123,6 +141,14 @@ pub struct Model {
     pub(crate) board_row: usize,
     pub(crate) milestone_cursor: usize,
     pub(crate) issue_cursor: usize,
+    pub(crate) agent_runs: Option<AgentRunsV2>,
+    pub(crate) agent_inbox: Option<AgentHandoffInbox>,
+    pub(crate) agent_error: String,
+    pub(crate) agent_pane: AgentPane,
+    pub(crate) agent_cursor: usize,
+    pub(crate) handoff_cursor: usize,
+    pub(crate) agent_detail: Option<AgentRunObservationV1>,
+    pub(crate) agent_detail_offset: usize,
     pub(crate) input: Option<ActiveInput>,
     pub(crate) pending_task_id: u64,
     pub(crate) detail: Option<DetailTarget>,
@@ -154,6 +180,14 @@ impl Model {
             board_row: 0,
             milestone_cursor: 0,
             issue_cursor: 0,
+            agent_runs: None,
+            agent_inbox: None,
+            agent_error: String::new(),
+            agent_pane: AgentPane::Runs,
+            agent_cursor: 0,
+            handoff_cursor: 0,
+            agent_detail: None,
+            agent_detail_offset: 0,
             input: None,
             pending_task_id: 0,
             detail: None,
@@ -177,11 +211,91 @@ impl Model {
         self.clamp_cursors();
     }
 
+    pub(crate) fn replace_agent_state(
+        &mut self,
+        runs: Option<AgentRunsV2>,
+        inbox: Option<AgentHandoffInbox>,
+        error: String,
+    ) {
+        let selected_run = self
+            .agent_runs
+            .as_ref()
+            .and_then(|value| value.runs.get(self.agent_cursor))
+            .map(|value| value.run_id.clone());
+        let selected_handoff = self
+            .agent_inbox
+            .as_ref()
+            .and_then(|value| value.items.get(self.handoff_cursor))
+            .map(|value| value.id.clone());
+        self.agent_runs = runs;
+        self.agent_inbox = inbox;
+        self.agent_error = error;
+        self.agent_cursor = selected_run
+            .as_deref()
+            .and_then(|id| {
+                self.agent_runs
+                    .as_ref()?
+                    .runs
+                    .iter()
+                    .position(|run| run.run_id == id)
+            })
+            .unwrap_or_else(|| {
+                clamp_index(
+                    self.agent_cursor,
+                    self.agent_runs.as_ref().map_or(0, |value| value.runs.len()),
+                )
+            });
+        self.handoff_cursor = selected_handoff
+            .as_deref()
+            .and_then(|id| {
+                self.agent_inbox
+                    .as_ref()?
+                    .items
+                    .iter()
+                    .position(|handoff| handoff.id == id)
+            })
+            .unwrap_or_else(|| {
+                clamp_index(
+                    self.handoff_cursor,
+                    self.agent_inbox
+                        .as_ref()
+                        .map_or(0, |value| value.items.len()),
+                )
+            });
+        if let Some(detail) = &self.agent_detail
+            && !self
+                .agent_runs
+                .as_ref()
+                .is_some_and(|runs| runs.runs.iter().any(|run| run.run_id == detail.run.run_id))
+        {
+            self.agent_detail = None;
+            self.agent_detail_offset = 0;
+        }
+    }
+
+    pub(crate) fn selected_agent_run_id(&self) -> Option<&str> {
+        self.agent_runs
+            .as_ref()?
+            .runs
+            .get(self.agent_cursor)
+            .map(|run| run.run_id.as_str())
+    }
+
     pub(crate) fn clamp_cursors(&mut self) {
         self.plan_cursor = clamp_index(self.plan_cursor, self.snapshot.plans.len());
         self.task_cursor = clamp_index(self.task_cursor, self.current_tasks().count());
         self.milestone_cursor = clamp_index(self.milestone_cursor, self.snapshot.milestones.len());
         self.issue_cursor = clamp_index(self.issue_cursor, self.snapshot.issues.len());
+        self.agent_cursor = clamp_index(
+            self.agent_cursor,
+            self.agent_runs.as_ref().map_or(0, |value| value.runs.len()),
+        );
+        self.handoff_cursor = clamp_index(
+            self.handoff_cursor,
+            self.agent_inbox
+                .as_ref()
+                .map_or(0, |value| value.items.len()),
+        );
         self.board_col = self.board_col.min(BOARD_STATUSES.len() - 1);
         self.board_row = clamp_index(self.board_row, self.board_tasks(self.board_col).count());
     }
@@ -244,7 +358,7 @@ impl Model {
             Tab::Overview => self
                 .current_plan()
                 .map(|value| DetailTarget::Plan(value.id)),
-            Tab::Maintenance => None,
+            Tab::Maintenance | Tab::Agents => None,
         }
     }
 
