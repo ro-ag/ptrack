@@ -40,6 +40,7 @@ export type ApplicationOverlayEscapeAction =
   | "settings"
   | "updates"
   | "drawer"
+  | "issue-drawer"
   | "agent-launch"
   | "terminal-association"
   | "terminal-writeback"
@@ -55,6 +56,7 @@ const escapeActionByOverlayID: Readonly<
   "settings-modal": "settings",
   "updates-modal": "updates",
   "task-drawer": "drawer",
+  "issue-drawer": "issue-drawer",
   "agent-launch-modal": "agent-launch",
   "terminal-association-modal": "terminal-association",
   "terminal-writeback-modal": "terminal-writeback",

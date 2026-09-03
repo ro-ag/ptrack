@@ -238,11 +238,15 @@ const DEP_CHILDREN: &[Child] = &[
 const ISSUE_CHILDREN: &[Child] = &[
     child("add", "Create a new open issue"),
     child("close", "Close an issue"),
+    child("edit", "Edit an issue report atomically"),
+    child("link", "Link or relink an issue to an existing task"),
     child("list", "List issues (optionally --status open|closed)"),
     child("open", "Reopen an issue"),
     child("rename", "Rename an issue"),
+    child("schedule", "Create plan work for an unscheduled issue"),
     child("severity", "Set an issue's severity"),
     child("show", "Show an issue with its linked task"),
+    child("unlink", "Make an issue unscheduled"),
 ];
 const NOTE_CHILDREN: &[Child] = &[
     child("add", "Add a note to the project, a plan, or a task"),
@@ -801,6 +805,45 @@ fn issue_leaf(name: &str) -> Spec {
             "Show an issue with its linked task",
             JSON_FLAGS,
         ),
+        "edit" => leaf_spec(
+            "issue edit <id>",
+            "Edit an issue report atomically",
+            &[
+                flag(
+                    "    --body string",
+                    "replacement detailed report and evidence",
+                ),
+                HELP_FLAG,
+                flag("    --severity string", "replacement severity"),
+                flag("    --status string", "replacement status: open or closed"),
+                flag("    --title string", "replacement title"),
+            ],
+        ),
+        "link" => leaf_spec(
+            "issue link <id> --task <task>",
+            "Link or relink an issue to an existing task",
+            &[
+                HELP_FLAG,
+                flag("    --task uint", "target task id (required)"),
+            ],
+        ),
+        "unlink" => leaf_spec(
+            "issue unlink <id>",
+            "Make an issue unscheduled without deleting its task",
+            HELP_ONLY,
+        ),
+        "schedule" => leaf_spec(
+            "issue schedule <id> --plan <plan>",
+            "Atomically create a todo task and link the issue",
+            &[
+                HELP_FLAG,
+                flag("    --plan uint", "target plan id (required)"),
+                flag(
+                    "    --title string",
+                    "task title (defaults to the issue title)",
+                ),
+            ],
+        ),
         "close" => leaf_spec("issue close <id>", "Close an issue", HELP_ONLY),
         "open" => leaf_spec("issue open <id>", "Reopen an issue", HELP_ONLY),
         "severity" => leaf_spec(
@@ -1093,7 +1136,10 @@ fn group_children(name: &str) -> Option<&'static [&'static str]> {
             "add", "block", "convert", "dep", "done", "hold", "list", "move", "rename", "resume",
             "show", "start",
         ]),
-        "issue" => Some(&["add", "close", "list", "open", "rename", "severity", "show"]),
+        "issue" => Some(&[
+            "add", "close", "edit", "link", "list", "open", "rename", "schedule", "severity",
+            "show", "unlink",
+        ]),
         "note" => Some(&["add", "list"]),
         "commit" => Some(&["add", "list", "record", "show"]),
         "hook" => Some(&["install", "status", "uninstall"]),

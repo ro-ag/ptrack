@@ -250,6 +250,30 @@ pub enum Mutation {
         id: u64,
         title: String,
     },
+    UpdateIssue {
+        id: u64,
+        expected_updated_at: Timestamp,
+        title: String,
+        body: String,
+        severity: Severity,
+        status: IssueStatus,
+    },
+    SetIssueTask {
+        id: u64,
+        expected_task_id: u64,
+        task_id: u64,
+    },
+    MoveIssueTask {
+        id: u64,
+        expected_task_id: u64,
+        expected_plan_id: u64,
+        plan_id: u64,
+    },
+    ScheduleIssue {
+        id: u64,
+        plan_id: u64,
+        task_title: String,
+    },
     AddNote {
         target: NoteTarget,
         target_id: u64,
@@ -270,6 +294,7 @@ pub enum MutationResult {
     Plan(Plan),
     Task(Task),
     Issue(Issue),
+    ScheduledIssue { issue: Issue, task: Task },
     Note(Note),
     Commit(Commit),
 }
@@ -1090,6 +1115,45 @@ impl ApplicationPort for LocalApplication {
                 Mutation::SetIssueTitle { id, title } => {
                     store.set_issue_title(id, title)?;
                     MutationResult::None
+                }
+                Mutation::UpdateIssue {
+                    id,
+                    expected_updated_at,
+                    title,
+                    body,
+                    severity,
+                    status,
+                } => MutationResult::Issue(store.update_issue(
+                    id,
+                    expected_updated_at,
+                    title,
+                    body,
+                    severity,
+                    status,
+                )?),
+                Mutation::SetIssueTask {
+                    id,
+                    expected_task_id,
+                    task_id,
+                } => MutationResult::Issue(store.set_issue_task(id, expected_task_id, task_id)?),
+                Mutation::MoveIssueTask {
+                    id,
+                    expected_task_id,
+                    expected_plan_id,
+                    plan_id,
+                } => MutationResult::Issue(store.move_issue_task(
+                    id,
+                    expected_task_id,
+                    expected_plan_id,
+                    plan_id,
+                )?),
+                Mutation::ScheduleIssue {
+                    id,
+                    plan_id,
+                    task_title,
+                } => {
+                    let (issue, task) = store.schedule_issue(id, plan_id, task_title)?;
+                    MutationResult::ScheduledIssue { issue, task }
                 }
                 Mutation::AddNote {
                     target,

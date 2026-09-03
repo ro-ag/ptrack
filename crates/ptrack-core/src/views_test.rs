@@ -48,6 +48,31 @@ fn next_matches_active_plan_priority_and_messages() {
 }
 
 #[test]
+fn next_only_selects_tasks_and_includes_their_open_issue_context() {
+    let mut data = snapshot();
+    data.issues = vec![
+        issue(
+            10,
+            "triage only",
+            "",
+            IssueStatus::Open,
+            Severity::Critical,
+            0,
+        ),
+        issue(11, "scheduled", "", IssueStatus::Open, Severity::High, 1),
+        issue(12, "closed", "", IssueStatus::Closed, Severity::High, 1),
+    ];
+    let view = next(&data).unwrap();
+    assert_eq!(view.task.unwrap().id, 1);
+    assert_eq!(
+        view.issues.iter().map(|issue| issue.id).collect::<Vec<_>>(),
+        [11]
+    );
+    data.tasks.clear();
+    assert!(next(&data).unwrap().task.is_none());
+}
+
+#[test]
 fn next_skips_held_tasks_and_stops_at_a_held_active_plan() {
     // Task #1 is the doing pick; holding it leaves nothing actionable.
     let mut held = snapshot();

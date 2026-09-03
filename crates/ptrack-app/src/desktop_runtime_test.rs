@@ -902,6 +902,7 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
         commands,
         [
             "AcknowledgeAgentHandoffV2",
+            "AddIssueV1",
             "AddTask",
             "AddTaskNote",
             "AddTaskNoteV2",
@@ -939,6 +940,8 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "GetCapabilityAuditsV2",
             "GetDiagnosticsReport",
             "GetInitializationStatusV1",
+            "GetIssueDetailV1",
+            "GetIssuesV1",
             "GetLayoutState",
             "GetPendingInitializationV1",
             "GetPreferences",
@@ -957,6 +960,7 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "InstallShellCommand",
             "LaunchLinkedAgentV2",
             "ListProjectsV1",
+            "MoveIssueTaskV1",
             "MovePlanV1",
             "MoveTask",
             "MoveTaskV2",
@@ -985,16 +989,19 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "ResumePlanV1",
             "RollbackLinkedAgentLaunchV2",
             "SaveCapabilityV2",
+            "ScheduleIssueV1",
             "SearchV2",
             "SendAgentHandoffV2",
             "SetAgentTaskOwnershipV2",
             "SetAgentWorktreeV2",
             "SetAutomaticUpdateChecks",
+            "SetIssueTaskV1",
             "SetLayoutState",
             "SetPreferences",
             "SetTerminalWindowTab",
             "StartFirstTaskV1",
             "TestCapabilityV2",
+            "UpdateIssueV1",
             "ValidateProjectTargetV1",
             "ValidateTerminalCWDsV2",
             "WriteTerminalMemoryV2",
@@ -2593,6 +2600,180 @@ fn workspace_snapshot_uses_bounded_store_reads_and_open_issue_rows() {
 }
 
 #[test]
+fn issue_desktop_workflow_fences_generation_and_persists_all_fields() {
+    let directory = TestDirectory::new("issue-workflow");
+    let (bindings, _) = bound_bindings(&directory);
+    let endpoint = bindings.project.as_ref().unwrap();
+    let store = ProjectStore::open_existing(&endpoint.database, &endpoint.binding, "test").unwrap();
+    let destination = store.add_plan("Destination", 0).unwrap();
+    let workspace = BoundDesktopWorkspace::new(
+        7,
+        0,
+        bindings.clone(),
+        Box::new(LocalApplication::new(bindings)),
+        None,
+        None,
+        None,
+    );
+    let args = [
+        json!(7),
+        json!("crash"),
+        json!("steps\nexpected\nevidence"),
+        json!("high"),
+    ];
+    let mut stale = args.clone();
+    stale[0] = json!(0);
+    assert!(workspace.invoke("AddIssueV1", &stale).is_err());
+    let created = workspace.invoke("AddIssueV1", &args).unwrap();
+    let id = created["issue"]["id"].as_u64().unwrap();
+    let detail = workspace
+        .invoke("GetIssueDetailV1", &[json!(7), json!(id)])
+        .unwrap();
+    assert_eq!(detail["issue"]["body"], "steps\nexpected\nevidence");
+    assert_eq!(detail["issue"]["taskId"], 0);
+    let update = [
+        json!(7),
+        json!(id),
+        json!("revised"),
+        json!("full report"),
+        json!("critical"),
+        json!("open"),
+        detail["issue"]["updatedAt"].clone(),
+    ];
+    workspace.invoke("UpdateIssueV1", &update).unwrap();
+    assert!(workspace.invoke("UpdateIssueV1", &update).is_err());
+    let scheduled = workspace
+        .invoke(
+            "ScheduleIssueV1",
+            &[json!(7), json!(id), json!(1), json!("")],
+        )
+        .unwrap();
+    let task_id = scheduled["issue"]["taskId"].as_u64().unwrap();
+    assert_eq!(store.task(task_id).unwrap().title, "revised");
+    workspace
+        .invoke(
+            "MoveIssueTaskV1",
+            &[
+                json!(7),
+                json!(id),
+                json!(task_id),
+                json!(1),
+                json!(destination.id),
+            ],
+        )
+        .unwrap();
+    assert_eq!(store.task(task_id).unwrap().plan_id, destination.id);
+    let detail = workspace
+        .invoke("GetIssueDetailV1", &[json!(7), json!(id)])
+        .unwrap();
+    assert_eq!(detail["issue"]["planTitle"], "Destination");
+    assert_eq!(detail["issue"]["body"], "full report");
+    assert!(
+        workspace
+            .invoke("SetIssueTaskV1", &[json!(7), json!(id), json!(0), json!(1)])
+            .is_err()
+    );
+    workspace
+        .invoke(
+            "SetIssueTaskV1",
+            &[json!(7), json!(id), json!(task_id), json!(0)],
+        )
+        .unwrap();
+    workspace
+        .invoke("SetIssueTaskV1", &[json!(7), json!(id), json!(0), json!(1)])
+        .unwrap();
+    assert_eq!(store.issue(id).unwrap().task_id, 1);
+    let found = workspace
+        .invoke("SearchV2", &[json!("full report")])
+        .unwrap();
+    assert!(found.to_string().contains("issue"));
+}
+
+#[test]
+fn issue_targets_can_be_found_beyond_default_bounds() {
+    let directory = TestDirectory::new("issue-target-search");
+    let (bindings, _) = bound_bindings(&directory);
+    let endpoint = bindings.project.as_ref().unwrap();
+    let store = ProjectStore::open_existing(&endpoint.database, &endpoint.binding, "test").unwrap();
+    for _ in 0..100 {
+        store.add_plan("Earlier plan", 0).unwrap();
+    }
+    for _ in 0..300 {
+        store.add_task(1, "Earlier task").unwrap();
+    }
+    let plan = store.add_plan("Distant destination", 0).unwrap();
+    let task = store.add_task(plan.id, "Distant target").unwrap();
+    let issue = store.add_issue("Report", "Evidence", None, 0).unwrap();
+    let workspace = BoundDesktopWorkspace::new(
+        7,
+        0,
+        bindings.clone(),
+        Box::new(LocalApplication::new(bindings)),
+        None,
+        None,
+        None,
+    );
+    let defaults = workspace
+        .invoke("GetIssueDetailV1", &[json!(7), json!(issue.id)])
+        .unwrap();
+    assert_eq!(defaults["plans"].as_array().unwrap().len(), 100);
+    assert_eq!(defaults["tasks"].as_array().unwrap().len(), 300);
+    let found = workspace
+        .invoke(
+            "GetIssueDetailV1",
+            &[json!(7), json!(issue.id), json!("Distant")],
+        )
+        .unwrap();
+    assert_eq!(found["plans"][0]["id"], plan.id);
+    assert_eq!(found["tasks"][0]["id"], task.id);
+    let exact = workspace
+        .invoke(
+            "GetIssueDetailV1",
+            &[json!(7), json!(issue.id), json!(format!("#{}", task.id))],
+        )
+        .unwrap();
+    assert_eq!(exact["tasks"].as_array().unwrap().len(), 1);
+    assert_eq!(exact["tasks"][0]["id"], task.id);
+}
+
+#[test]
+fn issue_inbox_pages_after_filtering_and_rejects_stale_generations() {
+    let directory = TestDirectory::new("issue-pages");
+    let (bindings, _) = bound_bindings(&directory);
+    let endpoint = bindings.project.as_ref().unwrap();
+    let store = ProjectStore::open_existing(&endpoint.database, &endpoint.binding, "test").unwrap();
+    let workspace = BoundDesktopWorkspace::new(
+        7,
+        0,
+        bindings.clone(),
+        Box::new(LocalApplication::new(bindings)),
+        None,
+        None,
+        None,
+    );
+    store.add_issue("scheduled", "", None, 1).unwrap();
+    for index in 0..55 {
+        store
+            .add_issue(format!("intake {index}"), "", None, 0)
+            .unwrap();
+    }
+    let first = workspace
+        .invoke("GetIssuesV1", &[json!(7), json!("unscheduled"), json!(0)])
+        .unwrap();
+    let second = workspace
+        .invoke("GetIssuesV1", &[json!(7), json!("unscheduled"), json!(50)])
+        .unwrap();
+    assert_eq!(first["issues"].as_array().unwrap().len(), 50);
+    assert_eq!(second["issues"].as_array().unwrap().len(), 5);
+    assert_eq!(first["bounds"]["total"], 55);
+    assert!(
+        workspace
+            .invoke("GetIssuesV1", &[json!(6), json!("all"), json!(0)])
+            .is_err()
+    );
+}
+
+#[test]
 fn workspace_snapshot_allows_no_active_plan_and_reports_missing_storage() {
     let directory = TestDirectory::new("snapshot-no-plan");
     let (bindings, _) = bound_bindings(&directory);
@@ -2856,6 +3037,8 @@ fn external_command_path(path: &Path) -> String {
 async fn task_transition_challenge_is_opaque_single_use_and_resource_revision_fenced() {
     let directory = TestDirectory::new("task-transition");
     let (bindings, task_id) = bound_bindings(&directory);
+    let endpoint = bindings.project.as_ref().unwrap();
+    let store = ProjectStore::open_existing(&endpoint.database, &endpoint.binding, "test").unwrap();
     let root = bindings.project.as_ref().unwrap().root.clone();
     let manager = Manager::new(&root, vec![profile(&root)], Arc::new(TestFactory))
         .await
@@ -2907,7 +3090,34 @@ async fn task_transition_challenge_is_opaque_single_use_and_resource_revision_fe
         session.session_id
     );
 
+    let issue = store
+        .add_issue("Live task report", "Evidence", None, task_id)
+        .unwrap();
+    let destination = store.add_plan("Other plan", 0).unwrap();
+    let move_issue = [
+        json!(7),
+        json!(issue.id),
+        json!(task_id),
+        json!(1),
+        json!(destination.id),
+    ];
+    assert!(
+        workspace
+            .invoke("MoveIssueTaskV1", &move_issue)
+            .unwrap_err()
+            .to_string()
+            .contains("stop or detach")
+    );
+    assert_eq!(store.task(task_id).unwrap().plan_id, 1);
+
     let pending_admission = workspace.begin_resource_admission().unwrap();
+    assert!(
+        workspace
+            .invoke("MoveIssueTaskV1", &move_issue)
+            .unwrap_err()
+            .to_string()
+            .contains("resource admission")
+    );
     assert_eq!(
         workspace
             .invoke(

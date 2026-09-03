@@ -967,7 +967,7 @@ export function driftPresentation(section: unknown): {
 // by an input, a modal, or the terminal.
 export function commandShortcut(
   input: ShortcutInput,
-): "palette" | "settings" | "board" | "overview" | "addTask" | null {
+): "palette" | "settings" | "board" | "overview" | "issues" | "addTask" | null {
   if (
     input.composing ||
     input.repeat ||
@@ -981,12 +981,13 @@ export function commandShortcut(
   if (key === ",") return "settings";
   if (key === "1") return "board";
   if (key === "2") return "overview";
+  if (key === "3") return "issues";
   if (key === "n") return "addTask";
   return null;
 }
 
 export interface PaletteResult {
-  kind: "plan" | "task" | "note";
+  kind: "plan" | "task" | "issue" | "note";
   id: number;
   planId: number;
   title: string;
@@ -1029,10 +1030,11 @@ export function groupSearchResults(results: PaletteResult[]): PaletteGroup[] {
   const labels: Record<PaletteResult["kind"], string> = {
     plan: "Plans",
     task: "Tasks",
+    issue: "Issues",
     note: "Notes",
   };
   const groups: PaletteGroup[] = [];
-  for (const kind of ["plan", "task", "note"] as const) {
+  for (const kind of ["plan", "task", "issue", "note"] as const) {
     const items = results.filter((result) => result.kind === kind);
     if (items.length > 0) groups.push({ kind, label: labels[kind], items });
   }
@@ -1040,15 +1042,17 @@ export function groupSearchResults(results: PaletteResult[]): PaletteGroup[] {
 }
 
 export interface PaletteTarget {
-  view: "board" | "overview";
+  view: "board" | "overview" | "issues";
   planId: number;
   taskId: number;
+  issueId?: number;
 }
 
 // paletteTarget maps a result to its activation: plans and tasks land on
 // the board (tasks also open their detail drawer), notes land on the
 // overview's Recent memory.
 export function paletteTarget(result: PaletteResult): PaletteTarget {
+  if (result.kind === "issue") return { view: "issues", planId: 0, taskId: 0, issueId: result.id };
   if (result.kind === "note") return { view: "overview", planId: 0, taskId: 0 };
   return {
     view: "board",

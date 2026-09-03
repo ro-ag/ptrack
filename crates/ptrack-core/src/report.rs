@@ -62,6 +62,12 @@ pub struct Digest {
     pub waiting_on_deps_more: usize,
     pub open_issues: Vec<IssueLine>,
     pub open_issues_more: usize,
+    /// Open issues without a task link. These are context, not executable work.
+    pub unscheduled_issues: Vec<IssueLine>,
+    pub unscheduled_issues_more: usize,
+    /// Open issues whose linked task is the executable unit of work.
+    pub scheduled_issues: Vec<IssueLine>,
+    pub scheduled_issues_more: usize,
     pub recent_notes: Vec<NoteLine>,
     pub inventory: Counts,
 }
@@ -202,19 +208,11 @@ pub fn context(snapshot: &ProjectSnapshot) -> Digest {
         }
     }
 
-    let mut open_issues = Vec::new();
-    let mut open_issues_more = 0;
-    for issue in snapshot
-        .issues
-        .iter()
-        .filter(|issue| issue.status == crate::IssueStatus::Open)
-    {
-        if open_issues.len() < CONTEXT_ISSUES_SHOWN {
-            open_issues.push(issue_line(issue));
-        } else {
-            open_issues_more += 1;
-        }
-    }
+    let (open_issues, open_issues_more) = context_issues(snapshot, |_| true);
+    let (unscheduled_issues, unscheduled_issues_more) =
+        context_issues(snapshot, |issue| issue.task_id == 0);
+    let (scheduled_issues, scheduled_issues_more) =
+        context_issues(snapshot, |issue| issue.task_id != 0);
 
     Digest {
         goal: snapshot.meta.goal.clone(),
@@ -228,6 +226,10 @@ pub fn context(snapshot: &ProjectSnapshot) -> Digest {
         waiting_on_deps_more,
         open_issues,
         open_issues_more,
+        unscheduled_issues,
+        unscheduled_issues_more,
+        scheduled_issues,
+        scheduled_issues_more,
         recent_notes: snapshot
             .recent_notes(CONTEXT_RECENT_NOTES)
             .into_iter()
@@ -256,7 +258,18 @@ impl Digest {
             &self.waiting_on_deps,
             self.waiting_on_deps_more,
         );
-        write_open_issues(&mut output, &self.open_issues, self.open_issues_more);
+        write_issue_bucket(
+            &mut output,
+            "## Unscheduled issues (triage only)\n",
+            &self.unscheduled_issues,
+            self.unscheduled_issues_more,
+        );
+        write_issue_bucket(
+            &mut output,
+            "## Scheduled issues\n",
+            &self.scheduled_issues,
+            self.scheduled_issues_more,
+        );
         write_recent_notes(&mut output, &self.recent_notes);
         write_inventory(&mut output, self.inventory);
         output
@@ -365,11 +378,11 @@ fn write_waiting_on_deps(output: &mut String, entries: &[DepWait], more: usize) 
     output.push('\n');
 }
 
-fn write_open_issues(output: &mut String, issues: &[IssueLine], more: usize) {
+fn write_issue_bucket(output: &mut String, heading: &str, issues: &[IssueLine], more: usize) {
     if issues.is_empty() {
         return;
     }
-    output.push_str("## Open issues\n");
+    output.push_str(heading);
     for issue in issues {
         if issue.task_id == 0 {
             writeln!(
@@ -503,6 +516,26 @@ pub fn open_plan_deps(snapshot: &ProjectSnapshot, plan: &Plan) -> Vec<u64> {
                 .is_some_and(|dep| dep.status != PlanStatus::Done)
         })
         .collect()
+}
+
+fn context_issues(
+    snapshot: &ProjectSnapshot,
+    filter: impl Fn(&Issue) -> bool,
+) -> (Vec<IssueLine>, usize) {
+    let mut items = Vec::new();
+    let mut more = 0;
+    for issue in snapshot
+        .issues
+        .iter()
+        .filter(|issue| issue.status == crate::IssueStatus::Open && filter(issue))
+    {
+        if items.len() < CONTEXT_ISSUES_SHOWN {
+            items.push(issue_line(issue));
+        } else {
+            more += 1;
+        }
+    }
+    (items, more)
 }
 
 pub(crate) fn issue_line(issue: &Issue) -> IssueLine {

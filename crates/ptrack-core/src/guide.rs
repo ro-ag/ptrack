@@ -18,7 +18,9 @@ log, open issues), then keep it current:\n\
 - Milestones (checkpoints): `ptrack milestone add \"v1.0\" [--due YYYY-MM-DD]`\n\
 - Plans (workstreams): `ptrack plan add \"...\" [--milestone N]`, then `ptrack plan use N` (also claims it). Junk plans are removed with `ptrack plan delete <id> --force` (preview first without `--force`), and work that belongs elsewhere moves with `ptrack plan move <id> --to <project>`.\n\
 - Tasks with status: `ptrack task add \"...\" [--plan N]` then `task start` (in progress) / `task done` / `task block` (todo = pending)\n\
-- Issues (bugs/problems): `ptrack issue add \"...\" [--severity high] [--task N]`\n\
+- Issues (bugs/problems): `ptrack issue add \"...\" --body \"reproduction, expected/observed behavior, evidence\" [--severity high] [--task N]`\n\
+- Maintain reports with `ptrack issue edit <id> --body \"...\" [--title \"...\"] [--severity high] [--status open|closed]`.\n\
+- Unscheduled issues are triage context, not permission to start work. Only on explicit user direction, `ptrack issue schedule <id> --plan N` creates and links a normal task; `issue link <id> --task N` relinks existing work; `issue unlink <id>` clears only the link. Task completion and issue closing are independent.\n\
 - Decisions: `ptrack note add \"...\" [--task N | --plan N]`\n\
 \n\
 **Titles are names, not status.** Do not prefix titles with \"Pending:\", \"In\n\

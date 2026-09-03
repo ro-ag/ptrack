@@ -343,6 +343,10 @@ pub struct DigestJson<'a> {
     waiting_on_deps_more: usize,
     open_issues: Option<Vec<IssueLineJson<'a>>>,
     open_issues_more: usize,
+    unscheduled_issues: Option<Vec<IssueLineJson<'a>>>,
+    unscheduled_issues_more: usize,
+    scheduled_issues: Option<Vec<IssueLineJson<'a>>>,
+    scheduled_issues_more: usize,
     recent_notes: Option<Vec<NoteLineJson<'a>>>,
     inventory: CountsJson,
 }
@@ -367,6 +371,10 @@ impl<'a> From<&'a Digest> for DigestJson<'a> {
             waiting_on_deps_more: value.waiting_on_deps_more,
             open_issues: nonempty(value.open_issues.iter().map(Into::into).collect()),
             open_issues_more: value.open_issues_more,
+            unscheduled_issues: nonempty(value.unscheduled_issues.iter().map(Into::into).collect()),
+            unscheduled_issues_more: value.unscheduled_issues_more,
+            scheduled_issues: nonempty(value.scheduled_issues.iter().map(Into::into).collect()),
+            scheduled_issues_more: value.scheduled_issues_more,
             recent_notes: nonempty(value.recent_notes.iter().map(Into::into).collect()),
             inventory: value.inventory.into(),
         }
@@ -393,6 +401,9 @@ pub struct NextJson<'a> {
     /// Present only when candidates were passed over because of open deps.
     #[serde(skip_serializing_if = "Option::is_none")]
     skipped: Option<Vec<DepSkipJson<'a>>>,
+    /// Open issues linked to the selected task.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    issues: Option<Vec<IssueLineJson<'a>>>,
 }
 
 #[derive(Serialize)]
@@ -420,6 +431,7 @@ impl<'a> From<&'a NextView> for NextJson<'a> {
             plan_hold_reason: value.plan_hold_reason.as_deref(),
             plan_waiting_on: nonempty_ids(&value.plan_waiting_on),
             skipped: nonempty(value.skipped.iter().map(Into::into).collect()),
+            issues: nonempty(value.issues.iter().map(Into::into).collect()),
         }
     }
 }

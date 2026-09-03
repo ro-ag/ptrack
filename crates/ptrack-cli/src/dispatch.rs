@@ -1053,6 +1053,107 @@ fn issue(
                 title: args[1..].join(" "),
             })?)?;
         }
+        "edit" => {
+            let id = parse_u64(first(matches, "id")?)?;
+            if ["title", "body", "severity", "status"]
+                .iter()
+                .all(|name| option(matches, name).is_none())
+            {
+                return Err(CliError::message(
+                    "issue edit requires --title, --body, --severity, or --status",
+                ));
+            }
+            let current = application
+                .snapshot()?
+                .issue(id)
+                .cloned()
+                .ok_or_else(|| CliError::message(format!("issue #{id} not found")))?;
+            let severity = parse_severity(option(matches, "severity").map(String::as_str))?
+                .unwrap_or(current.severity);
+            let status = parse_issue_status(option(matches, "status").map(String::as_str))?
+                .unwrap_or(current.status);
+            let result = application.mutate(Mutation::UpdateIssue {
+                id,
+                expected_updated_at: current.updated_at,
+                title: option(matches, "title").cloned().unwrap_or(current.title),
+                body: option(matches, "body").cloned().unwrap_or(current.body),
+                severity,
+                status,
+            })?;
+            let MutationResult::Issue(value) = result else {
+                return Err(internal_result());
+            };
+            output::line(
+                io.stdout,
+                format_args!(
+                    "issue #{} [{}] {} {}",
+                    value.id, value.severity, value.status, value.title
+                ),
+            )?;
+        }
+        "link" | "unlink" => {
+            let id = parse_u64(first(matches, "id")?)?;
+            let expected_task_id = application
+                .snapshot()?
+                .issue(id)
+                .map(|issue| issue.task_id)
+                .ok_or_else(|| CliError::message(format!("issue #{id} not found")))?;
+            let task_id = if command == "unlink" {
+                0
+            } else {
+                let task_id = parse_flag_u64("task", option(matches, "task"))?;
+                if task_id == 0 {
+                    return Err(CliError::message("pass the target task with --task <id>"));
+                }
+                task_id
+            };
+            let result = application.mutate(Mutation::SetIssueTask {
+                id,
+                expected_task_id,
+                task_id,
+            })?;
+            let MutationResult::Issue(value) = result else {
+                return Err(internal_result());
+            };
+            if value.task_id == 0 {
+                output::line(io.stdout, format_args!("issue #{} unscheduled", value.id))?;
+            } else {
+                output::line(
+                    io.stdout,
+                    format_args!("issue #{} linked to task #{}", value.id, value.task_id),
+                )?;
+            }
+        }
+        "schedule" => {
+            let id = parse_u64(first(matches, "id")?)?;
+            let plan_id = parse_flag_u64("plan", option(matches, "plan"))?;
+            if plan_id == 0 {
+                return Err(CliError::message("pass the target plan with --plan <id>"));
+            }
+            let current = application
+                .snapshot()?
+                .issue(id)
+                .cloned()
+                .ok_or_else(|| CliError::message(format!("issue #{id} not found")))?;
+            let task_title = option(matches, "title")
+                .cloned()
+                .unwrap_or_else(|| current.title.clone());
+            let result = application.mutate(Mutation::ScheduleIssue {
+                id,
+                plan_id,
+                task_title,
+            })?;
+            let MutationResult::ScheduledIssue { issue, task } = result else {
+                return Err(internal_result());
+            };
+            output::line(
+                io.stdout,
+                format_args!(
+                    "issue #{} scheduled as task #{} in plan #{}",
+                    issue.id, task.id, task.plan_id
+                ),
+            )?;
+        }
         _ => return Err(CliError::message("internal issue dispatch mismatch")),
     }
     Ok(RunOutcome::ExitSuccess)
@@ -1849,6 +1950,17 @@ fn parse_severity(value: Option<&str>) -> Result<Option<Severity>, CliError> {
         "critical" => Ok(Some(Severity::Critical)),
         value => Err(CliError::message(format!(
             "invalid severity {value:?} (want low, medium, high, critical)"
+        ))),
+    }
+}
+
+fn parse_issue_status(value: Option<&str>) -> Result<Option<IssueStatus>, CliError> {
+    match value.unwrap_or_default() {
+        "" => Ok(None),
+        "open" => Ok(Some(IssueStatus::Open)),
+        "closed" => Ok(Some(IssueStatus::Closed)),
+        value => Err(CliError::message(format!(
+            "invalid issue status {value:?} (want open or closed)"
         ))),
     }
 }

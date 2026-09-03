@@ -180,6 +180,7 @@ struct IssueDocument {
     severity: String,
     title: String,
     body: String,
+    scheduling: &'static str,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -364,6 +365,11 @@ fn add_issues(
             severity,
             title,
             body,
+            scheduling: if issue.task_id == 0 {
+                "unscheduled: triage only, not actionable work"
+            } else {
+                "scheduled: follow linked task and plan gates"
+            },
         });
     }
     document.truncated |= relevant > MAX_OPEN_ISSUES || issues.truncated;
@@ -434,7 +440,10 @@ fn issue_relevant(
         return Ok(true);
     }
     if issue.task_id == 0 {
-        return Ok(false);
+        // Unscheduled issues are project intake, not actionable work, but a
+        // plan-scoped agent still needs that triage context so it does not
+        // rediscover or silently schedule the same problem.
+        return Ok(true);
     }
     Ok(task_plan(store, issue.task_id, cache)?.is_some_and(|plan| plan == target.plan_id))
 }

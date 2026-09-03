@@ -63,6 +63,13 @@
             title="Overview — ⌘2"
             disabled
           >Overview</button>
+          <button
+            id="nav-issues"
+            class="sidebar-nav-item"
+            type="button"
+            title="Issues — ⌘3"
+            disabled
+          >Issues</button>
         </nav>
 
         <div class="sidebar-plans">
@@ -996,6 +1003,38 @@
             </details>
           </div>
         </section>
+
+        <section
+          id="issues-page"
+          class="issues-page"
+          aria-label="Project issues"
+          hidden
+        >
+          <header class="issues-heading">
+            <div>
+              <p class="eyebrow">Agent intake</p>
+              <h2 id="issues-heading" tabindex="-1">Issues</h2>
+              <p class="issues-intro">Review reported problems, then explicitly schedule the ones that belong in a plan.</p>
+            </div>
+            <div class="issues-toolbar">
+              <label for="issues-filter">Show</label>
+              <select id="issues-filter">
+                <option value="open">Open</option>
+                <option value="unscheduled">Unscheduled</option>
+                <option value="scheduled">Scheduled</option>
+                <option value="closed">Closed</option>
+                <option value="all">All</option>
+              </select>
+              <button id="issues-new" type="button">New issue</button>
+            </div>
+          </header>
+          <p id="issues-status" class="issues-status" role="status" aria-live="polite"></p>
+          <div class="issues-toolbar">
+            <button id="issues-previous" type="button" class="button-secondary">Newer issues</button>
+            <button id="issues-next" type="button" class="button-secondary">Older issues</button>
+          </div>
+          <div id="issues-inbox" class="issues-inbox" role="list" aria-busy="false"></div>
+        </section>
         </main>
       </div>
     </div>
@@ -1701,6 +1740,80 @@
             <div id="drawer-issues" class="drawer-list"></div>
           </section>
         </div>
+      </aside>
+    </div>
+
+    <div id="issue-drawer" class="modal" hidden>
+      <button
+        class="modal-backdrop"
+        type="button"
+        data-close-issue-drawer
+        tabindex="-1"
+        aria-label="Close issue detail"
+      ></button>
+      <aside
+        class="drawer issue-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="issue-drawer-heading"
+      >
+        <header class="drawer-header">
+          <div class="drawer-heading">
+            <p id="issue-drawer-eyebrow" class="eyebrow">Issue</p>
+            <h2 id="issue-drawer-heading">Issue detail</h2>
+            <p id="issue-drawer-updated" class="drawer-updated"></p>
+          </div>
+          <button id="issue-drawer-close" class="dialog-close" type="button">Close</button>
+        </header>
+        <form id="issue-form" class="issue-form">
+          <label for="issue-title">Title</label>
+          <input id="issue-title" type="text" required />
+          <label for="issue-body">Detailed report and evidence</label>
+          <textarea id="issue-body" rows="9" placeholder="What happened, expected behavior, reproduction steps, and evidence…"></textarea>
+          <div class="issue-field-row">
+            <label>Severity
+              <select id="issue-severity">
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+                <option value="critical">Critical</option>
+              </select>
+            </label>
+            <label>Status
+              <select id="issue-status-select">
+                <option value="open">Open</option>
+                <option value="closed">Closed</option>
+              </select>
+            </label>
+          </div>
+          <p id="issue-form-message" class="dialog-help" role="status" aria-live="polite"></p>
+          <div class="dialog-actions">
+            <button id="issue-save" type="submit">Save issue</button>
+          </div>
+        </form>
+        <section id="issue-scheduling" class="drawer-section issue-scheduling">
+          <div class="section-heading">
+            <p class="section-label">Scheduling</p>
+            <span id="issue-scheduling-state" class="section-count">Unscheduled</span>
+          </div>
+          <p id="issue-link-summary" class="dialog-help">This issue is triage context only.</p>
+          <label for="issue-target-search">Find plans and tasks by title or exact #ID</label>
+          <input id="issue-target-search" type="search" placeholder="Search all targets…" />
+          <button id="issue-target-find" type="button" class="button-secondary">Find targets</button>
+          <p id="issue-target-bounds" class="dialog-help" aria-live="polite"></p>
+          <label for="issue-plan-select">Destination plan</label>
+          <select id="issue-plan-select"></select>
+          <button id="issue-schedule" type="button">Schedule as new task</button>
+          <button id="issue-move" type="button" hidden>Move linked task to plan</button>
+          <p id="issue-move-help" class="dialog-help" hidden>Moving keeps task status, evidence, and all of its linked issues together.</p>
+          <label for="issue-task-select">Or link to existing task</label>
+          <select id="issue-task-select"></select>
+          <div class="dialog-actions issue-link-actions">
+            <button id="issue-unlink" class="button-secondary" type="button">Unlink</button>
+            <button id="issue-open-task" class="button-secondary" type="button">Open linked task</button>
+            <button id="issue-link" type="button">Link task</button>
+          </div>
+        </section>
       </aside>
     </div>
 

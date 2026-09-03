@@ -40,6 +40,7 @@ pub enum LayoutViewV1 {
     #[default]
     Board,
     Overview,
+    Issues,
     Capabilities,
 }
 

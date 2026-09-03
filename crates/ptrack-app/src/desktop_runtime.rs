@@ -20,7 +20,7 @@ use ptrack_capability_policy::{
 };
 use ptrack_core::{
     Capability, CapabilityKind, Commit, Issue, IssueStatus, MemoryKind, Meta, Note, NoteTarget,
-    Plan, ProjectSnapshot, Task, TaskStatus, Timestamp, open_plan_deps, open_task_deps,
+    Plan, ProjectSnapshot, Severity, Task, TaskStatus, Timestamp, open_plan_deps, open_task_deps,
 };
 use ptrack_store::{
     FIRST_RUN_TITLE_MAX_BYTES, GlobalStore, MemoryWriteRequest, ProjectStore, StoreError,
@@ -70,8 +70,9 @@ const WORKSPACE_OPERATION_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub const FIRST_RUN_GOAL_MAX_BYTES: usize = 4_096;
 
-const COMMANDS: [&str; 97] = [
+const COMMANDS: [&str; 104] = [
     "AcknowledgeAgentHandoffV2",
+    "AddIssueV1",
     "AddTask",
     "AddTaskNote",
     "AddTaskNoteV2",
@@ -109,6 +110,8 @@ const COMMANDS: [&str; 97] = [
     "GetCapabilityAuditsV2",
     "GetDiagnosticsReport",
     "GetInitializationStatusV1",
+    "GetIssueDetailV1",
+    "GetIssuesV1",
     "GetLayoutState",
     "GetPendingInitializationV1",
     "GetPreferences",
@@ -127,6 +130,7 @@ const COMMANDS: [&str; 97] = [
     "InstallShellCommand",
     "LaunchLinkedAgentV2",
     "ListProjectsV1",
+    "MoveIssueTaskV1",
     "MovePlanV1",
     "MoveTask",
     "MoveTaskV2",
@@ -155,22 +159,25 @@ const COMMANDS: [&str; 97] = [
     "ResumePlanV1",
     "RollbackLinkedAgentLaunchV2",
     "SaveCapabilityV2",
+    "ScheduleIssueV1",
     "SearchV2",
     "SendAgentHandoffV2",
     "SetAgentTaskOwnershipV2",
     "SetAgentWorktreeV2",
     "SetAutomaticUpdateChecks",
+    "SetIssueTaskV1",
     "SetLayoutState",
     "SetPreferences",
     "SetTerminalWindowTab",
     "StartFirstTaskV1",
     "TestCapabilityV2",
+    "UpdateIssueV1",
     "ValidateProjectTargetV1",
     "ValidateTerminalCWDsV2",
     "WriteTerminalMemoryV2",
 ];
 
-/// Exact current 97-method desktop bridge command allowlist.
+/// Exact current 104-method desktop bridge command allowlist.
 #[must_use]
 pub const fn allowed_desktop_commands() -> &'static [&'static str] {
     &COMMANDS
@@ -3641,6 +3648,166 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
                         .collect::<Vec<_>>(),
                 }))
             }
+            "GetIssuesV1" => {
+                require_argument_count(method, arguments, 3)?;
+                let generation = u64_arg(arguments, 0)?;
+                self.require_exact_generation(generation)?;
+                let snapshot = self.snapshot()?;
+                let filter = string_arg(arguments, 1)?;
+                if !["all", "open", "closed", "scheduled", "unscheduled"].contains(&filter) {
+                    return Err(AppError::Message("invalid issue filter".to_owned()));
+                }
+                let offset = usize::try_from(u64_arg(arguments, 2)?).unwrap_or(usize::MAX);
+                let matching = snapshot
+                    .issues
+                    .iter()
+                    .rev()
+                    .filter(|issue| match filter {
+                        "open" => issue.status == IssueStatus::Open,
+                        "closed" => issue.status == IssueStatus::Closed,
+                        "scheduled" => issue.status == IssueStatus::Open && issue.task_id != 0,
+                        "unscheduled" => issue.status == IssueStatus::Open && issue.task_id == 0,
+                        _ => true,
+                    })
+                    .collect::<Vec<_>>();
+                let total = matching.len();
+                let issues = matching
+                    .into_iter()
+                    .skip(offset)
+                    .take(SNAPSHOT_ISSUE_LIMIT)
+                    .map(|issue| issue_detail_summary(&snapshot, issue))
+                    .collect::<Vec<_>>();
+                Ok(json!({
+                    "generation": self.generation,
+                    "issues": issues,
+                    "offset": offset,
+                    "bounds": bound(issues.len(), total),
+                }))
+            }
+            "GetIssueDetailV1" => {
+                if arguments.len() != 2 && arguments.len() != 3 {
+                    return Err(message(
+                        "issue detail expects generation, issue ID, and optional target search",
+                    ));
+                }
+                let generation = u64_arg(arguments, 0)?;
+                self.require_exact_generation(generation)?;
+                let query = if arguments.len() == 3 {
+                    string_arg(arguments, 2)?
+                } else {
+                    ""
+                };
+                issue_detail_value(
+                    self.generation,
+                    &self.snapshot()?,
+                    u64_arg(arguments, 1)?,
+                    query,
+                )
+            }
+            "AddIssueV1" => {
+                require_argument_count(method, arguments, 4)?;
+                let generation = u64_arg(arguments, 0)?;
+                self.require_exact_generation(generation)?;
+                let title =
+                    trimmed_nonempty(string_arg(arguments, 1)?, "issue title cannot be empty")?;
+                let severity = parse_issue_severity(string_arg(arguments, 3)?)?;
+                let result = lock(&self.application).mutate(Mutation::AddIssue {
+                    title,
+                    body: string_arg(arguments, 2)?.to_owned(),
+                    severity: Some(severity),
+                    task_id: 0,
+                })?;
+                let MutationResult::Issue(issue) = result else {
+                    return Err(unavailable("issue mutation"));
+                };
+                Ok(json!({ "generation": self.generation, "issue": issue_record_value(&issue) }))
+            }
+            "UpdateIssueV1" => {
+                require_argument_count(method, arguments, 7)?;
+                let generation = u64_arg(arguments, 0)?;
+                self.require_exact_generation(generation)?;
+                let result = lock(&self.application).mutate(Mutation::UpdateIssue {
+                    id: u64_arg(arguments, 1)?,
+                    expected_updated_at: parse_issue_timestamp(string_arg(arguments, 6)?)?,
+                    title: trimmed_nonempty(
+                        string_arg(arguments, 2)?,
+                        "issue title cannot be empty",
+                    )?,
+                    body: string_arg(arguments, 3)?.to_owned(),
+                    severity: parse_issue_severity(string_arg(arguments, 4)?)?,
+                    status: parse_issue_status(string_arg(arguments, 5)?)?,
+                })?;
+                let MutationResult::Issue(issue) = result else {
+                    return Err(unavailable("issue mutation"));
+                };
+                Ok(json!({ "generation": self.generation, "issue": issue_record_value(&issue) }))
+            }
+            "SetIssueTaskV1" => {
+                require_argument_count(method, arguments, 4)?;
+                let generation = u64_arg(arguments, 0)?;
+                self.require_exact_generation(generation)?;
+                let result = lock(&self.application).mutate(Mutation::SetIssueTask {
+                    id: u64_arg(arguments, 1)?,
+                    expected_task_id: u64_arg(arguments, 2)?,
+                    task_id: u64_arg(arguments, 3)?,
+                })?;
+                let MutationResult::Issue(issue) = result else {
+                    return Err(unavailable("issue mutation"));
+                };
+                Ok(json!({ "generation": self.generation, "issue": issue_record_value(&issue) }))
+            }
+            "MoveIssueTaskV1" => {
+                require_argument_count(method, arguments, 5)?;
+                self.require_exact_generation(u64_arg(arguments, 0)?)?;
+                let _transition = lock(&self.resource_transition);
+                let _admission = self.fence_resource_admission()?;
+                if lock(&self.resource_admission.state).pending != 0 {
+                    return Err(message(
+                        "issue move must retry after resource admission completes",
+                    ));
+                }
+                self.with_exact_task_resources(&self.snapshot()?, u64_arg(arguments, 2)?, |resources| {
+                    if !resources.is_empty() {
+                        return Err(message("stop or detach linked terminals and agents before moving this task to another plan"));
+                    }
+                    let result = lock(&self.application).mutate(Mutation::MoveIssueTask {
+                        id: u64_arg(arguments, 1)?,
+                        expected_task_id: u64_arg(arguments, 2)?,
+                        expected_plan_id: u64_arg(arguments, 3)?,
+                        plan_id: u64_arg(arguments, 4)?,
+                    })?;
+                    let MutationResult::Issue(issue) = result else {
+                        return Err(unavailable("issue move"));
+                    };
+                    Ok(json!({"generation": self.generation, "issue": issue_record_value(&issue)}))
+                })
+            }
+            "ScheduleIssueV1" => {
+                require_argument_count(method, arguments, 4)?;
+                let generation = u64_arg(arguments, 0)?;
+                self.require_exact_generation(generation)?;
+                let issue_id = u64_arg(arguments, 1)?;
+                let plan_id = u64_arg(arguments, 2)?;
+                let requested_title = string_arg(arguments, 3)?.trim();
+                let task_title = if requested_title.is_empty() {
+                    self.project_store()?.issue(issue_id)?.title
+                } else {
+                    requested_title.to_owned()
+                };
+                let result = lock(&self.application).mutate(Mutation::ScheduleIssue {
+                    id: issue_id,
+                    plan_id,
+                    task_title,
+                })?;
+                let MutationResult::ScheduledIssue { issue, task } = result else {
+                    return Err(unavailable("issue scheduling mutation"));
+                };
+                Ok(json!({
+                    "generation": self.generation,
+                    "issue": issue_record_value(&issue),
+                    "task": task_card(&self.snapshot()?, &task),
+                }))
+            }
             "AddTaskNote" | "AddTaskNoteV2" => {
                 let (generation, offset) = if method == "AddTaskNoteV2" {
                     (u64_arg(arguments, 0)?, 1)
@@ -5144,6 +5311,7 @@ fn task_detail_value(
                 "id": issue.id,
                 "title": issue.title,
                 "severity": issue.severity.as_str(),
+                "status": issue.status.as_str(),
                 "taskId": issue.task_id
             })
         })
@@ -5206,6 +5374,18 @@ fn search(snapshot: &ProjectSnapshot, query: &str) -> Vec<Value> {
                 "snippet": "",
                 "status": task.status.as_str()
             }));
+        }
+        if results.len() == SEARCH_RESULT_LIMIT {
+            return results;
+        }
+    }
+    for issue in &snapshot.issues {
+        if issue.title.to_lowercase().contains(&needle)
+            || issue.body.to_lowercase().contains(&needle)
+        {
+            results.push(json!({"kind": "issue", "id": issue.id,
+                "planId": snapshot.task(issue.task_id).map_or(0, |task| task.plan_id),
+                "title": issue.title, "snippet": "", "status": issue.status.as_str()}));
         }
         if results.len() == SEARCH_RESULT_LIMIT {
             return results;
@@ -5376,6 +5556,95 @@ fn issue_snapshot_view(issue: &Issue) -> Value {
         "severity": issue.severity.as_str(),
         "taskId": issue.task_id
     })
+}
+
+fn issue_record_value(issue: &Issue) -> Value {
+    json!({
+        "id": issue.id,
+        "title": issue.title,
+        "body": issue.body,
+        "status": issue.status.as_str(),
+        "severity": issue.severity.as_str(),
+        "taskId": issue.task_id,
+        "createdAt": timestamp(issue.created_at),
+        "updatedAt": timestamp(issue.updated_at),
+    })
+}
+
+fn issue_detail_summary(snapshot: &ProjectSnapshot, issue: &Issue) -> Value {
+    let task = snapshot.task(issue.task_id);
+    let plan = task.and_then(|task| snapshot.plan(task.plan_id));
+    let mut value = issue_record_value(issue);
+    value["taskTitle"] = Value::String(task.map_or_else(String::new, |task| task.title.clone()));
+    value["taskStatus"] =
+        Value::String(task.map_or_else(String::new, |task| task.status.as_str().to_owned()));
+    value["planId"] = json!(task.map_or(0, |task| task.plan_id));
+    value["planTitle"] = Value::String(plan.map_or_else(String::new, |plan| plan.title.clone()));
+    value
+}
+
+fn issue_detail_value(
+    generation: u64,
+    snapshot: &ProjectSnapshot,
+    issue_id: u64,
+    query: &str,
+) -> AppResult<Value> {
+    let issue = snapshot
+        .issue(issue_id)
+        .ok_or_else(|| AppError::Message(format!("issue #{issue_id} not found")))?;
+    let query = query.trim().to_lowercase();
+    let matches = |id: u64, title: &str| {
+        if let Ok(wanted) = query.trim_start_matches('#').parse::<u64>() {
+            id == wanted
+        } else {
+            title.to_lowercase().contains(&query)
+        }
+    };
+    let matching_plans = snapshot
+        .plans
+        .iter()
+        .filter(|plan| plan.status != ptrack_core::PlanStatus::Done)
+        .filter(|plan| matches(plan.id, &plan.title))
+        .collect::<Vec<_>>();
+    let plans = matching_plans
+        .iter()
+        .take(SNAPSHOT_PLAN_LIMIT)
+        .map(|plan| {
+            json!({
+                "id": plan.id,
+                "title": plan.title,
+                "status": plan.status.as_str(),
+                "holdReason": plan.hold_reason,
+            })
+        })
+        .collect::<Vec<_>>();
+    let matching_tasks = snapshot
+        .tasks
+        .iter()
+        .filter(|task| matches(task.id, &task.title))
+        .collect::<Vec<_>>();
+    let tasks = matching_tasks
+        .iter()
+        .take(SNAPSHOT_TASK_LIMIT)
+        .map(|task| {
+            json!({
+                "id": task.id,
+                "planId": task.plan_id,
+                "title": task.title,
+                "status": task.status.as_str(),
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "generation": generation,
+        "issue": issue_detail_summary(snapshot, issue),
+        "plans": plans,
+        "tasks": tasks,
+        "bounds": {
+            "plans": bound(plans.len(), matching_plans.len()),
+            "tasks": bound(tasks.len(), matching_tasks.len()),
+        },
+    }))
 }
 
 pub(super) fn project_storage(database: &str, meta: &Meta) -> Value {
@@ -5793,6 +6062,29 @@ fn project_guide_unavailable() -> ProjectGuidePreviewV1 {
 fn parse_task_status(value: &str) -> AppResult<TaskStatus> {
     TaskStatus::from_name(value)
         .ok_or_else(|| AppError::Message(format!("invalid task status {value:?}")))
+}
+
+fn parse_issue_status(value: &str) -> AppResult<IssueStatus> {
+    IssueStatus::from_name(value)
+        .ok_or_else(|| AppError::Message(format!("invalid issue status {value:?}")))
+}
+
+fn parse_issue_severity(value: &str) -> AppResult<Severity> {
+    Severity::from_name(value)
+        .ok_or_else(|| AppError::Message(format!("invalid issue severity {value:?}")))
+}
+
+fn parse_issue_timestamp(value: &str) -> AppResult<Timestamp> {
+    if value == "0001-01-01T00:00:00Z" {
+        return Ok(Timestamp::Zero);
+    }
+    let parsed = OffsetDateTime::parse(value, &Rfc3339)
+        .map_err(|_| AppError::Message("issue timestamp is invalid".to_owned()))?;
+    Ok(Timestamp::Fixed {
+        seconds: parsed.unix_timestamp(),
+        nanoseconds: parsed.nanosecond(),
+        offset_seconds: parsed.offset().whole_seconds(),
+    })
 }
 
 fn association_pointer_arg(

@@ -233,6 +233,50 @@ fn context_is_exact_bounded_untrusted_json_with_relevant_memory() {
 }
 
 #[test]
+fn plan_context_keeps_unscheduled_triage_separate_from_other_plan_work() {
+    let root = TempDirectory::new("ptrack-issue-context");
+    let canonical = fs::canonicalize(root.path()).unwrap();
+    let mut store = Store::new(canonical.clone());
+    store.plans.insert(2, plan(2));
+    store.plans.insert(3, plan(3));
+    store.tasks.insert(9, task(9, 2));
+    store.tasks.insert(10, task(10, 3));
+    for (id, task_id) in [(1, 0), (2, 9), (3, 10)] {
+        store.issues.push(Issue {
+            id,
+            title: format!("report {id}"),
+            body: "evidence".to_owned(),
+            status: IssueStatus::Open,
+            severity: Severity::High,
+            task_id,
+            created_at: CoreTimestamp::Zero,
+            updated_at: CoreTimestamp::Zero,
+            actor: None,
+            ulid: None,
+        });
+    }
+    let host = AssociationHost::new(&canonical, 7, Some(&store)).unwrap();
+    let context = build_launch_context(
+        Some(&store),
+        Some(&host),
+        AssociationPointer {
+            version: 1,
+            plan_id: 2,
+            task_id: 0,
+        },
+    )
+    .unwrap();
+    let document: Value = serde_json::from_str(&context.text).unwrap();
+    let tasks = document["openIssues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|issue| issue["taskId"].as_u64().unwrap_or(0))
+        .collect::<Vec<_>>();
+    assert_eq!(tasks, [0, 9]);
+}
+
+#[test]
 fn a_held_plan_or_task_states_its_hold_in_the_launch_document() {
     let root = TempDirectory::new("ptrack-agent-launch-hold");
     let canonical = fs::canonicalize(root.path()).unwrap();

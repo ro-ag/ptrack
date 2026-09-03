@@ -39,6 +39,8 @@ pub struct NextView {
     pub plan_waiting_on: Vec<u64>,
     /// Candidates passed over only because their task-deps are still open.
     pub skipped: Vec<DepSkip>,
+    /// Open issues linked to the selected task, empty when no task is selected.
+    pub issues: Vec<crate::IssueLine>,
 }
 
 /// A candidate task passed over because its dependencies are still open.
@@ -72,6 +74,7 @@ pub fn next(snapshot: &ProjectSnapshot) -> Result<NextView, ReportError> {
             plan_hold_reason: None,
             plan_waiting_on: Vec::new(),
             skipped: Vec::new(),
+            issues: Vec::new(),
         });
     }
     let plan = snapshot
@@ -86,6 +89,7 @@ pub fn next(snapshot: &ProjectSnapshot) -> Result<NextView, ReportError> {
             plan_hold_reason: Some(reason.clone()),
             plan_waiting_on: Vec::new(),
             skipped: Vec::new(),
+            issues: Vec::new(),
         });
     }
     let plan_waiting_on = open_plan_deps(snapshot, plan);
@@ -98,6 +102,7 @@ pub fn next(snapshot: &ProjectSnapshot) -> Result<NextView, ReportError> {
             plan_hold_reason: None,
             plan_waiting_on,
             skipped: Vec::new(),
+            issues: Vec::new(),
         });
     }
     let mut tasks = Vec::new();
@@ -129,6 +134,14 @@ pub fn next(snapshot: &ProjectSnapshot) -> Result<NextView, ReportError> {
             plan_hold_reason: None,
             plan_waiting_on: Vec::new(),
             skipped,
+            issues: snapshot
+                .issues
+                .iter()
+                .filter(|issue| {
+                    issue.status == crate::IssueStatus::Open && issue.task_id == task.id
+                })
+                .map(crate::report::issue_line)
+                .collect(),
         });
     }
     Ok(NextView {
@@ -139,6 +152,7 @@ pub fn next(snapshot: &ProjectSnapshot) -> Result<NextView, ReportError> {
         plan_hold_reason: None,
         plan_waiting_on: Vec::new(),
         skipped,
+        issues: Vec::new(),
     })
 }
 
@@ -158,6 +172,14 @@ impl NextView {
             None => {
                 writeln!(&mut output, "{}", self.message).expect("writing to String cannot fail");
             }
+        }
+        for issue in &self.issues {
+            writeln!(
+                &mut output,
+                "issue: #{} [{}] {}",
+                issue.id, issue.severity, issue.title
+            )
+            .expect("writing to String cannot fail");
         }
         for skip in &self.skipped {
             writeln!(

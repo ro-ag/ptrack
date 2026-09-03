@@ -71,6 +71,7 @@ fn dispatch_and_window_contracts_are_exact() {
         "workspace:command-palette-requested",
         "workspace:install-shell-command-requested",
         "workspace:intelligence-requested",
+        "workspace:issues-requested",
         "workspace:open-requested",
         "workspace:settings-requested",
         "workspace:switch-requested",
