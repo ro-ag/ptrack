@@ -10,8 +10,8 @@ use ptrack_capability::Broker;
 use ptrack_terminal::{
     CwdPolicy, ExitResult, MAX_RUNTIME_SESSION_CANDIDATES, Manager, ManagerErrorKind, Profile,
     ProfileKind, Session, SessionInfo, SessionState, ShellIntegrationDescriptor, StreamTicket,
-    TerminalAssociation, TerminalAssociationChange, TerminalAssociationPointer, resolve_cwd,
-    sort_profiles,
+    TerminalAssociation, TerminalAssociationChange, TerminalAssociationPointer,
+    profile_executable_is_available, resolve_cwd, sort_profiles,
 };
 use serde::Serialize;
 use tokio::task::JoinHandle;
@@ -584,6 +584,7 @@ impl TerminalRuntime {
     pub fn profiles(&self, generation: u64) -> AppResult<TerminalProfilesV2> {
         let _operation = self.begin(generation)?;
         let mut profiles = self.manager.profiles();
+        profiles.retain(profile_executable_is_available);
         sort_profiles(&mut profiles);
         Ok(TerminalProfilesV2 {
             generation: self.generation,
@@ -778,6 +779,11 @@ impl TerminalRuntime {
             .ok_or_else(|| {
                 AppError::Message(format!("terminal profile {profile_id:?} is unavailable"))
             })?;
+        if !profile_executable_is_available(&profile) {
+            return Err(AppError::Message(format!(
+                "terminal profile {profile_id:?} is unavailable"
+            )));
+        }
         if linked.is_some() && profile.kind != ProfileKind::Agent {
             return Err(AppError::Message(format!(
                 "terminal profile {profile_id:?} is not an agent"

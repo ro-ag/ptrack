@@ -159,7 +159,7 @@ and is revoked before terminal teardown. The versioned input contains only an
 event ID and sequence, an allowlisted type, short metadata, project-relative
 paths, and commit or exit metadata. A free-text final-summary field is reserved
 for trusted host-side integrations that explicitly enable it; generic provider
-events cannot self-assert one. Codex, Claude, Gemini, Agy, and OpenCode have
+events cannot self-assert one. Codex, Claude, Gemini, Kimi, Agy, and OpenCode have
 provider adapters; unknown future providers are limited to explicit lifecycle
 events. Provider event bodies reject unknown fields and do not admit prompts,
 messages, reasoning, tool inputs or results, command arguments, terminal output,
