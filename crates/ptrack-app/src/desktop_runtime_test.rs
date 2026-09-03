@@ -895,7 +895,7 @@ fn desktop_update_commands_delegate_exact_arguments_and_return_full_state() {
 }
 
 #[test]
-#[allow(clippy::too_many_lines)] // Full 93-command freeze fixture is intentionally explicit.
+#[allow(clippy::too_many_lines)] // Full 97-command freeze fixture is intentionally explicit.
 fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
     let commands = allowed_desktop_commands();
     assert_eq!(
@@ -917,6 +917,7 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "CloseProject",
             "CloseTerminal",
             "CloseTerminalV2",
+            "CompletePlanV1",
             "CopyPlanV1",
             "CreateFirstPlanV1",
             "CreateFirstTaskV1",
@@ -951,6 +952,7 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "GetUpdateState",
             "GetWorkspaceSnapshot",
             "GetWorkspaceState",
+            "HoldPlanV1",
             "InitializeProjectV1",
             "InstallShellCommand",
             "LaunchLinkedAgentV2",
@@ -980,6 +982,7 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "ResizeTerminal",
             "ResizeTerminalV2",
             "ResolveRecentProjectV1",
+            "ResumePlanV1",
             "RollbackLinkedAgentLaunchV2",
             "SaveCapabilityV2",
             "SearchV2",
@@ -2170,7 +2173,7 @@ fn bound_workspace(directory: &TestDirectory) -> BoundDesktopWorkspace {
         7,
         0,
         bindings.clone(),
-        Box::new(LocalApplication::new(bindings)),
+        Box::new(LocalApplication::new(bindings.clone())),
         None,
         None,
         None,
@@ -2491,6 +2494,9 @@ fn workspace_snapshot_uses_bounded_store_reads_and_open_issue_rows() {
     for index in 0..104 {
         store.add_plan(format!("Plan {index}"), 0).unwrap();
     }
+    store
+        .set_plan_hold(105, Some("Waiting beyond the page".to_owned()))
+        .unwrap();
     for index in 0..304 {
         let task = store.add_task(1, format!("Task {index}")).unwrap();
         if index < 55 {
@@ -2538,6 +2544,17 @@ fn workspace_snapshot_uses_bounded_store_reads_and_open_issue_rows() {
         snapshot["tracking"]["bounds"]["plans"],
         json!({"shown":100,"total":105,"more":5})
     );
+    let selected_beyond_page = workspace
+        .invoke("GetWorkspaceSnapshot", &[json!(7), json!(105)])
+        .unwrap();
+    let selected_plan = selected_beyond_page["tracking"]["board"]["plans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|plan| plan["id"] == json!(105))
+        .unwrap();
+    assert_eq!(selected_plan["status"], "active");
+    assert_eq!(selected_plan["holdReason"], "Waiting beyond the page");
     assert_eq!(
         snapshot["tracking"]["bounds"]["tasks"],
         json!({"shown":300,"total":305,"more":5})
@@ -2581,7 +2598,7 @@ fn workspace_snapshot_allows_no_active_plan_and_reports_missing_storage() {
         7,
         0,
         bindings.clone(),
-        Box::new(LocalApplication::new(bindings)),
+        Box::new(LocalApplication::new(bindings.clone())),
         None,
         None,
         None,
@@ -2604,6 +2621,18 @@ fn workspace_snapshot_allows_no_active_plan_and_reports_missing_storage() {
             .iter()
             .all(|column| column["tasks"] == json!([]))
     );
+    let store = ProjectStore::open_existing(
+        &bindings.project.as_ref().unwrap().database,
+        &bindings.project.as_ref().unwrap().binding,
+        "test",
+    )
+    .unwrap();
+    store.set_active_plan(1).unwrap();
+    drop(store);
+    let explicitly_empty = workspace
+        .invoke("GetWorkspaceSnapshot", &[json!(7), Value::Null])
+        .unwrap();
+    assert_eq!(explicitly_empty["tracking"]["board"]["planId"], 0);
     let missing = project_storage(&directory.0.join("missing.redb").to_string_lossy(), &meta);
     assert_eq!(missing["status"], "error");
     assert_eq!(missing["exists"], false);
@@ -3489,6 +3518,70 @@ fn desktop_plan_lifecycle_commands_rename_preview_delete_and_copy_within() {
     // ListProjectsV1 answers with the registry (possibly empty in this harness).
     let projects = workspace.invoke("ListProjectsV1", &[json!(7)]).unwrap();
     assert!(projects["projects"].is_array());
+}
+
+#[test]
+fn desktop_plan_completion_hold_and_resume_preserve_cli_lifecycle_rules() {
+    let directory = TestDirectory::new("plan-completion-hold-resume");
+    let (bindings, task_id) = bound_bindings(&directory);
+    let workspace = BoundDesktopWorkspace::new(
+        7,
+        0,
+        bindings.clone(),
+        Box::new(LocalApplication::new(bindings)),
+        None,
+        None,
+        None,
+    );
+    let plan_id = 1_u64;
+
+    workspace
+        .invoke(
+            "HoldPlanV1",
+            &[json!(7), json!(plan_id), json!("Waiting for review")],
+        )
+        .unwrap();
+    let held = workspace
+        .invoke("GetBoardV2", &[json!(7), json!(plan_id)])
+        .unwrap();
+    assert_eq!(held["board"]["plans"][0]["status"], json!("active"));
+    assert_eq!(
+        held["board"]["plans"][0]["holdReason"],
+        json!("Waiting for review")
+    );
+    workspace
+        .invoke("ResumePlanV1", &[json!(7), json!(plan_id)])
+        .unwrap();
+    let resumed = workspace
+        .invoke("GetBoardV2", &[json!(7), json!(plan_id)])
+        .unwrap();
+    assert!(resumed["board"]["plans"][0].get("holdReason").is_none());
+
+    let refusal = workspace
+        .invoke("CompletePlanV1", &[json!(7), json!(plan_id)])
+        .unwrap_err();
+    assert!(refusal.to_string().contains("open tasks remain"));
+    workspace
+        .invoke("MoveTaskV2", &[json!(7), json!(task_id), json!("done")])
+        .unwrap();
+    let completed = workspace
+        .invoke("CompletePlanV1", &[json!(7), json!(plan_id)])
+        .unwrap();
+    assert!(
+        completed["checkpoint"]["markdown"]
+            .as_str()
+            .unwrap()
+            .contains("CHECKPOINT — before continuing, re-evaluate:")
+    );
+    assert_eq!(completed["checkpoint"]["openPlans"], json!([]));
+    let board = workspace
+        .invoke("GetBoardV2", &[json!(7), json!(plan_id)])
+        .unwrap();
+    assert_eq!(board["board"]["plans"][0]["status"], json!("done"));
+    let hold_done = workspace
+        .invoke("HoldPlanV1", &[json!(7), json!(plan_id), json!("Too late")])
+        .unwrap_err();
+    assert!(hold_done.to_string().contains("cannot be put on hold"));
 }
 
 #[test]
