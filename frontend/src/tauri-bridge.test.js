@@ -5,7 +5,7 @@ import { COMMANDS, installTauriBridge } from "./tauri-bridge";
 describe("Tauri compatibility bridge", () => {
   it("pins the exact current command allowlist", () => {
     expect(COMMANDS).toEqual([
-      "AcknowledgeAgentHandoffV2", "AddIssueV1", "AddTask", "AddTaskNote", "AddTaskNoteV2",
+      "AcknowledgeAgentHandoffV2", "AddIssueV1", "AddPlanV1", "AddTask", "AddTaskNote", "AddTaskNoteV2",
       "AddTaskV2", "ApplyUpdate", "ApproveAgentWorkflowV2", "AssociateAgentRunV2",
       "AssociateTerminalV2", "CancelUpdateOperation", "CancelWorkspaceChange",
       "CheckForUpdates", "ClaimTerminalStream", "CloseProject", "CloseTerminal",
@@ -91,6 +91,7 @@ describe("Tauri compatibility bridge", () => {
     await target.go.gui.App.GetInitializationStatusV1("operation-1");
     await target.go.gui.App.GetPendingInitializationV1();
     await target.go.gui.App.CreateFirstPlanV1(7, "First plan");
+    await target.go.gui.App.AddPlanV1(7, "Another plan");
     await target.go.gui.App.CreateFirstTaskV1(7, 11, "First task");
     await target.go.gui.App.StartFirstTaskV1(7, 21, "2026-08-14T12:00:00Z");
     await target.go.gui.App.GetRecentProjectsV1();
@@ -133,6 +134,9 @@ describe("Tauri compatibility bridge", () => {
       }],
       ["gui_invoke", {
         request: { method: "CreateFirstPlanV1", arguments: [7, "First plan"] },
+      }],
+      ["gui_invoke", {
+        request: { method: "AddPlanV1", arguments: [7, "Another plan"] },
       }],
       ["gui_invoke", {
         request: { method: "CreateFirstTaskV1", arguments: [7, 11, "First task"] },

@@ -45,6 +45,9 @@
             >dev</button>
             <h1 id="project-name" tabindex="-1">Project workspace</h1>
           </div>
+          <button id="project-copy-context" class="sidebar-icon-button" type="button" aria-label="Copy project context" title="Copy project context for an agent" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/></svg>
+          </button>
         </div>
 
         <nav class="sidebar-nav" aria-label="Project views">
@@ -75,7 +78,29 @@
         <div class="sidebar-plans">
           <div class="section-heading">
             <p class="section-label">Plans</p>
-            <span id="plan-total" class="section-count">0</span>
+            <div class="sidebar-plan-tools">
+              <span id="plan-total" class="section-count">0</span>
+              <button id="plan-filter-toggle" class="sidebar-icon-button" type="button" aria-label="Filter plans" title="Filter plans" aria-expanded="false" aria-controls="plan-filters" disabled>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
+              </button>
+              <button id="plan-add" class="sidebar-icon-button" type="button" aria-label="New plan" title="New plan" disabled>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M12 4v16M4 12h16"/></svg>
+              </button>
+            </div>
+          </div>
+          <div id="plan-filters" class="plan-filters" hidden>
+            <label for="plan-search">Find a plan</label>
+            <input id="plan-search" type="search" placeholder="Title or number…" autocomplete="off" />
+            <label for="plan-status-filter">Status</label>
+            <select id="plan-status-filter">
+              <option value="all">All plans</option>
+              <option value="open">Open</option>
+              <option value="held">On hold</option>
+              <option value="done">Done</option>
+              <option value="archived">Archived</option>
+            </select>
+            <button id="plan-filter-clear" class="button-secondary" type="button">Clear filters</button>
+            <p id="plan-filter-summary" class="dialog-help" role="status"></p>
           </div>
           <div id="sidebar-plan-list" class="sidebar-plan-list"></div>
         </div>
@@ -504,6 +529,13 @@
                     Connecting…
                   </span>
                   <button
+                    id="plan-copy-context"
+                    class="button-secondary"
+                    type="button"
+                    aria-label="Copy current plan context for an agent"
+                    disabled
+                  >Copy context</button>
+                  <button
                     id="plan-launch-agent"
                     class="button-secondary"
                     type="button"
@@ -551,12 +583,6 @@
                   role="tablist"
                   aria-label="Terminal tabs"
                 ></div>
-                <div
-                  id="terminal-tab-actions"
-                  class="terminal-tab-actions"
-                  role="toolbar"
-                  aria-label="Active terminal tab actions"
-                ></div>
                 <button
                   id="terminal-new-tab"
                   class="terminal-new-tab"
@@ -564,6 +590,12 @@
                   aria-label="New terminal tab"
                   title="New terminal tab"
                 >+</button>
+                <div
+                  id="terminal-tab-actions"
+                  class="terminal-tab-actions"
+                  role="toolbar"
+                  aria-label="Active terminal tab actions"
+                ></div>
                 <button
                   id="terminal-reset-workspace"
                   class="terminal-reset-workspace"
@@ -573,6 +605,7 @@
                 >↺</button>
               </div>
               <header class="terminal-toolbar">
+                <div class="terminal-setup-row">
                 <div class="terminal-identity">
                   <span class="terminal-mark" aria-hidden="true">&gt;_</span>
                   <div>
@@ -611,6 +644,8 @@
                   />
                   <span>Modern Unicode</span>
                 </label>
+                </div>
+                <div class="terminal-controls-row">
                 <div class="terminal-tools" role="group" aria-label="Terminal tools">
                   <button
                     id="terminal-search-open"
@@ -675,7 +710,7 @@
                 <div
                   class="terminal-actions"
                   role="group"
-                  aria-label="Terminal actions"
+                  aria-label="Project context actions"
                 >
                   <button
                     id="terminal-link-context"
@@ -704,6 +739,8 @@
                       <path d="M10 2.5v3h3M8 8v4M6.25 10.25 8 12l1.75-1.75"></path>
                     </svg>
                   </button>
+                </div>
+                <div class="terminal-actions" role="group" aria-label="Terminal utilities">
                   <button
                     id="terminal-diagnostics-toggle"
                     class="terminal-action-button"
@@ -744,6 +781,8 @@
                       <path d="M9.5 2.5h4v4M13.5 2.5 8 8"></path>
                     </svg>
                   </button>
+                </div>
+                <div class="terminal-actions" role="group" aria-label="Session controls">
                   <button
                     id="terminal-open"
                     class="terminal-action-button"
@@ -771,8 +810,8 @@
                     id="terminal-close"
                     class="terminal-action-button terminal-action-stop"
                     type="button"
-                    aria-label="Close terminal"
-                    title="Close terminal"
+                    aria-label="Stop terminal session"
+                    title="Stop session (keep tab)"
                     hidden
                   >
                     <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -791,6 +830,7 @@
                       <path d="M6.5 1.75 3.75 8h3l-1 6.25L12.25 7h-3l1-5.25z"></path>
                     </svg>
                   </button>
+                </div>
                 </div>
               </header>
               <section
@@ -906,7 +946,10 @@
                 <div id="plan-ring" class="plan-ring" role="img" hidden></div>
                 <div id="project-stats" class="stats-grid"></div>
               </div>
-              <div id="snapshot-bounds" class="intelligence-summary"></div>
+              <details class="snapshot-details">
+                <summary>Snapshot details</summary>
+                <div id="snapshot-bounds" class="intelligence-summary"></div>
+              </details>
             </section>
 
             <section class="memory-section overview-wide">
@@ -1029,7 +1072,7 @@
             </div>
           </header>
           <p id="issues-status" class="issues-status" role="status" aria-live="polite"></p>
-          <div class="issues-toolbar">
+          <div class="issues-toolbar issues-pagination">
             <button id="issues-previous" type="button" class="button-secondary">Newer issues</button>
             <button id="issues-next" type="button" class="button-secondary">Older issues</button>
           </div>
@@ -1706,6 +1749,7 @@
           <button id="drawer-memory" class="button-secondary" type="button">
             Record memory
           </button>
+          <button id="drawer-copy-context" class="button-secondary" type="button">Copy context</button>
           <button id="drawer-launch-agent" class="button-secondary" type="button">
             Launch agent
           </button>
@@ -2161,6 +2205,7 @@
       </section>
     </div>
 
+    <span id="context-copy-status" class="visually-hidden" role="status" aria-live="polite"></span>
     <div id="toast" class="toast" role="alert" aria-live="assertive" hidden></div>
     <script type="module" src="/src/app.js"></script>
   </body>

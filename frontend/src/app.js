@@ -1,4 +1,6 @@
 import "./tauri-bridge";
+import { filterPlans } from "./workspace/plan-list";
+import { agentContextText } from "./workspace/copy-context";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { Terminal } from "@xterm/xterm";
@@ -382,9 +384,20 @@ const elements = {
   updatesCancel: document.querySelector("#updates-cancel"),
   updatesPrimary: document.querySelector("#updates-primary"),
   projectName: document.querySelector("#project-name"),
+  projectCopyContext: document.querySelector("#project-copy-context"),
+  contextCopyStatus: document.querySelector("#context-copy-status"),
+  planCopyContext: document.querySelector("#plan-copy-context"),
+  drawerCopyContext: document.querySelector("#drawer-copy-context"),
   planTitle: document.querySelector("#plan-title"),
   planTotal: document.querySelector("#plan-total"),
   planList: document.querySelector("#sidebar-plan-list"),
+  planAdd: document.querySelector("#plan-add"),
+  planFilterToggle: document.querySelector("#plan-filter-toggle"),
+  planFilters: document.querySelector("#plan-filters"),
+  planSearch: document.querySelector("#plan-search"),
+  planStatusFilter: document.querySelector("#plan-status-filter"),
+  planFilterClear: document.querySelector("#plan-filter-clear"),
+  planFilterSummary: document.querySelector("#plan-filter-summary"),
   planProgress: document.querySelector("#plan-progress"),
   planProgressLabel: document.querySelector("#plan-progress-label"),
   planLaunchAgent: document.querySelector("#plan-launch-agent"),
@@ -596,7 +609,8 @@ let planContextMenu = null;
 let planContextMenuDispose = null;
 let planContextMenuReturnFocus = null;
 let planRenameActive = false;
-let planDialogMode = null; // "done" | "checkpoint" | "hold" | "delete" | "move" | "copy"
+let planDialogMode = null; // "create" | "done" | "checkpoint" | "hold" | "delete" | "move" | "copy"
+let planCreateSequence = 0;
 let planDialogPlan = null;
 let planDialogTransferState = null;
 let planDialogReturnFocus = null;
@@ -1040,27 +1054,38 @@ function renderMemory() {
     board.summary || "No rolling summary yet. Agents can update it with ptrack summary set.";
   // The Overview is project-wide: totals never change with the selected
   // plan (the per-plan numbers stay on the board header).
-  const tiles = [
-    statElement(`${board.stats.tasksDone}/${board.stats.tasks}`, "Tasks done"),
-    statElement(`${board.stats.plansDone}/${board.stats.plans}`, "Plans done"),
+  const progress = document.createElement("div");
+  progress.className = "status-progress";
+  const metrics = [
+    [board.stats.tasksDone, board.stats.tasks, "Tasks"],
+    [board.stats.plansDone, board.stats.plans, "Plans"],
+    [board.stats.milestonesDone, board.stats.milestones, "Milestones"],
+  ];
+  metrics.filter(([, total, label]) => total || label !== "Milestones").forEach(([done, total, label]) => {
+    const metric = statElement(`${done}/${total}`, label);
+    const bar = document.createElement("progress");
+    bar.max = total || 1;
+    bar.value = done;
+    bar.setAttribute("aria-label", `${label}: ${done} of ${total} done`);
+    metric.append(bar);
+    progress.append(metric);
+  });
+  const counts = document.createElement("div");
+  counts.className = "status-counts";
+  counts.append(
     statElement(board.stats.tasksOpen, "Open tasks"),
     statElement(board.stats.tasksBlocked, "Blocked"),
+    statElement(board.stats.openIssues, "Open issues"),
     statElement(board.stats.notes, "Notes"),
     statElement(board.stats.commits, "Commits"),
-    statElement(board.stats.openIssues, "Open issues"),
-  ];
-  if (board.stats.milestones) {
-    tiles.push(
-      statElement(`${board.stats.milestonesDone}/${board.stats.milestones}`, "Milestones"),
-    );
-  }
+  );
   if (repoStats?.available) {
-    tiles.push(
+    counts.append(
       statElement(repoStats.files.toLocaleString(), "Tracked files"),
       statElement(repoStats.lines.toLocaleString(), "Lines of code"),
     );
   }
-  elements.stats.replaceChildren(...tiles);
+  elements.stats.replaceChildren(progress, counts);
   renderPlanRing(board.stats.tasksDone, board.stats.tasks);
 
   elements.issueTotal.textContent = board.stats.openIssues;
@@ -1389,14 +1414,14 @@ function renderPlanRing(done, total) {
     y: 40,
     "text-anchor": "middle",
   });
-  number.textContent = `${done}/${total}`;
+  number.textContent = `${Math.round(fraction * 100)}%`;
   const caption = svgElement("text", {
     class: "plan-ring-caption",
     x: 42,
     y: 54,
     "text-anchor": "middle",
   });
-  caption.textContent = "done";
+  caption.textContent = "tasks done";
   svg.append(number, caption);
   elements.planRing.setAttribute(
     "aria-label",
@@ -1412,28 +1437,44 @@ function renderHeatmap(days) {
     return;
   }
   const columns = heatmapWeeks(days);
-  const cell = 10;
-  const pitch = cell + 2;
-  const width = columns.length * pitch - 2;
-  const height = 7 * pitch - 2;
+  const cell = 14;
+  const pitch = 18;
+  const left = 30;
+  const top = 20;
+  const width = left + columns.length * pitch;
+  const height = top + 7 * pitch;
+  const chart = document.createElement("div");
+  chart.className = "heatmap-chart";
   const svg = svgElement("svg", {
     viewBox: `0 0 ${width} ${height}`,
-    width: width,
-    height: height,
     class: "heatmap-svg",
     role: "img",
     "aria-label": "Daily note and commit activity for the last 16 weeks",
   });
+  [["Mon", 1], ["Wed", 3], ["Fri", 5]].forEach(([label, row]) => {
+    const text = svgElement("text", { x: 0, y: top + row * pitch + 11, class: "heatmap-label" });
+    text.textContent = label;
+    svg.append(text);
+  });
+  let previousMonth = "";
   columns.forEach((column, x) => {
+    const first = column.find((day) => day.date);
+    const month = first?.date.slice(0, 7);
+    if (month && month !== previousMonth) {
+      const label = svgElement("text", { x: left + x * pitch, y: 11, class: "heatmap-label" });
+      label.textContent = new Date(`${first.date}T12:00:00Z`).toLocaleDateString(undefined, { month: "short", timeZone: "UTC" });
+      svg.append(label);
+      previousMonth = month;
+    }
     column.forEach((day, y) => {
       if (!day.date) return;
       const rect = svgElement("rect", {
         class: `heatmap-cell heatmap-level-${day.level}`,
-        x: x * pitch,
-        y: y * pitch,
+        x: left + x * pitch,
+        y: top + y * pitch,
         width: cell,
         height: cell,
-        rx: 2,
+        rx: 3,
       });
       const tip = svgElement("title");
       tip.textContent = `${day.count} ${day.count === 1 ? "item" : "items"} · ${day.date}`;
@@ -1441,7 +1482,27 @@ function renderHeatmap(days) {
       svg.append(rect);
     });
   });
-  elements.heatmap.append(svg);
+  const legend = document.createElement("div");
+  legend.className = "heatmap-legend";
+  legend.append("Less");
+  for (let level = 0; level <= 4; level += 1) {
+    const swatch = svgElement("svg", { viewBox: "0 0 12 12", "aria-hidden": "true" });
+    swatch.append(svgElement("rect", { width: 12, height: 12, rx: 2, class: `heatmap-cell heatmap-level-${level}` }));
+    legend.append(swatch);
+  }
+  legend.append("More");
+  chart.append(svg, legend);
+  const totals = document.createElement("div");
+  totals.className = "activity-totals";
+  const total = days.reduce((sum, day) => sum + day.count, 0);
+  const active = days.filter((day) => day.count > 0).length;
+  totals.append(
+    statElement(total.toLocaleString(), "Notes + commits"),
+    statElement(active, "Active days"),
+    statElement(Math.max(...days.map((day) => day.count)), "Most in one day"),
+    statElement((total / Math.max(1, days.length / 7)).toFixed(1), "Average per week"),
+  );
+  elements.heatmap.append(chart, totals);
 }
 
 // Repository code statistics follow the heatmap pattern: fetched lazily
@@ -1633,6 +1694,7 @@ function cardElement(task) {
         event.currentTarget,
       ),
     ),
+    actionButton("Copy context", `Copy task #${task.id} context for an agent`, (event) => void copyAgentContext("task", task, event.currentTarget)),
     actionButton("Edit", "Rename task", () => openRename(task)),
     actionButton("Memory", "Record a memory note", () => openMemory(task)),
   );
@@ -1751,8 +1813,15 @@ function selectPlan(planId) {
 
 function renderPlanList() {
   elements.planList.replaceChildren();
-  elements.planTotal.textContent = board.plans.length;
-  board.plans.forEach((plan) => {
+  if (!board) return;
+  const plans = filterPlans(board.plans, elements.planSearch.value, elements.planStatusFilter.value);
+  const filtered = elements.planSearch.value.trim() !== "" || elements.planStatusFilter.value !== "all";
+  elements.planTotal.textContent = filtered ? `${plans.length}/${board.plans.length}` : board.plans.length;
+  elements.planFilterToggle.dataset.active = String(filtered);
+  const total = Number(board.stats.plans || board.plans.length);
+  elements.planFilterSummary.textContent = `${plans.length} of ${board.plans.length} loaded plans${total > board.plans.length ? ` (${total} in project)` : ""}.`;
+  if (!plans.length) elements.planList.append(emptyMemory(filtered ? "No plans match these filters." : "No plans yet. Create a plan with +."));
+  plans.forEach((plan) => {
     // Not a native <button>: it hosts the nested "⋯" plan-actions button
     // below, and interactive content can't nest inside a real button.
     const item = document.createElement("div");
@@ -1768,6 +1837,11 @@ function renderPlanList() {
     title.className = "sidebar-plan-title";
     title.textContent = `#${plan.id} ${plan.title}`;
     item.append(title);
+    const count = document.createElement("span");
+    count.className = "sidebar-plan-count";
+    count.textContent = `${plan.tasksDone}/${plan.tasksTotal}`;
+    count.setAttribute("aria-label", `${plan.tasksDone} of ${plan.tasksTotal} tasks done`);
+    item.append(count);
     if (plan.isActive) {
       const dot = document.createElement("span");
       dot.className = "sidebar-plan-dot";
@@ -1854,6 +1928,7 @@ function renderBoard() {
   elements.taskTitle.disabled = board.planId === 0;
   elements.addForm.querySelector("button").disabled = board.planId === 0;
   elements.planLaunchAgent.disabled = board.planId === 0;
+  elements.planCopyContext.disabled = board.planId === 0;
   const collapsed = new Set(
     collapsedLaneStatuses(
       board.columns.map((column) => ({
@@ -3043,6 +3118,7 @@ function beginPlanRename(titleElement, plan) {
 }
 
 function closePlanDialog() {
+  if (elements.planDialogForm.getAttribute("aria-busy") === "true") return;
   if (elements.planDialog.hidden) return;
   hideApplicationOverlay(elements.planDialog);
   planDialogReturnFocus?.focus?.();
@@ -3097,6 +3173,69 @@ function maybePromptForPlanCompletion() {
   if (promptedCompletedPlans.has(key) || snapshotDialogIsOpen()) return;
   promptedCompletedPlans.add(key);
   openPlanDoneDialog(plan, true);
+}
+
+function openNewPlanDialog() {
+  if (workspaceController.state.status !== "open" || firstPlanState.phase !== "idle") return;
+  planDialogMode = "create";
+  planDialogPlan = null;
+  planDialogTransferState = null;
+  openPlanDialogShell();
+  hidePlanDialogFields();
+  elements.planDialogEyebrow.textContent = "Plans";
+  elements.planDialogHeading.textContent = "Create a new plan";
+  elements.planDialogBody.textContent = "Give this plan a title. You can add tasks on its board next.";
+  elements.planDialogTitleLabel.textContent = "Plan title";
+  elements.planDialogTitleLabel.hidden = false;
+  elements.planDialogTitle.value = "";
+  elements.planDialogTitle.hidden = false;
+  elements.planDialogSubmit.textContent = "Create plan";
+  elements.planDialogSubmit.disabled = true;
+  requestAnimationFrame(() => elements.planDialogTitle.focus());
+}
+
+async function submitNewPlan() {
+  if (elements.planDialogForm.getAttribute("aria-busy") === "true") return;
+  const validation = validateOnboardingTitle(elements.planDialogTitle.value, "plan");
+  if (validation.error) {
+    setPlanDialogError(validation.error);
+    elements.planDialogTitle.focus();
+    return;
+  }
+  const ticket = workspaceController.capture();
+  const sequence = ++planCreateSequence;
+  elements.planDialogForm.setAttribute("aria-busy", "true");
+  elements.planDialogTitle.readOnly = true;
+  elements.planDialogSubmit.disabled = true;
+  elements.planDialogCancel.disabled = true;
+  elements.planDialogError.hidden = true;
+  try {
+    const response = await api().AddPlanV1(ticket.generation, validation.value);
+    if (sequence !== planCreateSequence || !workspaceController.accepts(ticket, Number(response.generation))) return;
+    elements.planDialogForm.removeAttribute("aria-busy");
+    closePlanDialog();
+    clearPlanFilters();
+    setView("board");
+    await loadSnapshot(Number(response.plan.id));
+    elements.taskTitle.focus();
+  } catch (error) {
+    if (sequence === planCreateSequence && workspaceController.accepts(ticket, ticket.generation)) setPlanDialogError(error);
+  } finally {
+    if (sequence === planCreateSequence) {
+      elements.planDialogForm.removeAttribute("aria-busy");
+      elements.planDialogTitle.readOnly = false;
+      elements.planDialogCancel.disabled = false;
+      if (planDialogMode === "create") syncPlanDialogState();
+    }
+  }
+}
+
+function clearPlanFilters() {
+  elements.planSearch.value = "";
+  elements.planStatusFilter.value = "all";
+  elements.planFilterToggle.dataset.active = "false";
+  elements.planFilterSummary.textContent = "";
+  renderPlanList();
 }
 
 function openPlanDoneDialog(plan, automatic = false) {
@@ -3202,6 +3341,10 @@ async function openPlanDeleteDialog(plan) {
 }
 
 function syncPlanDialogState() {
+  if (planDialogMode === "create") {
+    elements.planDialogSubmit.disabled = elements.planDialogForm.getAttribute("aria-busy") === "true" || elements.planDialogTitle.value.trim() === "";
+    return;
+  }
   if (planDialogMode === "hold") {
     elements.planDialogSubmit.disabled = elements.planDialogTitle.value.trim() === "";
     return;
@@ -5727,6 +5870,8 @@ function renderFirstPlanOnboarding(focus = false) {
   updateAboutUpdatesAvailability();
   setFirstRunSectionVisible(elements.onboarding, active);
   elements.planList.inert = active;
+  elements.planAdd.disabled = active || workspaceController.state.status !== "open";
+  elements.planFilterToggle.disabled = active || workspaceController.state.status !== "open";
   elements.sidebarToggle.disabled = active;
   elements.sidebarResize.inert = active;
   if (terminalHandle) terminalHandle.setLayoutLocked(active);
@@ -6138,6 +6283,13 @@ function renderWorkspaceState(state, focus = false) {
     );
   }
   const open = state.status === "open";
+  if (!open && planDialogMode === "create") {
+    planCreateSequence += 1;
+    elements.planDialogForm.removeAttribute("aria-busy");
+    elements.planDialogTitle.readOnly = false;
+    elements.planDialogCancel.disabled = false;
+    closePlanDialog();
+  }
   if (!open) hideAgentActionForms();
   if (open && !wasOpen) restoreProjectLayout(state.project?.root || "");
   applyView();
@@ -6145,6 +6297,9 @@ function renderWorkspaceState(state, focus = false) {
   elements.navBoard.disabled = !open;
   elements.navOverview.disabled = !open;
   elements.navIssues.disabled = !open;
+  elements.planAdd.disabled = !open;
+  elements.projectCopyContext.disabled = !open;
+  elements.planFilterToggle.disabled = !open;
   elements.switchProject.hidden = !open;
   elements.closeProject.hidden = !open;
   elements.openProject.hidden = true;
@@ -6206,6 +6361,9 @@ function renderWorkspaceState(state, focus = false) {
   repoStatsRequested = false;
   repoStats = null;
   board = null;
+  clearPlanFilters();
+  elements.planFilters.hidden = true;
+  elements.planFilterToggle.setAttribute("aria-expanded", "false");
   snapshot = null;
   issuesState = { issues: [], bounds: { shown: 0, total: 0 } };
   issuesOffset = 0;
@@ -7901,6 +8059,64 @@ elements.planTitleMenu.addEventListener("click", () => {
     y: rect.bottom + 4,
   });
 });
+async function copyAgentContext(scope, task, invoker) {
+  try {
+    const plan = scope === "project" ? undefined :
+      task?.planId ? board?.plans.find((candidate) => Number(candidate.id) === Number(task.planId)) : currentBoardPlan();
+    if (scope !== "project" && !plan) throw new Error("Refresh the plan before copying its context.");
+    const text = agentContextText({
+      project: {
+        name: board?.projectName || workspaceState.project?.name || "Project",
+        root: workspaceState.project?.root || "",
+        goal: board?.goal,
+      },
+      plan,
+      task: scope === "task" ? task : undefined,
+    });
+    if ((await window.runtime?.ClipboardSetText?.(text)) !== true) {
+      throw new Error("Clipboard unavailable. Try copying again.");
+    }
+    setStatus(`${scope === "task" ? `Task #${task.id}` : scope === "plan" ? `Plan #${plan.id}` : "Project"} context copied.`);
+    elements.contextCopyStatus.textContent = `${scope === "task" ? "Task" : scope === "plan" ? "Plan" : "Project"} context copied to clipboard.`;
+    if (invoker) {
+      invoker.dataset.copied = "true";
+      window.setTimeout(() => { delete invoker.dataset.copied; }, 1800);
+    }
+    if (invoker && !invoker.querySelector("svg")) {
+      const label = invoker.dataset.copyLabel || invoker.textContent;
+      invoker.dataset.copyLabel = label;
+      invoker.textContent = "Copied";
+      window.setTimeout(() => { invoker.textContent = label; }, 1800);
+    }
+  } catch (error) {
+    showError(error);
+  }
+}
+
+elements.projectCopyContext.addEventListener("click", (event) => void copyAgentContext("project", null, event.currentTarget));
+elements.planCopyContext.addEventListener("click", (event) => void copyAgentContext("plan", null, event.currentTarget));
+elements.drawerCopyContext.addEventListener("click", (event) => {
+  if (detailTask) void copyAgentContext("task", detailTask, event.currentTarget);
+});
+elements.planAdd.addEventListener("click", openNewPlanDialog);
+elements.planFilterToggle.addEventListener("click", () => {
+  elements.planFilters.hidden = !elements.planFilters.hidden;
+  elements.planFilterToggle.setAttribute("aria-expanded", String(!elements.planFilters.hidden));
+  if (!elements.planFilters.hidden) elements.planSearch.focus();
+});
+elements.planSearch.addEventListener("input", renderPlanList);
+elements.planStatusFilter.addEventListener("change", renderPlanList);
+elements.planFilterClear.addEventListener("click", () => {
+  clearPlanFilters();
+  elements.planSearch.focus();
+});
+elements.planFilters.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  event.stopPropagation();
+  elements.planFilters.hidden = true;
+  elements.planFilterToggle.setAttribute("aria-expanded", "false");
+  elements.planFilterToggle.focus();
+});
 elements.planDialogProject.addEventListener("input", syncPlanDialogState);
 elements.planDialogProject.addEventListener("change", syncPlanDialogState);
 elements.planDialogTitle.addEventListener("input", syncPlanDialogState);
@@ -7913,6 +8129,10 @@ elements.planDialogForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (planDialogMode === "checkpoint") {
     closePlanDialog();
+    return;
+  }
+  if (planDialogMode === "create") {
+    await submitNewPlan();
     return;
   }
   if (!planDialogPlan || !planDialogMode) return;

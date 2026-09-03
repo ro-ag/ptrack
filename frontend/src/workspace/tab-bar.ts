@@ -7,6 +7,7 @@ import {
 import type { WorkspaceAction } from "./reducer";
 import { WorkspaceTabController } from "./tab-controller";
 import type { PaneIndicator, PaneIndicatorKind } from "../terminal/activity";
+import { terminalControlIcon, type TerminalControlIcon } from "../terminal/control-icon";
 
 export type TabRenameKeyIntent = "begin" | "commit" | "cancel";
 export type TabMoveDirection = "left" | "right";
@@ -152,7 +153,7 @@ export function tabIndicatorPresentation(
 }
 
 function button(
-  text: string,
+  icon: TerminalControlIcon,
   label: string,
   onClick: () => void,
   disabled = false,
@@ -160,7 +161,7 @@ function button(
   const result = document.createElement("button");
   result.type = "button";
   result.className = "terminal-tab-action";
-  result.textContent = text;
+  result.append(terminalControlIcon(icon));
   result.setAttribute("aria-label", label);
   result.title = label;
   result.disabled = disabled;
@@ -296,6 +297,14 @@ export class WorkspaceTabBar {
     });
     this.#tabButtons.set(tab.id, tabButton);
     item.append(tabButton);
+    const closeAction: WorkspaceAction = { type: "close-tab", tabId: tab.id };
+    const close = button("close", `Close ${tab.title} tab`, () => {
+      if (this.#closeIntent) this.#closeIntent(closeAction);
+      else this.#dispatch(closeAction);
+    }, tabControlPolicy(index, count).closeDisabled || !this.#controller.canDispatch(closeAction));
+    close.classList.add("terminal-tab-close");
+    if (count === 1) close.title = "Keep one tab open. Use Stop session to stop its process.";
+    item.append(close);
 
     return item;
   }
@@ -345,28 +354,23 @@ export class WorkspaceTabBar {
     }
 
     const duplicateAction: WorkspaceAction = { type: "duplicate-tab", tabId: tab.id };
-    const closeAction: WorkspaceAction = { type: "close-tab", tabId: tab.id };
     this.#actionToolbar.replaceChildren(
-      button("←", `Move ${tab.title} left`, () => {
+      button("left", `Move ${tab.title} left`, () => {
         const target = tabMoveIndex(index, "left", workspace.tabs.length);
         if (target !== null) {
           this.#dispatch({ type: "reorder-tab", tabId: tab.id, toIndex: target }, tab.id);
         }
       }, controls.moveLeftDisabled),
-      button("→", `Move ${tab.title} right`, () => {
+      button("right", `Move ${tab.title} right`, () => {
         const target = tabMoveIndex(index, "right", workspace.tabs.length);
         if (target !== null) {
           this.#dispatch({ type: "reorder-tab", tabId: tab.id, toIndex: target }, tab.id);
         }
       }, controls.moveRightDisabled),
-      button("✎", `Rename ${tab.title}`, () => this.#beginRename(tab.id)),
-      button("⧉", `Duplicate ${tab.title}`, () => {
+      button("rename", `Rename ${tab.title}`, () => this.#beginRename(tab.id)),
+      button("duplicate", `Duplicate ${tab.title}`, () => {
         this.#dispatch(duplicateAction);
       }, controls.duplicateDisabled || !this.#controller.canDispatch(duplicateAction)),
-      button("×", `Close ${tab.title}`, () => {
-        if (this.#closeIntent) this.#closeIntent(closeAction);
-        else this.#dispatch(closeAction);
-      }, controls.closeDisabled || !this.#controller.canDispatch(closeAction)),
     );
   }
 

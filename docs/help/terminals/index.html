@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="description" content="Use p-track terminal sessions, tabs, splits, search, paste safety, profiles, associations, and bounded recovery controls.">
-    <meta name="ptrack-version" content="0.34.0">
+    <meta name="ptrack-version" content="0.35.0">
     <title>Terminals · p-track Help Center</title>
     <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="../assets/style.css">
@@ -16,7 +16,7 @@
         <a class="brand" href="../" aria-label="p-track Help Center home">
           <span class="brand-mark" aria-hidden="true">p·</span>
           <span>p-track Help</span>
-          <span class="version-badge">v0.34.0</span>
+          <span class="version-badge">v0.35.0</span>
         </a>
         <nav class="primary-nav" aria-label="Primary">
           <ul>
@@ -63,8 +63,9 @@
           </figure>
 
           <h2 id="sessions-and-tabs">Sessions and tabs</h2>
+          <p>Controls follow their scope: the tab row manages tabs; each pane header splits or closes that pane; the terminal toolbar groups output tools, project context, utilities, and session controls. Icon tooltips describe each action.</p>
           <p>Open the terminal dock from a project workspace, choose a profile and working directory, then open the stopped pane. Each pane receives its own PTY-backed session. Closing a pane stops its owned process; an exited pane remains visible when its profile uses the <code>keep</code> exit behavior.</p>
-          <p>Create, select, reorder, duplicate, rename, and close tabs from the tab row. Keyboard users can focus a tab and press <kbd>F2</kbd> to begin renaming, <kbd>Enter</kbd> to save a non-empty name, or <kbd>Escape</kbd> to cancel. Arrow keys move focus between tabs; <kbd>Home</kbd> and <kbd>End</kbd> reach the first and last tab.</p>
+          <p>Use <strong>+</strong> beside the tabs to create a tab and <strong>×</strong> on a tab to close it. Reorder, duplicate, and rename actions on the right apply to the selected tab. Closing a tab with live sessions asks for confirmation; the last tab stays available. Use the square <strong>Stop session</strong> control to stop its process while keeping the tab. Keyboard users can focus a tab and press <kbd>F2</kbd> to begin renaming, <kbd>Enter</kbd> to save a non-empty name, or <kbd>Escape</kbd> to cancel. Arrow keys move focus between tabs; <kbd>Home</kbd> and <kbd>End</kbd> reach the first and last tab.</p>
           <div class="callout">
             <p><strong>Persistence is intentionally content-free.</strong> p-track stores tab titles, active panes, split layout, profile IDs, requested working directories, and bounded plan/task pointers. It never persists terminal output, scrollback contents, session IDs, stream URLs, tokens, environment values, or other runtime authority.</p>
           </div>
@@ -120,6 +121,7 @@
           <p>Profile files must not be used as credential stores. p-track rejects credential-like and reserved environment names; keep credentials in the launched tool's native credential store.</p>
 
           <h2 id="associations-and-writeback">Associations and write-back</h2>
+          <p><strong>Copy context</strong> on the board or a task copies the project path, plan and task references, and commands to read their current p-track records. The copy icon beside the project name copies project context alone. Paste the result into your agent when you are ready.</p>
           <p><strong>Link terminal context</strong> associates the active tab with a plan or task after host validation. The pointer helps p-track correlate the terminal with project work; it does not grant any authority or capture terminal contents.</p>
           <p><strong>Write memory back</strong> is available only for an associated live session. You enter the bounded summary, decision, blocker, or handoff yourself, preview its authoritative destination, and then save it. p-track does not extract text from terminal output.</p>
 

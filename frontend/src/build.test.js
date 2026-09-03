@@ -419,7 +419,7 @@ describe("production asset layout", () => {
       /id="terminal-link-context"[\s\S]*aria-label="Link terminal context"[\s\S]*disabled/,
     );
     expect(index).toMatch(
-      /class="terminal-actions"[\s\S]*aria-label="Terminal actions"[\s\S]*id="terminal-open"[\s\S]*aria-label="Open terminal"[\s\S]*<svg/,
+      /class="terminal-actions"[\s\S]*aria-label="Session controls"[\s\S]*id="terminal-open"[\s\S]*aria-label="Open terminal"[\s\S]*<svg/,
     );
     expect(index).toMatch(
       /id="terminal-help"[\s\S]*aria-label="Open terminal guide"/,
@@ -428,7 +428,7 @@ describe("production asset layout", () => {
     expect(appSource).toContain('openHelpDestination("terminals")');
     expect(appSource).not.toContain("ro-ag.github.io/ptrack/help");
     expect(index).toMatch(
-      /id="terminal-close"[\s\S]*class="terminal-action-button terminal-action-stop"[\s\S]*aria-label="Close terminal"/,
+      /id="terminal-close"[\s\S]*class="terminal-action-button terminal-action-stop"[\s\S]*aria-label="Stop terminal session"/,
     );
     expect(index).toMatch(
       /id="terminal-diagnostics-toggle"[\s\S]*aria-controls="terminal-diagnostics"[\s\S]*aria-expanded="false"[\s\S]*<svg[^>]*aria-hidden="true"/,

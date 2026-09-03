@@ -6,8 +6,8 @@ Observe agent work, keep project state durable, and pass bounded context to
 the next agent—without a hosted service or cloud account.
 
 [![Rust](https://img.shields.io/badge/Rust-1.89%2B-CE6A3D?logo=rust&logoColor=white)](https://www.rust-lang.org/)
-[![Release](https://img.shields.io/badge/release-v0.34.0-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.34.0)
-[![Help Center](https://img.shields.io/badge/help-v0.34.0-3DD6A3)](https://ro-ag.github.io/ptrack/help/)
+[![Release](https://img.shields.io/badge/release-v0.35.0-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.35.0)
+[![Help Center](https://img.shields.io/badge/help-v0.35.0-3DD6A3)](https://ro-ag.github.io/ptrack/help/)
 [![License](https://img.shields.io/badge/License-Apache--2.0-3DD6A3)](LICENSE)
 [![Storage](https://img.shields.io/badge/Storage-local--first-AFA8FF)](#storage-and-safety)
 
@@ -118,7 +118,9 @@ The project workspace combines a bounded tracking snapshot with repository and
 storage status, read-only Git status/remotes/branches/commits/divergence,
 multi-session terminals, and explicitly registered agent runs. Select a plan
 from the sidebar, drag cards between Todo, Doing, Blocked, and Done, or use the
-status selector on a card. Add tasks from the board header,
+status selector on a card. Each sidebar plan shows completed/total tasks. Use
+**+** beside **Plans** to create a plan, or the filter icon to search loaded
+plans by title or ID and narrow them by status. Add tasks from the board header,
 double-click a card to rename it, or record durable task context with **Memory**.
 Cards surface linked notes, commits, and open issues, while the project-memory
 rail keeps the goal, rolling project summary, status, issues, and recent decisions
@@ -141,6 +143,12 @@ existing task. Unscheduled issues remain triage context rather than executable
 work; scheduling is an explicit choice. Linked tasks can move between plans
 without losing their issue history when no live terminal or agent association
 blocks the move.
+
+Use **Copy context** on a plan or task, or the copy icon beside the project
+name, to copy its references and commands for reading current records. Paste
+that context into the agent you want to use. Overview groups completion metrics
+and supporting counts, with a labeled activity calendar and separate snapshot
+details.
 
 ### Registered agent runs
 
@@ -206,6 +214,11 @@ be considered inert.
 ### The terminal dock
 
 The bottom dock hosts a multi-session terminal workspace at the project root.
+The tab row holds **+**, per-tab close buttons, and tab organization controls.
+Pane headers hold split and pane-close actions; session setup and output tools
+are grouped below. **Stop session** stops the process while keeping its tab.
+The final tab stays available, and closing a live tab follows the existing
+confirmation flow.
 Create tabs, split a tab horizontally or vertically, and resize panes while
 each PTY-backed shell or detected agent profile remains live independently.
 Only bounded layout descriptors persist; restored panes start stopped and mint
