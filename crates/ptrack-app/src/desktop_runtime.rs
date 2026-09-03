@@ -20,7 +20,8 @@ use ptrack_capability_policy::{
 };
 use ptrack_core::{
     Capability, CapabilityKind, Commit, Issue, IssueStatus, MemoryKind, Meta, Note, NoteTarget,
-    Plan, ProjectSnapshot, Task, TaskStatus, Timestamp, open_plan_deps, open_task_deps,
+    Plan, PlanStatus, ProjectSnapshot, Task, TaskStatus, Timestamp, checkpoint, open_plan_deps,
+    open_task_deps,
 };
 use ptrack_store::{
     FIRST_RUN_TITLE_MAX_BYTES, GlobalStore, MemoryWriteRequest, ProjectStore, StoreError,
@@ -70,7 +71,7 @@ const WORKSPACE_OPERATION_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub const FIRST_RUN_GOAL_MAX_BYTES: usize = 4_096;
 
-const COMMANDS: [&str; 94] = [
+const COMMANDS: [&str; 96] = [
     "AcknowledgeAgentHandoffV2",
     "AddTask",
     "AddTaskNote",
@@ -87,6 +88,7 @@ const COMMANDS: [&str; 94] = [
     "CloseProject",
     "CloseTerminal",
     "CloseTerminalV2",
+    "CompletePlanV1",
     "CopyPlanV1",
     "CreateFirstPlanV1",
     "CreateFirstTaskV1",
@@ -158,6 +160,7 @@ const COMMANDS: [&str; 94] = [
     "SetAgentWorktreeV2",
     "SetAutomaticUpdateChecks",
     "SetLayoutState",
+    "SetPlanHoldV1",
     "SetPreferences",
     "SetTerminalWindowTab",
     "StartFirstTaskV1",
@@ -167,7 +170,7 @@ const COMMANDS: [&str; 94] = [
     "WriteTerminalMemoryV2",
 ];
 
-/// Exact current 93-method desktop bridge command allowlist.
+/// Exact current 96-method desktop bridge command allowlist.
 #[must_use]
 pub const fn allowed_desktop_commands() -> &'static [&'static str] {
     &COMMANDS
@@ -2497,6 +2500,7 @@ impl BoundDesktopWorkspace {
                 PlanSummaryView {
                     id: plan.id,
                     title: plan.title.clone(),
+                    status: plan.status.as_str().to_owned(),
                     is_active: plan.id == snapshot.meta.active_plan,
                     tasks_total: progress.total,
                     tasks_done: progress.done,
@@ -3392,6 +3396,51 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
                 })?;
                 Ok(json!({ "generation": self.generation }))
             }
+            "CompletePlanV1" => {
+                require_argument_count(method, arguments, 2)?;
+                let generation = u64_arg(arguments, 0)?;
+                self.require_generation(generation)?;
+                let plan_id = u64_arg(arguments, 1)?;
+                let before = self.snapshot()?;
+                if before.plan(plan_id).is_none() {
+                    return Err(AppError::Message(format!("plan #{plan_id} not found")));
+                }
+                let open = before
+                    .tasks_for_plan(plan_id)
+                    .filter(|task| task.status.is_open())
+                    .map(|task| task.id)
+                    .collect::<Vec<_>>();
+                if !open.is_empty() {
+                    let ids = open
+                        .iter()
+                        .map(u64::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    return Err(AppError::Message(format!(
+                        "cannot close plan #{plan_id}: open tasks remain ({ids}); finish them first"
+                    )));
+                }
+                lock(&self.application).mutate(Mutation::SetPlanStatus {
+                    id: plan_id,
+                    status: PlanStatus::Done,
+                })?;
+                let checkpoint = checkpoint(&self.snapshot()?, Some(plan_id));
+                Ok(json!({
+                    "generation": self.generation,
+                    "checkpoint": checkpoint_json(&checkpoint),
+                }))
+            }
+            "SetPlanHoldV1" => {
+                require_argument_count(method, arguments, 3)?;
+                let generation = u64_arg(arguments, 0)?;
+                self.require_generation(generation)?;
+                let reason = optional_string(string_arg(arguments, 2)?);
+                lock(&self.application).mutate(Mutation::SetPlanHold {
+                    id: u64_arg(arguments, 1)?,
+                    reason,
+                })?;
+                Ok(json!({ "generation": self.generation }))
+            }
             "DeletePlanV1" => {
                 require_argument_count(method, arguments, 3)?;
                 let generation = u64_arg(arguments, 0)?;
@@ -4276,6 +4325,7 @@ pub(super) fn watch_workspace_data(
 struct PlanSummaryView {
     id: u64,
     title: String,
+    status: String,
     is_active: bool,
     tasks_total: usize,
     tasks_done: usize,
@@ -4285,7 +4335,7 @@ struct PlanSummaryView {
     hold_reason: Option<String>,
     /// Present only while the plan is claimed; carries the resolved display
     /// label (actor name, else the raw identity ID). Display-only — claims
-    /// are mutated through the CLI only, exactly like holds.
+    /// are mutated through the CLI only.
     #[serde(skip_serializing_if = "Option::is_none")]
     claimed_by: Option<String>,
     /// Plan-dep IDs still open, computed snapshot-side so the frontend never
@@ -4433,6 +4483,7 @@ pub(super) struct BoardView {
     plans: Vec<PlanSummaryView>,
     plan_id: u64,
     plan_title: String,
+    plan_status: String,
     columns: Vec<ColumnView>,
     stats: ProjectStatsView,
     activity: Vec<ActivityView>,
@@ -4538,6 +4589,7 @@ pub(super) fn board_view(
             PlanSummaryView {
                 id: plan.id,
                 title: plan.title.clone(),
+                status: plan.status.as_str().to_owned(),
                 is_active: plan.id == snapshot.meta.active_plan,
                 tasks_total: entry.0,
                 tasks_done: entry.1,
@@ -4561,6 +4613,7 @@ pub(super) fn board_view(
         plans,
         plan_id,
         plan_title: selected.title.clone(),
+        plan_status: selected.status.as_str().to_owned(),
         columns,
         stats: ProjectStatsView {
             plan_tasks: tasks.len(),
@@ -4607,6 +4660,7 @@ fn snapshot_board_view(
             PlanSummaryView {
                 id: plan.id,
                 title: plan.title.clone(),
+                status: plan.status.as_str().to_owned(),
                 is_active: false,
                 tasks_total: entry.0,
                 tasks_done: entry.1,
@@ -4627,6 +4681,7 @@ fn snapshot_board_view(
         plans,
         plan_id: 0,
         plan_title: String::new(),
+        plan_status: String::new(),
         columns: [
             (TaskStatus::Todo, "Todo"),
             (TaskStatus::Doing, "Doing"),
@@ -5844,6 +5899,25 @@ fn optional_string(value: &str) -> Option<String> {
     } else {
         Some(trimmed.to_owned())
     }
+}
+
+fn checkpoint_json(checkpoint: &ptrack_core::CheckpointView) -> Value {
+    json!({
+        "goal": checkpoint.goal,
+        "summary": checkpoint.summary,
+        "openPlans": checkpoint
+            .open_plans
+            .iter()
+            .map(|(id, title)| json!({ "id": id, "title": title }))
+            .collect::<Vec<_>>(),
+        "openIssues": checkpoint.open_issues,
+        "highIssues": checkpoint.high_issues,
+        "milestone": checkpoint.milestone.as_ref().map(|milestone| json!({
+            "title": milestone.title,
+            "plansDone": milestone.plans_done,
+            "plansTotal": milestone.plans_total,
+        })),
+    })
 }
 
 fn delete_summary_json(summary: &ptrack_store::PlanDeleteSummary) -> Value {

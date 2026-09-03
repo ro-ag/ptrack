@@ -3061,6 +3061,10 @@ button.modal-backdrop:active {
   width: min(420px, 100%);
 }
 
+#plan-dialog-body {
+  white-space: pre-line;
+}
+
 #plan-dialog-project,
 #plan-dialog-title {
   width: 100%;
@@ -3357,8 +3361,8 @@ button.modal-backdrop:active {
 }
 
 .drawer-actions select {
-  width: 100%;
-  min-width: 0;
+  width: max(100%, 78px);
+  min-width: 78px;
   border: 1px solid var(--line);
   border-radius: 8px;
   color: var(--text);
@@ -3366,6 +3370,41 @@ button.modal-backdrop:active {
   padding: 5px var(--space-100);
   font-size: 0.75rem;
   transition: border-color 150ms var(--ease);
+}
+
+.board-completion {
+  min-height: 250px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--space-150);
+  border: 1px solid color-mix(in srgb, var(--done), transparent 70%);
+  border-radius: 14px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--done), transparent 92%), transparent);
+  padding: var(--space-400);
+  text-align: center;
+}
+
+.board-completion-mark {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--canvas-bg);
+  background: var(--done);
+  font-size: 1.5rem;
+  font-weight: 800;
+}
+
+.board-completion h3,
+.board-completion p {
+  margin: 0;
+}
+
+.board-completion p {
+  max-width: 430px;
+  color: var(--muted);
 }
 
 .drawer-actions select:hover {
@@ -4824,6 +4863,21 @@ html[data-window-mode="terminal"] #app {
   .recent-project-path {
     overflow-wrap: anywhere;
     text-overflow: clip;
+    white-space: normal;
+  }
+
+  .drawer-actions {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .drawer-actions select {
+    grid-column: 1 / -1;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .drawer-actions button {
+    width: 100%;
     white-space: normal;
   }
 }

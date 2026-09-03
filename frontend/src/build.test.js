@@ -137,6 +137,15 @@ describe("production asset layout", () => {
       /id="setup-uncertain-actions"[\s\S]*id="setup-check-status"[^>]*>Check Status Again<\/button>/,
     );
     expect(appSource).not.toContain(".ptrack/ptrack.redb");
+    expect(appSource).toContain(
+      "api().CompletePlanV1(ticket.generation, Number(plan.id))",
+    );
+    expect(appSource).toContain(
+      "api().SetPlanHoldV1(ticket.generation, Number(plan.id), \"\")",
+    );
+    expect(appSource).toContain(
+      "planCompletionPrompt(done, total, selectedPlan?.status)",
+    );
     expect(firstRunJourneySource).toContain("api.ValidateProjectTargetV1(root)");
     expect(firstRunJourneySource).toContain("api.InitializeProjectV1(request)");
     expect(appSource).toContain("validateInitializationTarget(api(), path)");

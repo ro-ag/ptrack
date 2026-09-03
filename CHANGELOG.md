@@ -9,11 +9,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 - Installed agent discovery now includes Cursor Agent and Kimi Code, with Kimi
   hook events normalized into the bounded agent activity model.
+- Desktop plan actions can now complete a plan through the existing open-task
+  gate and checkpoint flow, and put plans on hold or resume them with a reason.
+  When every task is done, the Board replaces the Done-only lane view with a
+  direct close-plan prompt.
 
 ### Fixed
 - Terminal and linked-agent pickers now omit profiles whose executable is no
   longer available, and macOS discovery is regression-tested across `PATH`,
   Homebrew, `~/.local/bin`, and the Kimi Code install directory.
+- The task drawer status picker reserves enough width to show the full status
+  label at the default drawer size.
 
 ## [0.33.1] - 2026-09-01
 

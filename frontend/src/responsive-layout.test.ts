@@ -274,6 +274,15 @@ describe("responsive desktop layout contracts", () => {
     );
   });
 
+  it("keeps the task status label whole at default and narrow drawer widths", () => {
+    expect(styles).toMatch(
+      /\.drawer-actions select\s*\{[^}]*width:\s*max\(100%, 78px\);[^}]*min-width:\s*78px;/,
+    );
+    expect(styles).toMatch(
+      /@media \(max-width:\s*600px\)[\s\S]*?\.drawer-actions\s*\{[^}]*grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\);[^}]*\}[\s\S]*?\.drawer-actions select\s*\{[^}]*grid-column:\s*1 \/ -1;[^}]*width:\s*100%;[^}]*min-width:\s*0;/,
+    );
+  });
+
   it("reflows the terminal window bar and keeps its terminal shrinkable", () => {
     expect(styles).toMatch(
       /\.terminal-window-bar\s*\{[^}]*flex-wrap:\s*wrap;/,

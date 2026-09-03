@@ -844,7 +844,7 @@ fn desktop_update_commands_delegate_exact_arguments_and_return_full_state() {
 }
 
 #[test]
-#[allow(clippy::too_many_lines)] // Full 93-command freeze fixture is intentionally explicit.
+#[allow(clippy::too_many_lines)] // Full 96-command freeze fixture is intentionally explicit.
 fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
     let commands = allowed_desktop_commands();
     assert_eq!(
@@ -866,6 +866,7 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "CloseProject",
             "CloseTerminal",
             "CloseTerminalV2",
+            "CompletePlanV1",
             "CopyPlanV1",
             "CreateFirstPlanV1",
             "CreateFirstTaskV1",
@@ -937,6 +938,7 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "SetAgentWorktreeV2",
             "SetAutomaticUpdateChecks",
             "SetLayoutState",
+            "SetPlanHoldV1",
             "SetPreferences",
             "SetTerminalWindowTab",
             "StartFirstTaskV1",
@@ -2468,7 +2470,7 @@ fn workspace_snapshot_uses_bounded_store_reads_and_open_issue_rows() {
         7,
         0,
         bindings.clone(),
-        Box::new(LocalApplication::new(bindings)),
+        Box::new(LocalApplication::new(bindings.clone())),
         None,
         None,
         None,
@@ -3348,6 +3350,63 @@ fn bounded_workspace_snapshot_follows_the_per_actor_active_plan() {
 }
 
 #[test]
+fn desktop_plan_hold_resume_and_completion_return_checkpoint() {
+    let directory = TestDirectory::new("plan-lifecycle-status-commands");
+    let (bindings, task_id) = bound_bindings(&directory);
+    let workspace = BoundDesktopWorkspace::new(
+        7,
+        0,
+        bindings.clone(),
+        Box::new(LocalApplication::new(bindings.clone())),
+        None,
+        None,
+        None,
+    );
+    let plan_id = 1_u64;
+
+    workspace
+        .invoke(
+            "SetPlanHoldV1",
+            &[json!(7), json!(plan_id), json!("waiting on review")],
+        )
+        .unwrap();
+    let held = workspace
+        .invoke("GetBoardV2", &[json!(7), json!(plan_id)])
+        .unwrap();
+    assert_eq!(held["board"]["plans"][0]["holdReason"], "waiting on review");
+    workspace
+        .invoke("SetPlanHoldV1", &[json!(7), json!(plan_id), json!("  ")])
+        .unwrap();
+    let resumed = workspace
+        .invoke("GetBoardV2", &[json!(7), json!(plan_id)])
+        .unwrap();
+    assert!(resumed["board"]["plans"][0].get("holdReason").is_none());
+
+    let refusal = workspace
+        .invoke("CompletePlanV1", &[json!(7), json!(plan_id)])
+        .unwrap_err();
+    assert!(refusal.to_string().contains("open tasks remain"));
+    let store = ProjectStore::open_existing(
+        &bindings.project.as_ref().unwrap().database,
+        &bindings.project.as_ref().unwrap().binding,
+        "test",
+    )
+    .unwrap();
+    store.set_task_status(task_id, TaskStatus::Done).unwrap();
+    drop(store);
+    let completed = workspace
+        .invoke("CompletePlanV1", &[json!(7), json!(plan_id)])
+        .unwrap();
+    assert_eq!(completed["checkpoint"]["openPlans"], json!([]));
+    assert_eq!(completed["checkpoint"]["openIssues"], json!(0));
+    let completed_board = workspace
+        .invoke("GetBoardV2", &[json!(7), json!(plan_id)])
+        .unwrap();
+    assert_eq!(completed_board["board"]["plans"][0]["status"], "done");
+    assert_eq!(completed_board["board"]["planStatus"], "done");
+}
+
+#[test]
 fn desktop_plan_lifecycle_commands_rename_preview_delete_and_copy_within() {
     let directory = TestDirectory::new("plan-lifecycle-commands");
     let (bindings, _task_id) = bound_bindings(&directory); // seeded: plan "Desktop" + task + note
@@ -3374,6 +3433,7 @@ fn desktop_plan_lifecycle_commands_rename_preview_delete_and_copy_within() {
             &[json!(7), json!(plan_id), json!("Renamed")],
         )
         .unwrap();
+
     // Preview (force=false): counts, nothing deleted.
     let preview = workspace
         .invoke("DeletePlanV1", &[json!(7), json!(plan_id), json!(false)])
