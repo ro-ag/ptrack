@@ -25,11 +25,25 @@ fn platform_menu_specs_pin_order_roles_and_macos_only_accelerators() {
             MenuEntrySpec::Role(MenuRole::Quit),
         ]
     );
+    assert!(matches!(
+        &macos[4].entries[1],
+        MenuEntrySpec::Command {
+            label: "Overview",
+            ..
+        }
+    ));
     let other = menu_spec(DesktopPlatform::Other);
     assert_eq!(
         other.iter().map(|menu| menu.label).collect::<Vec<_>>(),
         ["File", "Project", "View", "Help"]
     );
+    assert!(matches!(
+        &other[2].entries[1],
+        MenuEntrySpec::Command {
+            label: "Overview",
+            ..
+        }
+    ));
     assert!(other.iter().flat_map(|menu| &menu.entries).all(|entry| {
         matches!(
             entry,

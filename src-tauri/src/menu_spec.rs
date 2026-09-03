@@ -138,7 +138,7 @@ pub fn menu_spec(platform: DesktopPlatform) -> Vec<MenuSpec> {
             command("workspace:board-requested", "Board", Some("CmdOrCtrl+1")),
             command(
                 "workspace:intelligence-requested",
-                "Intelligence",
+                "Overview",
                 Some("CmdOrCtrl+2"),
             ),
             MenuEntrySpec::Separator,

@@ -15,6 +15,7 @@ import {
   handoffPreviewResponseIsCurrent,
   linkedTaskRuntimePresentation,
   mutationFocusFallback,
+  paletteStatusPresentation,
   paletteTarget,
   preserveSectionOnError,
   postProjectOnboardingActions,
@@ -236,6 +237,11 @@ describe("workspace presentation policy", () => {
       items: [{ runId: "run-1", state: "running" }],
       notifications: [{ id: "notice-2" }],
     }, initial?.key || "")).not.toBeNull();
+    expect(agentActivityAnnouncement({
+      items: [],
+      notifications: [],
+      registeredTotal: 3,
+    })?.text).toContain("3 registered agents; detailed states unavailable");
   });
 
   it("keeps workflow actions focus-distinct with a safe removed-row fallback", () => {
@@ -297,8 +303,47 @@ describe("workspace presentation policy", () => {
 		workflows: { items: [], incomplete: false },
 		workflowTargets: [],
 		workflowTargetsIncomplete: false,
+      registeredTotal: 5,
+      liveCount: 0,
+      canHandoff: false,
+      canPrepareWorkflow: false,
       compact: "3/5",
       detail: "5 registered agents · 2 older entries omitted",
+    });
+  });
+
+  it("derives real agent action availability from registered and live counts", () => {
+    expect(agentActivityPresentation({ bounds: { total: 0 } })).toMatchObject({
+      registeredTotal: 0,
+      liveCount: 0,
+      canHandoff: false,
+      canPrepareWorkflow: false,
+    });
+    expect(agentActivityPresentation({
+      items: [{ runId: "run-1", state: "running", live: true }],
+      bounds: { total: 1 },
+    })).toMatchObject({
+      registeredTotal: 1,
+      liveCount: 1,
+      canHandoff: false,
+      canPrepareWorkflow: true,
+    });
+    expect(agentActivityPresentation({
+      items: [
+        { runId: "run-1", state: "running", live: true },
+        { runId: "run-2", state: "waiting", live: true },
+      ],
+    })).toMatchObject({
+      registeredTotal: 2,
+      liveCount: 2,
+      canHandoff: true,
+      canPrepareWorkflow: true,
+    });
+    expect(agentActivityPresentation({ bounds: { total: 3 } })).toMatchObject({
+      registeredTotal: 3,
+      liveCount: 0,
+      canHandoff: false,
+      canPrepareWorkflow: false,
     });
   });
 
@@ -486,11 +531,29 @@ describe("workspace presentation policy", () => {
     })).toEqual({
       findings: [
         { kind: "untrackedFile", severity: "warning", scope: "projectUnattributed", path: "frontend/new.ts", sha: "", runIds: [], evidenceCount: 1 },
-        { kind: "unlinkedCommit", severity: "info", scope: "projectUnattributed", path: "", sha: "abcdef0123456789", runIds: [], evidenceCount: 1 },
         { kind: "crossTaskPathOverlap", severity: "warning", scope: "taskComparison", path: "internal/shared.go", sha: "", runIds: ["one", "two"], evidenceCount: 2 },
+      ],
+      unlinkedCommits: [
+        { kind: "unlinkedCommit", severity: "info", scope: "projectUnattributed", path: "", sha: "abcdef0123456789", runIds: [], evidenceCount: 1 },
       ],
       incomplete: true,
     });
+  });
+
+  it("groups every valid unlinked commit while preserving other drift rows", () => {
+    const drift = driftPresentation({
+      findings: [
+        { kind: "unlinkedCommit", severity: "info", scope: "projectUnattributed", sha: "abcdef0", evidenceCount: 1 },
+        { kind: "untrackedFile", severity: "warning", scope: "projectUnattributed", path: "new.rs", evidenceCount: 2 },
+        { kind: "unlinkedCommit", severity: "info", scope: "projectUnattributed", sha: "1234567", evidenceCount: 1 },
+      ],
+      bounds: { more: 1 },
+    });
+    expect(drift.findings.map((finding) => finding.kind)).toEqual(["untrackedFile"]);
+    expect(drift.unlinkedCommits.map((finding) => finding.sha)).toEqual([
+      "abcdef0", "1234567",
+    ]);
+    expect(drift.incomplete).toBe(true);
   });
 
   it("accepts runtime refresh events only for the open generation", () => {
@@ -557,6 +620,21 @@ describe("workspace presentation policy", () => {
     expect(groups.map((group) => group.label)).toEqual(["Plans", "Tasks", "Notes"]);
     expect(groups[0].items[0].title).toBe("Board");
     expect(groupSearchResults([])).toEqual([]);
+  });
+
+  it("maps palette result statuses to canonical accessible glyphs", () => {
+    expect(paletteStatusPresentation({ kind: "plan", status: "active" })).toEqual({
+      glyph: "●", label: "Active", tone: "active",
+    });
+    expect(paletteStatusPresentation({ kind: "plan", status: "done" })?.glyph).toBe("✓");
+    expect(paletteStatusPresentation({ kind: "plan", status: "archived" })?.glyph).toBe("—");
+    expect(paletteStatusPresentation({ kind: "task", status: "todo" })?.glyph).toBe("○");
+    expect(paletteStatusPresentation({ kind: "task", status: "doing" })?.glyph).toBe("◐");
+    expect(paletteStatusPresentation({ kind: "task", status: "blocked" })?.glyph).toBe("✗");
+    expect(paletteStatusPresentation({ kind: "task", status: "done" })?.glyph).toBe("✓");
+    expect(paletteStatusPresentation({ kind: "note", status: "done" })).toBeNull();
+    expect(paletteStatusPresentation({ kind: "task", status: "invented" })).toBeNull();
+    expect(paletteStatusPresentation({ kind: "plan" })).toBeNull();
   });
 
   it("maps palette results to their activation targets", () => {

@@ -488,6 +488,10 @@ export function agentActivityPresentation(
 	};
 	workflowTargets: string[];
 	workflowTargetsIncomplete: boolean;
+  registeredTotal: number;
+  liveCount: number;
+  canHandoff: boolean;
+  canPrepareWorkflow: boolean;
   compact: string;
   detail: string;
 } {
@@ -545,6 +549,7 @@ export function agentActivityPresentation(
     ? Math.max(items.length, Math.trunc(rawTotal))
     : items.length;
   const omitted = Math.max(0, total - items.length);
+  const liveCount = items.filter((item) => item.live === true).length;
   const conflictSource = Array.isArray(section?.conflicts)
     ? section.conflicts.slice(0, 64)
     : [];
@@ -700,6 +705,10 @@ export function agentActivityPresentation(
 		},
 		workflowTargets,
 		workflowTargetsIncomplete: section?.workflowTargetsIncomplete === true,
+    registeredTotal: total,
+    liveCount,
+    canHandoff: liveCount >= 2,
+    canPrepareWorkflow: liveCount >= 1,
     compact: omitted ? `${items.length}/${total}` : String(total),
     detail: `${total} registered agent${total === 1 ? "" : "s"}` +
       (omitted ? ` · ${omitted} older entr${omitted === 1 ? "y" : "ies"} omitted` : ""),
@@ -710,6 +719,7 @@ export function agentActivityAnnouncement(
   activity: {
     items: ReadonlyArray<{ runId?: unknown; state?: unknown; [key: string]: unknown }>;
     notifications: ReadonlyArray<{ id?: unknown }>;
+    registeredTotal?: unknown;
   },
   previousKey = "",
 ): { key: string; text: string } | null {
@@ -726,14 +736,22 @@ export function agentActivityAnnouncement(
       return id ? [id] : [];
     })
     .sort();
-  const key = JSON.stringify([states, notificationIDs]);
+  const rawTotal = Number(activity.registeredTotal);
+  const registeredTotal = Number.isFinite(rawTotal)
+    ? Math.max(states.length, Math.trunc(rawTotal))
+    : states.length;
+  const key = JSON.stringify([states, notificationIDs, registeredTotal]);
   if (key === previousKey) return null;
 
   const counts = agentActivityStates.flatMap((state) => {
     const count = states.filter((entry) => entry.endsWith(`:${state}`)).length;
     return count ? [`${count} ${state}`] : [];
   });
-  const stateText = counts.length ? counts.join(", ") : "no registered agents";
+  const stateText = counts.length
+    ? counts.join(", ")
+    : registeredTotal > 0
+      ? `${registeredTotal} registered agents; detailed states unavailable in this bounded snapshot`
+      : "no registered agents";
   const notificationText = notificationIDs.length
     ? ` ${notificationIDs.length} structured notification${notificationIDs.length === 1 ? "" : "s"}.`
     : " No structured notifications.";
@@ -879,6 +897,15 @@ export function driftPresentation(section: unknown): {
     runIds: string[];
     evidenceCount: number;
   }>;
+  unlinkedCommits: Array<{
+    kind: "unlinkedCommit";
+    severity: "info" | "warning";
+    scope: "projectUnattributed" | "agent" | "taskComparison";
+    path: string;
+    sha: string;
+    runIds: string[];
+    evidenceCount: number;
+  }>;
   incomplete: boolean;
 } {
   const value = section && typeof section === "object"
@@ -920,7 +947,16 @@ export function driftPresentation(section: unknown): {
     ? value.bounds as Record<string, unknown>
     : {};
   return {
-    findings,
+    findings: findings.filter((finding) => finding.kind !== "unlinkedCommit"),
+    unlinkedCommits: findings.filter((finding) => finding.kind === "unlinkedCommit") as Array<{
+      kind: "unlinkedCommit";
+      severity: "info" | "warning";
+      scope: "projectUnattributed" | "agent" | "taskComparison";
+      path: string;
+      sha: string;
+      runIds: string[];
+      evidenceCount: number;
+    }>,
     incomplete: value.incomplete === true || Number(bounds.more || 0) > 0,
   };
 }
@@ -955,6 +991,30 @@ export interface PaletteResult {
   planId: number;
   title: string;
   snippet: string;
+  status?: string;
+}
+
+export function paletteStatusPresentation(
+  result: Pick<PaletteResult, "kind" | "status">,
+): { glyph: string; label: string; tone: string } | null {
+  const planStatuses = {
+    active: { glyph: "●", label: "Active", tone: "active" },
+    done: { glyph: "✓", label: "Done", tone: "done" },
+    archived: { glyph: "—", label: "Archived", tone: "archived" },
+  } as const;
+  const taskStatuses = {
+    todo: { glyph: "○", label: "Todo", tone: "todo" },
+    doing: { glyph: "◐", label: "Doing", tone: "doing" },
+    done: { glyph: "✓", label: "Done", tone: "done" },
+    blocked: { glyph: "✗", label: "Blocked", tone: "blocked" },
+  } as const;
+  if (result.kind === "plan") {
+    return planStatuses[result.status as keyof typeof planStatuses] || null;
+  }
+  if (result.kind === "task") {
+    return taskStatuses[result.status as keyof typeof taskStatuses] || null;
+  }
+  return null;
 }
 
 export interface PaletteGroup {

@@ -183,6 +183,7 @@ import {
   heatmapWeeks,
   linkedTaskRuntimePresentation,
   mutationFocusFallback,
+  paletteStatusPresentation,
   paletteTarget,
   preserveSectionOnError,
   postProjectOnboardingActions,
@@ -437,6 +438,7 @@ const elements = {
   gitRemotes: document.querySelector("#git-remotes"),
   gitBranches: document.querySelector("#git-branches"),
   gitCommits: document.querySelector("#git-commits"),
+  agentActivityHeading: document.querySelector("#agent-activity-heading"),
   agentActivityTotal: document.querySelector("#agent-activity-total"),
   agentActivitySummary: document.querySelector("#agent-activity-summary"),
   agentActivity: document.querySelector("#agent-activity"),
@@ -445,12 +447,14 @@ const elements = {
   agentHandoffSource: document.querySelector("#agent-handoff-source"),
   agentHandoffTarget: document.querySelector("#agent-handoff-target"),
   agentHandoffSend: document.querySelector("#agent-handoff-send"),
+  agentHandoffHelp: document.querySelector("#agent-handoff-help"),
   agentHandoffInbox: document.querySelector("#agent-handoff-inbox"),
 	agentWorkflowForm: document.querySelector("#agent-workflow-form"),
 	agentWorkflowRun: document.querySelector("#agent-workflow-run"),
 	agentWorkflowKind: document.querySelector("#agent-workflow-kind"),
 	agentWorkflowTarget: document.querySelector("#agent-workflow-target"),
 	agentWorkflowPrepare: document.querySelector("#agent-workflow-prepare"),
+	agentWorkflowHelp: document.querySelector("#agent-workflow-help"),
 	agentWorkflowInbox: document.querySelector("#agent-workflow-inbox"),
   agentDrift: document.querySelector("#agent-drift"),
   blockers: document.querySelector("#overview-blockers"),
@@ -1641,13 +1645,12 @@ function renderDrift(section) {
   const copy = {
     checkoutChangedPath: ["Shared checkout change", "Project-level and unattributed"],
     untrackedFile: ["Untracked file", "Project-level and unattributed"],
-    unlinkedCommit: ["Unlinked commit", "Exact SHA has no p-track commit link"],
     crossTaskPathOverlap: ["Possible cross-task path overlap", "Explicit owners on different tasks reported the same current path"],
     taskDriftSignal: ["Possible task drift", "Provider-neutral structured evidence indicates a current scope mismatch"],
   };
-  drift.findings.forEach((finding) => {
+  const appendFinding = (finding) => {
     const [title, meaning] = copy[finding.kind];
-    const evidence = finding.path || finding.sha ||
+    const evidence = finding.path ||
       finding.runIds.map((runId) => runId.slice(0, 8)).join(", ") || "structured evidence";
     elements.agentDrift.append(
       intelligenceItem(
@@ -1656,7 +1659,25 @@ function renderDrift(section) {
         finding.severity === "warning" ? "waiting" : "",
       ),
     );
-  });
+  };
+  drift.findings.filter((finding) => finding.severity === "warning").forEach(appendFinding);
+  if (drift.unlinkedCommits.length > 0) {
+    const group = document.createElement("details");
+    group.className = "drift-group";
+    const summary = document.createElement("summary");
+    summary.textContent = `${drift.unlinkedCommits.length} shown unlinked commit${drift.unlinkedCommits.length === 1 ? "" : "s"}`;
+    group.append(summary);
+    drift.unlinkedCommits.forEach((finding) => {
+      group.append(
+        intelligenceItem(
+          finding.sha,
+          `Exact SHA has no p-track commit link · ${finding.evidenceCount} evidence signal${finding.evidenceCount === 1 ? "" : "s"}. This is advisory, not proof of drift.`,
+        ),
+      );
+    });
+    elements.agentDrift.append(group);
+  }
+  drift.findings.filter((finding) => finding.severity !== "warning").forEach(appendFinding);
 }
 
 function renderGitIntelligence(section) {
@@ -1753,12 +1774,13 @@ function renderAgentActivity(section) {
     agentActivityAnnouncementKey = announcement.key;
     elements.agentActivityLive.textContent = announcement.text;
   }
-  renderAgentHandoffs(activity.items, activity.handoffs);
+  renderAgentHandoffs(activity.items, activity.handoffs, activity);
 	renderAgentWorkflows(
 		activity.items,
 		activity.workflows,
 		activity.workflowTargets,
 		activity.workflowTargetsIncomplete,
+		activity,
 	);
   elements.agentActivityTotal.textContent = activity.compact;
   elements.agentActivityTotal.title = activity.detail;
@@ -1830,7 +1852,11 @@ function renderAgentActivity(section) {
     );
   });
   if (activity.items.length === 0) {
-    elements.agentActivity.append(emptyMemory("No registered agent activity."));
+    elements.agentActivity.append(emptyMemory(
+      activity.registeredTotal === 0
+        ? "No registered agent activity."
+        : "No agent activity is available in this bounded snapshot.",
+    ));
   } else {
     activity.items.forEach((item) => {
       const origin = item.terminalBacked
@@ -1966,10 +1992,15 @@ function captureFocusedWorktreeSelection() {
   return { runId: select.dataset.worktreeRunId || "", value: select.value };
 }
 
-function renderAgentWorkflows(items, inbox, targets, targetsIncomplete) {
+function renderAgentWorkflows(items, inbox, targets, targetsIncomplete, availability) {
 	const previousRun = elements.agentWorkflowRun.value;
 	const previousTarget = elements.agentWorkflowTarget.value;
 	const live = items.filter((item) => item.live && item.runId);
+	const focusWasInForm = !availability.canPrepareWorkflow &&
+		elements.agentWorkflowForm.contains(document.activeElement);
+	elements.agentWorkflowForm.hidden = !availability.canPrepareWorkflow;
+	elements.agentWorkflowHelp.hidden = !availability.canPrepareWorkflow;
+	if (focusWasInForm) elements.agentActivityHeading.focus();
 	elements.agentWorkflowRun.replaceChildren();
 	live.forEach((item) => {
 		const option = document.createElement("option");
@@ -2005,7 +2036,13 @@ function renderAgentWorkflows(items, inbox, targets, targetsIncomplete) {
 		));
 	}
 	if (inbox.items.length === 0) {
-		elements.agentWorkflowInbox.append(emptyMemory("No workflow proposals. Nothing has been approved or executed."));
+		elements.agentWorkflowInbox.append(emptyMemory(
+			availability.registeredTotal === 0
+				? "No registered agents. Register or launch an agent to prepare a workflow proposal."
+				: !availability.canPrepareWorkflow
+					? "No live agents. Start an agent to prepare a workflow proposal."
+					: "No workflow proposals. Nothing has been approved or executed.",
+		));
 		return;
 	}
 	inbox.items.forEach((proposal) => {
@@ -2050,12 +2087,17 @@ function renderAgentWorkflows(items, inbox, targets, targetsIncomplete) {
 	});
 }
 
-function renderAgentHandoffs(items, inbox) {
+function renderAgentHandoffs(items, inbox, availability) {
   const previousSource = elements.agentHandoffSource.value;
   const previousTarget = elements.agentHandoffTarget.value;
   elements.agentHandoffSource.replaceChildren();
   elements.agentHandoffTarget.replaceChildren();
   const live = items.filter((item) => item.live && item.runId);
+  const focusWasInForm = !availability.canHandoff &&
+    elements.agentHandoffForm.contains(document.activeElement);
+  elements.agentHandoffForm.hidden = !availability.canHandoff;
+  elements.agentHandoffHelp.hidden = !availability.canHandoff;
+  if (focusWasInForm) elements.agentActivityHeading.focus();
   live.forEach((item) => {
     const label = `Agent ${item.runId.slice(0, 8)} · ${runtimeAssociationLabel(item.association)}`;
     for (const select of [elements.agentHandoffSource, elements.agentHandoffTarget]) {
@@ -2078,7 +2120,13 @@ function renderAgentHandoffs(items, inbox) {
     );
   }
   if (inbox.items.length === 0) {
-    elements.agentHandoffInbox.append(emptyMemory("No pending handoff proposals."));
+    elements.agentHandoffInbox.append(emptyMemory(
+      availability.registeredTotal === 0
+        ? "No registered agents. Register or launch two agents to send a handoff."
+        : !availability.canHandoff
+          ? "Two live agents are required to send a handoff."
+          : "No pending handoff proposals.",
+    ));
     return;
   }
   inbox.items.forEach((handoff) => {
@@ -2300,13 +2348,15 @@ function restoreMutationFocus(focusKey) {
   const exact = Array.from(document.querySelectorAll("[data-mutation-focus-key]"))
     .find((element) => element.dataset.mutationFocusKey === focusKey);
   if (exact instanceof HTMLElement) {
-    exact.focus();
+    if (exact.offsetParent !== null) exact.focus();
     return;
   }
   const fallback = mutationFocusFallback(focusKey);
-  if (fallback === "handoffSend") {
+  if (fallback === "handoffSend" &&
+    !elements.agentHandoffForm.hidden && !elements.agentHandoffSend.disabled) {
     elements.agentHandoffSend.focus();
-  } else if (fallback === "workflowPrepare") {
+  } else if (fallback === "workflowPrepare" &&
+    !elements.agentWorkflowForm.hidden && !elements.agentWorkflowPrepare.disabled) {
     elements.agentWorkflowPrepare.focus();
   }
 }
@@ -3550,6 +3600,20 @@ function renderPaletteResults() {
       badge.className = "palette-kind";
       badge.dataset.kind = result.kind;
       badge.textContent = paletteKindLabels[result.kind] || result.kind;
+      const statusPresentation = paletteStatusPresentation(result);
+      const status = statusPresentation ? document.createElement("span") : null;
+      if (status && statusPresentation) {
+        status.className = "palette-status";
+        status.dataset.status = statusPresentation.tone;
+        status.title = statusPresentation.label;
+        const glyph = document.createElement("span");
+        glyph.setAttribute("aria-hidden", "true");
+        glyph.textContent = statusPresentation.glyph;
+        const label = document.createElement("span");
+        label.className = "visually-hidden";
+        label.textContent = `${statusPresentation.label} status`;
+        status.append(glyph, label);
+      }
       const body = document.createElement("div");
       body.className = "palette-option-body";
       const title = document.createElement("p");
@@ -3563,7 +3627,9 @@ function renderPaletteResults() {
         snippet.textContent = result.snippet;
         body.append(snippet);
       }
-      option.append(badge, body);
+      option.append(badge);
+      if (status) option.append(status);
+      option.append(body);
       option.addEventListener("click", () => activatePaletteResult(result));
       option.addEventListener("mousemove", () => {
         if (paletteActive !== index) {
@@ -5758,6 +5824,7 @@ function renderWorkspaceState(state, focus = false) {
     );
   }
   const open = state.status === "open";
+  if (!open) hideAgentActionForms();
   if (open && !wasOpen) restoreProjectLayout(state.project?.root || "");
   applyView();
   elements.stateScreen.hidden = open;
@@ -5866,6 +5933,7 @@ function beginWorkspaceTransition() {
   closeTerminalAssociationEditor(false, true);
   closeTerminalWriteback(false, true);
   closeTaskTransition(false, false, true);
+  hideAgentActionForms();
   const transition = workspaceController.beginTransition();
   if (workspaceState.status === "open") {
     elements.workspace.inert = true;
@@ -5882,6 +5950,13 @@ function beginWorkspaceTransition() {
     });
   }
   return transition;
+}
+
+function hideAgentActionForms() {
+  elements.agentHandoffForm.hidden = true;
+  elements.agentHandoffHelp.hidden = true;
+  elements.agentWorkflowForm.hidden = true;
+  elements.agentWorkflowHelp.hidden = true;
 }
 
 async function recoverWorkspaceState(error) {

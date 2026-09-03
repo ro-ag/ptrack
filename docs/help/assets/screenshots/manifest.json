@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "productVersion": "0.33.1",
-  "capturedAt": "2026-08-11",
+  "capturedAt": "2026-09-03",
   "capture": {
     "app": "packaged macOS Desktop app",
     "fixture": "isolated Northstar project with sanitized paths, tasks, notes, issues, and terminal text",
@@ -16,7 +16,7 @@
     "frontend/src/workspace/model.ts",
     "frontend/src/workspace/presentation.ts"
   ],
-  "uiSourceSha256": "4f047141bc67627419953a1fa03f3b2f9119e8d6fa84183b6f5468164bc726bc",
+  "uiSourceSha256": "b161057a6e927219acd681356b6711887f6c20a9d54f2622f9a829ab2df63d63",
   "requiredWorkflows": [
     "board",
     "overview",
@@ -33,7 +33,7 @@
       "route": "start-here/",
       "width": 1552,
       "height": 1012,
-      "sha256": "6844a3e648d21bfb4c3f738e513beffe4a423d7cc30ff9ed0f4179fdb1fc20a7"
+      "sha256": "9d04906756d5a8673deffe625267decf93a8eb67b8844b4130dcff988d3f1b13"
     },
     {
       "file": "board-light.png",
@@ -42,7 +42,7 @@
       "route": "start-here/",
       "width": 1552,
       "height": 1012,
-      "sha256": "4fc5b48ea76ef2d278f69fea82ed1826986e13b47a238d7d722a0a282fde7fa1"
+      "sha256": "eace54fe746b9fe37aa808ffde3bd289df06951753e5bf3e2380acfc7c96b492"
     },
     {
       "file": "overview-dark.png",
@@ -51,7 +51,7 @@
       "route": "desktop/#overview",
       "width": 1552,
       "height": 1012,
-      "sha256": "ab96477500071cd80f003f3885600707ddda7f4d13a3e5cdcce8ecec8b946d59"
+      "sha256": "fb74c022df5e23e9ea8f25e91e425cf468b4803ba916bedd70a3bf52eeb392ca"
     },
     {
       "file": "overview-light.png",
@@ -60,7 +60,7 @@
       "route": "desktop/#overview",
       "width": 1552,
       "height": 1012,
-      "sha256": "2ad03c6905117a2f2060b074ba6bb1b42e289ae80d0609d0415e5cc2716298d9"
+      "sha256": "cd4c64d68022f81bf1a662ff24b42c82cb883498e84c243febf474628682ec15"
     },
     {
       "file": "project-search-dark.png",
@@ -69,7 +69,7 @@
       "route": "reference/#command-palette",
       "width": 1552,
       "height": 1012,
-      "sha256": "d1dd1dc11ba3afd99d61c969bd27b81d6949ad5a5609aaf7a296915dbb73773d"
+      "sha256": "ae85f0447c1a43a5cb7b5e1947e08a6a83cfe9fb9147a939fc82932c7319fea4"
     },
     {
       "file": "project-search-light.png",
@@ -78,7 +78,7 @@
       "route": "reference/#command-palette",
       "width": 1552,
       "height": 1012,
-      "sha256": "5e1564c9526419409b39b8b3162031715bf0825a791ac00a9076613420030a94"
+      "sha256": "57bcce63a0d093cfdfce4aec1865d1cb9a8774674053e28d3231b0190c89880e"
     },
     {
       "file": "project-switch-dark.png",
@@ -87,7 +87,7 @@
       "route": "desktop/#open-project",
       "width": 1552,
       "height": 1012,
-      "sha256": "d09100fe356e1c3b6d2c09a6565dc90d6ecc81741c13ed4e977ab1058960f8aa"
+      "sha256": "ca2a3e8cda1c5e54981378ab0a572bef5519a931dd1177863d0da84719aba826"
     },
     {
       "file": "project-switch-light.png",
@@ -96,7 +96,7 @@
       "route": "desktop/#open-project",
       "width": 1552,
       "height": 1012,
-      "sha256": "88f7c1098353a5818fbb8548fd6297d7404c5d5e8abbdce7cbed1345f0c530e9"
+      "sha256": "8a175d1ff4130d19bfa5489a1ecfae850ca6b19bcfe1721cc9e87dffefee771f"
     },
     {
       "file": "task-drawer-dark.png",
@@ -105,7 +105,7 @@
       "route": "desktop/#task-drawer",
       "width": 1552,
       "height": 1012,
-      "sha256": "6c0716fd323c8acfaaf1892d8e8bbc5fc2da3ea49f55330499211dace44ec1ae"
+      "sha256": "729d3a7450b62ad06441f5464ff3a5fd064717b518e4441eed7e4a5077735303"
     },
     {
       "file": "task-drawer-light.png",
@@ -114,7 +114,7 @@
       "route": "desktop/#task-drawer",
       "width": 1552,
       "height": 1012,
-      "sha256": "823353a7d01a835c7dd6d980d09ca1b3d978d38619bcce9baeb7d166cf09af05"
+      "sha256": "929e8051203b5c6e8b2d659f4af644c1c1a0443ffa8bde50793fd3445f043c17"
     },
     {
       "file": "terminal-dark.png",
@@ -123,7 +123,7 @@
       "route": "terminals/",
       "width": 1552,
       "height": 1012,
-      "sha256": "2b004b593d26f9e143a839304525d7120182c1e1c51b9c913664a9f5ea761ab0"
+      "sha256": "9d04906756d5a8673deffe625267decf93a8eb67b8844b4130dcff988d3f1b13"
     },
     {
       "file": "terminal-light.png",
@@ -132,7 +132,7 @@
       "route": "terminals/",
       "width": 1552,
       "height": 1012,
-      "sha256": "a8b74fe6759de82eca26856ccc88f4b2f7ea3d8f797e86bfc36e06f295abaa86"
+      "sha256": "eace54fe746b9fe37aa808ffde3bd289df06951753e5bf3e2380acfc7c96b492"
     }
   ]
 }
