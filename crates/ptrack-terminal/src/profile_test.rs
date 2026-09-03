@@ -4,11 +4,13 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(unix)]
+use crate::profile::profile_executable_is_available;
 use crate::profile::{
     CwdPolicy, DEFAULT_PROFILE_FONT_FAMILY, DEFAULT_PROFILE_FONT_SIZE, DEFAULT_PROFILE_SCROLLBACK,
     DEFAULT_PROFILE_THEME, ExitBehavior, MAX_PROFILE_FONT_SIZE, Profile, ProfileKind,
-    build_environment_for_os, discover_profiles_with, profile_executable_is_available, resolve_cwd,
-    sort_profiles, validate_profile_with,
+    build_environment_for_os, discover_profiles_with, resolve_cwd, sort_profiles,
+    validate_profile_with,
 };
 
 fn profile(id: &str, kind: ProfileKind, executable: &Path) -> Profile {
@@ -249,6 +251,7 @@ fn discovery_uses_darwin_agent_fallbacks() {
     remove_test_directory(&directory);
 }
 
+#[cfg(unix)]
 #[test]
 fn discovery_covers_path_local_bin_homebrew_and_kimi_home_and_filters_absent_agents() {
     let directory = test_directory("profile-discovery-install-locations");
