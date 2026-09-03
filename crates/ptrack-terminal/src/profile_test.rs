@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::profile::{
     CwdPolicy, DEFAULT_PROFILE_FONT_FAMILY, DEFAULT_PROFILE_FONT_SIZE, DEFAULT_PROFILE_SCROLLBACK,
     DEFAULT_PROFILE_THEME, ExitBehavior, MAX_PROFILE_FONT_SIZE, Profile, ProfileKind,
-    build_environment_for_os, discover_profiles_with, resolve_cwd, sort_profiles,
-    validate_profile_with,
+    build_environment_for_os, discover_profiles_with, profile_executable_is_available, resolve_cwd,
+    sort_profiles, validate_profile_with,
 };
 
 fn profile(id: &str, kind: ProfileKind, executable: &Path) -> Profile {
@@ -135,6 +135,28 @@ fn relative_executable_is_resolved_once_to_an_absolute_path() {
     remove_test_directory(&directory);
 }
 
+#[cfg(unix)]
+#[test]
+fn executable_availability_requires_an_executable_file() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = test_directory("profile-availability");
+    let executable = directory.join("agent");
+    fs::write(&executable, b"#!/bin/sh\n").unwrap();
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+    let input = profile("agent-test", ProfileKind::Agent, &executable);
+    assert!(profile_executable_is_available(&input));
+
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(!profile_executable_is_available(&input));
+    assert!(!profile_executable_is_available(&profile(
+        "agent-missing",
+        ProfileKind::Agent,
+        &directory.join("missing"),
+    )));
+    remove_test_directory(&directory);
+}
+
 #[test]
 fn profiles_sort_default_shell_then_shells_then_agents() {
     let executable = Path::new("/bin/example");
@@ -224,6 +246,76 @@ fn discovery_uses_darwin_agent_fallbacks() {
     )
     .unwrap();
     assert!(profiles.iter().any(|profile| profile.id == "agent-gemini"));
+    remove_test_directory(&directory);
+}
+
+#[test]
+fn discovery_covers_path_local_bin_homebrew_and_kimi_home_and_filters_absent_agents() {
+    let directory = test_directory("profile-discovery-install-locations");
+    let shell = directory.join("zsh");
+    let home = directory.join("home");
+    let installed = HashMap::from([
+        ("agy".to_owned(), directory.join("path/agy")),
+        (
+            home.join(".local/bin/claude")
+                .to_string_lossy()
+                .into_owned(),
+            home.join(".local/bin/claude"),
+        ),
+        (
+            "/opt/homebrew/bin/codex".to_owned(),
+            PathBuf::from("/opt/homebrew/bin/codex"),
+        ),
+        (
+            home.join(".local/bin/cursor-agent")
+                .to_string_lossy()
+                .into_owned(),
+            home.join(".local/bin/cursor-agent"),
+        ),
+        (
+            home.join(".kimi-code/bin/kimi")
+                .to_string_lossy()
+                .into_owned(),
+            home.join(".kimi-code/bin/kimi"),
+        ),
+    ]);
+    let lookup = |name: &str| {
+        installed
+            .get(name)
+            .cloned()
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
+    };
+    let user_shell = || Ok(shell.clone());
+    let profiles = discover_profiles_with(
+        "macos",
+        lookup,
+        |name| match name {
+            "HOME" => home.to_string_lossy().into_owned(),
+            _ => String::new(),
+        },
+        Some(&user_shell),
+    )
+    .unwrap();
+
+    assert_eq!(
+        profiles
+            .iter()
+            .map(|profile| profile.id.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "shell-default",
+            "agent-agy",
+            "agent-claude",
+            "agent-codex",
+            "agent-cursor",
+            "agent-kimi",
+        ]
+    );
+    assert!(
+        !profiles
+            .iter()
+            .any(|profile| profile.id == "agent-opencode")
+    );
     remove_test_directory(&directory);
 }
 

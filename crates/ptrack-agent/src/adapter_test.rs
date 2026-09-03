@@ -17,7 +17,7 @@ fn provider_event(event_type: &str) -> ProviderEvent {
 fn adapters_cover_profiles_and_reserve_completion() {
     assert_eq!(
         supported_event_providers(),
-        ["agy", "claude", "codex", "gemini", "opencode"]
+        ["agy", "claude", "codex", "gemini", "kimi", "opencode"]
     );
     for (provider, event_type, kind, phase) in [
         (
@@ -37,6 +37,12 @@ fn adapters_cover_profiles_and_reserve_completion() {
             "agy",
             "session.failed",
             EventKind::Lifecycle,
+            EventPhase::Failed,
+        ),
+        (
+            "kimi",
+            "PostToolUseFailure",
+            EventKind::Tool,
             EventPhase::Failed,
         ),
         (
@@ -61,6 +67,48 @@ fn adapters_cover_profiles_and_reserve_completion() {
             .phase,
         EventPhase::Completed
     );
+    assert_eq!(
+        normalize_provider_event("kimi", provider_event("SessionEnd"))
+            .unwrap()
+            .notification,
+        EventNotificationKind::Completion
+    );
+}
+
+#[test]
+fn kimi_adapter_maps_current_hook_lifecycle() {
+    for (event_type, kind, phase, notification) in [
+        (
+            "SessionStart",
+            EventKind::Lifecycle,
+            EventPhase::Started,
+            EventNotificationKind::Unset,
+        ),
+        (
+            "TurnStarted",
+            EventKind::Lifecycle,
+            EventPhase::Progress,
+            EventNotificationKind::Unset,
+        ),
+        (
+            "PermissionRequest",
+            EventKind::Lifecycle,
+            EventPhase::Waiting,
+            EventNotificationKind::ApprovalRequested,
+        ),
+        (
+            "StopFailure",
+            EventKind::Error,
+            EventPhase::Failed,
+            EventNotificationKind::Failure,
+        ),
+    ] {
+        let value = normalize_provider_event("kimi", provider_event(event_type)).unwrap();
+        assert_eq!(
+            (value.kind, value.phase, value.notification),
+            (kind, phase, notification)
+        );
+    }
 }
 
 #[test]

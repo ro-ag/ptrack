@@ -371,9 +371,17 @@ fn prepared_failure_authority_is_revoked_event_before_capability() {
 #[tokio::test]
 async fn app_terminal_host_redacts_profiles_fences_generation_and_revokes_before_close() {
     let root = TempDirectory::new();
-    let manager = Manager::new(&root.0, vec![profile(&root.0)], Arc::new(TestFactory))
-        .await
-        .unwrap();
+    let mut unavailable = profile(&root.0);
+    unavailable.id = "shell-missing".to_owned();
+    unavailable.name = "Missing shell".to_owned();
+    unavailable.executable = root.0.join("missing").to_string_lossy().into_owned();
+    let manager = Manager::new(
+        &root.0,
+        vec![profile(&root.0), unavailable],
+        Arc::new(TestFactory),
+    )
+    .await
+    .unwrap();
     let identity = Arc::new(TestIdentity::default());
     let events = Arc::new(TestEvents::default());
     let runtime = TerminalRuntime::new(TerminalRuntimeConfig {
@@ -394,6 +402,13 @@ async fn app_terminal_host_redacts_profiles_fences_generation_and_revokes_before
     assert_eq!(encoded["args"], serde_json::json!([]));
     assert_eq!(encoded["env"], serde_json::json!({}));
     assert!(encoded.get("fixedCwd").is_none());
+    assert_eq!(
+        runtime
+            .create(7, "shell-missing", None, 24, 80)
+            .unwrap_err()
+            .to_string(),
+        "terminal profile \"shell-missing\" is unavailable"
+    );
     assert!(
         runtime
             .profiles(8)

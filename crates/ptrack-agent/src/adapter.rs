@@ -58,7 +58,7 @@ impl std::error::Error for AdapterError {}
 
 #[must_use]
 pub fn supported_event_providers() -> Vec<&'static str> {
-    vec!["agy", "claude", "codex", "gemini", "opencode"]
+    vec!["agy", "claude", "codex", "gemini", "kimi", "opencode"]
 }
 
 /// Maps a provider-specific event into the closed observation schema.
@@ -166,46 +166,46 @@ fn provider_mapping(provider: &str, event_type: &str) -> Option<Mapping> {
     use EventOutcome::{Failed, Succeeded};
     use EventPhase::{Completed, Failed as PhaseFailed, Progress, Started, Waiting};
     let value = match (provider, event_type) {
-        ("codex" | "claude", "sessionstart") => Mapping {
+        ("codex" | "claude" | "kimi", "sessionstart") => Mapping {
             kind: Lifecycle,
             phase: Started,
             ..Mapping::default()
         },
-        ("codex", "turn.started") => Mapping {
+        ("codex", "turn.started") | ("kimi", "turnstarted") => Mapping {
             kind: Lifecycle,
             phase: Progress,
             ..Mapping::default()
         },
-        ("codex", "turn.completed") | ("codex" | "claude", "stop") => Mapping {
+        ("codex", "turn.completed") | ("codex" | "claude" | "kimi", "stop") => Mapping {
             kind: Lifecycle,
             phase: Waiting,
             ..Mapping::default()
         },
-        ("codex", "turn.failed") => Mapping {
+        ("codex", "turn.failed") | ("kimi", "stopfailure") => Mapping {
             kind: Error,
             phase: PhaseFailed,
             outcome: Failed,
             notification: Failure,
             ..Mapping::default()
         },
-        ("codex" | "claude", "pretooluse") => Mapping {
+        ("codex" | "claude" | "kimi", "pretooluse") => Mapping {
             kind: Tool,
             phase: Started,
             ..Mapping::default()
         },
-        ("codex" | "claude", "posttooluse") => Mapping {
+        ("codex" | "claude" | "kimi", "posttooluse") => Mapping {
             kind: Tool,
             phase: Completed,
             outcome: Succeeded,
             ..Mapping::default()
         },
-        ("codex" | "claude", "posttoolusefailure") => Mapping {
+        ("codex" | "claude" | "kimi", "posttoolusefailure") => Mapping {
             kind: Tool,
             phase: PhaseFailed,
             outcome: Failed,
             ..Mapping::default()
         },
-        ("codex" | "claude" | "gemini", "permissionrequest") => Mapping {
+        ("codex" | "claude" | "gemini" | "kimi", "permissionrequest") => Mapping {
             kind: Lifecycle,
             phase: Waiting,
             notification: ApprovalRequested,
@@ -217,7 +217,7 @@ fn provider_mapping(provider: &str, event_type: &str) -> Option<Mapping> {
             notification: Question,
             ..Mapping::default()
         },
-        ("codex" | "claude" | "gemini", "sessionend") => Mapping {
+        ("codex" | "claude" | "gemini" | "kimi", "sessionend") => Mapping {
             kind: Lifecycle,
             phase: Completed,
             outcome: Succeeded,

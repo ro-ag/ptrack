@@ -27,7 +27,7 @@
       "title": "Agents",
       "summary": "Pass bounded context across supported agent tools while keeping associations, worktrees, drift, and handoffs explicit.",
       "headings": ["Agent runs", "Associations", "Plan transfer", "Handoffs", "Worktrees"],
-      "keywords": ["ownership", "workflow", "handoff", "drift", "provider", "multi-agent", "Claude", "Codex", "Gemini", "Agy", "OpenCode"],
+      "keywords": ["ownership", "workflow", "handoff", "drift", "provider", "multi-agent", "Claude", "Codex", "Cursor Agent", "Gemini", "Kimi Code", "Agy", "OpenCode"],
       "url": "agents-and-capabilities/"
     },
     {

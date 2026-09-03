@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Installed agent discovery now includes Cursor Agent and Kimi Code, with Kimi
+  hook events normalized into the bounded agent activity model.
+
+### Fixed
+- Terminal and linked-agent pickers now omit profiles whose executable is no
+  longer available, and macOS discovery is regression-tested across `PATH`,
+  Homebrew, `~/.local/bin`, and the Kimi Code install directory.
+
 ## [0.33.1] - 2026-09-01
 
 ### Fixed

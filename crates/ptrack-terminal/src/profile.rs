@@ -342,7 +342,7 @@ struct AgentCandidate {
     executable: &'static str,
 }
 
-const SUPPORTED_AGENT_CANDIDATES: [AgentCandidate; 5] = [
+const SUPPORTED_AGENT_CANDIDATES: [AgentCandidate; 7] = [
     AgentCandidate {
         id: "agent-agy",
         name: "Agy",
@@ -362,10 +362,22 @@ const SUPPORTED_AGENT_CANDIDATES: [AgentCandidate; 5] = [
         executable: "codex",
     },
     AgentCandidate {
+        id: "agent-cursor",
+        name: "Cursor Agent",
+        provider: "cursor",
+        executable: "cursor-agent",
+    },
+    AgentCandidate {
         id: "agent-gemini",
         name: "Gemini",
         provider: "gemini",
         executable: "gemini",
+    },
+    AgentCandidate {
+        id: "agent-kimi",
+        name: "Kimi Code",
+        provider: "kimi",
+        executable: "kimi",
     },
     AgentCandidate {
         id: "agent-opencode",
@@ -389,6 +401,12 @@ pub fn discover_profiles() -> Result<Vec<Profile>, ProfileError> {
         |name| env::var(name).unwrap_or_default(),
         Some(&user_shell),
     )
+}
+
+/// Reports whether a normalized profile still names an executable file.
+#[must_use]
+pub fn profile_executable_is_available(profile: &Profile) -> bool {
+    look_path(&profile.executable).is_ok()
 }
 
 pub(crate) fn discover_profiles_with<L, G, U>(
@@ -533,6 +551,7 @@ where
     let home = getenv("HOME");
     if !home.is_empty() {
         candidates.push(Path::new(&home).join(".local/bin").join(name));
+        candidates.push(Path::new(&home).join(".kimi-code/bin").join(name));
         candidates.push(Path::new(&home).join(".opencode/bin").join(name));
     }
     for candidate in candidates {
