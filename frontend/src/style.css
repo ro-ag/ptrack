@@ -4241,6 +4241,7 @@ button.modal-backdrop:active {
 
 .terminal-tab,
 .terminal-tab-action,
+.terminal-start,
 .terminal-new-tab,
 .terminal-reset-workspace {
   min-height: 28px;
@@ -4357,6 +4358,8 @@ button.modal-backdrop:active {
 .terminal-tab:focus-visible,
 .terminal-tab-action:hover:not(:disabled),
 .terminal-tab-action:focus-visible,
+.terminal-start:hover:not(:disabled),
+.terminal-start:focus-visible,
 .terminal-new-tab:hover:not(:disabled),
 .terminal-new-tab:focus-visible,
 .terminal-reset-workspace:hover:not(:disabled),
@@ -4367,6 +4370,7 @@ button.modal-backdrop:active {
 }
 
 .terminal-tab-action:disabled,
+.terminal-start:disabled,
 .terminal-new-tab:disabled {
   cursor: default;
   color: var(--faint);
@@ -4403,29 +4407,23 @@ button.modal-backdrop:active {
   font-size: 1rem;
 }
 
-/* Tab-row session start: the discoverable play control. Hidden while a
-   live session runs; labelled "Restart terminal" after an exit. */
+/* Tab-row session start: the discoverable play control. Same quiet box as
+   its neighbours — the accent lives only in the glyph. Hidden while a live
+   session runs; labelled "Restart terminal" after an exit. */
 .terminal-start {
   width: 30px;
   flex: 0 0 auto;
   display: grid;
   place-items: center;
-  border: 1px solid rgba(var(--accent-rgb), 0.45);
+  border: 1px solid var(--line);
   border-radius: 7px;
-  color: var(--accent);
-  padding: 0;
 }
 
 .terminal-start svg {
-  width: 13px;
-  height: 13px;
-  fill: currentColor;
+  width: 11px;
+  height: 11px;
+  fill: var(--accent);
   stroke: none;
-}
-
-.terminal-start:hover,
-.terminal-start:focus-visible {
-  background: rgba(var(--accent-rgb), 0.12);
 }
 
 .terminal-reset-workspace {
