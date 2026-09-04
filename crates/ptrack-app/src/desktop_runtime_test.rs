@@ -1403,73 +1403,71 @@ fn board_view_carries_dep_edges_and_their_computed_open_subset() {
     assert!(board["plans"][1].get("depsOpen").is_none(), "{board}");
 }
 
-/// The Overview's Recent Memory is project-global: the activity feed carries
-/// notes and commits from every plan and task no matter which plan the board
-/// has selected — and it is not emptied when no plan is selected at all.
-#[test]
-fn overview_activity_is_project_global_regardless_of_selected_plan() {
-    fn plan(id: u64) -> Plan {
-        Plan {
-            id,
-            title: format!("Plan {id}"),
-            status: PlanStatus::Active,
-            milestone_id: 0,
-            order: 0,
-            created_at: Timestamp::Zero,
-            updated_at: Timestamp::Zero,
-            hold_reason: None,
-            actor: None,
-            ulid: None,
-            claim_owner: None,
-            claim_epoch: 0,
-            claim_conflict: false,
-            deps: Vec::new(),
-        }
+/// Fixture builders for the Overview activity contract test. They live at
+/// module scope: inner fns would push the test past clippy's line budget.
+fn activity_plan(id: u64) -> Plan {
+    Plan {
+        id,
+        title: format!("Plan {id}"),
+        status: PlanStatus::Active,
+        milestone_id: 0,
+        order: 0,
+        created_at: Timestamp::Zero,
+        updated_at: Timestamp::Zero,
+        hold_reason: None,
+        actor: None,
+        ulid: None,
+        claim_owner: None,
+        claim_epoch: 0,
+        claim_conflict: false,
+        deps: Vec::new(),
     }
+}
 
-    fn task(id: u64, plan_id: u64) -> Task {
-        Task {
-            id,
-            plan_id,
-            title: format!("Task {id}"),
-            status: TaskStatus::Doing,
-            order: 0,
-            created_at: Timestamp::Zero,
-            updated_at: Timestamp::Zero,
-            hold_reason: None,
-            actor: None,
-            ulid: None,
-            deps: Vec::new(),
-        }
+fn activity_task(id: u64, plan_id: u64) -> Task {
+    Task {
+        id,
+        plan_id,
+        title: format!("Task {id}"),
+        status: TaskStatus::Doing,
+        order: 0,
+        created_at: Timestamp::Zero,
+        updated_at: Timestamp::Zero,
+        hold_reason: None,
+        actor: None,
+        ulid: None,
+        deps: Vec::new(),
     }
+}
 
-    fn note(id: u64, target: NoteTarget, target_id: u64) -> Note {
-        Note {
-            id,
-            target,
-            target_id,
-            kind: MemoryKind::Decision,
-            body: format!("note {id}"),
-            created_at: Timestamp::Zero,
-            actor: None,
-            ulid: None,
-        }
+fn activity_note(id: u64, target: NoteTarget, target_id: u64) -> Note {
+    Note {
+        id,
+        target,
+        target_id,
+        kind: MemoryKind::Decision,
+        body: format!("note {id}"),
+        created_at: Timestamp::Zero,
+        actor: None,
+        ulid: None,
     }
+}
 
-    fn commit(id: u64, plan_id: u64, task_id: u64) -> Commit {
-        Commit {
-            id,
-            sha: format!("sha{id}00000000"),
-            subject: format!("commit {id}"),
-            plan_id,
-            task_id,
-            created_at: Timestamp::Zero,
-            actor: None,
-            ulid: None,
-        }
+fn activity_commit(id: u64, plan_id: u64, task_id: u64) -> Commit {
+    Commit {
+        id,
+        sha: format!("sha{id}00000000"),
+        subject: format!("commit {id}"),
+        plan_id,
+        task_id,
+        created_at: Timestamp::Zero,
+        actor: None,
+        ulid: None,
     }
+}
 
-    let snapshot = ProjectSnapshot::new(
+fn activity_snapshot() -> ProjectSnapshot {
+    ProjectSnapshot::new(
         Meta {
             goal: String::new(),
             summary: String::new(),
@@ -1482,16 +1480,24 @@ fn overview_activity_is_project_global_regardless_of_selected_plan() {
             actors: Vec::new(),
         },
         Vec::new(),
-        vec![plan(1), plan(2)],
-        vec![task(1, 1), task(2, 2)],
+        vec![activity_plan(1), activity_plan(2)],
+        vec![activity_task(1, 1), activity_task(2, 2)],
         Vec::new(),
         vec![
-            note(1, NoteTarget::Project, 0),
-            note(2, NoteTarget::Plan, 2),
-            note(3, NoteTarget::Task, 2),
+            activity_note(1, NoteTarget::Project, 0),
+            activity_note(2, NoteTarget::Plan, 2),
+            activity_note(3, NoteTarget::Task, 2),
         ],
-        vec![commit(1, 1, 0), commit(2, 2, 2)],
-    );
+        vec![activity_commit(1, 1, 0), activity_commit(2, 2, 2)],
+    )
+}
+
+/// The Overview's Recent Memory is project-global: the activity feed carries
+/// notes and commits from every plan and task no matter which plan the board
+/// has selected — and it is not emptied when no plan is selected at all.
+#[test]
+fn overview_activity_is_project_global_regardless_of_selected_plan() {
+    let snapshot = activity_snapshot();
 
     // Plan 1 is selected: the feed still carries plan 2's note, plan 2's task
     // note, and plan 2's commit.
