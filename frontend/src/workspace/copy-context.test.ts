@@ -28,4 +28,59 @@ describe("copy context for an agent", () => {
     const text = agentContextText({ project: { ...project, root: "/projects/O'Brien $(echo hi)" } });
     expect(text).toContain("cd -- '/projects/O'\\''Brien $(echo hi)'");
   });
+
+  it("embeds drawer memories, issues, and commits when detail is available", () => {
+    const text = agentContextText({
+      project,
+      plan: { id: 56, title: "Hardware settings", status: "active" },
+      task: {
+        id: 288,
+        title: "Make lane extents per-system",
+        status: "doing",
+        detail: {
+          notes: [
+            { body: "Measured, not assumed:\nlanes are translation-invariant." },
+            { body: "The real score-wide max is in autoplace::apply." },
+          ],
+          issues: [
+            { id: 94, title: "lane extents lifts every system", severity: "high", status: "open" },
+          ],
+          commits: [{ sha: "eb39dd86abc", subject: "docs(research): reference policy (#288)" }],
+        },
+      },
+    });
+    expect(text).toContain("Recent memories:");
+    expect(text).toContain("- Measured, not assumed: lanes are translation-invariant.");
+    expect(text).toContain("Linked issues:");
+    expect(text).toContain("- #94 (high, open): lane extents lifts every system");
+    expect(text).toContain("Linked commits:");
+    expect(text).toContain("- eb39dd86 docs(research): reference policy (#288)");
+    expect(text).toContain("ptrack task show 288");
+  });
+
+  it("caps long detail lists and omits the sections entirely without detail", () => {
+    const text = agentContextText({
+      project,
+      plan: { id: 56, title: "Hardware settings" },
+      task: {
+        id: 1,
+        title: "Any task",
+        detail: {
+          notes: [{ body: "one" }, { body: "two" }, { body: "three" }, { body: "four" }],
+          issues: [{ id: 7, title: "no severity or status" }],
+          commits: [],
+        },
+      },
+    });
+    expect(text).toContain("- one");
+    expect(text).not.toContain("- four");
+    expect(text).toContain("- #7: no severity or status");
+    expect(text).not.toContain("Linked commits:");
+    const plain = agentContextText({
+      project,
+      plan: { id: 56, title: "Hardware settings" },
+      task: { id: 1, title: "Any task" },
+    });
+    expect(plain).not.toContain("Recent memories:");
+  });
 });

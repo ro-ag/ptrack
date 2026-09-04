@@ -2569,6 +2569,48 @@ textarea::placeholder {
     transform 150ms var(--ease);
 }
 
+/* Overflow trigger for the task context menu (copy context/edit/memory),
+   tucked at the end of the meta line after the Drag hint; revealed on
+   hover, matching the plan rows' gear. */
+.card-menu {
+  min-height: 0;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 5px;
+  color: var(--faint);
+  background: transparent;
+  box-shadow: none;
+  padding: 0 3px;
+  line-height: 1;
+  opacity: 0;
+}
+
+.card:hover .card-menu,
+.card:focus-within .card-menu,
+.card-menu:focus-visible {
+  opacity: 1;
+}
+
+.card-menu:hover,
+.card-menu:focus-visible {
+  color: var(--text);
+  background: var(--fill-strong);
+  box-shadow: none;
+}
+
+.card-menu svg {
+  display: block;
+  width: 12px;
+  height: 12px;
+  fill: currentColor;
+  transition: transform 200ms var(--ease);
+}
+
+.card-menu:hover svg,
+.card-menu:focus-visible svg {
+  transform: rotate(60deg);
+}
+
 .card:hover,
 .card:focus-within {
   border-color: var(--line-strong);
@@ -2616,6 +2658,7 @@ textarea::placeholder {
 
 .drag-label {
   flex: 0 0 auto;
+  margin-left: auto;
   border: 1px solid var(--line-subtle);
   border-radius: 999px;
   color: var(--muted);

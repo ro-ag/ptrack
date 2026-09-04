@@ -604,9 +604,9 @@ let draggedTask = null;
 let editingTask = null;
 let dialogMode = "rename";
 let dialogReturnFocus = null;
-let planContextMenu = null;
-let planContextMenuDispose = null;
-let planContextMenuReturnFocus = null;
+let contextMenu = null;
+let contextMenuDispose = null;
+let contextMenuReturnFocus = null;
 let planRenameActive = false;
 let planDialogMode = null; // "create" | "done" | "checkpoint" | "hold" | "delete" | "move" | "copy"
 let planCreateSequence = 0;
@@ -645,6 +645,9 @@ let detailTask = null;
 let detailRequest = 0;
 let drawerReturnFocus = null;
 let drawerOpenTimer = null;
+// Notes/issues/commits from the loaded task detail, so "Copy context" can
+// paste a richer brief than the board's summary rows carry.
+let taskDetailExtras = null;
 let agentLaunchRequest = null;
 let agentLaunchProfiles = [];
 let agentLaunchReturnFocus = null;
@@ -1572,6 +1575,20 @@ function cardElement(task) {
   dragLabel.className = "drag-label";
   dragLabel.textContent = "Drag";
   meta.append(identity, dragLabel);
+  // Same gear trigger as the plan rows, tucked at the meta line's end so it
+  // never collides with the Drag hint; revealed on hover alongside it.
+  const cardMenu = document.createElement("button");
+  cardMenu.type = "button";
+  cardMenu.className = "card-menu";
+  cardMenu.append(elements.planTitleMenu.querySelector("svg").cloneNode(true));
+  cardMenu.setAttribute("aria-label", `Task #${task.id} actions`);
+  cardMenu.setAttribute("aria-haspopup", "menu");
+  cardMenu.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const rect = cardMenu.getBoundingClientRect();
+    openTaskContextMenu(task, { x: rect.right, y: rect.bottom + 4 });
+  });
+  meta.append(cardMenu);
   const title = document.createElement("p");
   title.className = "card-title";
   title.textContent = task.title;
@@ -1698,6 +1715,12 @@ function cardElement(task) {
     actionButton("Memory", "Record a memory note", () => openMemory(task)),
   );
   card.append(dragZone, actions);
+
+  // Right-click opens the same task menu as the gear trigger.
+  card.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    openTaskContextMenu(task, { x: event.clientX, y: event.clientY });
+  });
   return card;
 }
 
@@ -2610,7 +2633,7 @@ async function loadSnapshot(
       draggedTask ||
       elements.taskTitle.value.trim().length > 0 ||
       planRenameActive ||
-      planContextMenu !== null)
+      contextMenu !== null)
   ) {
     refreshGate.finish();
     return false;
@@ -3005,38 +3028,35 @@ function closeDialog() {
 
 // ------------------------------------------------------ plan lifecycle
 
-function closePlanContextMenu() {
-  if (!planContextMenu) return;
-  const menu = planContextMenu;
-  planContextMenu = null;
-  planContextMenuDispose?.();
-  planContextMenuDispose = null;
+function closeContextMenu() {
+  if (!contextMenu) return;
+  const menu = contextMenu;
+  contextMenu = null;
+  contextMenuDispose?.();
+  contextMenuDispose = null;
   menu.remove();
-  planContextMenuReturnFocus?.focus?.();
-  planContextMenuReturnFocus = null;
+  contextMenuReturnFocus?.focus?.();
+  contextMenuReturnFocus = null;
 }
 
-function openPlanContextMenu(plan, titleElement, invoker, position) {
-  closePlanContextMenu();
+// Shared context-menu plumbing for plans and tasks: positions a list of
+// { label, destructive?, onSelect } entries, clamps to the viewport, and
+// cleans up on outside click, Escape, or focus loss.
+function openContextMenu(entries, position, invoker) {
+  closeContextMenu();
   const menu = document.createElement("div");
   menu.className = "context-menu";
   menu.setAttribute("role", "menu");
   menu.style.visibility = "hidden";
-  planMenuItems(plan).forEach((item) => {
+  entries.forEach((entry) => {
     const button = document.createElement("button");
     button.type = "button";
     button.setAttribute("role", "menuitem");
-    button.textContent = item.label;
-    if (item.destructive) button.classList.add("context-menu-destructive");
+    button.textContent = entry.label;
+    if (entry.destructive) button.classList.add("context-menu-destructive");
     button.addEventListener("click", () => {
-      closePlanContextMenu();
-      if (item.action === "copy-context") void copyAgentContext("plan", null, null, plan);
-      else if (item.action === "rename") beginPlanRename(titleElement, plan);
-      else if (item.action === "done") openPlanDoneDialog(plan);
-      else if (item.action === "hold") openPlanHoldDialog(plan);
-      else if (item.action === "resume") void resumePlan(plan);
-      else if (item.action === "delete") void openPlanDeleteDialog(plan);
-      else void openPlanTransferDialog(plan, item.action);
+      closeContextMenu();
+      entry.onSelect();
     });
     menu.append(button);
   });
@@ -3050,18 +3070,18 @@ function openPlanContextMenu(plan, titleElement, invoker, position) {
   menu.style.left = `${Math.round(clamped.x)}px`;
   menu.style.top = `${Math.round(clamped.y)}px`;
   menu.style.visibility = "";
-  planContextMenu = menu;
-  planContextMenuReturnFocus = invoker instanceof HTMLElement ? invoker : null;
+  contextMenu = menu;
+  contextMenuReturnFocus = invoker instanceof HTMLElement ? invoker : null;
   requestAnimationFrame(() => {
     menu.querySelector("button")?.focus();
   });
   const onOutsideClick = (event) => {
-    if (!menu.contains(event.target)) closePlanContextMenu();
+    if (!menu.contains(event.target)) closeContextMenu();
   };
   const onKeydown = (event) => {
     if (event.key !== "Escape") return;
     event.preventDefault();
-    closePlanContextMenu();
+    closeContextMenu();
   };
   const onFocusOut = (event) => {
     // WKWebView never focuses a button on mousedown, so clicking a menu item
@@ -3070,18 +3090,50 @@ function openPlanContextMenu(plan, titleElement, invoker, position) {
     // covered by the document listener below.
     if (!event.relatedTarget) return;
     if (menu.contains(event.relatedTarget)) return;
-    closePlanContextMenu();
+    closeContextMenu();
   };
   // Deferred so the click/contextmenu event that opened the menu doesn't
   // also register as the outside click that closes it.
   window.setTimeout(() => document.addEventListener("click", onOutsideClick), 0);
   document.addEventListener("keydown", onKeydown);
   menu.addEventListener("focusout", onFocusOut);
-  planContextMenuDispose = () => {
+  contextMenuDispose = () => {
     document.removeEventListener("click", onOutsideClick);
     document.removeEventListener("keydown", onKeydown);
     menu.removeEventListener("focusout", onFocusOut);
   };
+}
+
+function openPlanContextMenu(plan, titleElement, invoker, position) {
+  openContextMenu(
+    planMenuItems(plan).map((item) => ({
+      label: item.label,
+      destructive: item.destructive,
+      onSelect: () => {
+        if (item.action === "copy-context") void copyAgentContext("plan", null, null, plan);
+        else if (item.action === "rename") beginPlanRename(titleElement, plan);
+        else if (item.action === "done") openPlanDoneDialog(plan);
+        else if (item.action === "hold") openPlanHoldDialog(plan);
+        else if (item.action === "resume") void resumePlan(plan);
+        else if (item.action === "delete") void openPlanDeleteDialog(plan);
+        else void openPlanTransferDialog(plan, item.action);
+      },
+    })),
+    position,
+    invoker,
+  );
+}
+
+function openTaskContextMenu(task, position) {
+  openContextMenu(
+    [
+      { label: "Copy context", onSelect: () => void copyAgentContext("task", task, null) },
+      { label: "Edit", onSelect: () => openRename(task) },
+      { label: "Memory", onSelect: () => openMemory(task) },
+    ],
+    position,
+    null,
+  );
 }
 
 function beginPlanRename(titleElement, plan) {
@@ -4410,6 +4462,11 @@ async function loadTaskDetail(task) {
       return;
     }
     detailTask = detail.task;
+    taskDetailExtras = {
+      notes: detail.notes,
+      issues: detail.issues,
+      commits: detail.commits,
+    };
     renderDrawerTask(detail.task);
     renderDrawerSections(detail);
   } catch (error) {
@@ -4437,6 +4494,7 @@ function closeTaskDetail(restoreFocus = true) {
   detailRequest += 1;
   const taskId = detailTask?.id;
   detailTask = null;
+  taskDetailExtras = null;
   const card =
     taskId &&
     document.querySelector(`.card[data-task-id="${taskId}"] .card-drag-zone`);
@@ -8117,7 +8175,13 @@ async function copyAgentContext(scope, task, invoker, planOverride) {
 
 elements.planCopyContext.addEventListener("click", (event) => void copyAgentContext("plan", null, event.currentTarget));
 elements.drawerCopyContext.addEventListener("click", (event) => {
-  if (detailTask) void copyAgentContext("task", detailTask, event.currentTarget);
+  if (detailTask) {
+    void copyAgentContext(
+      "task",
+      { ...detailTask, detail: taskDetailExtras ?? undefined },
+      event.currentTarget,
+    );
+  }
 });
 elements.planAdd.addEventListener("click", openNewPlanDialog);
 elements.planFilterToggle.addEventListener("click", () => {
