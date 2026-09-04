@@ -119,8 +119,8 @@ describe("tab-bar rename and control policy", () => {
       "new terminal activity",
       "opening",
       "running",
-      "waiting for activity",
-      "closed",
+      "waiting for output",
+      "not started",
     ]);
   });
 

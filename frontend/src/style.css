@@ -4449,6 +4449,31 @@ button.modal-backdrop:active {
   font-size: 1rem;
 }
 
+/* Tab-row session start: the discoverable play control. Hidden while a
+   live session runs; labelled "Restart terminal" after an exit. */
+.terminal-start {
+  width: 30px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(var(--accent-rgb), 0.45);
+  border-radius: 7px;
+  color: var(--accent);
+  padding: 0;
+}
+
+.terminal-start svg {
+  width: 13px;
+  height: 13px;
+  fill: currentColor;
+  stroke: none;
+}
+
+.terminal-start:hover,
+.terminal-start:focus-visible {
+  background: rgba(var(--accent-rgb), 0.12);
+}
+
 .terminal-reset-workspace {
   width: 30px;
   flex: 0 0 auto;

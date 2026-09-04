@@ -422,6 +422,7 @@ class TerminalDock {
     "#terminal-modern-unicode",
   );
   readonly #open = requiredElement<HTMLButtonElement>("#terminal-open");
+  readonly #start = requiredElement<HTMLButtonElement>("#terminal-start");
   readonly #popOut = requiredElement<HTMLButtonElement>("#terminal-pop-out");
   readonly #restart = requiredElement<HTMLButtonElement>("#terminal-restart");
   readonly #close = requiredElement<HTMLButtonElement>("#terminal-close");
@@ -660,6 +661,16 @@ class TerminalDock {
     );
     this.#listen(this.#open, "click", () =>
       void this.#runOperation((runtime) => this.#openTerminal(runtime)),
+    );
+    // The tab-row play control is the discoverable session start: it starts
+    // a closed session, restarts an exited or failed one, and hides while a
+    // live session is running.
+    this.#listen(this.#start, "click", () =>
+      void this.#runOperation((runtime) =>
+        runtime.state === "closed"
+          ? this.#openTerminal(runtime)
+          : this.#restartTerminal(runtime),
+      ),
     );
     this.#listen(this.#restart, "click", () =>
       void this.#runOperation((runtime) => this.#restartTerminal(runtime)),
@@ -2599,6 +2610,17 @@ class TerminalDock {
       }[runtime.state];
     this.#open.hidden = runtime.state !== "closed";
     this.#restart.hidden = runtime.state !== "exited" && runtime.state !== "failed";
+    // Tab-row start affordance mirrors the session state in its label.
+    const startLabel = runtime.state === "closed"
+      ? "Start terminal"
+      : runtime.state === "exited" || runtime.state === "failed"
+      ? "Restart terminal"
+      : null;
+    this.#start.hidden = startLabel === null;
+    if (startLabel) {
+      this.#start.setAttribute("aria-label", startLabel);
+      this.#start.title = startLabel;
+    }
     this.#close.hidden =
       runtime.state === "closed" ||
       (runtime.state === "failed" && runtime.session === null);
@@ -2632,6 +2654,9 @@ class TerminalDock {
     this.#open.disabled = runtime.busy || runtime.closing || linked || poppedOut ||
       !descriptor?.pane.profileId;
     this.#restart.disabled = !diagnosticView.canRestart;
+    this.#start.disabled = runtime.state === "closed"
+      ? this.#open.disabled
+      : this.#restart.disabled;
     this.#close.disabled = runtime.busy || runtime.closing;
     this.#rendererRetry.disabled = !diagnosticView.canRetryRenderer;
     this.#forceStop.disabled = !diagnosticView.canForceStop;

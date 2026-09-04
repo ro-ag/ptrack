@@ -147,8 +147,10 @@ export function tabIndicatorPresentation(
     activity: { glyph: "●", label: "new terminal activity" },
     opening: { glyph: "◌", label: "opening" },
     running: { glyph: "▶", label: "running" },
-    waiting: { glyph: "○", label: "waiting for activity" },
-    closed: { glyph: "—", label: "closed" },
+    waiting: { glyph: "○", label: "waiting for output" },
+    // Spelled out for screen readers: "closed" alone reads as an opaque
+    // state chip rather than "this session was never started".
+    closed: { glyph: "—", label: "not started" },
   }[kind];
 }
 
@@ -246,7 +248,7 @@ export class WorkspaceTabBar {
     const presentation = tabIndicatorPresentation(indicator.kind);
     tabButton.setAttribute(
       "aria-label",
-      `${tab.title}: ${presentation.label}${indicator.unread ? ", unread" : ""}`,
+      `${tab.title} tab, ${presentation.label}${indicator.unread ? ", unread" : ""}`,
     );
     tabButton.dataset.indicator = indicator.kind;
     tabButton.dataset.unread = String(indicator.unread);

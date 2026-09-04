@@ -126,7 +126,12 @@ export function createTab(
 ): Workspace {
   if (workspace.tabs.length >= maximumWorkspaceTabs) return workspace;
   try {
-    const tab = createWorkspaceTab(ids, options, collectWorkspaceIds(workspace));
+    const tab = createWorkspaceTab(ids, {
+      ...options,
+      // New tabs must not repeat an existing default name: identical titles
+      // make every tab's screen-reader label (and close button) ambiguous.
+      title: options.title ?? `Terminal ${workspace.tabs.length + 1}`,
+    }, collectWorkspaceIds(workspace));
     return { ...workspace, activeTabId: tab.id, tabs: [...workspace.tabs, tab] };
   } catch {
     return workspace;
