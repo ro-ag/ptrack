@@ -6,6 +6,38 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.36.1] - 2026-09-04
+
+### Changed
+- The sidebar pins the project's current plan above the plan list as a
+  recessed card — always visible, no longer rendered as a row of the scrolling
+  list — and keeps the aurora meter even when the plan is complete, with the
+  check tick leading the title.
+- Navigation reads Overview, Board, Issues (the native View menu matches;
+  keyboard shortcuts stay bound to their views), Settings and the project
+  actions move to a new sidebar footer, and the topbar keeps a compact icon
+  cluster for sidebar, board, terminal, and theme visibility.
+- The board header says "Selected plan" unless the selected plan really is the
+  project's current plan.
+- Terminal tabs keep the "Terminal" naming, and a play control next to the
+  tabs starts or restarts the session; with several tabs open, screen readers
+  announce each tab's position.
+- Task cards carry only the status select and a menu: agent launch, copy
+  context, edit, and memory moved into the task menu, which gains Launch
+  agent.
+
+### Fixed
+- The current plan's expanded sidebar card no longer paints over the plan
+  below: WebKit sized the grid row to the card's minimum height instead of its
+  wrapped content, so the stats line overlapped the next row's title.
+- Overview Recent Memory is project-global again: the feed no longer empties
+  when no plan is selected, and it always carries notes and commits from every
+  plan and task, whichever plan the board has selected.
+- Task and issue controls announce name and state instead of full body text;
+  the repeated DRAG pill is gone; the Issues page drops the "Agent intake"
+  jargon, labels its filter, and hides the pager on a single page; the
+  repository line reads "last written by <version>".
+
 ## [0.36.0] - 2026-09-04
 
 ### Added

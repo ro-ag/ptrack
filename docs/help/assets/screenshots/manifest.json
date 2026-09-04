@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "productVersion": "0.36.0",
+  "productVersion": "0.36.1",
   "capturedAt": "2026-09-03",
   "capture": {
     "app": "Desktop frontend in Chromium for board, overview, and terminal; retained packaged macOS captures for unchanged dialog workflows",
