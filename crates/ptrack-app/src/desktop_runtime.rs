@@ -4954,12 +4954,12 @@ pub(super) fn board_view(
             milestones: counts.milestones,
             milestones_done: counts.milestones_done,
         },
-        activity: recent_activity(snapshot, plan_id, &task_ids),
+        activity: recent_activity(snapshot),
         open_issues,
     })
 }
 
-fn snapshot_board_view(
+pub(super) fn snapshot_board_view(
     snapshot: &ProjectSnapshot,
     project_name: String,
     plan_id: u64,
@@ -4997,7 +4997,6 @@ fn snapshot_board_view(
             }
         })
         .collect();
-    let task_ids = BTreeSet::new();
     Ok(BoardView {
         project_name,
         goal: snapshot.meta.goal.clone(),
@@ -5033,7 +5032,7 @@ fn snapshot_board_view(
             milestones: counts.milestones,
             milestones_done: counts.milestones_done,
         },
-        activity: recent_activity(snapshot, 0, &task_ids),
+        activity: recent_activity(snapshot),
         open_issues: snapshot
             .issues
             .iter()
@@ -5049,19 +5048,14 @@ fn snapshot_board_view(
     })
 }
 
-fn recent_activity(
-    snapshot: &ProjectSnapshot,
-    plan_id: u64,
-    task_ids: &BTreeSet<u64>,
-) -> Vec<ActivityView> {
+/// The Overview's Recent Memory is project-global by contract: every note and
+/// commit the project keeps, regardless of which plan the board has selected.
+/// The renderer has no other consumer of `BoardView::activity`, so plan
+/// scoping here only ever emptied the feed — a no-plan selection showed just
+/// the project-level notes.
+fn recent_activity(snapshot: &ProjectSnapshot) -> Vec<ActivityView> {
     let mut events = Vec::<(Option<i128>, ActivityView)>::new();
     for note in &snapshot.notes {
-        let relevant = note.target == NoteTarget::Project
-            || (note.target == NoteTarget::Plan && note.target_id == plan_id)
-            || (note.target == NoteTarget::Task && task_ids.contains(&note.target_id));
-        if !relevant {
-            continue;
-        }
         let target = match note.target {
             NoteTarget::Project => "Project".to_owned(),
             NoteTarget::Plan => format!("Plan #{}", note.target_id),
@@ -5090,9 +5084,6 @@ fn recent_activity(
         ));
     }
     for commit in &snapshot.commits {
-        if commit.plan_id != plan_id && !task_ids.contains(&commit.task_id) {
-            continue;
-        }
         let detail = commit.sha.chars().take(8).collect();
         events.push((
             commit.created_at.unix_nanoseconds(),
@@ -5101,7 +5092,7 @@ fn recent_activity(
                 title: commit.subject.clone(),
                 detail,
                 target: if commit.task_id == 0 {
-                    format!("Plan #{plan_id}")
+                    format!("Plan #{}", commit.plan_id)
                 } else {
                     format!("Task #{}", commit.task_id)
                 },
