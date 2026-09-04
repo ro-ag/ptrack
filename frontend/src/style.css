@@ -1488,7 +1488,8 @@ select option {
 }
 
 .issue:active,
-.issue-inbox-row:active {
+.issue-inbox-row:active,
+.drawer-issue:active {
   transform: none;
 }
 
@@ -4054,6 +4055,15 @@ button.modal-backdrop:active {
 
 .drawer-issue {
   border-left: 3px solid var(--issue-color);
+}
+
+/* Card-styled button: without this the generic button:hover gradient floods
+   the card and its muted text becomes unreadable. */
+.drawer-issue:hover {
+  border-color: var(--line-subtle);
+  border-left-color: var(--issue-color);
+  background: var(--fill-hover);
+  box-shadow: var(--highlight-inset);
 }
 
 .drawer-issue-title {
