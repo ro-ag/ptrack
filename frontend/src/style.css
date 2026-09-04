@@ -557,6 +557,7 @@ button:disabled {
   gap: 2px;
   align-content: start;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .sidebar-plan {
@@ -604,7 +605,7 @@ button:disabled {
   color: var(--text);
 }
 
-.sidebar-plan.active:not(.in-progress) .sidebar-plan-title {
+.sidebar-plan.active .sidebar-plan-title {
   color: var(--nav-active-text);
 }
 
@@ -654,19 +655,30 @@ button:disabled {
   background: var(--info);
 }
 
-/* The project's in-progress plan expands into a recessed "void" card —
-   darker than the list around it — carrying the only progress meter. */
-.sidebar-plan.in-progress,
-.sidebar-plan.in-progress:hover,
-.sidebar-plan.in-progress.active,
-.sidebar-plan.in-progress.active:hover {
-  flex-wrap: wrap;
-  align-items: center;
-  row-gap: 7px;
-  height: auto;
-  min-height: 62px;
-  padding-top: 10px;
-  padding-bottom: 10px;
+/* The project's current plan is pinned above the list as a recessed "void"
+   card — darker than the rows around it — carrying the only progress meter.
+   It lives outside the scrolling grid on purpose: WebKit sizes a grid track
+   to the card's min-height instead of its wrapped-flex content height, which
+   painted the stats line over the row below. Block flow here is immune. */
+.sidebar-current {
+  flex: 0 0 auto;
+  margin-bottom: var(--space-100);
+}
+
+.sidebar-current[hidden] {
+  display: none;
+}
+
+.sidebar-current-label {
+  padding: 0 var(--space-100);
+}
+
+.sidebar-current-card {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  /* Right padding clears the always-visible plan-menu gear (top-right). */
+  padding: 9px calc(var(--space-400) + 8px) 10px var(--space-100);
   border: 1px solid var(--line-subtle);
   border-radius: 9px;
   color: var(--text);
@@ -676,20 +688,38 @@ button:disabled {
     inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 
-.sidebar-plan.in-progress .sidebar-plan-title {
-  flex-basis: 100%;
+.sidebar-current-card:hover {
+  border-color: var(--line);
+}
+
+.sidebar-current-title-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-100);
+}
+
+.sidebar-current-title {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: 0.75rem;
   font-weight: 700;
 }
 
-.sidebar-plan-meter {
-  flex: 1 1 100%;
+.sidebar-current-meter {
+  display: block;
   height: 5px;
+  margin-top: 8px;
   overflow: hidden;
   border-radius: 999px;
   background: var(--fill-strong);
 }
 
-.sidebar-plan-meter-fill {
+.sidebar-current-meter-fill {
   display: block;
   height: 100%;
   border-radius: inherit;
@@ -697,8 +727,9 @@ button:disabled {
   box-shadow: 0 0 9px rgba(var(--accent-rgb), 0.45);
 }
 
-.sidebar-plan-stats {
-  flex: 1 1 100%;
+.sidebar-current-stats {
+  display: block;
+  margin-top: 7px;
   overflow: hidden;
   color: var(--muted);
   font-size: 0.65rem;
@@ -708,17 +739,18 @@ button:disabled {
   text-overflow: ellipsis;
 }
 
-.sidebar-plan-stats-pct {
+.sidebar-current-stats-pct {
   color: var(--accent);
   font-weight: 700;
 }
 
-/* The gear would wrap below the stacked card lines, so pin it beside the
-   title instead. */
-.sidebar-plan.in-progress .sidebar-plan-menu {
+/* The card's plan menu stays revealed: it is the one always-visible entry
+   point for the current plan's actions. */
+.sidebar-current-card .sidebar-plan-menu {
   position: absolute;
-  top: 9px;
+  top: 8px;
   right: 7px;
+  opacity: 1;
 }
 
 /* Overflow trigger for the plan context menu (rename/move/copy/delete). */

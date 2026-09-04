@@ -21,7 +21,7 @@
     "frontend/src/workspace/plan-list.ts",
     "frontend/src/workspace/copy-context.ts"
   ],
-  "uiSourceSha256": "c97f213c8daa2095045b304e12ce5b5bcd6bfd7403beaca90dc9dbede653be68",
+  "uiSourceSha256": "b0797e09f3165e7a6ac1b3804797ecde89a43add28f8a863610dab7498223bd0",
   "sourceReview": "2026-09-03: Board, Overview, and Terminal recaptured in both themes from the current frontend using isolated Northstar fixture data. Verified plan counters and filters, plan creation and error recovery, project/plan/task context copying, tab close intent, last-tab guard, and pane split/close behavior in the browser. Existing project-search, project-switch, and task-drawer captures retain their unchanged primary dialog content; the new task-drawer Copy context action is described in the desktop and terminal guides.",
   "requiredWorkflows": [
     "board",

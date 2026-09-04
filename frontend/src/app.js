@@ -1,5 +1,5 @@
 import "./tauri-bridge";
-import { filterPlans } from "./workspace/plan-list";
+import { filterPlans, splitCurrentPlan } from "./workspace/plan-list";
 import { agentContextText } from "./workspace/copy-context";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
@@ -390,6 +390,8 @@ const elements = {
   planTitle: document.querySelector("#plan-title"),
   planTotal: document.querySelector("#plan-total"),
   planList: document.querySelector("#sidebar-plan-list"),
+  sidebarCurrent: document.querySelector("#sidebar-current"),
+  sidebarCurrentSlot: document.querySelector("#sidebar-current-slot"),
   planAdd: document.querySelector("#plan-add"),
   planFilterToggle: document.querySelector("#plan-filter-toggle"),
   planFilters: document.querySelector("#plan-filters"),
@@ -1834,16 +1836,31 @@ function selectPlan(planId) {
 }
 
 function renderPlanList() {
+  const plans = board
+    ? filterPlans(board.plans, elements.planSearch.value, elements.planStatusFilter.value)
+    : [];
+  const filtered = Boolean(board) &&
+    (elements.planSearch.value.trim() !== "" || elements.planStatusFilter.value !== "all");
+  // The project's current plan is pinned above the list as its own card, so
+  // the scrollable rows carry everyone else. Pinning also keeps the expanded
+  // card out of the grid track sizing that painted it over the next row.
+  // The card survives filtering on purpose: it is the project's active
+  // context, and the filters only reshape the browsing list below it.
+  const { current } = board ? splitCurrentPlan(board.plans) : { current: undefined };
+  const { rest } = splitCurrentPlan(plans);
+  renderCurrentPlan(current);
   elements.planList.replaceChildren();
   if (!board) return;
-  const plans = filterPlans(board.plans, elements.planSearch.value, elements.planStatusFilter.value);
-  const filtered = elements.planSearch.value.trim() !== "" || elements.planStatusFilter.value !== "all";
   elements.planTotal.textContent = filtered ? `${plans.length}/${board.plans.length}` : board.plans.length;
   elements.planFilterToggle.dataset.active = String(filtered);
   const total = Number(board.stats.plans || board.plans.length);
   elements.planFilterSummary.textContent = `${plans.length} of ${board.plans.length} loaded plans${total > board.plans.length ? ` (${total} in project)` : ""}.`;
-  if (!plans.length) elements.planList.append(emptyMemory(filtered ? "No plans match these filters." : "No plans yet. Create a plan with +."));
-  plans.forEach((plan) => {
+  if (!board.plans.length) {
+    elements.planList.append(emptyMemory("No plans yet. Create a plan with +."));
+  } else if (filtered && !plans.length) {
+    elements.planList.append(emptyMemory("No plans match these filters."));
+  }
+  rest.forEach((plan) => {
     // Not a native <button>: it hosts the nested "⋯" plan-actions button
     // below, and interactive content can't nest inside a real button.
     const item = document.createElement("div");
@@ -1857,44 +1874,14 @@ function renderPlanList() {
       item.classList.add("active");
       item.setAttribute("aria-current", "true");
     }
-    if (plan.isActive) item.classList.add("in-progress");
     if (settled) item.classList.add("settled");
-    item.title = plan.isActive ? `${plan.title} · active plan` : plan.title;
+    item.title = plan.title;
     if (totalTasks > 0) item.title = `${item.title} · ${doneTasks}/${totalTasks} done`;
     const title = document.createElement("span");
     title.className = "sidebar-plan-title";
     title.textContent = `#${plan.id} ${plan.title}`;
     item.append(title);
     if (plan.status === "done") item.append(planDoneTick());
-    if (plan.isActive) {
-      // Progress belongs to the in-progress plan only: a meter line plus a
-      // compact stats line, instead of the old per-row underline.
-      if (totalTasks > 0) {
-        const meter = document.createElement("span");
-        meter.className = "sidebar-plan-meter";
-        meter.setAttribute("aria-hidden", "true");
-        const fill = document.createElement("span");
-        fill.className = "sidebar-plan-meter-fill";
-        fill.style.width = `${Math.round((doneTasks / totalTasks) * 100)}%`;
-        meter.append(fill);
-        item.append(meter);
-      }
-      const stats = document.createElement("span");
-      stats.className = "sidebar-plan-stats";
-      if (totalTasks > 0) {
-        const pct = document.createElement("span");
-        pct.className = "sidebar-plan-stats-pct";
-        pct.textContent = `${Math.round((doneTasks / totalTasks) * 100)}%`;
-        stats.append(
-          document.createTextNode(`${doneTasks}/${totalTasks} done · `),
-          pct,
-          document.createTextNode(` · ${totalTasks - doneTasks} left`),
-        );
-      } else {
-        stats.textContent = "No tasks yet";
-      }
-      item.append(stats);
-    }
     if (plan.holdReason) {
       const hold = document.createElement("span");
       hold.className = "sidebar-plan-flag hold";
@@ -1948,6 +1935,115 @@ function renderPlanList() {
     item.append(menuButton);
     elements.planList.append(item);
   });
+}
+
+// The project's single current plan, pinned above the plan rows in a void
+// card. Rendered in plain block flow — never as a grid row — so its height
+// always follows its content. A done plan that is still the current plan
+// keeps the meter: a full aurora bar reads as "complete, wrap it up", and
+// the ✓ tick rides inline before the title.
+function renderCurrentPlan(plan) {
+  elements.sidebarCurrentSlot.replaceChildren();
+  if (!plan) {
+    elements.sidebarCurrent.hidden = true;
+    return;
+  }
+  elements.sidebarCurrent.hidden = false;
+  const doneTasks = Number(plan.tasksDone || 0);
+  const totalTasks = Number(plan.tasksTotal || 0);
+  const card = document.createElement("div");
+  card.setAttribute("role", "button");
+  card.tabIndex = 0;
+  card.className = "sidebar-current-card";
+  card.title = `${plan.title} · current plan`;
+  if (totalTasks > 0) card.title = `${card.title} · ${doneTasks}/${totalTasks} done`;
+  if (plan.holdReason) card.title = `${card.title} · on hold: ${plan.holdReason}`;
+  if (plan.claimedBy) card.title = `${card.title} · claimed by ${plan.claimedBy}`;
+  if (plan.depsOpen?.length) {
+    card.title = `${card.title} · waiting on ${plan.depsOpen.map((id) => `#${id}`).join(", ")}`;
+  }
+  const row = document.createElement("span");
+  row.className = "sidebar-current-title-row";
+  // The tick leads the title so it can't collide with the gear pinned at
+  // the card's top-right corner.
+  if (plan.status === "done") row.append(planDoneTick());
+  const title = document.createElement("span");
+  title.className = "sidebar-current-title";
+  title.textContent = `#${plan.id} ${plan.title}`;
+  row.append(title);
+  if (plan.holdReason) {
+    const hold = document.createElement("span");
+    hold.className = "sidebar-plan-flag hold";
+    hold.title = `on hold: ${plan.holdReason}`;
+    hold.setAttribute("aria-hidden", "true");
+    row.append(hold);
+  }
+  if (plan.claimedBy) {
+    const claim = document.createElement("span");
+    claim.className = "sidebar-plan-flag claim";
+    claim.title = `claimed by ${plan.claimedBy}`;
+    claim.setAttribute("aria-hidden", "true");
+    row.append(claim);
+  }
+  if (plan.depsOpen?.length) {
+    const deps = document.createElement("span");
+    deps.className = "sidebar-plan-flag deps";
+    deps.title = `waiting on ${plan.depsOpen.map((id) => `#${id}`).join(", ")}`;
+    deps.setAttribute("aria-hidden", "true");
+    row.append(deps);
+  }
+  card.append(row);
+  if (totalTasks > 0) {
+    const meter = document.createElement("span");
+    meter.className = "sidebar-current-meter";
+    meter.setAttribute("aria-hidden", "true");
+    const fill = document.createElement("span");
+    fill.className = "sidebar-current-meter-fill";
+    fill.style.width = `${Math.round((doneTasks / totalTasks) * 100)}%`;
+    meter.append(fill);
+    card.append(meter);
+  }
+  const stats = document.createElement("span");
+  stats.className = "sidebar-current-stats";
+  if (totalTasks > 0) {
+    const pct = document.createElement("span");
+    pct.className = "sidebar-current-stats-pct";
+    pct.textContent = `${Math.round((doneTasks / totalTasks) * 100)}%`;
+    stats.append(
+      document.createTextNode(`${doneTasks}/${totalTasks} done · `),
+      pct,
+      document.createTextNode(` · ${totalTasks - doneTasks} left`),
+    );
+  } else {
+    stats.textContent = "No tasks yet";
+  }
+  card.append(stats);
+  card.addEventListener("click", () => selectPlan(plan.id));
+  card.addEventListener("keydown", (event) => {
+    // Ignore keys bubbling up from the nested gear button (Enter/Space
+    // there should trigger it, not also select the card).
+    if (event.target !== card) return;
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    selectPlan(plan.id);
+  });
+  card.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    openPlanContextMenu(plan, title, card, { x: event.clientX, y: event.clientY });
+  });
+  const menuButton = document.createElement("button");
+  menuButton.type = "button";
+  menuButton.className = "sidebar-plan-menu";
+  menuButton.append(elements.planTitleMenu.querySelector("svg").cloneNode(true));
+  menuButton.setAttribute("aria-label", `Plan #${plan.id} actions`);
+  menuButton.setAttribute("aria-haspopup", "menu");
+  menuButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const rect = menuButton.getBoundingClientRect();
+    openPlanContextMenu(plan, title, menuButton, { x: rect.left, y: rect.bottom + 4 });
+  });
+  card.append(menuButton);
+  elements.sidebarCurrentSlot.append(card);
 }
 
 // Accent check chip marking a completed plan in the sidebar.
