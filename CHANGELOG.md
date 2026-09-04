@@ -6,6 +6,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-09-04
+
+### Added
+- Copy any plan's agent context straight from its sidebar ⋯ menu, and use a
+  task context menu — right-click a card or open its gear — for copy context,
+  edit, and memory actions.
+- Copying task context from the drawer embeds the three most recent memories,
+  up to five linked issues, and up to five linked commits in the brief, so
+  pasted agent instructions carry the working record with them.
+
+### Changed
+- The sidebar reserves progress for the plan that is actually in progress: it
+  expands into a recessed void card with an aurora-gradient meter and a compact
+  done · percent · remaining line, while done plans dim behind a check tick,
+  pending plans keep prominent white titles, and hold, claim, and dependency
+  markers become color-coded dots with tooltips.
+
+### Removed
+- The project copy icon leaves the sidebar brand header; plan and task context
+  copy cover the agent workflow.
+
+### Fixed
+- Task drawer issue cards stay readable on hover: the generic primary-button
+  hover styling no longer floods cards drawn on dark surfaces.
+
 ## [0.35.0] - 2026-09-03
 
 ### Added
