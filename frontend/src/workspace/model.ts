@@ -336,9 +336,7 @@ export function createWorkspaceTab(
   const association = normalizeAssociationPointer(options.association);
   return {
     id,
-    // Numbered defaults keep screen-reader labels distinct ("Close
-    // Terminal 2 tab") instead of a row of identical "Terminal" names.
-    title: normalizeTabTitle(options.title, "Terminal 1"),
+    title: normalizeTabTitle(options.title, "Terminal"),
     activePaneId: root.paneId,
     root,
     ...(association === undefined ? {} : { association }),

@@ -240,7 +240,18 @@ export class WorkspaceTabBar {
     this.#focusTab(tab.id);
   }
 
-  #refreshIndicator(tab: WorkspaceTab, tabButton: HTMLButtonElement): void {
+  #positionSuffix(index: number, count: number): string {
+    // Default tab titles repeat ("Terminal" everywhere), so screen readers
+    // get a position while the visible title stays untouched.
+    return count > 1 ? `, ${index + 1} of ${count}` : "";
+  }
+
+  #refreshIndicator(
+    tab: WorkspaceTab,
+    tabButton: HTMLButtonElement,
+    index: number,
+    count: number,
+  ): void {
     const indicator = this.#indicatorForTab?.(tab) ?? {
       kind: "closed",
       unread: false,
@@ -248,11 +259,11 @@ export class WorkspaceTabBar {
     const presentation = tabIndicatorPresentation(indicator.kind);
     tabButton.setAttribute(
       "aria-label",
-      `${tab.title} tab, ${presentation.label}${indicator.unread ? ", unread" : ""}`,
+      `${tab.title} tab${this.#positionSuffix(index, count)}, ${presentation.label}${indicator.unread ? ", unread" : ""}`,
     );
     tabButton.dataset.indicator = indicator.kind;
     tabButton.dataset.unread = String(indicator.unread);
-    tabButton.title = tabButton.getAttribute("aria-label") ?? tab.title;
+    tabButton.title = `${tab.title} · ${presentation.label}`;
     if (tabButton.firstElementChild) {
       tabButton.firstElementChild.textContent = presentation.glyph;
     }
@@ -280,7 +291,7 @@ export class WorkspaceTabBar {
     title.className = "terminal-tab-label";
     title.textContent = tab.title;
     tabButton.append(indicatorGlyph, title);
-    this.#refreshIndicator(tab, tabButton);
+    this.#refreshIndicator(tab, tabButton, index, count);
     tabButton.addEventListener("click", () => {
       this.#dispatch({ type: "select-tab", tabId: tab.id }, tab.id);
     });
@@ -300,10 +311,16 @@ export class WorkspaceTabBar {
     this.#tabButtons.set(tab.id, tabButton);
     item.append(tabButton);
     const closeAction: WorkspaceAction = { type: "close-tab", tabId: tab.id };
-    const close = button("close", `Close ${tab.title} tab`, () => {
-      if (this.#closeIntent) this.#closeIntent(closeAction);
-      else this.#dispatch(closeAction);
-    }, tabControlPolicy(index, count).closeDisabled || !this.#controller.canDispatch(closeAction));
+    const close = button(
+      "close",
+      `Close ${tab.title} tab${this.#positionSuffix(index, count)}`,
+      () => {
+        if (this.#closeIntent) this.#closeIntent(closeAction);
+        else this.#dispatch(closeAction);
+      },
+      tabControlPolicy(index, count).closeDisabled ||
+        !this.#controller.canDispatch(closeAction),
+    );
     close.classList.add("terminal-tab-close");
     if (count === 1) close.title = "Keep one tab open. Use Stop session to stop its process.";
     item.append(close);
