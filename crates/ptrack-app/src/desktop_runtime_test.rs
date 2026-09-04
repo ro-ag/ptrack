@@ -24,9 +24,9 @@ use super::desktop_runtime::{
     RecentProjectOpenAuthorizationV1, RecentProjectRegistryCommitV1, RecentProjectRegistryStatusV1,
     RecentProjectsProvider, ResetApplicationStateResultV1, WorkspaceProject, WorkspaceStatus,
     agent_intelligence_for_task_result, allowed_desktop_commands, apply_preferences, board_view,
-    snapshot_board_view,
     capture_git_snapshot_with, confirm_linked_launch, heatmap_at, project_storage,
-    record_last_project_in, repo_stats, reset_application_records, watch_workspace_data,
+    record_last_project_in, repo_stats, reset_application_records, snapshot_board_view,
+    watch_workspace_data,
 };
 use crate::{
     AppError, AppResult, DesktopEvent, DesktopEventSink, DesktopInitializationService,
