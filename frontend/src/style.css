@@ -2744,33 +2744,6 @@ textarea::placeholder {
   font-variant-numeric: tabular-nums;
 }
 
-.drag-label {
-  flex: 0 0 auto;
-  margin-left: auto;
-  border: 1px solid var(--line-subtle);
-  border-radius: 999px;
-  color: var(--muted);
-  background: var(--fill);
-  padding: 1px 7px;
-  font-family: inherit;
-  font-size: 0.5rem;
-  font-weight: 750;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  opacity: 0;
-  transition:
-    opacity 150ms var(--ease),
-    color 150ms var(--ease),
-    border-color 150ms var(--ease);
-}
-
-.card:hover .drag-label,
-.card:focus-within .drag-label {
-  border-color: rgba(var(--accent-rgb), 0.3);
-  color: var(--accent);
-  opacity: 1;
-}
-
 .card-title {
   margin-bottom: 0;
   color: var(--text);
@@ -2894,25 +2867,6 @@ textarea::placeholder {
 .card-actions select:hover {
   border-color: var(--line-strong);
   color: var(--text);
-}
-
-.card-action {
-  min-height: 30px;
-  border-color: var(--line-subtle);
-  border-radius: 7px;
-  color: var(--text-soft);
-  background: var(--control-solid-bg);
-  box-shadow: none;
-  padding: 5px 8px;
-  font-size: 0.625rem;
-  white-space: nowrap;
-}
-
-.card-action:hover {
-  border-color: var(--line-strong);
-  color: var(--text);
-  background: var(--fill-strong);
-  box-shadow: none;
 }
 
 .empty {

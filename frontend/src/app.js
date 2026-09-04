@@ -414,6 +414,7 @@ const elements = {
   issuesFilter: document.querySelector("#issues-filter"),
   issuesPrevious: document.querySelector("#issues-previous"),
   issuesNext: document.querySelector("#issues-next"),
+  issuesPagination: document.querySelector("#issues-pagination"),
   issuesNew: document.querySelector("#issues-new"),
   issuesStatus: document.querySelector("#issues-status"),
   activity: document.querySelector("#activity-list"),
@@ -1115,7 +1116,10 @@ function renderMemory() {
       meta.textContent = `${issue.severity} · #${issue.id}${issue.taskId ? ` · task #${issue.taskId}` : ""}`;
       content.append(title, meta);
       item.append(marker, content);
-      item.setAttribute("aria-label", `Open issue #${issue.id}: ${issue.title}`);
+      item.setAttribute(
+        "aria-label",
+        `Open issue #${issue.id}, ${issue.severity}: ${compactAriaText(issue.title)}`,
+      );
       item.addEventListener("click", () => openIssueDetail(issue.id, item));
       elements.issues.append(item);
     });
@@ -1137,6 +1141,14 @@ function renderMemory() {
   }
 }
 
+// Long report titles (whole paragraphs, paths) must not become screen-reader
+// labels: announcements stay to one line and the full text remains visible
+// content on the button itself.
+function compactAriaText(text, max = 80) {
+  const flat = String(text).replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
 function renderIssuesInbox() {
   const filter = elements.issuesFilter.value;
   const issues = issuesState.issues;
@@ -1149,6 +1161,9 @@ function renderIssuesInbox() {
     : `${issues.length} ${filter === "all" ? "total" : filter} issue${issues.length === 1 ? "" : "s"}.`;
   elements.issuesPrevious.disabled = issuesOffset === 0;
   elements.issuesNext.disabled = issuesOffset + shown >= total;
+  // A single page needs no pager: hiding it beats two permanently disabled
+  // buttons.
+  elements.issuesPagination.hidden = total <= shown && issuesOffset === 0;
   if (issues.length === 0) {
     elements.issuesInbox.append(emptyMemory(
       filter === "unscheduled"
@@ -1545,17 +1560,6 @@ function contextChip(count, singular, extraClass = "") {
   return chip;
 }
 
-function actionButton(label, title, handler) {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "card-action";
-  button.textContent = label;
-  button.title = title;
-  button.setAttribute("aria-label", title);
-  button.addEventListener("click", handler);
-  return button;
-}
-
 function cardElement(task) {
   const card = document.createElement("article");
   card.className = "card";
@@ -1566,18 +1570,18 @@ function cardElement(task) {
   dragZone.className = "card-drag-zone";
   dragZone.draggable = true;
   dragZone.tabIndex = 0;
+  // The label names the task; the visible card carries the rest. Body text
+  // and runtime details stay out of the label or screen readers announce a
+  // full paragraph before every card.
   dragZone.setAttribute(
     "aria-label",
-    `Task #${task.id}: ${task.title}. Drag to change status, press Enter for details.`,
+    `Task #${task.id}, ${task.status}: ${task.title}`,
   );
   const meta = document.createElement("div");
   meta.className = "card-meta";
   const identity = document.createElement("span");
   identity.textContent = `#${task.id} · ${relativeTime(task.updatedAt)}`;
-  const dragLabel = document.createElement("span");
-  dragLabel.className = "drag-label";
-  dragLabel.textContent = "Drag";
-  meta.append(identity, dragLabel);
+  meta.append(identity);
   // Same gear trigger as the plan rows, tucked at the meta line's end so it
   // never collides with the Drag hint; revealed on hover alongside it.
   const cardMenu = document.createElement("button");
@@ -1606,10 +1610,6 @@ function cardElement(task) {
     linked.title = linkedRuntime.detail;
     linked.setAttribute("aria-label", `Linked runtime: ${linkedRuntime.detail}`);
     dragZone.append(linked);
-    dragZone.setAttribute(
-      "aria-label",
-      `Task #${task.id}: ${task.title}. ${linkedRuntime.detail}. Drag to change status, press Enter for details.`,
-    );
   }
 
   // Hold is orthogonal to status: the card keeps its lane and gains a badge.
@@ -1622,7 +1622,7 @@ function cardElement(task) {
     dragZone.append(hold);
     dragZone.setAttribute(
       "aria-label",
-      `${dragZone.getAttribute("aria-label")} On hold: ${task.holdReason}.`,
+      `${dragZone.getAttribute("aria-label")}, on hold`,
     );
   }
 
@@ -1636,7 +1636,7 @@ function cardElement(task) {
     dragZone.append(deps);
     dragZone.setAttribute(
       "aria-label",
-      `${dragZone.getAttribute("aria-label")} ${deps.title}.`,
+      `${dragZone.getAttribute("aria-label")}, waiting on dependencies`,
     );
   }
 
@@ -1703,20 +1703,10 @@ function cardElement(task) {
   statusSelect.addEventListener("change", (event) =>
     void moveTask(task.id, statusSelect.value, event.currentTarget)
   );
-  actions.append(
-    statusSelect,
-    actionButton(
-      "Agent",
-      `Launch an installed agent for task #${task.id}`,
-      (event) => void openAgentLaunchPicker(
-        { planId: Number(board.planId), task },
-        event.currentTarget,
-      ),
-    ),
-    actionButton("Copy context", `Copy task #${task.id} context for an agent`, (event) => void copyAgentContext("task", task, event.currentTarget)),
-    actionButton("Edit", "Rename task", () => openRename(task)),
-    actionButton("Memory", "Record a memory note", () => openMemory(task)),
-  );
+  // The status select is the one control a card needs on its face; Agent,
+  // Copy context, Edit, and Memory live in the ⋯ menu (and the right-click
+  // menu), keeping the accessibility tree to a few nodes per lane.
+  actions.append(statusSelect);
   card.append(dragZone, actions);
 
   // Right-click opens the same task menu as the gear trigger.
@@ -2103,7 +2093,7 @@ function renderIntelligence() {
   elements.projectRoot.textContent = project.root;
   const storage = project.storage;
   elements.storageStatus.textContent = storage.exists
-    ? `p-track format v${storage.formatVersion} · ${compactBytes(storage.sizeBytes)} · writer ${storage.lastWriteVersion || "unknown"}`
+    ? `p-track format v${storage.formatVersion} · ${compactBytes(storage.sizeBytes)} · last written by ${storage.lastWriteVersion || "unknown"}`
     : storage.error || "p-track storage unavailable";
   elements.snapshotBounds.replaceChildren();
   for (const [label, bound] of Object.entries(tracking.bounds || {})) {
@@ -3230,6 +3220,13 @@ function openPlanContextMenu(plan, titleElement, invoker, position) {
 function openTaskContextMenu(task, position) {
   openContextMenu(
     [
+      {
+        label: "Launch agent",
+        onSelect: () => void openAgentLaunchPicker(
+          { planId: Number(board.planId), task },
+          document.activeElement,
+        ),
+      },
       { label: "Copy context", onSelect: () => void copyAgentContext("task", task, null) },
       { label: "Edit", onSelect: () => openRename(task) },
       { label: "Memory", onSelect: () => openMemory(task) },
@@ -4511,7 +4508,10 @@ function drawerIssueElement(issue) {
   meta.className = "drawer-item-meta";
   meta.textContent = `${issue.severity} · ${issue.status || "open"} · issue #${issue.id}`;
   item.append(title, meta);
-  item.setAttribute("aria-label", `Open issue #${issue.id}: ${issue.title}`);
+  item.setAttribute(
+    "aria-label",
+    `Open issue #${issue.id}, ${issue.severity}: ${compactAriaText(issue.title)}`,
+  );
   item.addEventListener("click", () => {
     void openIssueDetail(issue.id, item);
   });

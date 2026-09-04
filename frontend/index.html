@@ -1083,12 +1083,12 @@
         >
           <header class="issues-heading">
             <div>
-              <p class="eyebrow">Agent intake</p>
+              <p class="eyebrow">Reported issues</p>
               <h2 id="issues-heading" tabindex="-1">Issues</h2>
               <p class="issues-intro">Review reported problems, then explicitly schedule the ones that belong in a plan.</p>
             </div>
             <div class="issues-toolbar">
-              <label for="issues-filter">Show</label>
+              <label for="issues-filter">Filter</label>
               <select id="issues-filter">
                 <option value="open">Open</option>
                 <option value="unscheduled">Unscheduled</option>
@@ -1100,7 +1100,7 @@
             </div>
           </header>
           <p id="issues-status" class="issues-status" role="status" aria-live="polite"></p>
-          <div class="issues-toolbar issues-pagination">
+          <div id="issues-pagination" class="issues-toolbar issues-pagination">
             <button id="issues-previous" type="button" class="button-secondary">Newer issues</button>
             <button id="issues-next" type="button" class="button-secondary">Older issues</button>
           </div>
