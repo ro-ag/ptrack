@@ -4,9 +4,9 @@
   "version": "0.36.0",
   "identifier": "com.ro-ag.ptrack",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm --prefix frontend run dev",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm --prefix frontend run build",
     "frontendDist": "../frontend/dist"
   },
   "app": {
