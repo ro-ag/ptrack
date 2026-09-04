@@ -486,6 +486,64 @@ button:disabled {
   --wails-draggable: no-drag;
 }
 
+/* Bottom zone of the sidebar: Settings and the project actions live here,
+   keeping the topbar to compact view controls. Pinned to the sidebar's
+   foot by the flex column above it. */
+.sidebar-footer {
+  flex: 0 0 auto;
+  display: grid;
+  gap: 2px;
+  margin-top: var(--space-150);
+  padding-top: var(--space-150);
+  border-top: 1px solid var(--line-subtle);
+  --wails-draggable: no-drag;
+}
+
+.sidebar-footer-action {
+  width: 100%;
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-100);
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+  box-shadow: none;
+  padding: 0 var(--space-100);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-align: left;
+}
+
+.sidebar-footer-action svg {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+}
+
+.sidebar-footer-action span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-footer-action:hover {
+  color: var(--text-soft);
+  background: var(--fill-hover);
+  box-shadow: none;
+}
+
+.sidebar-footer-action:active {
+  transform: none;
+}
+
+.sidebar-footer-action:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
 
 .sidebar-plans .section-heading {
   padding: 0 var(--space-100);
@@ -829,17 +887,7 @@ button:disabled {
   --wails-draggable: drag;
 }
 
-/* Slim, low-key controls for the compact topbar strip. */
-.toolbar button {
-  min-height: 28px;
-  height: 28px;
-  border-radius: 7px;
-  padding: 0 var(--space-100);
-  font-size: 0.75rem;
-}
-
 .brand,
-.toolbar,
 .panel-controls,
 .title-row,
 .section-heading {
@@ -966,6 +1014,13 @@ h1 {
 .panel-toggle:disabled {
   cursor: default;
   opacity: 0.32;
+}
+
+/* The theme control is a glyph, not an svg: keep it optically matched with
+   its icon neighbours in the compact topbar cluster. */
+#theme-toggle {
+  font-size: 0.85rem;
+  line-height: 1;
 }
 
 .panel-toggle svg {
@@ -5446,11 +5501,6 @@ html[data-window-mode="terminal"] #app {
     min-height: 44px;
     flex-wrap: wrap;
     padding: var(--space-050) var(--space-100);
-  }
-
-  .toolbar {
-    min-width: 0;
-    flex-wrap: wrap;
   }
 
   .modal {

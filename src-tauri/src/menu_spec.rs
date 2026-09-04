@@ -136,12 +136,12 @@ pub fn menu_spec(platform: DesktopPlatform) -> Vec<MenuSpec> {
     let view = MenuSpec {
         label: "View",
         entries: vec![
-            command("workspace:board-requested", "Board", Some("CmdOrCtrl+1")),
             command(
                 "workspace:intelligence-requested",
                 "Overview",
                 Some("CmdOrCtrl+2"),
             ),
+            command("workspace:board-requested", "Board", Some("CmdOrCtrl+1")),
             command("workspace:issues-requested", "Issues", Some("CmdOrCtrl+3")),
             MenuEntrySpec::Separator,
             command(

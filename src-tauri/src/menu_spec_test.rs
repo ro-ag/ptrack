@@ -26,7 +26,7 @@ fn platform_menu_specs_pin_order_roles_and_macos_only_accelerators() {
         ]
     );
     assert!(matches!(
-        &macos[4].entries[1],
+        &macos[4].entries[0],
         MenuEntrySpec::Command {
             label: "Overview",
             ..
@@ -38,7 +38,7 @@ fn platform_menu_specs_pin_order_roles_and_macos_only_accelerators() {
         ["File", "Project", "View", "Help"]
     );
     assert!(matches!(
-        &other[2].entries[1],
+        &other[2].entries[0],
         MenuEntrySpec::Command {
             label: "Overview",
             ..

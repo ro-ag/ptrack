@@ -388,6 +388,7 @@ const elements = {
   planCopyContext: document.querySelector("#plan-copy-context"),
   drawerCopyContext: document.querySelector("#drawer-copy-context"),
   planTitle: document.querySelector("#plan-title"),
+  planEyebrow: document.querySelector("#plan-eyebrow"),
   planTotal: document.querySelector("#plan-total"),
   planList: document.querySelector("#sidebar-plan-list"),
   sidebarCurrent: document.querySelector("#sidebar-current"),
@@ -2060,6 +2061,12 @@ function planDoneTick() {
 function renderBoard() {
   elements.projectName.textContent = board.projectName;
   elements.planTitle.textContent = board.planTitle || "No active plan";
+  // "Current plan" is the project's single in-progress plan; a different
+  // plan the user opened is merely selected, and the header says so.
+  const selectedPlanIsCurrent = board.planId !== 0 &&
+    board.plans.some((plan) => String(plan.id) === String(board.planId) && plan.isActive);
+  elements.planEyebrow.hidden = board.planId === 0;
+  elements.planEyebrow.textContent = selectedPlanIsCurrent ? "Current plan" : "Selected plan";
   renderPlanList();
   const total = board.stats.planTasks;
   const done = board.stats.planTasksDone;

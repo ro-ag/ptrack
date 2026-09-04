@@ -49,6 +49,13 @@
 
         <nav class="sidebar-nav" aria-label="Project views">
           <button
+            id="nav-overview"
+            class="sidebar-nav-item"
+            type="button"
+            title="Overview — ⌘2"
+            disabled
+          >Overview</button>
+          <button
             id="nav-board"
             class="sidebar-nav-item"
             type="button"
@@ -56,13 +63,6 @@
             aria-current="page"
             disabled
           >Board</button>
-          <button
-            id="nav-overview"
-            class="sidebar-nav-item"
-            type="button"
-            title="Overview — ⌘2"
-            disabled
-          >Overview</button>
           <button
             id="nav-issues"
             class="sidebar-nav-item"
@@ -105,6 +105,45 @@
           </div>
           <div id="sidebar-plan-list" class="sidebar-plan-list"></div>
         </div>
+
+        <div class="sidebar-footer">
+          <button id="open-project-button" class="sidebar-footer-action" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 8.5V18a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-8.5L9.4 7.4a1 1 0 0 0-.8-.4H4a1 1 0 0 0-1 1Z"/></svg>
+            <span>Open Project…</span>
+          </button>
+          <button
+            id="switch-project-button"
+            class="sidebar-footer-action"
+            type="button"
+            hidden
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 8h13m0 0-3-3m3 3-3 3M20 16H7m0 0 3-3m-3 3 3 3"/></svg>
+            <span>Switch Project…</span>
+          </button>
+          <button
+            id="close-project-button"
+            class="sidebar-footer-action"
+            type="button"
+            hidden
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="m9.5 9.5 5 5m0-5-5 5"/></svg>
+            <span>Close Project</span>
+          </button>
+          <button
+            id="settings-open"
+            class="sidebar-footer-action"
+            type="button"
+            title="Settings — ⌘,"
+            aria-label="Open Settings"
+            aria-haspopup="dialog"
+            aria-controls="settings-modal"
+          ><!-- gear-fill from Bootstrap Icons (MIT) -->
+            <svg viewBox="0 0 16 16" fill="currentColor" stroke="none" aria-hidden="true">
+              <path d="M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1-2.105.872l-.31-.17c-1.283-.698-2.686.705-1.987 1.987l.169.311c.446.82.023 1.841-.872 2.105l-.34.1c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 0 1 .872 2.105l-.17.31c-.698 1.283.705 2.686 1.987 1.987l.311-.169a1.464 1.464 0 0 1 2.105.872l.1.34c.413 1.4 2.397 1.4 2.81 0l.1-.34a1.464 1.464 0 0 1 2.105-.872l.31.17c1.283.698 2.686-.705 1.987-1.987l-.169-.311a1.464 1.464 0 0 1 .872-2.105l.34-.1c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 0 1-.872-2.105l.17-.31c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 0 1-2.105-.872zM8 10.93a2.929 2.929 0 1 1 0-5.86 2.929 2.929 0 0 1 0 5.858z"></path>
+            </svg>
+            <span>Settings</span>
+          </button>
+        </div>
       </aside>
 
       <div
@@ -120,84 +159,60 @@
       ></div>
 
       <div class="canvas">
-        <header class="topbar">
-          <div class="toolbar">
-            <button id="open-project-button" type="button">Open Project…</button>
-            <button
-              id="switch-project-button"
-              class="button-secondary"
-              type="button"
-              hidden
-            >Switch Project…</button>
-            <button
-              id="theme-toggle"
-              class="button-secondary"
-              type="button"
-              aria-label="Toggle color theme"
-            >☾</button>
-            <button
-              id="settings-open"
-              class="button-secondary"
-              type="button"
-              title="Settings — ⌘,"
-              aria-label="Open Settings"
-              aria-haspopup="dialog"
-              aria-controls="settings-modal"
-            >Settings</button>
-            <button
-              id="close-project-button"
-              class="button-secondary"
-              type="button"
-              hidden
-            >Close Project</button>
-          </div>
-          <div class="panel-controls" role="group" aria-label="Panel visibility">
-            <button
-              id="sidebar-toggle"
-              class="panel-toggle"
-              type="button"
-              aria-controls="sidebar"
-              aria-expanded="true"
-              aria-label="Hide project sidebar"
-              title="Hide project sidebar"
-            >
-              <svg viewBox="0 0 16 16" aria-hidden="true">
-                <rect x="1.5" y="2" width="13" height="12" rx="2"></rect>
-                <path d="M5.5 2v12"></path>
-              </svg>
-            </button>
-            <button
-              id="board-panel-toggle"
-              class="panel-toggle"
-              type="button"
-              aria-controls="board"
-              aria-pressed="false"
-              aria-label="Hide board panel"
-              title="Hide board panel"
-              disabled
-            >
-              <svg viewBox="0 0 16 16" aria-hidden="true">
-                <rect x="1.5" y="2" width="13" height="12" rx="2"></rect>
-                <path d="M1.5 7h13"></path>
-              </svg>
-            </button>
-            <button
-              id="terminal-panel-toggle"
-              class="panel-toggle"
-              type="button"
-              aria-controls="terminal-dock"
-              aria-pressed="false"
-              aria-label="Hide terminal panel"
-              title="Hide terminal panel"
-              disabled
-            >
-              <svg viewBox="0 0 16 16" aria-hidden="true">
-                <rect x="1.5" y="2" width="13" height="12" rx="2"></rect>
-                <path d="M1.5 9h13"></path>
-              </svg>
-            </button>
-          </div>
-        </header>
+      <header class="topbar">
+        <div class="panel-controls" role="group" aria-label="Workspace view controls">
+          <button
+            id="sidebar-toggle"
+            class="panel-toggle"
+            type="button"
+            aria-controls="sidebar"
+            aria-expanded="true"
+            aria-label="Hide project sidebar"
+            title="Hide project sidebar"
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="1.5" y="2" width="13" height="12" rx="2"></rect>
+              <path d="M5.5 2v12"></path>
+            </svg>
+          </button>
+          <button
+            id="board-panel-toggle"
+            class="panel-toggle"
+            type="button"
+            aria-controls="board"
+            aria-pressed="false"
+            aria-label="Hide board panel"
+            title="Hide board panel"
+            disabled
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="1.5" y="2" width="13" height="12" rx="2"></rect>
+              <path d="M1.5 7h13"></path>
+            </svg>
+          </button>
+          <button
+            id="terminal-panel-toggle"
+            class="panel-toggle"
+            type="button"
+            aria-controls="terminal-dock"
+            aria-pressed="false"
+            aria-label="Hide terminal panel"
+            title="Hide terminal panel"
+            disabled
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="1.5" y="2" width="13" height="12" rx="2"></rect>
+              <path d="M1.5 9h13"></path>
+            </svg>
+          </button>
+          <button
+            id="theme-toggle"
+            class="panel-toggle"
+            type="button"
+            aria-label="Toggle color theme"
+          >☾</button>
+        </div>
+      </header>
 
         <main id="main-content" class="canvas-main" aria-label="Workspace content">
         <section
@@ -505,7 +520,7 @@
             <section class="board-shell">
               <header class="board-heading">
                 <div class="plan-context">
-                  <p class="eyebrow">Current plan</p>
+                  <p class="eyebrow" id="plan-eyebrow">Current plan</p>
                   <div class="title-row">
                     <h2 id="plan-title" tabindex="-1">Loading board…</h2>
                     <button
