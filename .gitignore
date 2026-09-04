@@ -32,3 +32,10 @@
 # Cargo output when the target directory is set inside the crate
 src-tauri/target/
 __pycache__/
+
+.playwright-mcp/
+.mimosa/
+frontend/
+.superpowers/
+MEMENTO.md
+.claude/
