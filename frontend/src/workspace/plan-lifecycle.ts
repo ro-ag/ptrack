@@ -1,4 +1,5 @@
 export type PlanLifecycleAction =
+  | "copy-context"
   | "rename"
   | "done"
   | "hold"
@@ -23,6 +24,7 @@ export interface PlanMenuItem {
 /** The plan context menu, identical for the sidebar and the board header. */
 export function planMenuItems(plan: PlanLifecycleState = {}): PlanMenuItem[] {
   const items: PlanMenuItem[] = [
+    { action: "copy-context", label: "Copy context", destructive: false },
     { action: "rename", label: "Rename", destructive: false },
   ];
   if (!plan.status || plan.status === "active") {

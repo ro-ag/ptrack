@@ -384,7 +384,6 @@ const elements = {
   updatesCancel: document.querySelector("#updates-cancel"),
   updatesPrimary: document.querySelector("#updates-primary"),
   projectName: document.querySelector("#project-name"),
-  projectCopyContext: document.querySelector("#project-copy-context"),
   contextCopyStatus: document.querySelector("#context-copy-status"),
   planCopyContext: document.querySelector("#plan-copy-context"),
   drawerCopyContext: document.querySelector("#drawer-copy-context"),
@@ -3008,7 +3007,8 @@ function openPlanContextMenu(plan, titleElement, invoker, position) {
     if (item.destructive) button.classList.add("context-menu-destructive");
     button.addEventListener("click", () => {
       closePlanContextMenu();
-      if (item.action === "rename") beginPlanRename(titleElement, plan);
+      if (item.action === "copy-context") void copyAgentContext("plan", null, null, plan);
+      else if (item.action === "rename") beginPlanRename(titleElement, plan);
       else if (item.action === "done") openPlanDoneDialog(plan);
       else if (item.action === "hold") openPlanHoldDialog(plan);
       else if (item.action === "resume") void resumePlan(plan);
@@ -6298,7 +6298,6 @@ function renderWorkspaceState(state, focus = false) {
   elements.navOverview.disabled = !open;
   elements.navIssues.disabled = !open;
   elements.planAdd.disabled = !open;
-  elements.projectCopyContext.disabled = !open;
   elements.planFilterToggle.disabled = !open;
   elements.switchProject.hidden = !open;
   elements.closeProject.hidden = !open;
@@ -8059,10 +8058,10 @@ elements.planTitleMenu.addEventListener("click", () => {
     y: rect.bottom + 4,
   });
 });
-async function copyAgentContext(scope, task, invoker) {
+async function copyAgentContext(scope, task, invoker, planOverride) {
   try {
-    const plan = scope === "project" ? undefined :
-      task?.planId ? board?.plans.find((candidate) => Number(candidate.id) === Number(task.planId)) : currentBoardPlan();
+    const plan = planOverride || (scope === "project" ? undefined :
+      task?.planId ? board?.plans.find((candidate) => Number(candidate.id) === Number(task.planId)) : currentBoardPlan());
     if (scope !== "project" && !plan) throw new Error("Refresh the plan before copying its context.");
     const text = agentContextText({
       project: {
@@ -8093,7 +8092,6 @@ async function copyAgentContext(scope, task, invoker) {
   }
 }
 
-elements.projectCopyContext.addEventListener("click", (event) => void copyAgentContext("project", null, event.currentTarget));
 elements.planCopyContext.addEventListener("click", (event) => void copyAgentContext("plan", null, event.currentTarget));
 elements.drawerCopyContext.addEventListener("click", (event) => {
   if (detailTask) void copyAgentContext("task", detailTask, event.currentTarget);

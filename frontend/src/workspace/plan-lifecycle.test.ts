@@ -12,7 +12,7 @@ describe("plan lifecycle menu", () => {
   it("offers completion and hold beside the existing lifecycle actions", () => {
     const items = planMenuItems({ status: "active", tasksTotal: 2, tasksDone: 1 });
     expect(items.map((item) => item.action)).toEqual([
-      "rename", "done", "hold", "move", "copy", "delete",
+      "copy-context", "rename", "done", "hold", "move", "copy", "delete",
     ]);
     expect(items.filter((item) => item.destructive).map((item) => item.action)).toEqual(["delete"]);
   });
@@ -21,7 +21,7 @@ describe("plan lifecycle menu", () => {
     expect(planMenuItems({ status: "active", holdReason: "Later" })
       .map((item) => item.action)).toContain("resume");
     expect(planMenuItems({ status: "done" }).map((item) => item.action)).toEqual([
-      "rename", "move", "copy", "delete",
+      "copy-context", "rename", "move", "copy", "delete",
     ]);
   });
 });
