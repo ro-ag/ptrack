@@ -549,14 +549,6 @@ button:disabled {
   padding: var(--space-100);
 }
 
-.sidebar-plan-count {
-  flex: 0 0 auto;
-  color: var(--muted);
-  font-size: 0.6875rem;
-  font-weight: 400;
-  font-variant-numeric: tabular-nums;
-}
-
 .sidebar-plan-list {
   grid-template-columns: minmax(0, 1fr);
   min-height: 0;
@@ -587,26 +579,6 @@ button:disabled {
   text-align: left;
 }
 
-/* 2px task-progress track pinned to the row's bottom edge; absolutely
-   positioned so the 30px row height never changes. */
-.sidebar-plan-track {
-  position: absolute;
-  right: var(--space-100);
-  bottom: 2px;
-  left: var(--space-100);
-  height: 2px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: var(--fill-strong);
-}
-
-.sidebar-plan-fill {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--accent);
-}
-
 .sidebar-plan:hover {
   color: var(--text-soft);
   background: var(--fill-hover);
@@ -629,40 +601,124 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--text);
 }
 
-/* Pause marker for a held plan; the reason itself is the row's tooltip. */
-.sidebar-plan-hold {
+.sidebar-plan.active:not(.in-progress) .sidebar-plan-title {
+  color: var(--nav-active-text);
+}
+
+/* Done and archived plans recede; a done plan also gets the accent tick. */
+.sidebar-plan.settled .sidebar-plan-title {
+  color: var(--faint);
+  font-weight: 500;
+}
+
+.sidebar-plan-tick {
   flex: 0 0 auto;
-  color: var(--hold);
-  font-size: 0.6875rem;
-  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgba(var(--accent-rgb), 0.16);
+  color: var(--accent);
 }
 
-/* Lock marker for a claimed plan; the owner name is the row's tooltip. */
-.sidebar-plan-claim {
-  flex: 0 0 auto;
-  color: var(--todo);
-  font-size: 0.6875rem;
-  line-height: 1;
+.sidebar-plan-tick svg {
+  width: 9px;
+  height: 9px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
 }
 
-/* Chain marker for a plan waiting on open deps; the IDs are the row's tooltip. */
-.sidebar-plan-deps {
-  flex: 0 0 auto;
-  color: var(--info);
-  font-size: 0.6875rem;
-  line-height: 1;
-}
-
-/* Accent marker for the project's active plan. */
-.sidebar-plan-dot {
-  width: 7px;
-  height: 7px;
+/* Status markers: small color-coded dots; the details live in tooltips. */
+.sidebar-plan-flag {
+  width: 6px;
+  height: 6px;
   flex: 0 0 auto;
   border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 10px rgba(var(--accent-rgb), 0.45);
+}
+
+.sidebar-plan-flag.hold {
+  background: var(--hold);
+}
+
+.sidebar-plan-flag.claim {
+  background: var(--todo);
+}
+
+.sidebar-plan-flag.deps {
+  background: var(--info);
+}
+
+/* The project's in-progress plan expands into a recessed "void" card —
+   darker than the list around it — carrying the only progress meter. */
+.sidebar-plan.in-progress,
+.sidebar-plan.in-progress:hover,
+.sidebar-plan.in-progress.active,
+.sidebar-plan.in-progress.active:hover {
+  flex-wrap: wrap;
+  align-items: center;
+  row-gap: 7px;
+  height: auto;
+  min-height: 62px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 9px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--night) 50%, var(--surface-soft));
+  box-shadow:
+    inset 0 2px 6px color-mix(in srgb, var(--night) 45%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.sidebar-plan.in-progress .sidebar-plan-title {
+  flex-basis: 100%;
+  font-weight: 700;
+}
+
+.sidebar-plan-meter {
+  flex: 1 1 100%;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--fill-strong);
+}
+
+.sidebar-plan-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent-dim), var(--accent) 55%, var(--accent-strong));
+  box-shadow: 0 0 9px rgba(var(--accent-rgb), 0.45);
+}
+
+.sidebar-plan-stats {
+  flex: 1 1 100%;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.65rem;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.sidebar-plan-stats-pct {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* The gear would wrap below the stacked card lines, so pin it beside the
+   title instead. */
+.sidebar-plan.in-progress .sidebar-plan-menu {
+  position: absolute;
+  top: 9px;
+  right: 7px;
 }
 
 /* Overflow trigger for the plan context menu (rename/move/copy/delete). */

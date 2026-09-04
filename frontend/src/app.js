@@ -1827,46 +1827,71 @@ function renderPlanList() {
     item.setAttribute("role", "button");
     item.tabIndex = 0;
     item.className = "sidebar-plan";
+    const doneTasks = Number(plan.tasksDone || 0);
+    const totalTasks = Number(plan.tasksTotal || 0);
+    const settled = plan.status === "done" || plan.status === "archived";
     if (String(plan.id) === String(board.planId)) {
       item.classList.add("active");
       item.setAttribute("aria-current", "true");
     }
+    if (plan.isActive) item.classList.add("in-progress");
+    if (settled) item.classList.add("settled");
     item.title = plan.isActive ? `${plan.title} · active plan` : plan.title;
+    if (totalTasks > 0) item.title = `${item.title} · ${doneTasks}/${totalTasks} done`;
     const title = document.createElement("span");
     title.className = "sidebar-plan-title";
     title.textContent = `#${plan.id} ${plan.title}`;
     item.append(title);
-    const count = document.createElement("span");
-    count.className = "sidebar-plan-count";
-    count.textContent = `${plan.tasksDone}/${plan.tasksTotal}`;
-    count.setAttribute("aria-label", `${plan.tasksDone} of ${plan.tasksTotal} tasks done`);
-    item.append(count);
+    if (plan.status === "done") item.append(planDoneTick());
     if (plan.isActive) {
-      const dot = document.createElement("span");
-      dot.className = "sidebar-plan-dot";
-      dot.setAttribute("aria-hidden", "true");
-      item.append(dot);
+      // Progress belongs to the in-progress plan only: a meter line plus a
+      // compact stats line, instead of the old per-row underline.
+      if (totalTasks > 0) {
+        const meter = document.createElement("span");
+        meter.className = "sidebar-plan-meter";
+        meter.setAttribute("aria-hidden", "true");
+        const fill = document.createElement("span");
+        fill.className = "sidebar-plan-meter-fill";
+        fill.style.width = `${Math.round((doneTasks / totalTasks) * 100)}%`;
+        meter.append(fill);
+        item.append(meter);
+      }
+      const stats = document.createElement("span");
+      stats.className = "sidebar-plan-stats";
+      if (totalTasks > 0) {
+        const pct = document.createElement("span");
+        pct.className = "sidebar-plan-stats-pct";
+        pct.textContent = `${Math.round((doneTasks / totalTasks) * 100)}%`;
+        stats.append(
+          document.createTextNode(`${doneTasks}/${totalTasks} done · `),
+          pct,
+          document.createTextNode(` · ${totalTasks - doneTasks} left`),
+        );
+      } else {
+        stats.textContent = "No tasks yet";
+      }
+      item.append(stats);
     }
     if (plan.holdReason) {
       const hold = document.createElement("span");
-      hold.className = "sidebar-plan-hold";
-      hold.textContent = "⏸";
+      hold.className = "sidebar-plan-flag hold";
+      hold.title = `on hold: ${plan.holdReason}`;
       hold.setAttribute("aria-hidden", "true");
       item.append(hold);
       item.title = `${item.title} · on hold: ${plan.holdReason}`;
     }
     if (plan.claimedBy) {
       const claim = document.createElement("span");
-      claim.className = "sidebar-plan-claim";
-      claim.textContent = "🔒";
+      claim.className = "sidebar-plan-flag claim";
+      claim.title = `claimed by ${plan.claimedBy}`;
       claim.setAttribute("aria-hidden", "true");
       item.append(claim);
       item.title = `${item.title} · claimed by ${plan.claimedBy}`;
     }
     if (plan.depsOpen?.length) {
       const deps = document.createElement("span");
-      deps.className = "sidebar-plan-deps";
-      deps.textContent = "⛓";
+      deps.className = "sidebar-plan-flag deps";
+      deps.title = `waiting on ${plan.depsOpen.map((id) => `#${id}`).join(", ")}`;
       deps.setAttribute("aria-hidden", "true");
       item.append(deps);
       item.title = `${item.title} · waiting on ${plan.depsOpen.map((id) => `#${id}`).join(", ")}`;
@@ -1884,19 +1909,6 @@ function renderPlanList() {
       event.preventDefault();
       openPlanContextMenu(plan, title, item, { x: event.clientX, y: event.clientY });
     });
-    if (plan.tasksTotal > 0) {
-      // 2px session progress track; absolutely positioned so the 30px row
-      // height never changes.
-      const track = document.createElement("span");
-      track.className = "sidebar-plan-track";
-      track.setAttribute("aria-hidden", "true");
-      const fill = document.createElement("span");
-      fill.className = "sidebar-plan-fill";
-      fill.style.width = `${Math.round((plan.tasksDone / plan.tasksTotal) * 100)}%`;
-      track.append(fill);
-      item.append(track);
-      item.title = `${item.title} · ${plan.tasksDone}/${plan.tasksTotal} done`;
-    }
     const menuButton = document.createElement("button");
     menuButton.type = "button";
     menuButton.className = "sidebar-plan-menu";
@@ -1913,6 +1925,17 @@ function renderPlanList() {
     item.append(menuButton);
     elements.planList.append(item);
   });
+}
+
+// Accent check chip marking a completed plan in the sidebar.
+function planDoneTick() {
+  const svg = svgElement("svg", { viewBox: "0 0 12 12", "aria-hidden": "true" });
+  svg.append(svgElement("path", { d: "M2 6.5 4.8 9 10 3.5" }));
+  const tick = document.createElement("span");
+  tick.className = "sidebar-plan-tick";
+  tick.setAttribute("aria-hidden", "true");
+  tick.append(svg);
+  return tick;
 }
 
 function renderBoard() {
