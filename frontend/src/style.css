@@ -1541,9 +1541,14 @@ select option {
 }
 
 .stack-breakdown {
+  /* One grid for the whole list, not a nested grid per row: the counts have to
+     line up column-by-column down the list, which a per-row grid cannot do. */
   display: grid;
-  grid-template-columns: minmax(5rem, max-content) 1fr;
+  grid-template-columns:
+    minmax(5rem, max-content) minmax(60px, 220px)
+    max-content max-content max-content;
   align-items: center;
+  justify-content: start;
   gap: var(--space-100) var(--space-150);
   margin: var(--space-100) 0 0;
   border-top: 1px solid var(--line-subtle);
@@ -1561,11 +1566,8 @@ select option {
 }
 
 .stack-breakdown-detail {
-  display: grid;
-  grid-template-columns: minmax(60px, 220px) max-content max-content;
-  align-items: center;
-  justify-content: start;
-  gap: var(--space-150);
+  /* The row's own box is dropped so its cells join the list grid above. */
+  display: contents;
   margin: 0;
 }
 
@@ -1585,16 +1587,24 @@ select option {
   background: linear-gradient(90deg, var(--accent-dim), var(--accent));
 }
 
-.stack-breakdown-count {
+.stack-breakdown-count,
+.stack-breakdown-lines {
   color: var(--text);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.stack-breakdown-lines {
+  color: var(--text-soft);
 }
 
 .stack-breakdown-scope {
   color: var(--muted);
   font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
 .stat-value {

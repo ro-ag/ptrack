@@ -1050,18 +1050,19 @@ function stackBreakdown(rows) {
     const fill = document.createElement("span");
     fill.style.width = `${Math.max(2, Math.round(row.share * 100))}%`;
     bar.append(fill);
+    // Files, lines, and projects each get their own cell so the digits line up
+    // down the list. A language with no counted lines still emits its cell,
+    // empty, rather than shifting every column left on that row.
     const count = document.createElement("span");
     count.className = "stack-breakdown-count";
     count.textContent = `${row.files.toLocaleString()} file${row.files === 1 ? "" : "s"}`;
+    const lines = document.createElement("span");
+    lines.className = "stack-breakdown-lines";
+    lines.textContent = row.lines > 0 ? `${row.lines.toLocaleString()} lines` : "";
     const scope = document.createElement("span");
     scope.className = "stack-breakdown-scope";
-    // Lines are per language, and only when the scan counted them — a
-    // repository with no commit yet lists files and stays silent about lines.
-    const projects = row.projects === 1 ? "1 project" : `${row.projects} projects`;
-    scope.textContent = row.lines > 0
-      ? `${row.lines.toLocaleString()} lines · ${projects}`
-      : projects;
-    detail.append(bar, count, scope);
+    scope.textContent = row.projects === 1 ? "1 project" : `${row.projects} projects`;
+    detail.append(bar, count, lines, scope);
     list.append(term, detail);
   });
   return list;
