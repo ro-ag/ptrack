@@ -7,8 +7,8 @@ use ptrack_capability_policy::{ApprovalProof, SanitizedAudit, normalize};
 use ptrack_core::{
     CAPABILITY_MODEL_VERSION, Capability, CapabilityAudit, Commit, Counts, Digest32, Issue,
     IssueStatus, MemoryKind, MemoryWritebackRecord, Meta, Milestone, MilestoneStatus, Note,
-    NoteTarget, Plan, PlanStatus, ProjectSnapshot, Severity, Task, TaskStatus, Timestamp,
-    would_create_cycle,
+    NoteTarget, Plan, PlanStatus, ProjectSnapshot, Severity, StackProfile, Task, TaskStatus,
+    Timestamp, would_create_cycle,
 };
 
 use crate::typed::{self, StoredRecord};
@@ -368,6 +368,17 @@ impl ProjectStore {
         self.active.store().read(|transaction| {
             typed::get(transaction, RecordKey::Singleton)?.ok_or(StoreError::NotFound)
         })
+    }
+
+    /// Returns the stored stack profile, absent until the first scan.
+    pub fn stack_profile(&self) -> StoreResult<Option<StackProfile>> {
+        Ok(self.meta()?.stack)
+    }
+
+    /// Replaces the stored stack profile. The tracked-path scan is its sole
+    /// writer, and it writes only a complete result.
+    pub fn set_stack_profile(&self, profile: StackProfile) -> StoreResult<()> {
+        self.update_meta(|meta| meta.stack = Some(profile))
     }
 
     pub fn set_goal(&self, goal: impl Into<String>) -> StoreResult<()> {

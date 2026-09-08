@@ -8,8 +8,9 @@ use std::time::Instant;
 use ptrack_capability_policy::{AuditEvent, confirm_approval, normalize, sanitize_audit};
 use ptrack_core::{
     Capability, CapabilityAudit, CapabilityAuditPolicy, CapabilityKind, CapabilityLimits, Digest32,
-    GitScope, MIN_NATIVE_PAYLOAD_SCHEMA, MemoryKind, NativeRecord, NoteTarget, Plan, PlanStatus,
-    RecordKind, TaskStatus, Timestamp, decode_record, encode_record_at_schema,
+    GitScope, LanguageId, MIN_NATIVE_PAYLOAD_SCHEMA, MemoryKind, NativeRecord, NoteTarget, Plan,
+    PlanStatus, RecordKind, StackProfile, StackProject, StackSummary, TaskStatus, Timestamp,
+    decode_record, encode_record_at_schema,
 };
 
 use crate::typed;
@@ -3091,4 +3092,101 @@ fn rebind_moved_refuses_a_binding_mismatch() {
         ..recorded
     };
     assert!(ProjectStore::rebind_moved(&new_path, &wrong_kind).is_err());
+}
+
+fn sample_stack_profile() -> StackProfile {
+    StackProfile {
+        projects: vec![StackProject {
+            root: String::new(),
+            language: LanguageId::Rust,
+            evidence: vec!["Cargo.toml".to_owned()],
+            depth: 0,
+            files: 9,
+        }],
+        scanned_head: "deadbeef".to_owned(),
+        scanned_at: Timestamp::Zero,
+        tracked_files: 9,
+        incomplete: false,
+    }
+}
+
+#[test]
+fn a_stack_profile_round_trips_through_project_meta() {
+    let temp = Temp::new();
+    let path = temp.path("stack-profile.redb");
+    let store = ProjectStore::create_new_with_clock(
+        &path,
+        binding(&path, StoreKind::Project, "stack-profile"),
+        "test",
+        clock(),
+    )
+    .unwrap();
+    assert_eq!(store.stack_profile().unwrap(), None);
+
+    let profile = sample_stack_profile();
+    store.set_stack_profile(profile.clone()).unwrap();
+    assert_eq!(store.stack_profile().unwrap(), Some(profile.clone()));
+
+    drop(store);
+    let reopened = reopen_as(&path, "stack-profile", None);
+    assert_eq!(reopened.stack_profile().unwrap(), Some(profile));
+}
+
+#[test]
+fn a_registry_stack_summary_survives_re_registration_and_relocation() {
+    let temp = Temp::new();
+    let global_path = temp.path("registry-stack.redb");
+    let global = GlobalStore::create_new_with_clock(
+        &global_path,
+        binding(&global_path, StoreKind::Global, "registry-stack"),
+        clock(),
+    )
+    .unwrap();
+    let root = temp.path("stack-project");
+    fs::create_dir(&root).unwrap();
+    global.register_project("stack", &root).unwrap();
+
+    let summary = StackSummary {
+        languages: vec![(LanguageId::Rust, 9)],
+        tracked_files: 9,
+        scanned_head: "deadbeef".to_owned(),
+        incomplete: false,
+    };
+    global.set_project_stack(&root, summary.clone()).unwrap();
+    let registered = global.register_project("stack", &root).unwrap();
+    assert_eq!(registered.stack, Some(summary.clone()));
+
+    let moved = temp.path("stack-project-moved");
+    fs::create_dir(&moved).unwrap();
+    global
+        .relocate_project_if_matches(&registered, "stack", &moved)
+        .unwrap();
+    let relocated = global.project(&moved).unwrap().unwrap();
+    assert_eq!(relocated.stack, Some(summary));
+}
+
+#[test]
+fn a_stack_summary_for_an_unregistered_project_writes_nothing() {
+    let temp = Temp::new();
+    let global_path = temp.path("registry-stack-absent.redb");
+    let global = GlobalStore::create_new_with_clock(
+        &global_path,
+        binding(&global_path, StoreKind::Global, "registry-stack-absent"),
+        clock(),
+    )
+    .unwrap();
+    let root = temp.path("never-registered");
+    fs::create_dir(&root).unwrap();
+    global
+        .set_project_stack(
+            &root,
+            StackSummary {
+                languages: vec![(LanguageId::Rust, 1)],
+                tracked_files: 1,
+                scanned_head: "deadbeef".to_owned(),
+                incomplete: false,
+            },
+        )
+        .unwrap();
+    assert!(global.projects().unwrap().is_empty());
 }
