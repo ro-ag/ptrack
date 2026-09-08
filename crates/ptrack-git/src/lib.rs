@@ -8,6 +8,7 @@ mod model;
 mod runner;
 mod snapshot;
 mod status;
+mod timeline;
 mod tracked;
 mod worktree;
 
@@ -17,6 +18,9 @@ pub use model::{
 };
 pub use runner::{CancellationToken, RepositoryError};
 pub use snapshot::{RepositoryService, capture};
+pub use timeline::{
+    MAX_TIMELINE_COMMITS, MAX_TIMELINE_TAGS, Timeline, TimelineTag, capture_timeline,
+};
 pub use tracked::{MAX_TRACKED_PATHS, TrackedPath, TrackedPaths};
 pub use worktree::inspect_worktree;
 
@@ -28,6 +32,8 @@ mod snapshot_test;
 mod status_test;
 #[cfg(test)]
 mod test_support;
+#[cfg(test)]
+mod timeline_test;
 #[cfg(test)]
 mod tracked_test;
 #[cfg(test)]

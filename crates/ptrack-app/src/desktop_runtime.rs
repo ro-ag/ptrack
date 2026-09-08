@@ -71,7 +71,7 @@ const WORKSPACE_OPERATION_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub const FIRST_RUN_GOAL_MAX_BYTES: usize = 4_096;
 
-const COMMANDS: [&str; 105] = [
+const COMMANDS: [&str; 106] = [
     "AcknowledgeAgentHandoffV2",
     "AddIssueV1",
     "AddPlanV1",
@@ -117,6 +117,7 @@ const COMMANDS: [&str; 105] = [
     "GetLayoutState",
     "GetPendingInitializationV1",
     "GetPreferences",
+    "GetProjectTimelineV1",
     "GetRecentProjects",
     "GetRecentProjectsV1",
     "GetStackProfileV1",
@@ -2384,6 +2385,17 @@ pub struct BoundDesktopWorkspace {
     resource_admission: Arc<ResourceAdmissionGate>,
     workspace_calls: Arc<WorkspaceCallGate>,
     task_challenges: Mutex<BTreeMap<String, TaskChallenge>>,
+    timeline: Mutex<Option<TimelineCache>>,
+}
+
+/// The repository timeline and the HEAD it was read at.
+///
+/// Reading it walks the whole history through git, which is far too expensive
+/// to repeat every time the Overview re-renders — and the answer cannot change
+/// until HEAD does. This is the same trigger the stack scan already uses.
+struct TimelineCache {
+    head: Option<String>,
+    value: Value,
 }
 
 impl BoundDesktopWorkspace {
@@ -2430,6 +2442,7 @@ impl BoundDesktopWorkspace {
                 idle: Condvar::new(),
             }),
             task_challenges: Mutex::new(BTreeMap::new()),
+            timeline: Mutex::new(None),
         }
     }
 
@@ -2545,6 +2558,50 @@ impl BoundDesktopWorkspace {
             StackScanOutcome::Serve(profile) => StackProfileView::ready(&profile),
             StackScanOutcome::Failed(_) => StackProfileView::failed(),
             StackScanOutcome::Unavailable => StackProfileView::unavailable(),
+        }
+    }
+
+    /// Repository history for the Overview, reusing the last read while HEAD
+    /// has not moved.
+    fn project_timeline_v1(&self) -> Value {
+        let head = self.repository_head();
+        if let Ok(cache) = self.timeline.lock()
+            && let Some(entry) = cache.as_ref()
+            && entry.head == head
+        {
+            return entry.value.clone();
+        }
+        let value = self.repository_timeline();
+        if let Ok(mut cache) = self.timeline.lock() {
+            *cache = Some(TimelineCache {
+                head,
+                value: value.clone(),
+            });
+        }
+        value
+    }
+
+    /// Commit and tag history for the timeline, empty when the root is not a
+    /// repository this build can walk.
+    fn repository_timeline(&self) -> Value {
+        let cancellation = ptrack_git::CancellationToken::new();
+        match ptrack_git::capture_timeline(&cancellation, &self.endpoint.root) {
+            Ok(timeline) => json!({
+                "commits": timeline.commits,
+                "tags": timeline
+                    .tags
+                    .iter()
+                    .map(|tag| json!({ "name": tag.name, "at": tag.at }))
+                    .collect::<Vec<_>>(),
+                "truncated": timeline.truncated,
+                "available": true,
+            }),
+            Err(_) => json!({
+                "commits": [],
+                "tags": [],
+                "truncated": false,
+                "available": false,
+            }),
         }
     }
 
@@ -3994,6 +4051,10 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
                 })
             }
             "GetActivityHeatmapV2" => value(heatmap(&self.snapshot()?, i64_arg(arguments, 0)?)),
+            "GetProjectTimelineV1" => {
+                require_argument_count(method, arguments, 0)?;
+                value(self.project_timeline_v1())
+            }
             "GetStackProfileV1" => {
                 require_argument_count(method, arguments, 1)?;
                 value(self.stack_profile_v1(bool_arg(arguments, 0)?))

@@ -5,7 +5,11 @@
 # as the tag-only release workflow. Override VERSION for an unsigned candidate.
 VERSION ?= $(shell python3 -c 'import tomllib; print(tomllib.load(open("src-tauri/Cargo.toml", "rb"))["package"]["version"])')
 RUST_TARGET ?= $(shell rustc -vV | sed -n 's/^host: //p')
-CARGO_TARGET_DIR ?= target
+# Absolute: the Tauri CLI runs cargo with src-tauri as its working directory,
+# so a relative value puts the build in src-tauri/target while $(APP) below
+# still resolves against the repository root. The two silently disagree, and
+# packaging then patches whatever stale bundle happens to sit in ./target.
+CARGO_TARGET_DIR ?= $(CURDIR)/target
 UNAME_OS := $(shell uname -s)
 UNAME_ARCH := $(shell uname -m)
 ARCHIVE_OS := $(if $(filter Darwin,$(UNAME_OS)),darwin,$(if $(filter Linux,$(UNAME_OS)),linux,windows))

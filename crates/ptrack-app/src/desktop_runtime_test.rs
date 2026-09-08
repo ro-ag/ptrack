@@ -896,7 +896,7 @@ fn desktop_update_commands_delegate_exact_arguments_and_return_full_state() {
 }
 
 #[test]
-#[allow(clippy::too_many_lines)] // Full 97-command freeze fixture is intentionally explicit.
+#[allow(clippy::too_many_lines)] // Full 98-command freeze fixture is intentionally explicit.
 fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
     let commands = allowed_desktop_commands();
     assert_eq!(
@@ -947,6 +947,7 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "GetLayoutState",
             "GetPendingInitializationV1",
             "GetPreferences",
+            "GetProjectTimelineV1",
             "GetRecentProjects",
             "GetRecentProjectsV1",
             "GetStackProfileV1",

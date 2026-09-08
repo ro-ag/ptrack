@@ -195,10 +195,13 @@ import {
   runtimeEventIsCurrent,
   shortcutIntent,
   stackLanguageRows,
+  summaryShape,
+  summaryShapeCaption,
   workflowMutationFocusKey,
   worktreeSelectionForRerender,
   workspaceStateCopy,
 } from "./workspace/presentation";
+import { timelineBuckets, timelineMarkers } from "./workspace/project-timeline";
 
 const statuses = ["todo", "doing", "blocked", "done"];
 const laneColors = {
@@ -226,6 +229,7 @@ const elements = {
   overviewPage: document.querySelector("#overview-page"),
   overviewHeading: document.querySelector("#overview-heading"),
   issuesPage: document.querySelector("#issues-page"),
+  timelineCaption: document.querySelector("#timeline-caption"),
   issuesHeading: document.querySelector("#issues-heading"),
   navBoard: document.querySelector("#nav-board"),
   navOverview: document.querySelector("#nav-overview"),
@@ -407,6 +411,10 @@ const elements = {
   planTitleMenu: document.querySelector("#plan-title-menu"),
   goal: document.querySelector("#goal"),
   summary: document.querySelector("#summary"),
+  summaryFlag: document.querySelector("#summary-flag"),
+  summaryShapeRow: document.querySelector("#summary-shape"),
+  summaryMetrics: document.querySelector("#summary-metrics"),
+  summaryExpand: document.querySelector("#summary-expand"),
   stats: document.querySelector("#project-stats"),
   snapshotBounds: document.querySelector("#snapshot-bounds"),
   issues: document.querySelector("#issue-list"),
@@ -463,6 +471,9 @@ const elements = {
   gitSummary: document.querySelector("#git-summary"),
   stackSummary: document.querySelector("#stack-summary"),
   stackProjects: document.querySelector("#stack-projects"),
+  stackProjectsSummary: document.querySelector("#stack-projects-summary"),
+  stackProjectsDisclosure: document.querySelector("#stack-projects-disclosure"),
+  stackEmpty: document.querySelector("#stack-empty"),
   stackScanned: document.querySelector("#stack-scanned"),
   stackRescan: document.querySelector("#stack-rescan"),
   gitRemotes: document.querySelector("#git-remotes"),
@@ -578,6 +589,8 @@ const elements = {
   paletteResults: document.querySelector("#palette-results"),
   planRing: document.querySelector("#plan-ring"),
   heatmap: document.querySelector("#activity-heatmap"),
+  projectHistory: document.querySelector("#project-history"),
+  historyCaption: document.querySelector("#history-caption"),
   toast: document.querySelector("#toast"),
 };
 
@@ -1136,6 +1149,30 @@ function activityElement(activity, expanded = false) {
   return item;
 }
 
+// Re-rendering the Overview empties several tall lists before refilling them,
+// and fitRecentMemory reads layout while they are empty. That clamps the
+// page's scrollTop to the momentarily shorter content, and refilling never
+// puts it back — so every snapshot, rescan and heatmap load threw the reader
+// back to the top of the page. Capture the offset around any re-render and
+// restore it once the DOM is whole, including the frame in which the
+// late-settling parts finish.
+function withOverviewScrollPreserved(render) {
+  const page = elements.overviewPage;
+  if (!page || page.hidden) {
+    render();
+    return;
+  }
+  const top = page.scrollTop;
+  try {
+    render();
+  } finally {
+    if (page.scrollTop !== top) page.scrollTop = top;
+    requestAnimationFrame(() => {
+      if (!page.hidden && page.scrollTop !== top) page.scrollTop = top;
+    });
+  }
+}
+
 function fitRecentMemory() {
   if (!board || elements.activity.children.length === 0) return;
   const items = Array.from(elements.activity.children);
@@ -1161,10 +1198,34 @@ function fitRecentMemory() {
   );
 }
 
+// A summary that keeps to the guide is shown whole, as prose. One written as a
+// digest of notes cannot be made readable by styling it, so the card folds it
+// and says which rule it broke instead of pretending it reads.
+function renderSummary() {
+  const text = board.summary ?? "";
+  const display =
+    text || "No rolling summary yet. Agents can update it with ptrack summary set.";
+  // Every snapshot re-renders this card, and folding a summary the reader
+  // deliberately opened is the same bug as scrolling them back to the top.
+  // Only new text earns a fresh fold; the same text keeps the state it was
+  // left in. Read before the write, or the comparison is against itself.
+  const unchanged = elements.summary.textContent === display;
+  const expanded = unchanged && elements.summary.dataset.expanded === "true";
+
+  elements.summary.textContent = display;
+  const shape = text ? summaryShape(text) : null;
+  const dense = Boolean(shape?.problem);
+  elements.summary.dataset.dense = dense ? "true" : "false";
+  elements.summary.dataset.expanded = expanded ? "true" : "false";
+  elements.summaryFlag.hidden = !dense;
+  elements.summaryShapeRow.hidden = !dense;
+  elements.summaryExpand.textContent = expanded ? "Show less" : "Show all";
+  elements.summaryMetrics.textContent = dense ? summaryShapeCaption(shape) : "";
+}
+
 function renderMemory() {
   elements.goal.textContent = board.goal || "No north star set for this project.";
-  elements.summary.textContent =
-    board.summary || "No rolling summary yet. Agents can update it with ptrack summary set.";
+  renderSummary();
   // The Overview is project-wide: totals never change with the selected
   // plan (the per-plan numbers stay on the board header).
   const progress = document.createElement("div");
@@ -1176,11 +1237,16 @@ function renderMemory() {
   ];
   metrics.filter(([, total, label]) => total || label !== "Milestones").forEach(([done, total, label]) => {
     const metric = statElement(`${done}/${total}`, label);
-    const bar = document.createElement("progress");
-    bar.max = total || 1;
-    bar.value = done;
-    bar.setAttribute("aria-label", `${label}: ${done} of ${total} done`);
-    metric.append(bar);
+    // Tasks get no bar: the ring beside this tile is already that bar, drawn
+    // from the same two numbers. The fraction stays as the exact count the
+    // ring rounds off.
+    if (label !== "Tasks") {
+      const bar = document.createElement("progress");
+      bar.max = total || 1;
+      bar.value = done;
+      bar.setAttribute("aria-label", `${label}: ${done} of ${total} done`);
+      metric.append(bar);
+    }
     progress.append(metric);
   });
   const counts = document.createElement("div");
@@ -1513,6 +1579,33 @@ function svgElement(name, attributes = {}) {
   return node;
 }
 
+// The ring's arc carries a gradient along its own length, dim where the arc
+// starts to bright where it ends, so the eye follows the direction of
+// progress. The stop colours come from CSS so the ring re-tints with the
+// theme; the sweep runs corner to corner because the arc starts at the top and
+// travels clockwise.
+function planRingGradient() {
+  const defs = svgElement("defs");
+  // The axis starts at twelve o'clock, where the arc starts, and runs to the
+  // bottom right, so a short arc still travels most of the ramp instead of
+  // sampling a sliver of it in the middle.
+  const gradient = svgElement("linearGradient", {
+    id: "plan-ring-sweep",
+    x1: "0.5",
+    y1: "0",
+    x2: "1",
+    y2: "1",
+  });
+  gradient.append(
+    svgElement("stop", { offset: "0", class: "plan-ring-sweep-from" }),
+    svgElement("stop", { offset: "0.35", class: "plan-ring-sweep-deep" }),
+    svgElement("stop", { offset: "0.72", class: "plan-ring-sweep-mid" }),
+    svgElement("stop", { offset: "1", class: "plan-ring-sweep-to" }),
+  );
+  defs.append(gradient);
+  return defs;
+}
+
 function renderPlanRing(done, total) {
   elements.planRing.replaceChildren();
   if (!total) {
@@ -1529,6 +1622,7 @@ function renderPlanRing(done, total) {
     "aria-hidden": "true",
   });
   svg.append(
+    planRingGradient(),
     svgElement("circle", { class: "plan-ring-track", cx: 42, cy: 42, r: radius }),
     svgElement("circle", {
       class: "plan-ring-value",
@@ -1569,14 +1663,20 @@ function renderHeatmap(days) {
     return;
   }
   const columns = heatmapWeeks(days);
-  // Denser cells: the chart is read as a shape, not cell by cell, and the
-  // saved height is what lets the Activity block sit beside its totals rather
-  // than towering over them. The SVG scales, so retina sharpness is unaffected.
-  const cell = 8;
-  const pitch = 11;
-  const left = 22;
-  const top = 14;
-  const width = left + columns.length * pitch;
+  // The chart is read as a shape, not cell by cell, so the cells are sized for
+  // the shape rather than for pointing at one day. Keeping the block short is
+  // what lets Activity sit beside Status on a wide display instead of taking a
+  // row of its own. The SVG scales, so retina sharpness is unaffected.
+  const cell = 7;
+  const pitch = 9;
+  // Everything here is in viewBox units and scales with the drawing, labels
+  // included, so the gutters are sized against the label size rather than
+  // against pixels. The right margin exists because the last month label
+  // starts on its column and runs past it.
+  const left = 16;
+  const top = 10;
+  const right = 10;
+  const width = left + columns.length * pitch + right;
   const height = top + 7 * pitch;
   const chart = document.createElement("div");
   chart.className = "heatmap-chart";
@@ -1587,7 +1687,7 @@ function renderHeatmap(days) {
     "aria-label": "Daily note and commit activity for the last 16 weeks",
   });
   [["Mon", 1], ["Wed", 3], ["Fri", 5]].forEach(([label, row]) => {
-    const text = svgElement("text", { x: 0, y: top + row * pitch + 11, class: "heatmap-label" });
+    const text = svgElement("text", { x: 0, y: top + row * pitch + cell, class: "heatmap-label" });
     text.textContent = label;
     svg.append(text);
   });
@@ -1596,7 +1696,7 @@ function renderHeatmap(days) {
     const first = column.find((day) => day.date);
     const month = first?.date.slice(0, 7);
     if (month && month !== previousMonth) {
-      const label = svgElement("text", { x: left + x * pitch, y: 11, class: "heatmap-label" });
+      const label = svgElement("text", { x: left + x * pitch, y: 6, class: "heatmap-label" });
       label.textContent = new Date(`${first.date}T12:00:00Z`).toLocaleDateString(undefined, { month: "short", timeZone: "UTC" });
       svg.append(label);
       previousMonth = month;
@@ -1640,6 +1740,131 @@ function renderHeatmap(days) {
   elements.heatmap.append(chart, totals);
 }
 
+
+// ------------------------------------------------------- project history
+//
+// The repository's whole life, read from git rather than from p-track's own
+// commit records: those begin only when the hook was installed, so a chart
+// built from them would draw a project that started the day tracking did.
+//
+// The shape is drawn by hand. A charting library was tried here and removed:
+// at a hundred buckets across the card the curve smoothing it offered is not
+// visible, and it cost a dependency and its own visual idiom.
+
+let projectHistory = null;
+let projectHistoryRequested = false;
+
+const HISTORY_BUCKETS = 100;
+
+// Heights are square-rooted before they are drawn. Commit activity is heavily
+// skewed — one release day can carry fifty times a normal one — and against a
+// raw maximum every other week collapses into a flat line at the bottom of the
+// card, which is the opposite of a history. The transform is monotonic, so the
+// busiest period is still unmistakably the tallest; it just stops erasing the
+// rest of the project.
+function historyPath(buckets, width, floor, peak, close) {
+  const step = buckets.length > 1 ? width / (buckets.length - 1) : 0;
+  const ceiling = Math.sqrt(peak) || 1;
+  const points = buckets.map((bucket, index) => {
+    const x = index * step;
+    const y = floor - (Math.sqrt(bucket.count) / ceiling) * (floor - 8);
+    return `${x.toFixed(1)} ${y.toFixed(1)}`;
+  });
+  const line = `M ${points.join(" L ")}`;
+  return close ? `${line} L ${width} ${floor} L 0 ${floor} Z` : line;
+}
+
+function renderProjectHistory() {
+  const host = elements.projectHistory;
+  if (!host) return;
+  host.replaceChildren();
+  const timeline = projectHistory;
+  if (!timeline?.available || timeline.commits.length === 0) {
+    elements.historyCaption.textContent = "";
+    host.append(
+      emptyMemory("No repository history to draw. This reads git, not p-track's commit records."),
+    );
+    return;
+  }
+
+  const width = 720;
+  const height = 96;
+  const floor = height - 22;
+  const buckets = timelineBuckets(timeline.commits, HISTORY_BUCKETS);
+  const peak = buckets.reduce((top, bucket) => Math.max(top, bucket.count), 0) || 1;
+
+  const svg = svgElement("svg", {
+    viewBox: `0 0 ${width} ${height}`,
+    class: "history-svg",
+    role: "img",
+    preserveAspectRatio: "none",
+    "aria-label": `Commit history, ${timeline.commits.length} commits`,
+  });
+
+  const defs = svgElement("defs");
+  const gradient = svgElement("linearGradient", {
+    id: "history-sweep",
+    x1: "0",
+    y1: "0",
+    x2: "0",
+    y2: "1",
+  });
+  gradient.append(
+    svgElement("stop", { offset: "0", class: "history-stop-strong" }),
+    svgElement("stop", { offset: "1", class: "history-stop-dim" }),
+  );
+  defs.append(gradient);
+  svg.append(defs);
+
+  svg.append(
+    svgElement("path", {
+      d: historyPath(buckets, width, floor, peak, true),
+      class: "history-area",
+      fill: "url(#history-sweep)",
+    }),
+    svgElement("path", { d: historyPath(buckets, width, floor, peak, false), class: "history-line" }),
+    svgElement("line", { x1: 0, y1: floor, x2: width, y2: floor, class: "history-axis" }),
+  );
+
+  // Releases are the landmarks a reader navigates this by.
+  timelineMarkers(timeline).forEach((marker) => {
+    const at = marker.position * width;
+    const rule = svgElement("line", { x1: at, y1: 4, x2: at, y2: floor, class: "history-marker" });
+    const tip = svgElement("title");
+    tip.textContent = `${marker.name} · ${new Date(marker.at * 1000).toLocaleDateString()}`;
+    rule.append(tip);
+    const label = svgElement("text", { x: at, y: height - 6, class: "history-marker-label" });
+    label.textContent = marker.name;
+    label.setAttribute("text-anchor", at > width - 40 ? "end" : at < 40 ? "start" : "middle");
+    svg.append(rule, label);
+  });
+
+  host.append(svg);
+
+  const first = new Date(timeline.commits[0] * 1000);
+  const last = new Date(timeline.commits[timeline.commits.length - 1] * 1000);
+  const span = `${first.toLocaleDateString()} to ${last.toLocaleDateString()}`;
+  elements.historyCaption.textContent = timeline.truncated
+    ? `${timeline.commits.length.toLocaleString()} most recent commits, ${span}`
+    : `${timeline.commits.length.toLocaleString()} commits, ${span}`;
+}
+
+// Read once per project and re-read only when a snapshot lands, since the
+// backend reuses its answer until HEAD moves.
+async function loadProjectHistory(force = false) {
+  if (workspaceController.state.status !== "open") return;
+  if (projectHistoryRequested && !force) return;
+  projectHistoryRequested = true;
+  try {
+    projectHistory = await api().GetProjectTimelineV1();
+    withOverviewScrollPreserved(renderProjectHistory);
+  } catch {
+    projectHistoryRequested = false;
+    projectHistory = null;
+    withOverviewScrollPreserved(renderProjectHistory);
+  }
+}
+
 // The stack profile follows the heatmap pattern: fetched lazily once the
 // Overview is shown, re-fetched after a snapshot reload. The backend scans
 // only when HEAD moved, so a re-fetch is usually a stored read.
@@ -1652,13 +1877,17 @@ async function loadStackProfile(force = false) {
   if (force) stackProfile = { state: "scanning" };
   try {
     stackProfile = await api().GetStackProfileV1(force);
-    if (board) renderMemory();
-    renderStackProfile();
+    withOverviewScrollPreserved(() => {
+      if (board) renderMemory();
+      renderStackProfile();
+    });
   } catch {
     stackProfileRequested = false;
     stackProfile = { state: "failed" };
-    if (board) renderMemory();
-    renderStackProfile();
+    withOverviewScrollPreserved(() => {
+      if (board) renderMemory();
+      renderStackProfile();
+    });
   }
 }
 
@@ -1669,7 +1898,8 @@ async function loadHeatmap(force = false) {
   if (heatmapRequested && !force) return;
   heatmapRequested = true;
   try {
-    renderHeatmap(await api().GetActivityHeatmapV2(16));
+    const days = await api().GetActivityHeatmapV2(16);
+    withOverviewScrollPreserved(() => renderHeatmap(days));
   } catch (error) {
     heatmapRequested = false;
     if (workspaceController.state.status === "open") showError(error);
@@ -2305,10 +2535,19 @@ const STACK_PANEL_PROJECTS = 12;
 // The Repository panel's stack section. Every state is explicit: a project
 // that cannot be scanned says so rather than rendering an empty list that
 // reads as "no code here".
+// "Rust", "Rust and TypeScript", "Rust, TypeScript and Go" — a list a person
+// reads, rather than one joined by separators.
+function languageSentence(languages) {
+  if (languages.length <= 1) return languages[0] ?? "no known language";
+  return `${languages.slice(0, -1).join(", ")} and ${languages[languages.length - 1]}`;
+}
+
 function renderStackProfile() {
   if (!elements.stackSummary) return;
   elements.stackSummary.replaceChildren();
   elements.stackProjects.replaceChildren();
+  elements.stackProjectsDisclosure.hidden = true;
+  elements.stackEmpty.hidden = true;
   elements.stackScanned.textContent = "";
   elements.stackRescan.hidden = true;
 
@@ -2333,8 +2572,24 @@ function renderStackProfile() {
     elements.stackSummary.append(pill("scan", "truncated at the path cap", "warning"));
   }
   if (!stackProfile.projects.length) {
-    elements.stackProjects.append(emptyMemory("No project manifest found in tracked files."));
+    // Nothing to disclose: a control that opens onto an empty list is worse
+    // than a sentence saying there is nothing there.
+    elements.stackProjectsDisclosure.hidden = true;
+    elements.stackEmpty.hidden = false;
   } else {
+    elements.stackProjectsDisclosure.hidden = false;
+    elements.stackEmpty.hidden = true;
+    // A workspace discovers a project per crate, so the evidence rows are the
+    // tallest thing on this page by a wide margin. The disclosure line carries
+    // what a reader wants at a glance — how many, in what — and the rows stay
+    // one click away.
+    const languages = [
+      ...new Set(stackProfile.projects.map((project) => languageLabel(project.language))),
+    ];
+    const count = stackProfile.projects.length;
+    elements.stackProjectsSummary.textContent = `${count} discovered project${
+      count === 1 ? "" : "s"
+    } in ${languageSentence(languages)}`;
     // The panel is the evidence view, so it stays per-project — but a large
     // workspace discovers dozens, and the panel is not a place to scroll
     // through 64 rows. The Overview carries the per-language totals.
@@ -2804,7 +3059,7 @@ function renderAgentHandoffs(items, inbox, availability) {
   if (inbox.items.length === 0) {
     elements.agentHandoffInbox.append(emptyMemory(
       availability.registeredTotal === 0
-        ? "No registered agents. Register or launch two agents to send a handoff."
+        ? "Sending a handoff needs two registered agents."
         : !availability.canHandoff
           ? "Two live agents are required to send a handoff."
           : "No pending handoff proposals.",
@@ -2933,12 +3188,15 @@ async function loadSnapshot(
     board = response.tracking.board;
     explicitNoPlanSelection = planRequest === null;
     elements.workspace.dataset.snapshotState = "ready";
-    renderBoard();
-    recordProjectLayout();
-    renderIntelligence();
+    withOverviewScrollPreserved(() => {
+      renderBoard();
+      recordProjectLayout();
+      renderIntelligence();
+    });
     openPendingTaskDetail();
     if (view === "issues") void loadIssues(true);
     if (view === "overview" && heatmapRequested) void loadHeatmap(true);
+    if (view === "overview" && projectHistoryRequested) void loadProjectHistory(true);
     // Every snapshot re-reads the stack: opening a project lands one, and the
     // backend scans only when HEAD moved since the stored profile.
     void loadStackProfile(!stackProfileRequested);
@@ -6647,6 +6905,7 @@ function setView(nextView, focusHeading = false) {
     requestAnimationFrame(fitRecentMemory);
     void loadHeatmap();
     void loadStackProfile();
+    void loadProjectHistory();
   }
   if (view === "issues") void loadIssues();
   recordProjectLayout();
@@ -6750,6 +7009,8 @@ function renderWorkspaceState(state, focus = false) {
   closeIssueDetail(false);
   closePalette();
   heatmapRequested = false;
+  projectHistoryRequested = false;
+  projectHistory = null;
   stackProfileRequested = false;
   stackProfile = null;
   board = null;
@@ -8295,6 +8556,11 @@ elements.onboardingFinishSetup.addEventListener("click", () =>
   void finishFirstPlanOnboarding(firstPlanState.planId),
 );
 elements.activityMore.addEventListener("click", openMemoryHistory);
+elements.summaryExpand.addEventListener("click", () => {
+  const expanded = elements.summary.dataset.expanded === "true";
+  elements.summary.dataset.expanded = expanded ? "false" : "true";
+  elements.summaryExpand.textContent = expanded ? "Show all" : "Show less";
+});
 elements.appVersion.addEventListener("click", (event) => {
   openAboutUpdates(event.currentTarget);
 });

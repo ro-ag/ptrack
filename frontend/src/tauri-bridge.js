@@ -49,6 +49,7 @@ const COMMANDS = Object.freeze([
   "GetLayoutState",
   "GetPendingInitializationV1",
   "GetPreferences",
+  "GetProjectTimelineV1",
   "GetRecentProjects",
   "GetRecentProjectsV1",
   "GetStackProfileV1",

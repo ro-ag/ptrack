@@ -16,8 +16,8 @@ use ptrack_capability::{
 };
 use ptrack_core::{
     CheckpointView, Commit, Issue, IssueStatus, Milestone, MilestoneStatus, Note, NoteTarget, Plan,
-    PlanStatus, ProjectRef, ProjectSnapshot, Severity, Task, TaskStatus, Timestamp, checkpoint,
-    id_list, render_guide,
+    PlanStatus, ProjectRef, ProjectSnapshot, Severity, Task, TaskStatus, Timestamp, check_summary,
+    checkpoint, id_list, render_guide,
 };
 use ptrack_store::{
     ActiveBinding, ActorIdentity, GlobalStore, PinnedProjectDirectory, PlanDeleteSummary,
@@ -1010,6 +1010,7 @@ impl ApplicationPort for LocalApplication {
                     MutationResult::None
                 }
                 Mutation::SetSummary(value) => {
+                    check_summary(&value).map_err(AppError::Message)?;
                     store.set_summary(value)?;
                     MutationResult::None
                 }

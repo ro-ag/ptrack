@@ -1441,7 +1441,7 @@ select option {
 }
 
 .memory-section .section-label {
-  margin-bottom: var(--space-100);
+  margin-bottom: var(--space-050);
   color: var(--muted);
   letter-spacing: 0.12em;
 }
@@ -1471,59 +1471,76 @@ select option {
   color: var(--accent);
 }
 
-.goal,
-/* Rolling summaries are written by agents and often arrive as dense,
-   space-poor machine text. The card shows the first lines, breaks long
-   unbroken tokens instead of letting them run off, and opens to the full text
-   on click rather than ending in an ellipsis with nowhere to go. */
-.summary {
-  display: -webkit-box;
-  overflow: hidden;
+.goal {
   margin-bottom: 0;
   color: var(--text-soft);
   font-size: 0.75rem;
-  line-height: 1.6;
+  line-height: 1.55;
+}
+
+/* The rolling summary is the only text on this page meant to be read rather
+   than scanned, so it is set larger and looser than the labels and tiles
+   around it, on a measure short enough to track from line to line. A summary
+   that keeps to the guide (2-4 sentences, under 1000 bytes) fits here whole,
+   which is why there is no clamp in the default state. */
+.summary {
+  max-width: 68ch;
+  margin-bottom: 0;
+  color: var(--text-soft);
+  font-size: 0.8125rem;
+  line-height: 1.55;
   overflow-wrap: anywhere;
+}
+
+/* A summary written as a digest of notes is unreadable by nature: mashed
+   tokens, no sentence breaks, hundreds of characters. Rather than pretend it
+   is prose, the card folds it to five lines and says what is wrong with it. */
+.summary[data-dense="true"]:not([data-expanded="true"]) {
+  display: -webkit-box;
+  overflow: hidden;
+  mask-image: linear-gradient(180deg, #000 62%, transparent);
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 5;
 }
 
-.summary-disclosure[open] .summary {
-  display: block;
-  overflow: visible;
-  max-height: 260px;
-  overflow-y: auto;
+/* The flag borrows the hold tone, the app's existing "needs attention, not
+   broken" colour, and a left rule rather than a badge, matching how the status
+   counts already mark a column. */
+.summary-flag {
+  flex: 0 0 auto;
+  border-left: 2px solid var(--hold);
+  padding-left: var(--space-050);
+  color: var(--hold);
+  font-size: 0.6875rem;
+  line-height: 1.3;
 }
 
-.summary-preview {
-  position: relative;
-  cursor: pointer;
-  list-style: none;
-}
-
-.summary-preview::marker,
-.summary-preview::-webkit-details-marker {
-  content: "";
-  display: none;
-}
-
-/* The last line fades out to show the text continues. A mask is used rather
-   than a gradient in the card colour: the card fill is translucent, so a
-   painted gradient would not match it. */
-.summary-disclosure:not([open]) .summary {
-  mask-image: linear-gradient(180deg, #000 55%, transparent);
-}
-
-.summary-disclosure::after {
-  content: "Show full summary";
-  display: block;
-  margin-top: var(--space-050);
+/* Measurements, not decoration: the two numbers the guide rule is written in. */
+.summary-shape {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-100);
+  margin: var(--space-100) 0 0;
   color: var(--muted);
   font-size: 0.6875rem;
+  line-height: 1.4;
 }
 
-.summary-disclosure[open]::after {
-  content: "Show less";
+.summary-expand {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: 0.6875rem;
+  cursor: pointer;
+}
+
+.summary-expand:hover {
+  color: var(--accent-strong);
+  background: transparent;
+  box-shadow: none;
 }
 
 .stats-grid {
@@ -2065,12 +2082,6 @@ select option {
   padding: var(--space-200) var(--space-250) var(--space-250);
 }
 
-/* Wide displays get more cards per row rather than wider cards: at half of a
-   2K window a two-column grid stretches every card until the page reads as
-   oversized. */
-.overview-grid {
-  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
-}
 
 /* ---------------------------------------------------------------- issues */
 
@@ -2197,7 +2208,7 @@ select option {
 }
 
 .overview-heading {
-  padding: 0 2px var(--space-200);
+  padding: 0 2px var(--space-150);
 }
 
 .overview-heading h2 {
@@ -2207,15 +2218,38 @@ select option {
   letter-spacing: -0.038em;
 }
 
+/* Wide displays get more cards per row rather than wider cards: on a 2K
+   display a two-column grid stretches every card until a progress bar runs
+   half the width of the screen. The grid is its own query container because
+   it lives in a resizable pane — how much room it has is not a fact about the
+   window. */
 .overview-grid {
+  container-type: inline-size;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-200);
+  grid-auto-flow: row dense;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--space-150);
   align-items: start;
 }
 
+/* Status and Activity need about twice a card's width, not the whole row. At
+   two columns that is still full width; from four columns up the two of them
+   share a row instead of stacking, which is where the screen space on a 2K
+   display actually goes. */
 .overview-wide {
-  grid-column: 1 / -1;
+  min-width: 0;
+  grid-column: span 2;
+}
+
+/* Once the grid holds four columns, the north star and the rolling summary
+   take two apiece: both are sentences to read rather than tiles to scan, and a
+   single column sets them to about forty characters a line. The threshold is
+   the width at which a fourth column appears, not a round number. */
+@container (min-width: 1300px) {
+  .north-star,
+  .summary-section {
+    grid-column: span 2;
+  }
 }
 
 /* The north star keeps its own accent card treatment. */
@@ -2231,7 +2265,7 @@ select option {
 .status-layout {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-start;
+  align-items: center;
   gap: var(--space-200);
 }
 
@@ -2271,22 +2305,30 @@ select option {
 }
 
 .status-progress progress::-webkit-progress-value {
-  background: var(--accent);
+  background: linear-gradient(90deg, var(--accent-dim), var(--accent-strong));
   border-radius: 999px;
 }
 
 .status-progress progress::-moz-progress-bar {
-  background: var(--accent);
+  background: linear-gradient(90deg, var(--accent-dim), var(--accent-strong));
 }
 
 .status-counts {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
   gap: var(--space-100);
 }
 
 .status-counts .stat-value {
   font-size: 0.9375rem;
+}
+
+/* These tiles are narrow by design — six of them share the row beside the
+   ring — so a long label wraps onto a second line rather than truncating.
+   "Open tas…" tells a reader less than a two-line "Open tasks". */
+.status-counts .stat-label {
+  overflow: visible;
+  white-space: normal;
 }
 
 .status-counts .stat {
@@ -2297,6 +2339,42 @@ select option {
   box-shadow: none;
   padding: var(--space-050) var(--space-150);
   gap: var(--space-050);
+}
+
+/* Open issues and Recent memory are lists that grow with the project, and a
+   long one dictated the height of its whole grid row — leaving a hole beside
+   it wherever the neighbouring card was shorter. They scroll within a height
+   that matches the Activity card instead. The full lists live on the Issues
+   page and in memory history, which is where someone reading past the top of
+   either one is going anyway. */
+.overview-page .issue-list,
+.overview-page .activity-list {
+  max-height: 232px;
+  overflow-y: auto;
+}
+
+/* An expanded panel must not set the height of its whole grid row. On a busy
+   repository the branch list alone ran seven hundred pixels, which left a
+   third of the page empty beside it and pushed everything below out of sight.
+   Each list scrolls within a bound instead. */
+.overview-page .intelligence-section .intelligence-list {
+  max-height: 264px;
+  overflow-y: auto;
+}
+
+/* A branch name, a path and a SHA all want monospace. A note body does not:
+   it is prose, and at this size the monospace turned the panel into a wall
+   nobody could read. Two lines each, in the reading face, with the whole note
+   a click away in memory history. */
+.overview-page #overview-blockers .intelligence-detail,
+.overview-page #overview-notes .intelligence-detail {
+  display: -webkit-box;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 0.6875rem;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .snapshot-details {
@@ -2311,15 +2389,34 @@ select option {
   cursor: pointer;
 }
 
+/* This one is a sentence about the data, not a section header, so it opts out
+   of the panel's uppercase disclosure styling. */
+.intelligence-section .stack-projects > summary {
+  margin: var(--space-100) 0 var(--space-050);
+  color: var(--muted);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: normal;
+  line-height: 1.4;
+  text-transform: none;
+  cursor: pointer;
+}
+
 .snapshot-details .intelligence-summary {
   margin-top: var(--space-150);
   gap: var(--space-100);
 }
 
+/* The ring is the one figure on this page meant to be read from across a desk,
+   so it is sized to fill the height the status tiles beside it produce. It is
+   deliberately NOT stretched to the flex line: with an aspect ratio, a
+   stretched item resolves its width from its own max constraint and then
+   forces the row to match, which inflates the panel and leaves a void under
+   the tiles. A fixed square keeps the tiles in charge of the card's height. */
 .plan-ring {
   flex: 0 0 auto;
-  width: 84px;
-  height: 84px;
+  width: 140px;
+  height: 140px;
 }
 
 .plan-ring-svg {
@@ -2336,10 +2433,32 @@ select option {
 
 .plan-ring-value {
   fill: none;
-  stroke: var(--accent);
-  stroke-width: 7;
+  stroke: url("#plan-ring-sweep");
+  stroke-width: 7.5;
   stroke-linecap: round;
+  filter: drop-shadow(0 0 4px rgba(var(--accent-rgb), 0.4));
   transition: stroke-dashoffset 300ms var(--ease);
+}
+
+/* The same three notes the north star card plays — deep teal, green, mint —
+   but along the arc rather than down an edge. Two stops read as flat at this
+   size: the ramp needs a dark end to travel from, so it starts part
+   transparent over the card and arrives at the brightest accent. */
+.plan-ring-sweep-from {
+  stop-color: var(--accent-dim);
+  stop-opacity: 0.3;
+}
+
+.plan-ring-sweep-deep {
+  stop-color: var(--accent-dim);
+}
+
+.plan-ring-sweep-mid {
+  stop-color: var(--accent);
+}
+
+.plan-ring-sweep-to {
+  stop-color: var(--accent-strong);
 }
 
 .plan-ring-number {
@@ -2360,7 +2479,7 @@ select option {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-200);
+  gap: var(--space-150);
   padding: var(--space-050) 0;
 }
 
@@ -2369,9 +2488,13 @@ select option {
   min-width: 0;
 }
 
+/* In viewBox units: the drawing is scaled up to fit the card, so a label set
+   at a comfortable pixel size here arrives half again too large. Six units
+   lands at roughly the size of the small print around it. */
 .heatmap-label {
   fill: var(--muted);
-  font-size: 10px;
+  font-size: 6px;
+  letter-spacing: 0.02em;
 }
 
 .heatmap-legend {
@@ -2390,25 +2513,21 @@ select option {
 }
 
 .activity-totals {
-  flex: 1 1 240px;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-150);
-}
-
-.activity-totals .stat {
-  padding: var(--space-200);
+  flex: 1 1 220px;
 }
 
 .heatmap-svg {
   display: block;
   width: 100%;
-  max-width: 440px;
+  max-width: 330px;
   height: auto;
 }
 
+/* A day with no activity still has to read as a cell: at the fill used for
+   panel surfaces the empty weeks disappear and the calendar stops looking like
+   a calendar. This is the same tone as a strong hairline. */
 .heatmap-cell {
-  fill: var(--fill-strong);
+  fill: var(--line-strong);
 }
 
 .heatmap-level-1 {
@@ -2432,11 +2551,11 @@ select option {
   max-height: 220px;
 }
 
-/* The four activity totals read as one compact row, not as four slabs the
-   size of the chart beside them. */
+/* Two by two beside the chart: the four totals should read as one block, not
+   as a row that drops its last tile onto a second line. */
 .activity-totals {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-100);
 }
 
@@ -5747,4 +5866,62 @@ html[data-window-mode="terminal"] #app {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* ------------------------------------------------------- project history */
+
+.project-history {
+  min-width: 0;
+  margin-top: var(--space-100);
+}
+
+.history-svg {
+  display: block;
+  width: 100%;
+  height: 96px;
+}
+
+/* The same ramp as the progress ring, so the card belongs to the page. */
+.history-stop-strong {
+  stop-color: var(--accent);
+  stop-opacity: 0.4;
+}
+
+.history-stop-dim {
+  stop-color: var(--accent-dim);
+  stop-opacity: 0.02;
+}
+
+.history-area {
+  stroke: none;
+}
+
+.history-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.history-axis {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+/* A release is a landmark, marked in the hold tone rather than in the accent
+   the series itself already uses. */
+.history-marker {
+  stroke: var(--hold);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+  opacity: 0.65;
+  vector-effect: non-scaling-stroke;
+}
+
+.history-marker-label {
+  fill: var(--hold);
+  font-size: 8px;
+  font-variant-numeric: tabular-nums;
 }
