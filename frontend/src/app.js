@@ -469,6 +469,9 @@ const elements = {
   gitSummary: document.querySelector("#git-summary"),
   stackSummary: document.querySelector("#stack-summary"),
   stackProjects: document.querySelector("#stack-projects"),
+  stackProjectsSummary: document.querySelector("#stack-projects-summary"),
+  stackProjectsDisclosure: document.querySelector("#stack-projects-disclosure"),
+  stackEmpty: document.querySelector("#stack-empty"),
   stackScanned: document.querySelector("#stack-scanned"),
   stackRescan: document.querySelector("#stack-rescan"),
   gitRemotes: document.querySelector("#git-remotes"),
@@ -1142,6 +1145,30 @@ function activityElement(activity, expanded = false) {
   return item;
 }
 
+// Re-rendering the Overview empties several tall lists before refilling them,
+// and fitRecentMemory reads layout while they are empty. That clamps the
+// page's scrollTop to the momentarily shorter content, and refilling never
+// puts it back — so every snapshot, rescan and heatmap load threw the reader
+// back to the top of the page. Capture the offset around any re-render and
+// restore it once the DOM is whole, including the frame in which the
+// late-settling parts finish.
+function withOverviewScrollPreserved(render) {
+  const page = elements.overviewPage;
+  if (!page || page.hidden) {
+    render();
+    return;
+  }
+  const top = page.scrollTop;
+  try {
+    render();
+  } finally {
+    if (page.scrollTop !== top) page.scrollTop = top;
+    requestAnimationFrame(() => {
+      if (!page.hidden && page.scrollTop !== top) page.scrollTop = top;
+    });
+  }
+}
+
 function fitRecentMemory() {
   if (!board || elements.activity.children.length === 0) return;
   const items = Array.from(elements.activity.children);
@@ -1540,6 +1567,33 @@ function svgElement(name, attributes = {}) {
   return node;
 }
 
+// The ring's arc carries a gradient along its own length, dim where the arc
+// starts to bright where it ends, so the eye follows the direction of
+// progress. The stop colours come from CSS so the ring re-tints with the
+// theme; the sweep runs corner to corner because the arc starts at the top and
+// travels clockwise.
+function planRingGradient() {
+  const defs = svgElement("defs");
+  // The axis starts at twelve o'clock, where the arc starts, and runs to the
+  // bottom right, so a short arc still travels most of the ramp instead of
+  // sampling a sliver of it in the middle.
+  const gradient = svgElement("linearGradient", {
+    id: "plan-ring-sweep",
+    x1: "0.5",
+    y1: "0",
+    x2: "1",
+    y2: "1",
+  });
+  gradient.append(
+    svgElement("stop", { offset: "0", class: "plan-ring-sweep-from" }),
+    svgElement("stop", { offset: "0.35", class: "plan-ring-sweep-deep" }),
+    svgElement("stop", { offset: "0.72", class: "plan-ring-sweep-mid" }),
+    svgElement("stop", { offset: "1", class: "plan-ring-sweep-to" }),
+  );
+  defs.append(gradient);
+  return defs;
+}
+
 function renderPlanRing(done, total) {
   elements.planRing.replaceChildren();
   if (!total) {
@@ -1556,6 +1610,7 @@ function renderPlanRing(done, total) {
     "aria-hidden": "true",
   });
   svg.append(
+    planRingGradient(),
     svgElement("circle", { class: "plan-ring-track", cx: 42, cy: 42, r: radius }),
     svgElement("circle", {
       class: "plan-ring-value",
@@ -1601,10 +1656,15 @@ function renderHeatmap(days) {
   // what lets Activity sit beside Status on a wide display instead of taking a
   // row of its own. The SVG scales, so retina sharpness is unaffected.
   const cell = 7;
-  const pitch = 10;
-  const left = 20;
-  const top = 13;
-  const width = left + columns.length * pitch;
+  const pitch = 9;
+  // Everything here is in viewBox units and scales with the drawing, labels
+  // included, so the gutters are sized against the label size rather than
+  // against pixels. The right margin exists because the last month label
+  // starts on its column and runs past it.
+  const left = 16;
+  const top = 10;
+  const right = 10;
+  const width = left + columns.length * pitch + right;
   const height = top + 7 * pitch;
   const chart = document.createElement("div");
   chart.className = "heatmap-chart";
@@ -1615,7 +1675,7 @@ function renderHeatmap(days) {
     "aria-label": "Daily note and commit activity for the last 16 weeks",
   });
   [["Mon", 1], ["Wed", 3], ["Fri", 5]].forEach(([label, row]) => {
-    const text = svgElement("text", { x: 0, y: top + row * pitch + 11, class: "heatmap-label" });
+    const text = svgElement("text", { x: 0, y: top + row * pitch + cell, class: "heatmap-label" });
     text.textContent = label;
     svg.append(text);
   });
@@ -1624,7 +1684,7 @@ function renderHeatmap(days) {
     const first = column.find((day) => day.date);
     const month = first?.date.slice(0, 7);
     if (month && month !== previousMonth) {
-      const label = svgElement("text", { x: left + x * pitch, y: 11, class: "heatmap-label" });
+      const label = svgElement("text", { x: left + x * pitch, y: 6, class: "heatmap-label" });
       label.textContent = new Date(`${first.date}T12:00:00Z`).toLocaleDateString(undefined, { month: "short", timeZone: "UTC" });
       svg.append(label);
       previousMonth = month;
@@ -1680,13 +1740,17 @@ async function loadStackProfile(force = false) {
   if (force) stackProfile = { state: "scanning" };
   try {
     stackProfile = await api().GetStackProfileV1(force);
-    if (board) renderMemory();
-    renderStackProfile();
+    withOverviewScrollPreserved(() => {
+      if (board) renderMemory();
+      renderStackProfile();
+    });
   } catch {
     stackProfileRequested = false;
     stackProfile = { state: "failed" };
-    if (board) renderMemory();
-    renderStackProfile();
+    withOverviewScrollPreserved(() => {
+      if (board) renderMemory();
+      renderStackProfile();
+    });
   }
 }
 
@@ -1697,7 +1761,8 @@ async function loadHeatmap(force = false) {
   if (heatmapRequested && !force) return;
   heatmapRequested = true;
   try {
-    renderHeatmap(await api().GetActivityHeatmapV2(16));
+    const days = await api().GetActivityHeatmapV2(16);
+    withOverviewScrollPreserved(() => renderHeatmap(days));
   } catch (error) {
     heatmapRequested = false;
     if (workspaceController.state.status === "open") showError(error);
@@ -2333,10 +2398,19 @@ const STACK_PANEL_PROJECTS = 12;
 // The Repository panel's stack section. Every state is explicit: a project
 // that cannot be scanned says so rather than rendering an empty list that
 // reads as "no code here".
+// "Rust", "Rust and TypeScript", "Rust, TypeScript and Go" — a list a person
+// reads, rather than one joined by separators.
+function languageSentence(languages) {
+  if (languages.length <= 1) return languages[0] ?? "no known language";
+  return `${languages.slice(0, -1).join(", ")} and ${languages[languages.length - 1]}`;
+}
+
 function renderStackProfile() {
   if (!elements.stackSummary) return;
   elements.stackSummary.replaceChildren();
   elements.stackProjects.replaceChildren();
+  elements.stackProjectsDisclosure.hidden = true;
+  elements.stackEmpty.hidden = true;
   elements.stackScanned.textContent = "";
   elements.stackRescan.hidden = true;
 
@@ -2361,8 +2435,24 @@ function renderStackProfile() {
     elements.stackSummary.append(pill("scan", "truncated at the path cap", "warning"));
   }
   if (!stackProfile.projects.length) {
-    elements.stackProjects.append(emptyMemory("No project manifest found in tracked files."));
+    // Nothing to disclose: a control that opens onto an empty list is worse
+    // than a sentence saying there is nothing there.
+    elements.stackProjectsDisclosure.hidden = true;
+    elements.stackEmpty.hidden = false;
   } else {
+    elements.stackProjectsDisclosure.hidden = false;
+    elements.stackEmpty.hidden = true;
+    // A workspace discovers a project per crate, so the evidence rows are the
+    // tallest thing on this page by a wide margin. The disclosure line carries
+    // what a reader wants at a glance — how many, in what — and the rows stay
+    // one click away.
+    const languages = [
+      ...new Set(stackProfile.projects.map((project) => languageLabel(project.language))),
+    ];
+    const count = stackProfile.projects.length;
+    elements.stackProjectsSummary.textContent = `${count} discovered project${
+      count === 1 ? "" : "s"
+    } in ${languageSentence(languages)}`;
     // The panel is the evidence view, so it stays per-project — but a large
     // workspace discovers dozens, and the panel is not a place to scroll
     // through 64 rows. The Overview carries the per-language totals.
@@ -2832,7 +2922,7 @@ function renderAgentHandoffs(items, inbox, availability) {
   if (inbox.items.length === 0) {
     elements.agentHandoffInbox.append(emptyMemory(
       availability.registeredTotal === 0
-        ? "No registered agents. Register or launch two agents to send a handoff."
+        ? "Sending a handoff needs two registered agents."
         : !availability.canHandoff
           ? "Two live agents are required to send a handoff."
           : "No pending handoff proposals.",
@@ -2961,9 +3051,11 @@ async function loadSnapshot(
     board = response.tracking.board;
     explicitNoPlanSelection = planRequest === null;
     elements.workspace.dataset.snapshotState = "ready";
-    renderBoard();
-    recordProjectLayout();
-    renderIntelligence();
+    withOverviewScrollPreserved(() => {
+      renderBoard();
+      recordProjectLayout();
+      renderIntelligence();
+    });
     openPendingTaskDetail();
     if (view === "issues") void loadIssues(true);
     if (view === "overview" && heatmapRequested) void loadHeatmap(true);

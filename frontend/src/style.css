@@ -2226,7 +2226,8 @@ select option {
 .overview-grid {
   container-type: inline-size;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  grid-auto-flow: row dense;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: var(--space-150);
   align-items: start;
 }
@@ -2242,8 +2243,9 @@ select option {
 
 /* Once the grid holds four columns, the north star and the rolling summary
    take two apiece: both are sentences to read rather than tiles to scan, and a
-   340px column sets them to about forty characters a line. */
-@container (min-width: 1400px) {
+   single column sets them to about forty characters a line. The threshold is
+   the width at which a fourth column appears, not a round number. */
+@container (min-width: 1300px) {
   .north-star,
   .summary-section {
     grid-column: span 2;
@@ -2259,12 +2261,11 @@ select option {
   box-shadow: var(--highlight-inset);
 }
 
-/* Project status: progress ring beside the stat tiles. The row stretches so
-   the ring can size itself against the tiles rather than against a constant. */
+/* Project status: progress ring beside the stat tiles. */
 .status-layout {
   display: flex;
   flex-wrap: wrap;
-  align-items: stretch;
+  align-items: center;
   gap: var(--space-200);
 }
 
@@ -2304,22 +2305,30 @@ select option {
 }
 
 .status-progress progress::-webkit-progress-value {
-  background: var(--accent);
+  background: linear-gradient(90deg, var(--accent-dim), var(--accent-strong));
   border-radius: 999px;
 }
 
 .status-progress progress::-moz-progress-bar {
-  background: var(--accent);
+  background: linear-gradient(90deg, var(--accent-dim), var(--accent-strong));
 }
 
 .status-counts {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
   gap: var(--space-100);
 }
 
 .status-counts .stat-value {
   font-size: 0.9375rem;
+}
+
+/* These tiles are narrow by design — six of them share the row beside the
+   ring — so a long label wraps onto a second line rather than truncating.
+   "Open tas…" tells a reader less than a two-line "Open tasks". */
+.status-counts .stat-label {
+  overflow: visible;
+  white-space: normal;
 }
 
 .status-counts .stat {
@@ -2344,23 +2353,34 @@ select option {
   cursor: pointer;
 }
 
+/* This one is a sentence about the data, not a section header, so it opts out
+   of the panel's uppercase disclosure styling. */
+.intelligence-section .stack-projects > summary {
+  margin: var(--space-100) 0 var(--space-050);
+  color: var(--muted);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: normal;
+  line-height: 1.4;
+  text-transform: none;
+  cursor: pointer;
+}
+
 .snapshot-details .intelligence-summary {
   margin-top: var(--space-150);
   gap: var(--space-100);
 }
 
 /* The ring is the one figure on this page meant to be read from across a desk,
-   so it takes the full height of the status panel and its width follows, which
-   keeps it a circle. The floor is the size it used to be fixed at. */
+   so it is sized to fill the height the status tiles beside it produce. It is
+   deliberately NOT stretched to the flex line: with an aspect ratio, a
+   stretched item resolves its width from its own max constraint and then
+   forces the row to match, which inflates the panel and leaves a void under
+   the tiles. A fixed square keeps the tiles in charge of the card's height. */
 .plan-ring {
   flex: 0 0 auto;
-  align-self: stretch;
-  width: auto;
-  min-width: 84px;
-  max-width: 168px;
-  height: auto;
-  min-height: 84px;
-  aspect-ratio: 1;
+  width: 140px;
+  height: 140px;
 }
 
 .plan-ring-svg {
@@ -2377,10 +2397,32 @@ select option {
 
 .plan-ring-value {
   fill: none;
-  stroke: var(--accent);
-  stroke-width: 7;
+  stroke: url("#plan-ring-sweep");
+  stroke-width: 7.5;
   stroke-linecap: round;
+  filter: drop-shadow(0 0 4px rgba(var(--accent-rgb), 0.4));
   transition: stroke-dashoffset 300ms var(--ease);
+}
+
+/* The same three notes the north star card plays — deep teal, green, mint —
+   but along the arc rather than down an edge. Two stops read as flat at this
+   size: the ramp needs a dark end to travel from, so it starts part
+   transparent over the card and arrives at the brightest accent. */
+.plan-ring-sweep-from {
+  stop-color: var(--accent-dim);
+  stop-opacity: 0.3;
+}
+
+.plan-ring-sweep-deep {
+  stop-color: var(--accent-dim);
+}
+
+.plan-ring-sweep-mid {
+  stop-color: var(--accent);
+}
+
+.plan-ring-sweep-to {
+  stop-color: var(--accent-strong);
 }
 
 .plan-ring-number {
@@ -2410,9 +2452,13 @@ select option {
   min-width: 0;
 }
 
+/* In viewBox units: the drawing is scaled up to fit the card, so a label set
+   at a comfortable pixel size here arrives half again too large. Six units
+   lands at roughly the size of the small print around it. */
 .heatmap-label {
   fill: var(--muted);
-  font-size: 10px;
+  font-size: 6px;
+  letter-spacing: 0.02em;
 }
 
 .heatmap-legend {
@@ -2437,12 +2483,15 @@ select option {
 .heatmap-svg {
   display: block;
   width: 100%;
-  max-width: 380px;
+  max-width: 330px;
   height: auto;
 }
 
+/* A day with no activity still has to read as a cell: at the fill used for
+   panel surfaces the empty weeks disappear and the calendar stops looking like
+   a calendar. This is the same tone as a strong hairline. */
 .heatmap-cell {
-  fill: var(--fill-strong);
+  fill: var(--line-strong);
 }
 
 .heatmap-level-1 {

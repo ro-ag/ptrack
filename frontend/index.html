@@ -118,7 +118,7 @@
             hidden
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 8h13m0 0-3-3m3 3-3 3M20 16H7m0 0 3-3m-3 3 3 3"/></svg>
-            <span>Switch Project…</span>
+            <span>Open another project…</span>
           </button>
           <button
             id="close-project-button"
@@ -127,7 +127,7 @@
             hidden
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="m9.5 9.5 5 5m0-5-5 5"/></svg>
-            <span>Close Project</span>
+            <span>Back to all projects</span>
           </button>
           <button
             id="settings-open"
@@ -1029,7 +1029,13 @@
               <p id="storage-status" class="intelligence-meta"></p>
               <div id="git-summary" class="intelligence-summary"></div>
               <div id="stack-summary" class="intelligence-summary"></div>
-              <div id="stack-projects" class="intelligence-list" aria-label="Discovered projects"></div>
+              <details id="stack-projects-disclosure" class="stack-projects" hidden>
+                <summary id="stack-projects-summary">Discovered projects</summary>
+                <div id="stack-projects" class="intelligence-list" aria-label="Discovered projects"></div>
+              </details>
+              <p id="stack-empty" class="intelligence-meta" hidden>
+                No project manifest found in tracked files.
+              </p>
               <p id="stack-scanned" class="intelligence-meta"></p>
               <button id="stack-rescan" type="button" class="button-secondary" hidden>Rescan stack</button>
             </section>
