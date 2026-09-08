@@ -2341,6 +2341,18 @@ select option {
   gap: var(--space-050);
 }
 
+/* Open issues and Recent memory are lists that grow with the project, and a
+   long one dictated the height of its whole grid row — leaving a hole beside
+   it wherever the neighbouring card was shorter. They scroll within a height
+   that matches the Activity card instead. The full lists live on the Issues
+   page and in memory history, which is where someone reading past the top of
+   either one is going anyway. */
+.overview-page .issue-list,
+.overview-page .activity-list {
+  max-height: 232px;
+  overflow-y: auto;
+}
+
 .snapshot-details {
   margin-top: var(--space-250);
   padding-top: var(--space-150);

@@ -1756,11 +1756,18 @@ let projectHistoryRequested = false;
 
 const HISTORY_BUCKETS = 100;
 
+// Heights are square-rooted before they are drawn. Commit activity is heavily
+// skewed — one release day can carry fifty times a normal one — and against a
+// raw maximum every other week collapses into a flat line at the bottom of the
+// card, which is the opposite of a history. The transform is monotonic, so the
+// busiest period is still unmistakably the tallest; it just stops erasing the
+// rest of the project.
 function historyPath(buckets, width, floor, peak, close) {
   const step = buckets.length > 1 ? width / (buckets.length - 1) : 0;
+  const ceiling = Math.sqrt(peak) || 1;
   const points = buckets.map((bucket, index) => {
     const x = index * step;
-    const y = floor - (bucket.count / peak) * (floor - 8);
+    const y = floor - (Math.sqrt(bucket.count) / ceiling) * (floor - 8);
     return `${x.toFixed(1)} ${y.toFixed(1)}`;
   });
   const line = `M ${points.join(" L ")}`;
