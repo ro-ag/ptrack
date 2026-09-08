@@ -2259,11 +2259,12 @@ select option {
   box-shadow: var(--highlight-inset);
 }
 
-/* Project status: progress ring beside the stat tiles. */
+/* Project status: progress ring beside the stat tiles. The row stretches so
+   the ring can size itself against the tiles rather than against a constant. */
 .status-layout {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-start;
+  align-items: stretch;
   gap: var(--space-200);
 }
 
@@ -2348,10 +2349,18 @@ select option {
   gap: var(--space-100);
 }
 
+/* The ring is the one figure on this page meant to be read from across a desk,
+   so it takes the full height of the status panel and its width follows, which
+   keeps it a circle. The floor is the size it used to be fixed at. */
 .plan-ring {
   flex: 0 0 auto;
-  width: 84px;
-  height: 84px;
+  align-self: stretch;
+  width: auto;
+  min-width: 84px;
+  max-width: 168px;
+  height: auto;
+  min-height: 84px;
+  aspect-ratio: 1;
 }
 
 .plan-ring-svg {
