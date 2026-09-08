@@ -1010,7 +1010,12 @@ function stackTrackedFilesToggle(profile, languages) {
   toggle.setAttribute("aria-controls", "stack-breakdown");
   const label = document.createElement("span");
   label.className = "stat-label";
-  label.textContent = languages === 1 ? "Tracked files · 1 language" : `Tracked files · ${languages} languages`;
+  // The tile column is narrow; a longer label truncates. The language count
+  // lives in the tooltip and in the breakdown the tile opens.
+  label.textContent = "Tracked files";
+  toggle.title = languages === 1
+    ? "1 language discovered — click for the breakdown"
+    : `${languages} languages discovered — click for the breakdown`;
   const value = document.createElement("span");
   value.className = "stat-value";
   value.textContent = profile.trackedFiles.toLocaleString();
