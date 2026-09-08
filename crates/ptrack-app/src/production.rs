@@ -44,13 +44,12 @@ use crate::{
     ProductionTerminalIdentityAuthority, ProjectEndpoint, ProjectGuideChoiceV1,
     ProjectGuideFileActionV1, ProjectGuidePreviewRequestV1, ProjectGuidePreviewV1,
     ProjectTargetKindV1, ProjectTargetValidationV1, RecentProjectAvailabilityV1,
-    RecentProjectOpenAuthorizationV1, RecentProjectRegistryCommitV1, RecentProjectRegistryStatusV1,
-    RecentProjectLanguageV1, RecentProjectResolutionV1, RecentProjectStackV1, RecentProjectV1,
-    RecentProjectsProvider, RecentProjectsV1,
-    RelocateRequest, RelocateResult, ResolvedRecentProjectV1, TerminalAgentAuthority,
-    TerminalEventSink, TerminalIdentityAuthority, TerminalRuntime, TerminalRuntimeConfig,
-    UnavailableUpdateService, UpdateEventSink, UpdateRuntime, UpdateState, WorkspaceBindings,
-    WorkspaceProject,
+    RecentProjectLanguageV1, RecentProjectOpenAuthorizationV1, RecentProjectRegistryCommitV1,
+    RecentProjectRegistryStatusV1, RecentProjectResolutionV1, RecentProjectStackV1,
+    RecentProjectV1, RecentProjectsProvider, RecentProjectsV1, RelocateRequest, RelocateResult,
+    ResolvedRecentProjectV1, TerminalAgentAuthority, TerminalEventSink, TerminalIdentityAuthority,
+    TerminalRuntime, TerminalRuntimeConfig, UnavailableUpdateService, UpdateEventSink,
+    UpdateRuntime, UpdateState, WorkspaceBindings, WorkspaceProject,
 };
 
 const RECOVERY_REQUIRED: &str = "runtime recovery is required";

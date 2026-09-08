@@ -40,12 +40,11 @@ pub use desktop_runtime::{
     OpenRecentProjectResultV1, PendingInitializationV1, ProjectGuideChoiceV1,
     ProjectGuideFileActionV1, ProjectGuideFilePreviewV1, ProjectGuidePreviewRequestV1,
     ProjectGuidePreviewV1, ProjectTargetKindV1, ProjectTargetValidationV1,
-    RecentProjectAvailabilityV1, RecentProjectOpenAuthorizationV1, RecentProjectRegistryCommitV1,
-    RecentProjectLanguageV1, RecentProjectRegistryStatusV1, RecentProjectResolutionV1,
-    RecentProjectStackV1, RecentProjectV1,
-    RecentProjectsProvider, RecentProjectsV1, ResetApplicationStateResultV1,
-    ResolvedRecentProjectV1, WorkspaceChangeResult, WorkspaceProject, WorkspaceState,
-    WorkspaceStatus, allowed_desktop_commands,
+    RecentProjectAvailabilityV1, RecentProjectLanguageV1, RecentProjectOpenAuthorizationV1,
+    RecentProjectRegistryCommitV1, RecentProjectRegistryStatusV1, RecentProjectResolutionV1,
+    RecentProjectStackV1, RecentProjectV1, RecentProjectsProvider, RecentProjectsV1,
+    ResetApplicationStateResultV1, ResolvedRecentProjectV1, WorkspaceChangeResult,
+    WorkspaceProject, WorkspaceState, WorkspaceStatus, allowed_desktop_commands,
 };
 
 pub use identity::{IDENTITY_CONFIG_KEY, load_identity, set_identity_name};
