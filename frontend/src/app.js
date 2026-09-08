@@ -1233,15 +1233,23 @@ function fitRecentMemory() {
 // and says which rule it broke instead of pretending it reads.
 function renderSummary() {
   const text = board.summary ?? "";
-  elements.summary.textContent =
+  const display =
     text || "No rolling summary yet. Agents can update it with ptrack summary set.";
+  // Every snapshot re-renders this card, and folding a summary the reader
+  // deliberately opened is the same bug as scrolling them back to the top.
+  // Only new text earns a fresh fold; the same text keeps the state it was
+  // left in. Read before the write, or the comparison is against itself.
+  const unchanged = elements.summary.textContent === display;
+  const expanded = unchanged && elements.summary.dataset.expanded === "true";
+
+  elements.summary.textContent = display;
   const shape = text ? summaryShape(text) : null;
   const dense = Boolean(shape?.problem);
   elements.summary.dataset.dense = dense ? "true" : "false";
-  elements.summary.dataset.expanded = "false";
+  elements.summary.dataset.expanded = expanded ? "true" : "false";
   elements.summaryFlag.hidden = !dense;
   elements.summaryShapeRow.hidden = !dense;
-  elements.summaryExpand.textContent = "Show all";
+  elements.summaryExpand.textContent = expanded ? "Show less" : "Show all";
   elements.summaryMetrics.textContent = dense ? summaryShapeCaption(shape) : "";
 }
 
