@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-09-07
+
 ### Added
 - Deterministic stack discovery. Opening a project scans its tracked files
   once, discovers each subproject from the manifests git actually tracks

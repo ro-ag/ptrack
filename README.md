@@ -6,8 +6,8 @@ Observe agent work, keep project state durable, and pass bounded context to
 the next agent—without a hosted service or cloud account.
 
 [![Rust](https://img.shields.io/badge/Rust-1.89%2B-CE6A3D?logo=rust&logoColor=white)](https://www.rust-lang.org/)
-[![Release](https://img.shields.io/badge/release-v0.36.1-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.36.1)
-[![Help Center](https://img.shields.io/badge/help-v0.36.1-3DD6A3)](https://ro-ag.github.io/ptrack/help/)
+[![Release](https://img.shields.io/badge/release-v0.37.0-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.37.0)
+[![Help Center](https://img.shields.io/badge/help-v0.37.0-3DD6A3)](https://ro-ag.github.io/ptrack/help/)
 [![License](https://img.shields.io/badge/License-Apache--2.0-3DD6A3)](LICENSE)
 [![Storage](https://img.shields.io/badge/Storage-local--first-AFA8FF)](#storage-and-safety)
 
@@ -149,6 +149,20 @@ name, to copy its references and commands for reading current records. Paste
 that context into the agent you want to use. Overview groups completion metrics
 and supporting counts, with a labeled activity calendar and separate snapshot
 details.
+
+### Stack discovery
+
+Opening a project scans its tracked files once and reports what the project is
+built from. Every language comes from a manifest git actually tracks —
+`Cargo.toml`, `go.mod`, `package.json`, `pyproject.toml`, `Package.swift`, and
+the rest — so each discovered subproject can name the paths that prove it, and
+an ignored or vendored tree never enters the answer. Counts are tracked files,
+never lines or bytes: one generated bundle or vendored directory would
+otherwise outweigh the code that defines the project. The Repository panel
+lists the discovered projects with their evidence, the project cards carry a
+stack label, and `ptrack context` passes the same structure to the next agent.
+A rescan runs when HEAD moves; a repository past the scan's path cap is marked
+partial and rescans on open or on request.
 
 ### Registered agent runs
 
