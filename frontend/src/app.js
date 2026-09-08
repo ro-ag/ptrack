@@ -194,6 +194,7 @@ import {
   runtimeAssociationLabel,
   runtimeEventIsCurrent,
   shortcutIntent,
+  stackTiles,
   workflowMutationFocusKey,
   worktreeSelectionForRerender,
   workspaceStateCopy,
@@ -1115,13 +1116,15 @@ function renderMemory() {
     statElement(board.stats.notes, "Notes"),
     statElement(board.stats.commits, "Commits"),
   );
-  // Discovered languages, counted in tracked files. A line count is not
-  // reported: one vendored directory or generated bundle outweighs the code
-  // that defines the project.
+  // Discovered languages, counted in tracked files. One tile per language, not
+  // per discovered project: a Cargo workspace discovers a project per crate,
+  // and per-project tiles would repeat the same label across the row. A line
+  // count is not reported — one vendored directory or generated bundle
+  // outweighs the code that defines the project.
   if (stackProfile?.state === "ready") {
     counts.append(statElement(stackProfile.trackedFiles.toLocaleString(), "Tracked files"));
-    stackProfile.projects.slice(0, 4).forEach((project) => {
-      counts.append(statElement(project.files.toLocaleString(), languageLabel(project.language)));
+    stackTiles(stackProfile.projects).forEach((tile) => {
+      counts.append(statElement(tile.files.toLocaleString(), languageLabel(tile.language)));
     });
     if (stackProfile.incomplete) {
       counts.append(statElement("partial", "Scan truncated"));

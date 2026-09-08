@@ -31,6 +31,7 @@ import {
   runtimeCountLabel,
   runtimeEventIsCurrent,
   shortcutIntent,
+  stackTiles,
   workflowMutationFocusKey,
   worktreeSelectionForRerender,
   workspaceStateCopy,
@@ -707,5 +708,37 @@ describe("workspace presentation policy", () => {
     expect(columns[0][2].level).toBe(2);
     expect(columns[0][4].level).toBe(4);
     expect(heatmapWeeks([])).toEqual([]);
+  });
+});
+
+describe("stack tiles", () => {
+  it("aggregates a workspace's per-crate projects into one tile per language", () => {
+    const tiles = stackTiles([
+      { root: "", language: "rust", files: 93, evidence: [] },
+      { root: "crates/a", language: "rust", files: 149, evidence: [] },
+      { root: "crates/b", language: "rust", files: 8, evidence: [] },
+      { root: "frontend", language: "typescript", files: 96, evidence: [] },
+    ]);
+    expect(tiles).toEqual([
+      { language: "rust", files: 250, projects: 3 },
+      { language: "typescript", files: 96, projects: 1 },
+    ]);
+  });
+
+  it("orders by files then name, and caps the tile count", () => {
+    const tiles = stackTiles(
+      [
+        { root: "a", language: "go", files: 10, evidence: [] },
+        { root: "b", language: "python", files: 10, evidence: [] },
+        { root: "c", language: "rust", files: 50, evidence: [] },
+        { root: "d", language: "ruby", files: 1, evidence: [] },
+      ],
+      3,
+    );
+    expect(tiles.map((tile) => tile.language)).toEqual(["rust", "go", "python"]);
+  });
+
+  it("returns nothing for an unscanned project", () => {
+    expect(stackTiles([])).toEqual([]);
   });
 });

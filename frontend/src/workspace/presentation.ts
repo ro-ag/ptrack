@@ -1123,3 +1123,45 @@ export function heatmapWeeks(days: HeatmapDay[]): HeatmapCell[][] {
   if (column.length > 0) columns.push(column);
   return columns;
 }
+
+export interface StackProfileProject {
+  root: string;
+  language: string;
+  files: number;
+  evidence: string[];
+}
+
+export interface StackTile {
+  language: string;
+  files: number;
+  projects: number;
+}
+
+/**
+ * Aggregates a stack profile into Overview tiles: one per language, never one
+ * per discovered project. A Cargo workspace discovers a project per crate, so
+ * per-project tiles render as a row of identical "Rust" labels carrying
+ * fragments of the same number.
+ *
+ * Languages are ordered by tracked files, then by name so equal counts do not
+ * reorder between scans.
+ */
+export function stackTiles(projects: StackProfileProject[], limit = 4): StackTile[] {
+  const totals = new Map<string, StackTile>();
+  projects.forEach((project) => {
+    const tile = totals.get(project.language);
+    if (tile) {
+      tile.files += project.files;
+      tile.projects += 1;
+    } else {
+      totals.set(project.language, {
+        language: project.language,
+        files: project.files,
+        projects: 1,
+      });
+    }
+  });
+  return [...totals.values()]
+    .sort((left, right) => right.files - left.files || left.language.localeCompare(right.language))
+    .slice(0, limit);
+}
