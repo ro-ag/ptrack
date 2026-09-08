@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.37.1] - 2026-09-08
+
 ### Added
 - Line counts per discovered language, inside the Overview's stack breakdown.
   Lines are counted per tracked text file at HEAD (`git grep -I` skips
