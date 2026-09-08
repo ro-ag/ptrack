@@ -13,14 +13,15 @@ use crate::{
 /// Stable envelope codec ID for native ptrack positional records.
 pub const NATIVE_CODEC: u16 = 3;
 /// Current schema of native ptrack positional record payloads.
-pub const NATIVE_PAYLOAD_SCHEMA: u32 = 6;
+pub const NATIVE_PAYLOAD_SCHEMA: u32 = 7;
 /// Oldest native payload schema this build still decodes.
 ///
 /// Schema 1 predates the plan and task hold reason, which schema 2 added.
 /// Schema 3 adds actor attribution, reserved entity ULIDs, plan claims, and the
 /// per-actor `Meta` maps. Schema 4 adds plan and task dependency edges.
 /// Schema 5 adds the deterministic stack profile on `Meta` and its summary on
-/// `ProjectRef`. Schema 6 adds that profile's line counts.
+/// `ProjectRef`. Schema 6 adds that profile's line counts; schema 7 length-
+/// frames the profile and summary so later fields cost no bump.
 /// Payloads at any older schema decode with all of those fields empty and are
 /// re-encoded at [`NATIVE_PAYLOAD_SCHEMA`] on their next write, so stored
 /// records upgrade lazily and no database is rewritten on open.
@@ -543,12 +544,19 @@ fn decode_meta(reader: &mut Reader<'_>, payload_schema: u32) -> Result<Meta, Cod
     Ok(meta)
 }
 
+/// The payload schema that length-frames the stack profile and its summary.
+///
+/// Schema 6 wrote the line counts positionally. Only pre-release builds ever
+/// wrote that layout, but they wrote it to real databases, so it stays
+/// readable here and upgrades to the framed form on the next write.
+const STACK_FRAMED_PAYLOAD_SCHEMA: u32 = 7;
+
 /// The payload schema that introduced the stack profile's line counts.
 ///
 /// A schema-5 profile carries file counts only, so it decodes with every line
 /// count zero and `lines_counted` false — the surfaces then omit lines instead
 /// of reporting a project with none.
-const STACK_LINES_PAYLOAD_SCHEMA: u32 = 6;
+pub(crate) const STACK_LINES_PAYLOAD_SCHEMA: u32 = 6;
 
 /// The payload schema that introduced the deterministic stack profile.
 ///
@@ -582,16 +590,20 @@ fn encode_stack_profile(
         });
     }
     writer.bool(true)?;
-    if payload_schema < STACK_LINES_PAYLOAD_SCHEMA {
-        // Schema 5's layout is fixed by the databases 0.37.0 already wrote:
-        // unframed, with no line counts. Anything this build added afterwards
-        // has no canonical form there.
-        if profile.lines != 0 || profile.lines_counted || !profile.future_fields.is_empty() {
+    if payload_schema < STACK_FRAMED_PAYLOAD_SCHEMA {
+        // Schema 5's layout is fixed by the databases 0.37.0 already wrote
+        // (no line counts); schema 6 adds them positionally. Neither has room
+        // for bytes a later build appended.
+        if !profile.future_fields.is_empty() {
             return Err(CodecError::NonCanonical);
         }
-        return encode_stack_profile_body(writer, profile, false);
+        let lines = payload_schema >= STACK_LINES_PAYLOAD_SCHEMA;
+        if !lines && (profile.lines != 0 || profile.lines_counted) {
+            return Err(CodecError::NonCanonical);
+        }
+        return encode_stack_profile_body(writer, profile, lines);
     }
-    // From schema 6 the body is length-framed, so a build that predates a
+    // From schema 7 the body is length-framed, so a build that predates a
     // later field still reads the record: it parses what it knows and carries
     // the rest in `future_fields`. Without the frame, one unknown trailing
     // field reads as a corrupt record and the database refuses to open.
@@ -663,8 +675,9 @@ fn decode_stack_profile(
     if payload_schema < STACK_PAYLOAD_SCHEMA || !reader.bool()? {
         return Ok(None);
     }
-    if payload_schema < STACK_LINES_PAYLOAD_SCHEMA {
-        return decode_stack_profile_body(reader, false).map(Some);
+    if payload_schema < STACK_FRAMED_PAYLOAD_SCHEMA {
+        return decode_stack_profile_body(reader, payload_schema >= STACK_LINES_PAYLOAD_SCHEMA)
+            .map(Some);
     }
     let mut body = unframe(reader)?;
     let mut profile = decode_stack_profile_body(&mut body, true)?;
@@ -750,7 +763,7 @@ fn encode_stack_summary(
         });
     }
     writer.bool(true)?;
-    if payload_schema < STACK_LINES_PAYLOAD_SCHEMA {
+    if payload_schema < STACK_FRAMED_PAYLOAD_SCHEMA {
         if !summary.future_fields.is_empty() {
             return Err(CodecError::NonCanonical);
         }
@@ -784,7 +797,7 @@ fn decode_stack_summary(
     if payload_schema < STACK_PAYLOAD_SCHEMA || !reader.bool()? {
         return Ok(None);
     }
-    if payload_schema < STACK_LINES_PAYLOAD_SCHEMA {
+    if payload_schema < STACK_FRAMED_PAYLOAD_SCHEMA {
         return decode_stack_summary_body(reader).map(Some);
     }
     let mut body = unframe(reader)?;

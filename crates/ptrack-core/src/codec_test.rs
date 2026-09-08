@@ -1,4 +1,7 @@
-use crate::codec::{ACTOR_PAYLOAD_SCHEMA, HOLD_REASON_PAYLOAD_SCHEMA, STACK_PAYLOAD_SCHEMA};
+use crate::codec::{
+    ACTOR_PAYLOAD_SCHEMA, HOLD_REASON_PAYLOAD_SCHEMA, STACK_LINES_PAYLOAD_SCHEMA,
+    STACK_PAYLOAD_SCHEMA,
+};
 use crate::test_support;
 use crate::{
     Capability, CapabilityAuditPolicy, CapabilityKind, CapabilityLimits, CodecError, Digest32,
@@ -949,4 +952,44 @@ fn every_supported_schema_round_trips_a_record_written_at_it() {
             "schema {schema} must round trip"
         );
     }
+}
+
+#[test]
+fn a_schema_six_profile_keeps_the_unframed_layout_its_writer_used() {
+    // Pre-release builds wrote schema 6 positionally, with line counts and no
+    // frame, into real databases. Redefining schema 6 later would make those
+    // records unreadable, so the layout is pinned here: schema 6 stays
+    // unframed and only schema 7 frames the body.
+    let mut meta = test_support::meta(1);
+    meta.stack = Some(stack_profile());
+    let record = NativeRecord::Meta(meta);
+
+    let six = encode_record_at_schema(&record, STACK_LINES_PAYLOAD_SCHEMA).expect("encode at 6");
+    assert_eq!(
+        decode_record_at_schema(RecordKind::Meta, STACK_LINES_PAYLOAD_SCHEMA, &six)
+            .expect("decode at 6"),
+        record
+    );
+
+    // The framed form is strictly longer: it carries the same body behind a
+    // four-byte length.
+    let seven = encode_record_at_schema(&record, NATIVE_PAYLOAD_SCHEMA).expect("encode at 7");
+    assert_eq!(seven.len(), six.len() + 4);
+}
+
+#[test]
+fn a_schema_six_registry_summary_still_decodes() {
+    let record = NativeRecord::ProjectRef(ProjectRef {
+        name: "ptrack".to_owned(),
+        path: "/tmp/ptrack".to_owned(),
+        last_seen: fixed_time(),
+        stack: Some(stack_summary()),
+    });
+    let encoded =
+        encode_record_at_schema(&record, STACK_LINES_PAYLOAD_SCHEMA).expect("encode at 6");
+    assert_eq!(
+        decode_record_at_schema(RecordKind::ProjectRef, STACK_LINES_PAYLOAD_SCHEMA, &encoded)
+            .expect("decode at 6"),
+        record
+    );
 }

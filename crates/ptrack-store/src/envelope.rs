@@ -12,7 +12,7 @@ pub const LEGACY_CODEC_RAW: u16 = 2;
 /// Stable codec identifier for canonical native ptrack positional records.
 pub const NATIVE_CODEC: u16 = 3;
 /// Current payload schema for canonical native ptrack positional records.
-pub const NATIVE_PAYLOAD_SCHEMA: u32 = 6;
+pub const NATIVE_PAYLOAD_SCHEMA: u32 = 7;
 /// Oldest native payload schema this build still reads, imports, and stores.
 ///
 /// Databases written before the plan and task hold reason carry schema-1
