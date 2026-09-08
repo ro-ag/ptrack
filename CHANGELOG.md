@@ -10,7 +10,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Deterministic stack discovery. Opening a project scans its tracked files
   once, discovers each subproject from the manifests git actually tracks
   (`Cargo.toml`, `go.mod`, `package.json`, `pyproject.toml`, and the rest), and
-  reports the languages with their tracked-file counts. The Repository panel
+  reports the languages with their tracked-file counts. A JavaScript project is
+  reported as TypeScript when it tracks a `tsconfig.json` or any `.ts`/`.tsx`
+  source. The Repository panel
   lists each discovered project with the manifest paths that prove it, the
   project cards carry a stack label, and `ptrack context` carries the same
   structure so a resuming agent does not have to guess the stack. A rescan runs

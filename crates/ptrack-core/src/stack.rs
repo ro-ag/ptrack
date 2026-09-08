@@ -47,7 +47,8 @@ const MARKERS: &[(Marker, LanguageId)] = &[
 ];
 
 /// The refinement marker: a tracked `tsconfig.json` beside a `package.json`
-/// makes the project TypeScript rather than JavaScript.
+/// makes the project TypeScript rather than JavaScript. A project that tracks
+/// TypeScript sources without one is refined the same way, from those sources.
 const TYPESCRIPT_MARKER: &str = "tsconfig.json";
 
 /// Resolves discovered projects from a tracked-path list.
@@ -94,7 +95,12 @@ pub fn resolve(paths: &[String]) -> Vec<StackProject> {
     });
     projects.truncate(MAX_STACK_PROJECTS);
 
-    attribute_files(&mut projects, paths);
+    let typescript_sources = attribute_files(&mut projects, paths);
+    for (index, project) in projects.iter_mut().enumerate() {
+        if project.language == LanguageId::JavaScript && typescript_sources[index] {
+            project.language = LanguageId::TypeScript;
+        }
+    }
     projects
 }
 
@@ -162,7 +168,13 @@ fn build_project(root: String, discovery: Discovery, typescript_roots: &[&str]) 
 }
 
 /// Attributes every tracked path to the deepest project whose root contains it.
-fn attribute_files(projects: &mut [StackProject], paths: &[String]) {
+///
+/// Returns, per project, whether any file attributed to it is a TypeScript
+/// source. That answer drives the JavaScript refinement for projects that
+/// track no `tsconfig.json`, and it is a by-product of a pass the resolver
+/// already makes over every path.
+fn attribute_files(projects: &mut [StackProject], paths: &[String]) -> Vec<bool> {
+    let mut typescript_sources = vec![false; projects.len()];
     for path in paths {
         let mut best: Option<usize> = None;
         for (index, project) in projects.iter().enumerate() {
@@ -177,7 +189,25 @@ fn attribute_files(projects: &mut [StackProject], paths: &[String]) {
         }
         if let Some(index) = best {
             projects[index].files = projects[index].files.saturating_add(1);
+            if is_typescript_source(path) {
+                typescript_sources[index] = true;
+            }
         }
+    }
+    typescript_sources
+}
+
+/// Reports whether a tracked path is a TypeScript source. Declaration files
+/// are excluded: a `.d.ts` describes JavaScript rather than proving the
+/// project is written in TypeScript.
+fn is_typescript_source(path: &str) -> bool {
+    let Some((stem, extension)) = path.rsplit_once('.') else {
+        return false;
+    };
+    match extension {
+        "tsx" => true,
+        "ts" => stem.rsplit_once('.').is_none_or(|(_, inner)| inner != "d"),
+        _ => false,
     }
 }
 

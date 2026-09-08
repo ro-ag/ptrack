@@ -47,8 +47,11 @@ that defines the project. This design removes that class of answer entirely.
   module appears because its own manifest is tracked. This keeps the resolver a
   pure function of the path list and avoids parsing manifest globs.
 - **Refinement.** A JavaScript project is reported as TypeScript when a
-  `tsconfig.json` is tracked in the same directory. Refinement rules are part
-  of the table and are applied in table order.
+  `tsconfig.json` is tracked in the same directory, or when any tracked file
+  attributed to it is a `.ts`/`.tsx` source. Declaration files (`.d.ts`) do not
+  refine: they describe JavaScript rather than prove the project is written in
+  TypeScript. Refinement never invents evidence — an untracked `tsconfig.json`
+  is not listed as a manifest.
 - **Attribution.** Every tracked file is attributed to the nearest enclosing
   discovered project and counted by extension. Files under no discovered
   project are counted once at the repository level as unattributed.

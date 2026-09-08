@@ -136,3 +136,50 @@ fn an_extension_marker_discovers_its_project() {
     assert_eq!(resolved[0].language, LanguageId::Terraform);
     assert_eq!(resolved[0].files, 2);
 }
+
+#[test]
+fn tracked_typescript_sources_refine_a_project_with_no_tsconfig() {
+    let resolved = resolve(&paths(&[
+        "frontend/package.json",
+        "frontend/src/app.ts",
+        "frontend/vite.config.ts",
+    ]));
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].language, LanguageId::TypeScript);
+    // No tsconfig.json is tracked, so it is never claimed as evidence.
+    assert_eq!(
+        resolved[0].evidence,
+        vec!["frontend/package.json".to_owned()]
+    );
+}
+
+#[test]
+fn declaration_files_alone_leave_a_project_on_javascript() {
+    let resolved = resolve(&paths(&[
+        "frontend/package.json",
+        "frontend/src/app.js",
+        "frontend/types/global.d.ts",
+    ]));
+    assert_eq!(resolved[0].language, LanguageId::JavaScript);
+}
+
+#[test]
+fn typescript_sources_refine_only_the_project_that_owns_them() {
+    let resolved = resolve(&paths(&[
+        "package.json",
+        "src/index.js",
+        "tools/package.json",
+        "tools/main.ts",
+    ]));
+    let roots: Vec<(&str, LanguageId)> = resolved
+        .iter()
+        .map(|project| (project.root.as_str(), project.language))
+        .collect();
+    assert_eq!(
+        roots,
+        vec![
+            ("", LanguageId::JavaScript),
+            ("tools", LanguageId::TypeScript)
+        ]
+    );
+}
