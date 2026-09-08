@@ -122,6 +122,7 @@ fn legacy_zero_format_meta_is_preserved_but_newer_formats_fail() {
         last_write_version: String::new(),
         active_plans: Vec::new(),
         actors: Vec::new(),
+        stack: None,
     };
     meta.validate().expect("legacy v0 is preserved");
     meta.format_version = 6;

@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use ptrack_core::{ProjectRef, Timestamp};
+use ptrack_core::{ProjectRef, StackSummary, Timestamp};
 
 use crate::paths::lexical_absolute;
 use crate::typed;
@@ -181,10 +181,20 @@ impl GlobalStore {
             .to_str()
             .ok_or_else(|| StoreError::InvalidManifest("project path must be UTF-8".to_owned()))?
             .to_owned();
+        // A re-registration is a last-seen touch, not a reset: the stack
+        // summary a scan established must survive it.
+        let stack = self
+            .active
+            .store()
+            .read(|transaction| {
+                typed::get::<ProjectRef>(transaction, RecordKey::Bytes(path.as_bytes()))
+            })?
+            .and_then(|existing| existing.stack);
         let value = ProjectRef {
             name: name.into(),
             path: path.clone(),
             last_seen: self.clock.now_local(),
+            stack,
         };
         self.active.write(|tx| {
             typed::put(tx, RecordKey::Bytes(path.as_bytes()), &value)?;
@@ -198,6 +208,27 @@ impl GlobalStore {
         self.active
             .store()
             .read(|tx| typed::get::<ProjectRef>(tx, RecordKey::Bytes(path.as_bytes())))
+    }
+
+    /// Records the compact stack summary for one registered project.
+    ///
+    /// A project that is not registered is left alone rather than created: the
+    /// registry entry is owned by registration, not by a scan.
+    pub fn set_project_stack(
+        &self,
+        path: impl AsRef<Path>,
+        summary: StackSummary,
+    ) -> StoreResult<()> {
+        let path = registry_path(path.as_ref())?;
+        self.active.write(|transaction| {
+            let key = RecordKey::Bytes(path.as_bytes());
+            let Some(mut value) = typed::get_write::<ProjectRef>(transaction, key)? else {
+                return Ok(());
+            };
+            value.stack = Some(summary);
+            typed::put(transaction, key, &value)?;
+            Ok(())
+        })
     }
 
     pub fn forget_project_if_matches(
@@ -228,6 +259,7 @@ impl GlobalStore {
             name: name.into(),
             path: path.clone(),
             last_seen: self.clock.now_local(),
+            stack: expected.stack.clone(),
         };
         self.active.write(|transaction| {
             let old_key = RecordKey::Bytes(expected.path.as_bytes());

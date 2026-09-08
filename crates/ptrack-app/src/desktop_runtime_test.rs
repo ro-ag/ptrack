@@ -12,7 +12,7 @@ use ptrack_agent::{
 };
 use ptrack_core::{
     Commit, IssueStatus, MemoryKind, Meta, Note, NoteTarget, Plan, PlanStatus, ProjectSnapshot,
-    Severity, Task, TaskStatus, Timestamp,
+    Severity, StackProfile, Task, TaskStatus, Timestamp,
 };
 use ptrack_store::{ActiveBinding, GlobalStore, ProjectStore, StoreKind};
 use ptrack_terminal::{Manager, TerminalAssociationPointer};
@@ -22,11 +22,11 @@ use super::desktop_runtime::{
     ActiveResourceSummary, BoundDesktopWorkspace, DesktopCommandRequest, DesktopRuntime,
     DesktopRuntimeConfig, DesktopWorkspace, DesktopWorkspaceFactory,
     RecentProjectOpenAuthorizationV1, RecentProjectRegistryCommitV1, RecentProjectRegistryStatusV1,
-    RecentProjectsProvider, ResetApplicationStateResultV1, WorkspaceProject, WorkspaceStatus,
-    agent_intelligence_for_task_result, allowed_desktop_commands, apply_preferences, board_view,
-    capture_git_snapshot_with, confirm_linked_launch, heatmap_at, project_storage,
-    record_last_project_in, repo_stats, reset_application_records, snapshot_board_view,
-    watch_workspace_data,
+    RecentProjectsProvider, ResetApplicationStateResultV1, StackScanOutcome, WorkspaceProject,
+    WorkspaceStatus, agent_intelligence_for_task_result, allowed_desktop_commands,
+    apply_preferences, board_view, capture_git_snapshot_with, confirm_linked_launch, heatmap_at,
+    project_storage, record_last_project_in, reset_application_records, snapshot_board_view,
+    stack_scan_due, stack_scan_outcome, watch_workspace_data,
 };
 use crate::{
     AppError, AppResult, DesktopEvent, DesktopEventSink, DesktopInitializationService,
@@ -949,7 +949,7 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "GetPreferences",
             "GetRecentProjects",
             "GetRecentProjectsV1",
-            "GetRepoStatsV1",
+            "GetStackProfileV1",
             "GetTaskDetailV2",
             "GetTerminalProfiles",
             "GetTerminalProfilesV2",
@@ -1286,6 +1286,7 @@ fn heatmap_buckets_instants_in_the_host_local_calendar_day() {
             last_write_version: String::new(),
             active_plans: Vec::new(),
             actors: Vec::new(),
+            stack: None,
         },
         Vec::new(),
         Vec::new(),
@@ -1368,6 +1369,7 @@ fn board_view_carries_dep_edges_and_their_computed_open_subset() {
             last_write_version: String::new(),
             active_plans: Vec::new(),
             actors: Vec::new(),
+            stack: None,
         },
         Vec::new(),
         vec![
@@ -1478,6 +1480,7 @@ fn activity_snapshot() -> ProjectSnapshot {
             last_write_version: String::new(),
             active_plans: Vec::new(),
             actors: Vec::new(),
+            stack: None,
         },
         Vec::new(),
         vec![activity_plan(1), activity_plan(2)],
@@ -3965,63 +3968,72 @@ fn desktop_plan_completion_hold_and_resume_preserve_cli_lifecycle_rules() {
 }
 
 #[test]
-fn repo_stats_counts_tracked_files_and_lines_and_fails_soft() {
-    let root = std::env::temp_dir().join(format!(
-        "ptrack-repo-stats-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&root).unwrap();
+fn a_scan_is_due_only_when_head_moved_and_never_for_a_truncated_profile() {
+    assert!(stack_scan_due(None, "abc123"));
 
-    // Not a git repository: soft failure, never an error.
-    let stats = repo_stats(&root);
-    assert!(!stats.available);
-
-    let git = |args: &[&str]| {
-        let outcome = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&root)
-            .args(args)
-            .status()
-            .unwrap();
-        assert!(outcome.success(), "git {args:?}");
+    let stored = StackProfile {
+        scanned_head: "abc123".to_owned(),
+        ..StackProfile::default()
     };
-    git(&["init", "-q"]);
-    git(&[
-        "-c",
-        "user.email=t@t",
-        "-c",
-        "user.name=t",
-        "commit",
-        "-q",
-        "--allow-empty",
-        "-m",
-        "root",
-    ]);
+    assert!(stack_scan_due(Some(&stored), "def456"));
+    assert!(!stack_scan_due(Some(&stored), "abc123"));
 
-    // A repository whose HEAD holds no files is available and empty.
-    let stats = repo_stats(&root);
-    assert_eq!((stats.available, stats.files, stats.lines), (true, 0, 0));
+    let truncated = StackProfile {
+        scanned_head: "abc123".to_owned(),
+        incomplete: true,
+        ..StackProfile::default()
+    };
+    assert!(!stack_scan_due(Some(&truncated), "def456"));
+}
 
-    std::fs::write(root.join("a.txt"), "one\ntwo\nthree\n").unwrap();
-    std::fs::write(root.join("b.txt"), "four\n").unwrap();
-    git(&["add", "."]);
-    git(&[
-        "-c",
-        "user.email=t@t",
-        "-c",
-        "user.name=t",
-        "commit",
-        "-q",
-        "-m",
-        "content",
-    ]);
+#[test]
+fn a_failed_scan_writes_nothing_and_keeps_the_stored_profile() {
+    let stored = StackProfile {
+        scanned_head: "abc123".to_owned(),
+        ..StackProfile::default()
+    };
+    assert_eq!(
+        stack_scan_outcome(Some(stored.clone()), Some("def456"), false, || None),
+        StackScanOutcome::Failed(Some(stored))
+    );
+}
 
-    let stats = repo_stats(&root);
-    assert_eq!((stats.available, stats.files, stats.lines), (true, 2, 4));
+#[test]
+fn an_unchanged_head_serves_the_stored_profile_without_scanning() {
+    let stored = StackProfile {
+        scanned_head: "abc123".to_owned(),
+        ..StackProfile::default()
+    };
+    assert_eq!(
+        stack_scan_outcome(Some(stored.clone()), Some("abc123"), false, || panic!(
+            "no scan is due"
+        )),
+        StackScanOutcome::Serve(stored)
+    );
+}
 
-    std::fs::remove_dir_all(&root).unwrap();
+#[test]
+fn a_forced_scan_runs_even_when_nothing_moved() {
+    let stored = StackProfile {
+        scanned_head: "abc123".to_owned(),
+        ..StackProfile::default()
+    };
+    let fresh = StackProfile {
+        scanned_head: "abc123".to_owned(),
+        tracked_files: 7,
+        ..StackProfile::default()
+    };
+    let scanned = fresh.clone();
+    assert_eq!(
+        stack_scan_outcome(Some(stored), Some("abc123"), true, move || Some(scanned)),
+        StackScanOutcome::Store(fresh)
+    );
+}
+
+#[test]
+fn a_repository_with_no_head_is_unavailable() {
+    assert_eq!(
+        stack_scan_outcome(None, None, true, || panic!("no scan without a HEAD")),
+        StackScanOutcome::Unavailable
+    );
 }

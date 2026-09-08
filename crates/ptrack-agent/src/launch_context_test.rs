@@ -42,6 +42,7 @@ impl Store {
                 last_write_version: String::new(),
                 active_plans: Vec::new(),
                 actors: Vec::new(),
+                stack: None,
             },
             plans: BTreeMap::new(),
             tasks: BTreeMap::new(),

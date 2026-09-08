@@ -44,12 +44,12 @@ use crate::{
     ProductionTerminalIdentityAuthority, ProjectEndpoint, ProjectGuideChoiceV1,
     ProjectGuideFileActionV1, ProjectGuidePreviewRequestV1, ProjectGuidePreviewV1,
     ProjectTargetKindV1, ProjectTargetValidationV1, RecentProjectAvailabilityV1,
-    RecentProjectOpenAuthorizationV1, RecentProjectRegistryCommitV1, RecentProjectRegistryStatusV1,
-    RecentProjectResolutionV1, RecentProjectV1, RecentProjectsProvider, RecentProjectsV1,
-    RelocateRequest, RelocateResult, ResolvedRecentProjectV1, TerminalAgentAuthority,
-    TerminalEventSink, TerminalIdentityAuthority, TerminalRuntime, TerminalRuntimeConfig,
-    UnavailableUpdateService, UpdateEventSink, UpdateRuntime, UpdateState, WorkspaceBindings,
-    WorkspaceProject,
+    RecentProjectLanguageV1, RecentProjectOpenAuthorizationV1, RecentProjectRegistryCommitV1,
+    RecentProjectRegistryStatusV1, RecentProjectResolutionV1, RecentProjectStackV1,
+    RecentProjectV1, RecentProjectsProvider, RecentProjectsV1, RelocateRequest, RelocateResult,
+    ResolvedRecentProjectV1, TerminalAgentAuthority, TerminalEventSink, TerminalIdentityAuthority,
+    TerminalRuntime, TerminalRuntimeConfig, UnavailableUpdateService, UpdateEventSink,
+    UpdateRuntime, UpdateState, WorkspaceBindings, WorkspaceProject,
 };
 
 const RECOVERY_REQUIRED: &str = "runtime recovery is required";
@@ -845,6 +845,17 @@ impl RecentProjectsProvider for ProductionRecentProjects {
                     canonical_path: project.path.clone(),
                     last_opened_at: format_timestamp(project.last_seen),
                     availability: recent_availability(&self.runtime, project),
+                    stack: project.stack.as_ref().map(|summary| RecentProjectStackV1 {
+                        languages: summary
+                            .languages
+                            .iter()
+                            .map(|(language, files)| RecentProjectLanguageV1 {
+                                language: language.as_str().to_owned(),
+                                files: *files,
+                            })
+                            .collect(),
+                        tracked_files: summary.tracked_files,
+                    }),
                 })
             })
             .collect::<AppResult<Vec<_>>>()?;

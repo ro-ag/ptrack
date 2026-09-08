@@ -6,6 +6,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Deterministic stack discovery. Opening a project scans its tracked files
+  once, discovers each subproject from the manifests git actually tracks
+  (`Cargo.toml`, `go.mod`, `package.json`, `pyproject.toml`, and the rest), and
+  reports the languages with their tracked-file counts. A JavaScript project is
+  reported as TypeScript when it tracks a `tsconfig.json` or any `.ts`/`.tsx`
+  source. The Repository panel
+  lists each discovered project with the manifest paths that prove it, the
+  project cards carry a stack label, and `ptrack context` carries the same
+  structure so a resuming agent does not have to guess the stack. A rescan runs
+  when HEAD moves; a repository over the 200,000-path cap is marked partial and
+  rescans only on open or on request.
+
+### Removed
+- The Overview's "Lines of code" tile, and the line counting behind it. A
+  vendored directory, a lockfile, or one generated bundle outweighed the code
+  that defines the project, which made the number misleading. Tracked-file
+  counts replace it.
+
+### Changed
+- The native record payload schema is now 5, adding the stack profile to the
+  project metadata record and its summary to the registry entry. Databases
+  written by older builds open unchanged and upgrade on their next write; a
+  database written by this build is not readable by an older ptrack.
+
 ## [0.36.1] - 2026-09-04
 
 ### Changed

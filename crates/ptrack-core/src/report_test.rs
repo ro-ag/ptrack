@@ -1,6 +1,7 @@
 use crate::test_support::{issue, meta, note, plan, snapshot, task};
 use crate::{
-    IssueStatus, MemoryKind, NoteTarget, PlanStatus, ProjectSnapshot, Severity, TaskStatus, context,
+    IssueStatus, LanguageId, MemoryKind, NoteTarget, PlanStatus, ProjectSnapshot, Severity,
+    StackProfile, StackProject, TaskStatus, Timestamp, context,
 };
 
 #[test]
@@ -329,4 +330,57 @@ fn context_silently_omits_a_missing_active_plan() {
     let digest = context(&snapshot);
     assert!(digest.active_plan.is_none());
     assert!(digest.markdown().contains("## Active plan\n_none_\n"));
+}
+
+#[test]
+fn the_digest_names_the_discovered_stack_and_omits_it_when_unscanned() {
+    let mut snapshot = snapshot();
+    assert!(!context(&snapshot).markdown().contains("## Stack"));
+
+    snapshot.meta.stack = Some(StackProfile {
+        projects: vec![
+            StackProject {
+                root: String::new(),
+                language: LanguageId::Rust,
+                evidence: vec!["Cargo.toml".to_owned()],
+                depth: 0,
+                files: 214,
+            },
+            StackProject {
+                root: "frontend".to_owned(),
+                language: LanguageId::TypeScript,
+                evidence: vec!["frontend/package.json".to_owned()],
+                depth: 1,
+                files: 38,
+            },
+        ],
+        scanned_head: "abc123".to_owned(),
+        scanned_at: Timestamp::Zero,
+        tracked_files: 252,
+        incomplete: false,
+    });
+    let markdown = context(&snapshot).markdown();
+    assert!(markdown.contains("## Stack"));
+    assert!(markdown.contains("- . — rust (214 tracked files)"));
+    assert!(markdown.contains("- frontend — typescript (38 tracked files)"));
+    assert!(!markdown.contains("_partial"));
+}
+
+#[test]
+fn a_truncated_scan_is_labelled_partial_in_the_digest() {
+    let mut snapshot = snapshot();
+    snapshot.meta.stack = Some(StackProfile {
+        projects: vec![StackProject {
+            root: String::new(),
+            language: LanguageId::Rust,
+            evidence: vec!["Cargo.toml".to_owned()],
+            depth: 0,
+            files: 200_000,
+        }],
+        scanned_head: "abc123".to_owned(),
+        scanned_at: Timestamp::Zero,
+        tracked_files: 200_000,
+        incomplete: true,
+    });
+    assert!(context(&snapshot).markdown().contains("_partial"));
 }

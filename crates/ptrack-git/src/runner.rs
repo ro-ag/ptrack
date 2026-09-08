@@ -96,6 +96,18 @@ impl Default for ExecRunner {
 }
 
 impl ExecRunner {
+    /// Constructs a runner with explicit bounds, for the tracked-path scan
+    /// whose listing is far larger and slower than any snapshot command.
+    pub(crate) fn with_limits(timeout: Duration, max_output_bytes: usize) -> Self {
+        Self {
+            git_path: OsString::from("git"),
+            timeout,
+            max_output_bytes,
+            reader_counter: &ACTIVE_READER_THREADS,
+            reader_limit: MAX_READER_THREADS,
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn for_test(
         git_path: impl Into<OsString>,

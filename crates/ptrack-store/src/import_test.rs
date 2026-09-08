@@ -123,6 +123,7 @@ fn record(collection: Collection, key: OwnedRecordKey, payload: &[u8]) -> Import
             last_write_version: "v0.21.0".to_owned(),
             active_plans: Vec::new(),
             actors: Vec::new(),
+            stack: None,
         }))
         .unwrap(),
         Collection::Tasks => {
@@ -153,6 +154,7 @@ fn record(collection: Collection, key: OwnedRecordKey, payload: &[u8]) -> Import
                 name: String::from_utf8_lossy(payload).into_owned(),
                 path: String::from_utf8(path.clone()).unwrap(),
                 last_seen: Timestamp::Zero,
+                stack: None,
             }))
             .unwrap()
         }

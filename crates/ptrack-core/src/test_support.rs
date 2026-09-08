@@ -14,6 +14,7 @@ pub(crate) fn meta(active_plan: u64) -> Meta {
         last_write_version: "v0.21.0".to_owned(),
         active_plans: Vec::new(),
         actors: Vec::new(),
+        stack: None,
     }
 }
 

@@ -8,6 +8,7 @@ mod model;
 mod runner;
 mod snapshot;
 mod status;
+mod tracked;
 mod worktree;
 
 pub use model::{
@@ -16,6 +17,7 @@ pub use model::{
 };
 pub use runner::{CancellationToken, RepositoryError};
 pub use snapshot::{RepositoryService, capture};
+pub use tracked::{MAX_TRACKED_PATHS, TrackedPaths};
 pub use worktree::inspect_worktree;
 
 #[cfg(test)]
@@ -26,5 +28,7 @@ mod snapshot_test;
 mod status_test;
 #[cfg(test)]
 mod test_support;
+#[cfg(test)]
+mod tracked_test;
 #[cfg(test)]
 mod worktree_test;

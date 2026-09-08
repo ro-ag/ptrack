@@ -460,6 +460,10 @@ const elements = {
   storageStatus: document.querySelector("#storage-status"),
   gitState: document.querySelector("#git-state"),
   gitSummary: document.querySelector("#git-summary"),
+  stackSummary: document.querySelector("#stack-summary"),
+  stackProjects: document.querySelector("#stack-projects"),
+  stackScanned: document.querySelector("#stack-scanned"),
+  stackRescan: document.querySelector("#stack-rescan"),
   gitRemotes: document.querySelector("#git-remotes"),
   gitBranches: document.querySelector("#git-branches"),
   gitCommits: document.querySelector("#git-commits"),
@@ -681,8 +685,8 @@ let paletteSequence = 0;
 let paletteReturnFocus = null;
 let pendingDetailTaskId = 0;
 let heatmapRequested = false;
-let repoStatsRequested = false;
-let repoStats = null;
+let stackProfileRequested = false;
+let stackProfile = null;
 const expandedLanes = new Set();
 const foldedLanes = new Set();
 
@@ -967,6 +971,32 @@ function compactBytes(value) {
   return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
+// Display names for the identifiers the backend can send. An unknown
+// identifier renders as itself: a newer backend must never produce a blank
+// label.
+const languageLabels = {
+  rust: "Rust",
+  go: "Go",
+  javascript: "JavaScript",
+  typescript: "TypeScript",
+  python: "Python",
+  swift: "Swift",
+  java: "Java",
+  kotlin: "Kotlin",
+  csharp: "C#",
+  ruby: "Ruby",
+  php: "PHP",
+  elixir: "Elixir",
+  dart: "Dart",
+  c: "C/C++",
+  terraform: "Terraform",
+  container: "Containers",
+};
+
+function languageLabel(id) {
+  return languageLabels[id] || id;
+}
+
 function statElement(value, label) {
   const stat = document.createElement("div");
   stat.className = "stat";
@@ -1085,11 +1115,17 @@ function renderMemory() {
     statElement(board.stats.notes, "Notes"),
     statElement(board.stats.commits, "Commits"),
   );
-  if (repoStats?.available) {
-    counts.append(
-      statElement(repoStats.files.toLocaleString(), "Tracked files"),
-      statElement(repoStats.lines.toLocaleString(), "Lines of code"),
-    );
+  // Discovered languages, counted in tracked files. A line count is not
+  // reported: one vendored directory or generated bundle outweighs the code
+  // that defines the project.
+  if (stackProfile?.state === "ready") {
+    counts.append(statElement(stackProfile.trackedFiles.toLocaleString(), "Tracked files"));
+    stackProfile.projects.slice(0, 4).forEach((project) => {
+      counts.append(statElement(project.files.toLocaleString(), languageLabel(project.language)));
+    });
+    if (stackProfile.incomplete) {
+      counts.append(statElement("partial", "Scan truncated"));
+    }
   }
   elements.stats.replaceChildren(progress, counts);
   renderPlanRing(board.stats.tasksDone, board.stats.tasks);
@@ -1525,17 +1561,25 @@ function renderHeatmap(days) {
   elements.heatmap.append(chart, totals);
 }
 
-// Repository code statistics follow the heatmap pattern: fetched lazily
-// once the Overview is shown, re-fetched after a snapshot reload.
-async function loadRepoStats(force = false) {
+// The stack profile follows the heatmap pattern: fetched lazily once the
+// Overview is shown, re-fetched after a snapshot reload. The backend scans
+// only when HEAD moved, so a re-fetch is usually a stored read.
+// `force` also forces a rescan, which is what the Repository panel's Rescan
+// control needs.
+async function loadStackProfile(force = false) {
   if (workspaceController.state.status !== "open") return;
-  if (repoStatsRequested && !force) return;
-  repoStatsRequested = true;
+  if (stackProfileRequested && !force) return;
+  stackProfileRequested = true;
+  if (force) stackProfile = { state: "scanning" };
   try {
-    repoStats = await api().GetRepoStatsV1();
+    stackProfile = await api().GetStackProfileV1(force);
     if (board) renderMemory();
+    renderStackProfile();
   } catch {
-    repoStatsRequested = false;
+    stackProfileRequested = false;
+    stackProfile = { state: "failed" };
+    if (board) renderMemory();
+    renderStackProfile();
   }
 }
 
@@ -2175,7 +2219,57 @@ function renderDrift(section) {
   drift.findings.filter((finding) => finding.severity !== "warning").forEach(appendFinding);
 }
 
+// The Repository panel's stack section. Every state is explicit: a project
+// that cannot be scanned says so rather than rendering an empty list that
+// reads as "no code here".
+function renderStackProfile() {
+  if (!elements.stackSummary) return;
+  elements.stackSummary.replaceChildren();
+  elements.stackProjects.replaceChildren();
+  elements.stackScanned.textContent = "";
+  elements.stackRescan.hidden = true;
+
+  const state = stackProfile?.state;
+  if (!state || state === "scanning") {
+    elements.stackSummary.append(pill("Stack", state ? "scanning…" : "not scanned"));
+    return;
+  }
+  if (state === "unavailable") {
+    elements.stackSummary.append(pill("Stack", "not a git repository"));
+    return;
+  }
+  if (state === "failed") {
+    elements.stackSummary.append(pill("Stack", "scan failed", "error"));
+    elements.stackRescan.hidden = false;
+    elements.stackRescan.textContent = "Retry stack scan";
+    return;
+  }
+
+  elements.stackSummary.append(pill("tracked files", stackProfile.trackedFiles.toLocaleString()));
+  if (stackProfile.incomplete) {
+    elements.stackSummary.append(pill("scan", "truncated at the path cap", "warning"));
+  }
+  if (!stackProfile.projects.length) {
+    elements.stackProjects.append(emptyMemory("No project manifest found in tracked files."));
+  } else {
+    stackProfile.projects.forEach((project) => {
+      elements.stackProjects.append(
+        intelligenceItem(
+          `${project.root || "."} · ${languageLabel(project.language)}`,
+          `${project.files.toLocaleString()} tracked file${project.files === 1 ? "" : "s"} · from ${project.evidence.join(", ")}`,
+        ),
+      );
+    });
+  }
+  elements.stackScanned.textContent = stackProfile.scannedHead
+    ? `Scanned at ${stackProfile.scannedHead.slice(0, 8)}`
+    : "";
+  elements.stackRescan.hidden = false;
+  elements.stackRescan.textContent = "Rescan stack";
+}
+
 function renderGitIntelligence(section) {
+  renderStackProfile();
   elements.gitSummary.replaceChildren();
   elements.gitRemotes.replaceChildren();
   elements.gitBranches.replaceChildren();
@@ -2752,7 +2846,9 @@ async function loadSnapshot(
     openPendingTaskDetail();
     if (view === "issues") void loadIssues(true);
     if (view === "overview" && heatmapRequested) void loadHeatmap(true);
-    if (view === "overview" && repoStatsRequested) void loadRepoStats(true);
+    // Every snapshot re-reads the stack: opening a project lands one, and the
+    // backend scans only when HEAD moved since the stored profile.
+    void loadStackProfile(!stackProfileRequested);
     const now = new Date(response.capturedAt).toLocaleTimeString([], {
       hour: "numeric",
       minute: "2-digit",
@@ -5178,6 +5274,17 @@ function recentProjectStateLabel(availability) {
   return "";
 }
 
+// The card's stack line: the two largest languages with their tracked-file
+// counts. A project never scanned by this build carries no summary and gets
+// no line rather than a guess.
+function recentProjectStackLabel(stack) {
+  if (!stack?.languages?.length) return "";
+  return stack.languages
+    .slice(0, 2)
+    .map((entry) => `${languageLabel(entry.language)} ${entry.files.toLocaleString()}`)
+    .join(" · ");
+}
+
 function recentProjectPrimaryLabel(availability) {
   if (availability === "available") return "Open";
   if (availability === "permission-required") return "Try Again";
@@ -5284,6 +5391,15 @@ function renderRecentProjects() {
     path.append(lastOpened);
     content.append(name, path);
     const descriptionIDs = [path.id];
+    const stackLabel = recentProjectStackLabel(project.stack);
+    if (stackLabel) {
+      const stack = document.createElement("p");
+      stack.className = "recent-project-stack";
+      stack.id = `recent-project-stack-${index}`;
+      stack.textContent = stackLabel;
+      content.append(stack);
+      descriptionIDs.push(stack.id);
+    }
     const stateLabel = recentProjectStateLabel(project.availability);
     if (stateLabel) {
       const state = document.createElement("p");
@@ -6437,7 +6553,7 @@ function setView(nextView, focusHeading = false) {
   if (view === "overview") {
     requestAnimationFrame(fitRecentMemory);
     void loadHeatmap();
-    void loadRepoStats();
+    void loadStackProfile();
   }
   if (view === "issues") void loadIssues();
   recordProjectLayout();
@@ -6541,8 +6657,8 @@ function renderWorkspaceState(state, focus = false) {
   closeIssueDetail(false);
   closePalette();
   heatmapRequested = false;
-  repoStatsRequested = false;
-  repoStats = null;
+  stackProfileRequested = false;
+  stackProfile = null;
   board = null;
   clearPlanFilters();
   elements.planFilters.hidden = true;
@@ -7779,6 +7895,7 @@ elements.sidebarResize.addEventListener("keydown", resizeSidebarFromKeyboard);
 window.addEventListener("resize", () => setSidebarWidth(sidebarWidth, false));
 
 elements.navBoard.addEventListener("click", () => setView("board"));
+elements.stackRescan?.addEventListener("click", () => void loadStackProfile(true));
 elements.navOverview.addEventListener("click", () => setView("overview"));
 elements.navIssues.addEventListener("click", () => setView("issues"));
 elements.issuesFilter.addEventListener("change", () => { issuesOffset = 0; void loadIssues(); });
