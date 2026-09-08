@@ -1119,19 +1119,94 @@ The command handler:
 
 Register `"GetStackProfileV1"` in the command list at line 121 and add the dispatch arm beside the others at line 3897. Delete `"GetRepoStatsV1"` from both, and delete `RepoStatsView` and `repo_stats` entirely.
 
-- [ ] **Step 4: Add the failure and persistence test**
+- [ ] **Step 4: Make the write decision a testable pure function**
+
+The command handler must not decide persistence inline — that decision needs a
+test that does not build a whole runtime. Add beside `stack_scan_due`:
 
 ```rust
-#[test]
-fn a_failed_scan_preserves_the_stored_profile() {
-    // Build a runtime whose stack service fails, with a profile already
-    // stored, then assert the stored profile is unchanged and the view
-    // reports "failed". Follow the fixture pattern used by the neighbouring
-    // desktop runtime tests.
+/// What one scan attempt does to durable state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum StackScanOutcome {
+    /// Persist this profile and its registry summary, then serve it.
+    Store(StackProfile),
+    /// Serve the stored profile; nothing is written.
+    Serve(StackProfile),
+    /// The scan failed. Nothing is written; the stored profile stands.
+    Failed(Option<StackProfile>),
+    /// No HEAD to scan against.
+    Unavailable,
+}
+
+/// Decides the outcome of one scan attempt.
+///
+/// A failure never writes, so a transient git error cannot clear counts a
+/// successful scan established.
+pub(super) fn stack_scan_outcome(
+    stored: Option<StackProfile>,
+    head: Option<&str>,
+    force: bool,
+    scan: impl FnOnce() -> Option<StackProfile>,
+) -> StackScanOutcome {
+    let Some(head) = head else {
+        return StackScanOutcome::Unavailable;
+    };
+    if !force && !stack_scan_due(stored.as_ref(), head) {
+        return stored.map_or(StackScanOutcome::Unavailable, StackScanOutcome::Serve);
+    }
+    scan().map_or(StackScanOutcome::Failed(stored), StackScanOutcome::Store)
 }
 ```
 
-Fill this in against the fixture helpers already in `desktop_runtime_test.rs`; the assertion is that `stack_profile()` returns the pre-existing profile and the command result's `state` is `"failed"`.
+with the tests:
+
+```rust
+#[test]
+fn a_failed_scan_writes_nothing_and_keeps_the_stored_profile() {
+    let stored = StackProfile { scanned_head: "abc123".to_owned(), ..StackProfile::default() };
+    assert_eq!(
+        stack_scan_outcome(Some(stored.clone()), Some("def456"), false, || None),
+        StackScanOutcome::Failed(Some(stored))
+    );
+}
+
+#[test]
+fn an_unchanged_head_serves_the_stored_profile_without_scanning() {
+    let stored = StackProfile { scanned_head: "abc123".to_owned(), ..StackProfile::default() };
+    assert_eq!(
+        stack_scan_outcome(Some(stored.clone()), Some("abc123"), false, || {
+            panic!("no scan is due")
+        }),
+        StackScanOutcome::Serve(stored)
+    );
+}
+
+#[test]
+fn force_scans_even_when_nothing_moved() {
+    let stored = StackProfile { scanned_head: "abc123".to_owned(), ..StackProfile::default() };
+    let fresh = StackProfile { scanned_head: "abc123".to_owned(), tracked_files: 7, ..StackProfile::default() };
+    assert_eq!(
+        stack_scan_outcome(Some(stored), Some("abc123"), true, || Some(fresh.clone())),
+        StackScanOutcome::Store(fresh)
+    );
+}
+
+#[test]
+fn a_repository_with_no_head_is_unavailable() {
+    assert_eq!(
+        stack_scan_outcome(None, None, true, || panic!("no scan without a HEAD")),
+        StackScanOutcome::Unavailable
+    );
+}
+```
+
+The command handler then does exactly one thing per variant: `Store` writes the
+profile and the summary and serves `ready`; `Serve` serves `ready`; `Failed`
+serves `failed`; `Unavailable` serves `unavailable`.
+
+Also drop `repo_stats` from the `use super::desktop_runtime::{…}` list at
+`crates/ptrack-app/src/desktop_runtime_test.rs:29` and delete the tests that
+covered it.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
@@ -1266,16 +1341,19 @@ git commit -m "feat: show the discovered stack instead of a line count"
 - Modify: `crates/ptrack-cli/src/compat_json.rs` and `compat_json_test.rs` if the JSON view is assembled there
 
 **Interfaces:**
-- Consumes: `ProjectStore::stack_profile`.
+- Consumes: `snapshot.meta.stack` — the CLI reads through `ApplicationPort::snapshot`, and `ProjectSnapshot` already carries `meta`, so the profile arrives with no new snapshot field.
 - Produces: a `Stack` section in the display digest and a `stack` object in the JSON view.
 
 - [ ] **Step 1: Write the failing test**
 
+The dispatch tests drive a `FakeApplication` holding a `ProjectSnapshot`; set
+`snapshot.meta.stack` on it rather than touching a store.
+
 ```rust
 #[test]
 fn the_context_digest_names_the_discovered_stack() {
-    let fixture = cli_fixture();
-    fixture.store.set_stack_profile(StackProfile {
+    let mut application = FakeApplication::default();
+    application.snapshot.meta.stack = Some(StackProfile {
         projects: vec![
             StackProject { root: String::new(), language: LanguageId::Rust, evidence: vec!["Cargo.toml".to_owned()], depth: 0, files: 214 },
             StackProject { root: "frontend".to_owned(), language: LanguageId::TypeScript, evidence: vec!["frontend/package.json".to_owned()], depth: 1, files: 38 },
@@ -1284,9 +1362,9 @@ fn the_context_digest_names_the_discovered_stack() {
         scanned_at: Timestamp::Zero,
         tracked_files: 252,
         incomplete: false,
-    }).expect("write");
+    });
 
-    let output = fixture.run(&["context"]).expect("context");
+    let output = run_context(application);
     assert!(output.contains("Stack"));
     assert!(output.contains("rust"));
     assert!(output.contains("214"));
@@ -1295,13 +1373,15 @@ fn the_context_digest_names_the_discovered_stack() {
 
 #[test]
 fn a_project_with_no_scan_omits_the_stack_section() {
-    let fixture = cli_fixture();
-    let output = fixture.run(&["context"]).expect("context");
+    let output = run_context(FakeApplication::default());
     assert!(!output.contains("Stack"));
 }
 ```
 
-Use the dispatch test file's own fixture helpers and its assertion style.
+`run_context` stands for whatever this file's existing invocation helper is —
+the neighbouring tests already build a `FakeApplication`, call `run` with
+`["context"]` through `Io`, and read the captured stdout. Use that exact
+pattern and its names; do not add a second helper.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -1310,7 +1390,7 @@ Expected: FAIL — no `Stack` section.
 
 - [ ] **Step 3: Emit the section**
 
-In `context_command`, after the existing sections, read `stack_profile()`. When present and non-empty, print one line per discovered project: root (or `.` at the repository root), language, and file count, plus a truncation note when `incomplete`. Absent or empty profiles print nothing. The JSON view carries the same values as structured fields — never a formatted string a consumer must parse.
+In `context_command`, after the existing sections, read `snapshot.meta.stack`. When present and non-empty, print one line per discovered project: root (or `.` at the repository root), language, and file count, plus a truncation note when `incomplete`. Absent or empty profiles print nothing. The JSON view carries the same values as structured fields — never a formatted string a consumer must parse.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
