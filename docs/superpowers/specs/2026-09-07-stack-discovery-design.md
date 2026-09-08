@@ -58,15 +58,25 @@ that defines the project. This design removes that class of answer entirely.
 
 ## Records
 
-- The project database holds exactly one `LanguageProfile` record: the
-  discovered projects, their languages, evidence paths, depth, and per-project
-  file counts, plus the HEAD sha the scan ran against, the scan timestamp, the
-  total tracked file count, and a truncation flag.
+Persistence is additive at the payload-schema level only. No collection is
+added and `STORE_SCHEMA_VERSION` does not move: the database validator demands
+an exact table catalog and an exact schema version, and no in-place upgrade
+path exists, so a new collection would refuse to open every database written by
+an earlier build. Both new fields follow the mechanism that introduced the
+per-actor maps at payload schema 3 — written only at or above the schema that
+defines them, absent and empty when decoded from an older record.
+
+- The project database stores the full profile as an additive `Meta.stack`
+  field: the discovered projects, their languages, evidence paths, depth, and
+  per-project file counts, plus the HEAD sha the scan ran against, the scan
+  timestamp, the total tracked file count, and a truncation flag.
 - The global database carries an additive stack summary on `ProjectRef`: the
-  ranked language identifiers and the total tracked file count. Recent-project
-  cards read only this summary and never open a project database to render a
-  list. A `ProjectRef` written by an older build decodes with an absent
-  summary; it is not an error and the card renders without a label.
+  ranked language identifiers with their file counts, and the total tracked
+  file count. Recent-project cards read only this summary and never open a
+  project database to render a list.
+- A record written before this feature decodes with an absent profile or
+  summary. That is not an error: the panel scans, and the card renders without
+  a label.
 
 ## Scan cadence
 
@@ -95,6 +105,10 @@ that defines the project. This design removes that class of answer entirely.
 
 ## Surfaces
 
+- **Overview tiles.** The `Lines of code` tile is removed together with the
+  line-counting `repo_stats` path behind it. `Tracked files` remains and is
+  served by the scan. A language breakdown replaces the removed tile, showing
+  each discovered language with its tracked-file count.
 - **Repository panel.** Shows `Scanning…` while a scan runs, then the
   discovered projects with language, file count, and evidence paths, above a
   persistent line naming the short sha and time of the scan. A rescan control
