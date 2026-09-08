@@ -6,7 +6,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.37.1] - 2026-09-08
+## [0.38.0] - 2026-09-08
 
 ### Added
 - Line counts per discovered language, inside the Overview's stack breakdown.
