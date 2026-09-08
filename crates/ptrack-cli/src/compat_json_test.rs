@@ -67,6 +67,8 @@ fn empty_go_nil_slices_encode_as_null_while_derived_rows_can_remain_arrays() {
     assert!(encoded.contains("\"blocked\":null"));
     assert!(encoded.contains("\"open_issues\":null"));
     assert!(encoded.contains("\"recent_notes\":null"));
+    assert!(encoded.contains("\"stack\":null"));
+    assert!(encoded.contains("\"stack_incomplete\":false"));
     assert_eq!(
         serde_json::to_string(&raw_or_null::<u8>(Vec::new())).expect("raw list"),
         "null"
@@ -103,4 +105,48 @@ fn plan_row_emits_null_claim_and_a_legacy_actor_sentinel() {
     };
     let encoded = serde_json::to_string(&claimed).expect("plan row json");
     assert!(encoded.contains("\"claimed_by\":\"01hzvyekq3s7m8w9x0abcdefgh\""));
+}
+
+#[test]
+fn a_scanned_project_encodes_its_stack_as_structured_rows() {
+    let mut meta = ptrack_core::Meta {
+        goal: String::new(),
+        summary: String::new(),
+        active_plan: 0,
+        created_at: ptrack_core::Timestamp::Zero,
+        updated_at: ptrack_core::Timestamp::Zero,
+        format_version: 5,
+        last_write_version: String::new(),
+        active_plans: Vec::new(),
+        actors: Vec::new(),
+        stack: None,
+    };
+    meta.stack = Some(ptrack_core::StackProfile {
+        projects: vec![ptrack_core::StackProject {
+            root: "frontend".to_owned(),
+            language: ptrack_core::LanguageId::TypeScript,
+            evidence: vec!["frontend/package.json".to_owned()],
+            depth: 1,
+            files: 38,
+        }],
+        scanned_head: "abc123".to_owned(),
+        scanned_at: ptrack_core::Timestamp::Zero,
+        tracked_files: 38,
+        incomplete: true,
+    });
+    let snapshot = ptrack_core::ProjectSnapshot::new(
+        meta,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
+    let encoded = serde_json::to_string(&DigestJson::from(&ptrack_core::context(&snapshot)))
+        .expect("digest json");
+    assert!(encoded.contains("\"language\":\"typescript\""));
+    assert!(encoded.contains("\"files\":38"));
+    assert!(encoded.contains("\"evidence\":[\"frontend/package.json\"]"));
+    assert!(encoded.contains("\"stack_incomplete\":true"));
 }

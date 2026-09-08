@@ -1,7 +1,9 @@
 use std::fmt;
 use std::fmt::Write as _;
 
-use crate::{Counts, Issue, Note, Plan, PlanStatus, ProjectSnapshot, Task, TaskStatus};
+use crate::{
+    Counts, Issue, Note, Plan, PlanStatus, ProjectSnapshot, StackProject, Task, TaskStatus,
+};
 
 const CONTEXT_RECENT_NOTES: usize = 5;
 /// Shared cap for every project-wide task list in the digest (blocked, on hold).
@@ -70,6 +72,11 @@ pub struct Digest {
     pub scheduled_issues_more: usize,
     pub recent_notes: Vec<NoteLine>,
     pub inventory: Counts,
+    /// Discovered projects and their tracked-file counts, absent until the
+    /// desktop has scanned this project.
+    pub stack: Vec<StackProject>,
+    /// The scan hit its path cap, so the counts below it are partial.
+    pub stack_incomplete: bool,
 }
 
 /// A task plus the open dependency IDs still blocking it.
@@ -208,6 +215,7 @@ pub fn context(snapshot: &ProjectSnapshot) -> Digest {
         }
     }
 
+    let (stack, stack_incomplete) = context_stack(snapshot);
     let (open_issues, open_issues_more) = context_issues(snapshot, |_| true);
     let (unscheduled_issues, unscheduled_issues_more) =
         context_issues(snapshot, |issue| issue.task_id == 0);
@@ -236,7 +244,21 @@ pub fn context(snapshot: &ProjectSnapshot) -> Digest {
             .map(note_line)
             .collect(),
         inventory: snapshot.counts(),
+        stack,
+        stack_incomplete,
     }
+}
+
+/// Returns the discovered projects and whether their scan was truncated. Both
+/// are empty and false until the desktop has scanned the project.
+fn context_stack(snapshot: &ProjectSnapshot) -> (Vec<StackProject>, bool) {
+    snapshot
+        .meta
+        .stack
+        .as_ref()
+        .map_or_else(Default::default, |profile| {
+            (profile.projects.clone(), profile.incomplete)
+        })
 }
 
 impl Digest {
@@ -271,6 +293,7 @@ impl Digest {
             self.scheduled_issues_more,
         );
         write_recent_notes(&mut output, &self.recent_notes);
+        write_stack(&mut output, &self.stack, self.stack_incomplete);
         write_inventory(&mut output, self.inventory);
         output
     }
@@ -417,6 +440,31 @@ fn write_recent_notes(output: &mut String, notes: &[NoteLine]) {
             output.push_str(&note_markdown(note));
             output.push('\n');
         }
+    }
+}
+
+/// Writes the discovered stack, omitting the section entirely when no scan has
+/// run: an empty heading would read as "this project has no code".
+fn write_stack(output: &mut String, projects: &[StackProject], incomplete: bool) {
+    if projects.is_empty() {
+        return;
+    }
+    output.push_str("\n## Stack\n");
+    for project in projects {
+        let root = if project.root.is_empty() {
+            "."
+        } else {
+            project.root.as_str()
+        };
+        writeln!(
+            output,
+            "- {root} — {} ({} tracked files)",
+            project.language, project.files
+        )
+        .expect("writing to String cannot fail");
+    }
+    if incomplete {
+        output.push_str("_partial: the tracked-file scan hit its path cap_\n");
     }
 }
 

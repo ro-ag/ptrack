@@ -349,6 +349,20 @@ pub struct DigestJson<'a> {
     scheduled_issues_more: usize,
     recent_notes: Option<Vec<NoteLineJson<'a>>>,
     inventory: CountsJson,
+    /// Discovered projects; absent until the desktop has scanned this project.
+    stack: Option<Vec<StackProjectJson<'a>>>,
+    /// True when the scan hit its path cap and the counts are partial.
+    stack_incomplete: bool,
+}
+
+/// One discovered project. Counts are tracked files; sizes and line counts are
+/// deliberately not reported.
+#[derive(Serialize)]
+pub struct StackProjectJson<'a> {
+    root: &'a str,
+    language: &'a str,
+    files: u32,
+    evidence: &'a [String],
 }
 
 impl<'a> From<&'a Digest> for DigestJson<'a> {
@@ -377,6 +391,19 @@ impl<'a> From<&'a Digest> for DigestJson<'a> {
             scheduled_issues_more: value.scheduled_issues_more,
             recent_notes: nonempty(value.recent_notes.iter().map(Into::into).collect()),
             inventory: value.inventory.into(),
+            stack: nonempty(
+                value
+                    .stack
+                    .iter()
+                    .map(|project| StackProjectJson {
+                        root: &project.root,
+                        language: project.language.as_str(),
+                        files: project.files,
+                        evidence: &project.evidence,
+                    })
+                    .collect(),
+            ),
+            stack_incomplete: value.stack_incomplete,
         }
     }
 }
