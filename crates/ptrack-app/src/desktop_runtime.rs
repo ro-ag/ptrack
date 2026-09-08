@@ -20,7 +20,8 @@ use ptrack_capability_policy::{
 };
 use ptrack_core::{
     Capability, CapabilityKind, Commit, Issue, IssueStatus, MemoryKind, Meta, Note, NoteTarget,
-    Plan, ProjectSnapshot, Severity, Task, TaskStatus, Timestamp, open_plan_deps, open_task_deps,
+    Plan, ProjectSnapshot, Severity, StackProfile, Task, TaskStatus, Timestamp, open_plan_deps,
+    open_task_deps,
 };
 use ptrack_store::{
     FIRST_RUN_TITLE_MAX_BYTES, GlobalStore, MemoryWriteRequest, ProjectStore, StoreError,
@@ -118,7 +119,7 @@ const COMMANDS: [&str; 105] = [
     "GetPreferences",
     "GetRecentProjects",
     "GetRecentProjectsV1",
-    "GetRepoStatsV1",
+    "GetStackProfileV1",
     "GetTaskDetailV2",
     "GetTerminalProfiles",
     "GetTerminalProfilesV2",
@@ -2500,6 +2501,72 @@ impl BoundDesktopWorkspace {
         .with_actor(actor))
     }
 
+    /// Serves the deterministic stack profile, scanning when one is due.
+    ///
+    /// Every failure path degrades to a served state rather than an error: a
+    /// project that cannot be scanned still opens, and the stored profile is
+    /// never cleared by a failed attempt.
+    fn stack_profile_v1(&self, force: bool) -> StackProfileView {
+        let Ok(store) = self.project_store() else {
+            return StackProfileView::unavailable();
+        };
+        let stored = store.stack_profile().ok().flatten();
+        let head = self.repository_head();
+        let outcome = stack_scan_outcome(stored, head.as_deref(), force, || {
+            self.scan_stack(head.as_deref().unwrap_or_default())
+        });
+        match outcome {
+            StackScanOutcome::Store(profile) => {
+                if store.set_stack_profile(profile.clone()).is_err() {
+                    return StackProfileView::failed();
+                }
+                self.record_registry_stack(&profile);
+                StackProfileView::ready(&profile)
+            }
+            StackScanOutcome::Serve(profile) => StackProfileView::ready(&profile),
+            StackScanOutcome::Failed(_) => StackProfileView::failed(),
+            StackScanOutcome::Unavailable => StackProfileView::unavailable(),
+        }
+    }
+
+    /// Reads the current HEAD, or `None` when the project root is not a usable
+    /// repository (no git, no commit yet).
+    fn repository_head(&self) -> Option<String> {
+        let cancellation = ptrack_git::CancellationToken::new();
+        let identity =
+            ptrack_git::inspect_worktree(&cancellation, &self.endpoint.root, &self.endpoint.root)
+                .ok()?;
+        (!identity.head.is_empty()).then_some(identity.head)
+    }
+
+    /// Runs one bounded tracked-path scan and resolves it.
+    fn scan_stack(&self, head: &str) -> Option<StackProfile> {
+        let cancellation = ptrack_git::CancellationToken::new();
+        let listing = ptrack_git::RepositoryService::for_stack_scan()
+            .capture_tracked_paths(&cancellation, &self.endpoint.root)
+            .ok()?;
+        Some(StackProfile {
+            projects: ptrack_core::stack::resolve(&listing.paths),
+            scanned_head: head.to_owned(),
+            scanned_at: now_timestamp(),
+            tracked_files: u32::try_from(listing.paths.len()).unwrap_or(u32::MAX),
+            incomplete: listing.incomplete,
+        })
+    }
+
+    /// Mirrors the profile's summary onto the global registry entry so the
+    /// project cards can label a project without opening its database.
+    fn record_registry_stack(&self, profile: &StackProfile) {
+        let Ok(store) = GlobalStore::open_existing(
+            &self.bindings.global_database,
+            &self.bindings.global_binding,
+        ) else {
+            return;
+        };
+        let _ =
+            store.set_project_stack(&self.endpoint.root, ptrack_core::stack::summarize(profile));
+    }
+
     #[allow(clippy::too_many_lines)] // One bounded storage capture keeps totals and rows aligned.
     fn bounded_snapshot_tracking(
         &self,
@@ -3894,7 +3961,10 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
                 })
             }
             "GetActivityHeatmapV2" => value(heatmap(&self.snapshot()?, i64_arg(arguments, 0)?)),
-            "GetRepoStatsV1" => value(repo_stats(&self.endpoint.root)),
+            "GetStackProfileV1" => {
+                require_argument_count(method, arguments, 1)?;
+                value(self.stack_profile_v1(bool_arg(arguments, 0)?))
+            }
             "GetTaskDetailV2" => {
                 let generation = u64_arg(arguments, 0)?;
                 self.require_generation(generation)?;
@@ -5445,58 +5515,119 @@ fn snippet(body: &str, index: usize, needle_len: usize) -> String {
     result
 }
 
-/// Repository-wide code statistics for the Overview page.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+/// The deterministic stack profile served to the Overview and the Repository
+/// panel.
+///
+/// Languages are discovered from tracked manifests and counted in tracked
+/// files. Sizes and line counts are deliberately absent: one vendored
+/// directory or generated bundle outweighs the code that defines a project.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct RepoStatsView {
-    /// False when the project root is not a usable git repository (no git,
-    /// no HEAD yet); the frontend hides the tiles instead of showing zeros.
-    pub(super) available: bool,
-    pub(super) files: u64,
-    pub(super) lines: u64,
+pub(super) struct StackProfileView {
+    /// `scanning` is never served by this synchronous command; the frontend
+    /// shows it while the call is in flight.
+    pub(super) state: &'static str,
+    pub(super) scanned_head: String,
+    pub(super) scanned_at: String,
+    pub(super) tracked_files: u32,
+    pub(super) incomplete: bool,
+    pub(super) projects: Vec<StackProjectView>,
 }
 
-/// Counts tracked files and lines by diffing the empty tree against HEAD —
-/// two short git invocations, run only when the Overview requests them.
-pub(super) fn repo_stats(root: &Path) -> RepoStatsView {
-    let unavailable = RepoStatsView {
-        available: false,
-        files: 0,
-        lines: 0,
-    };
-    let git = |args: &[&str]| -> Option<String> {
-        let output = std::process::Command::new("git")
-            .arg("-C")
-            .arg(root)
-            .args(args)
-            .stdin(std::process::Stdio::null())
-            .output()
-            .ok()?;
-        output
-            .status
-            .success()
-            .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
-    };
-    // The empty-tree hash is derived (mktree on empty stdin), not hard-coded,
-    // so SHA-256 repos work and no platform null-device path is needed.
-    let Some(empty_tree) = git(&["mktree"]) else {
-        return unavailable;
-    };
-    let Some(shortstat) = git(&["diff", "--shortstat", empty_tree.trim(), "HEAD"]) else {
-        return unavailable;
-    };
-    // " 27 files changed, 78436 insertions(+)"; a repo of only empty files
-    // has no insertions clause at all.
-    let mut numbers = shortstat
-        .split(|c: char| !c.is_ascii_digit())
-        .filter(|part| !part.is_empty())
-        .filter_map(|part| part.parse::<u64>().ok());
-    // An empty diff (commit with no files) is a valid, empty repository.
-    RepoStatsView {
-        available: true,
-        files: numbers.next().unwrap_or(0),
-        lines: numbers.next().unwrap_or(0),
+/// One discovered project and the manifests that prove it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct StackProjectView {
+    pub(super) root: String,
+    pub(super) language: String,
+    pub(super) files: u32,
+    pub(super) evidence: Vec<String>,
+}
+
+impl StackProfileView {
+    fn unavailable() -> Self {
+        Self::empty("unavailable")
     }
+
+    fn failed() -> Self {
+        Self::empty("failed")
+    }
+
+    fn empty(state: &'static str) -> Self {
+        Self {
+            state,
+            scanned_head: String::new(),
+            scanned_at: String::new(),
+            tracked_files: 0,
+            incomplete: false,
+            projects: Vec::new(),
+        }
+    }
+
+    fn ready(profile: &StackProfile) -> Self {
+        Self {
+            state: "ready",
+            scanned_head: profile.scanned_head.clone(),
+            scanned_at: timestamp(profile.scanned_at),
+            tracked_files: profile.tracked_files,
+            incomplete: profile.incomplete,
+            projects: profile
+                .projects
+                .iter()
+                .map(|project| StackProjectView {
+                    root: project.root.clone(),
+                    language: project.language.as_str().to_owned(),
+                    files: project.files,
+                    evidence: project.evidence.clone(),
+                })
+                .collect(),
+        }
+    }
+}
+
+/// What one scan attempt does to durable state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum StackScanOutcome {
+    /// Persist this profile and its registry summary, then serve it.
+    Store(StackProfile),
+    /// Serve the stored profile; nothing is written.
+    Serve(StackProfile),
+    /// The scan failed. Nothing is written; the stored profile stands.
+    Failed(Option<StackProfile>),
+    /// There is no HEAD to scan against.
+    Unavailable,
+}
+
+/// Reports whether a tracked-path scan is due.
+///
+/// A truncated profile is exempt from HEAD-driven rescans: its listing was
+/// already over the cap, so re-reading it on every commit costs far more than
+/// the staleness it removes. Project open and explicit rescan still scan it.
+pub(super) fn stack_scan_due(stored: Option<&StackProfile>, head: &str) -> bool {
+    match stored {
+        None => true,
+        Some(profile) if profile.incomplete => false,
+        Some(profile) => profile.scanned_head != head,
+    }
+}
+
+/// Decides the outcome of one scan attempt.
+///
+/// A failure never writes, so a transient git error cannot clear counts that a
+/// successful scan established.
+pub(super) fn stack_scan_outcome(
+    stored: Option<StackProfile>,
+    head: Option<&str>,
+    force: bool,
+    scan: impl FnOnce() -> Option<StackProfile>,
+) -> StackScanOutcome {
+    let Some(head) = head else {
+        return StackScanOutcome::Unavailable;
+    };
+    if !force && !stack_scan_due(stored.as_ref(), head) {
+        return stored.map_or(StackScanOutcome::Unavailable, StackScanOutcome::Serve);
+    }
+    scan().map_or(StackScanOutcome::Failed(stored), StackScanOutcome::Store)
 }
 
 fn heatmap(snapshot: &ProjectSnapshot, requested_weeks: i64) -> Vec<Value> {
@@ -5951,6 +6082,17 @@ fn timestamp(value: Timestamp) -> String {
         || "0001-01-01T00:00:00Z".to_owned(),
         |timestamp| timestamp.format(&Rfc3339).unwrap_or_default(),
     )
+}
+
+/// The scan's own wall-clock stamp, in the same fixed-offset shape the store
+/// writes elsewhere.
+fn now_timestamp() -> Timestamp {
+    let now = OffsetDateTime::now_utc();
+    Timestamp::Fixed {
+        seconds: now.unix_timestamp(),
+        nanoseconds: now.nanosecond(),
+        offset_seconds: 0,
+    }
 }
 
 fn parse_first_run_timestamp(value: &str) -> AppResult<Timestamp> {
