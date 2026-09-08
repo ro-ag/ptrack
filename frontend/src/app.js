@@ -1572,10 +1572,10 @@ function renderHeatmap(days) {
   // Denser cells: the chart is read as a shape, not cell by cell, and the
   // saved height is what lets the Activity block sit beside its totals rather
   // than towering over them. The SVG scales, so retina sharpness is unaffected.
-  const cell = 10;
-  const pitch = 13;
-  const left = 26;
-  const top = 16;
+  const cell = 8;
+  const pitch = 11;
+  const left = 22;
+  const top = 14;
   const width = left + columns.length * pitch;
   const height = top + 7 * pitch;
   const chart = document.createElement("div");

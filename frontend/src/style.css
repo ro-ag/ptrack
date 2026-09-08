@@ -1472,18 +1472,58 @@ select option {
 }
 
 .goal,
-.summary {
-  margin-bottom: 0;
-  color: var(--text-soft);
-  font-size: 0.75rem;
-  line-height: 1.55;
-}
-
+/* Rolling summaries are written by agents and often arrive as dense,
+   space-poor machine text. The card shows the first lines, breaks long
+   unbroken tokens instead of letting them run off, and opens to the full text
+   on click rather than ending in an ellipsis with nowhere to go. */
 .summary {
   display: -webkit-box;
   overflow: hidden;
+  margin-bottom: 0;
+  color: var(--text-soft);
+  font-size: 0.75rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 4;
+  -webkit-line-clamp: 3;
+}
+
+.summary-disclosure[open] .summary {
+  display: block;
+  overflow: visible;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.summary-preview {
+  position: relative;
+  cursor: pointer;
+  list-style: none;
+}
+
+.summary-preview::marker,
+.summary-preview::-webkit-details-marker {
+  content: "";
+  display: none;
+}
+
+/* The last line fades out to show the text continues. A mask is used rather
+   than a gradient in the card colour: the card fill is translucent, so a
+   painted gradient would not match it. */
+.summary-disclosure:not([open]) .summary {
+  mask-image: linear-gradient(180deg, #000 55%, transparent);
+}
+
+.summary-disclosure::after {
+  content: "Show full summary";
+  display: block;
+  margin-top: var(--space-050);
+  color: var(--muted);
+  font-size: 0.6875rem;
+}
+
+.summary-disclosure[open]::after {
+  content: "Show less";
 }
 
 .stats-grid {
@@ -2325,7 +2365,7 @@ select option {
 }
 
 .heatmap-chart {
-  flex: 0 1 360px;
+  flex: 0 1 300px;
   min-width: 0;
 }
 
@@ -2389,7 +2429,7 @@ select option {
 
 /* Keep the list bounded so the "Show more…" fit logic still applies. */
 .overview-page .activity-section {
-  max-height: 260px;
+  max-height: 220px;
 }
 
 /* The four activity totals read as one compact row, not as four slabs the
