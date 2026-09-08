@@ -1776,15 +1776,29 @@ function renderHeatmap(days) {
 const INSIGHTS_WEEKS = 16;
 let insights = null;
 let insightsRequested = false;
+// What was last drawn, so a snapshot event that changes nothing on this page
+// costs nothing on this page.
+let insightsSignature = "";
+// Entrances belong to the first reveal of the page, not to every data refresh.
+// The workspace emits `workspace:data-changed` whenever the project database
+// moves, and replaying seven staggered entrances on each one reads as an
+// animation that never stops.
+let insightsEntranceShown = false;
 
 function reducedMotion() {
   return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 }
 
+/// Whether this render should animate at all: only the first drawing of the
+/// page, and never for a reader who has asked for reduced motion.
+function insightsMotion() {
+  return !insightsEntranceShown && !reducedMotion();
+}
+
 /// Draws a path in over its own length. Returns immediately under reduced
 /// motion, so the figure is complete rather than merely still.
 function drawIn(path, duration = 700, delay = 0) {
-  if (reducedMotion() || typeof path.getTotalLength !== "function") return;
+  if (!insightsMotion() || typeof path.getTotalLength !== "function") return;
   const length = path.getTotalLength();
   if (!Number.isFinite(length) || length === 0) return;
   path.animate(
@@ -1799,7 +1813,7 @@ function drawIn(path, duration = 700, delay = 0) {
 /// Grows a figure's marks from their baseline, staggered so the eye follows the
 /// series rather than seeing everything arrive at once.
 function growIn(nodes, { duration = 420, stagger = 18, origin = "bottom" } = {}) {
-  if (reducedMotion()) return;
+  if (!insightsMotion()) return;
   nodes.forEach((node, index) => {
     node.animate(
       [{ transform: "scaleY(0)" }, { transform: "scaleY(1)" }],
@@ -1816,7 +1830,7 @@ function growIn(nodes, { duration = 420, stagger = 18, origin = "bottom" } = {})
 }
 
 function fadeIn(nodes, { duration = 320, stagger = 12 } = {}) {
-  if (reducedMotion()) return;
+  if (!insightsMotion()) return;
   nodes.forEach((node, index) => {
     node.animate([{ opacity: 0 }, { opacity: 1 }], {
       duration,
@@ -2287,7 +2301,7 @@ function renderInsightsPlans() {
     svg.append(count);
   });
 
-  if (!reducedMotion()) {
+  if (insightsMotion()) {
     fills.forEach((fill, index) => {
       const target = fill.getAttribute("width");
       fill.animate([{ width: "2" }, { width: target }], {
@@ -2317,6 +2331,7 @@ function renderInsights() {
   renderInsightsLeadTime();
   renderInsightsIssues();
   renderInsightsPlans();
+  insightsEntranceShown = true;
 }
 
 // Fetched lazily on first visit, and again after a snapshot lands while the
@@ -2327,11 +2342,18 @@ async function loadInsights(force = false) {
   if (insightsRequested && !force) return;
   insightsRequested = true;
   try {
-    insights = await api().GetInsightsV1(INSIGHTS_WEEKS);
+    const next = await api().GetInsightsV1(INSIGHTS_WEEKS);
+    const signature = JSON.stringify(next);
+    // The backend reuses its answer while nothing it depends on has moved, so
+    // an unchanged payload means there is nothing to redraw.
+    if (signature === insightsSignature && insightsEntranceShown) return;
+    insights = next;
+    insightsSignature = signature;
     renderInsights();
   } catch (error) {
     insightsRequested = false;
     insights = null;
+    insightsSignature = "";
     elements.insightsCaption.textContent = "";
     insightEmpty(elements.insightsTimeline, "Insights could not be read for this project.");
   }
@@ -2374,8 +2396,6 @@ async function loadHeatmap(force = false) {
     withOverviewScrollPreserved(() => renderHeatmap(days));
   } catch (error) {
     heatmapRequested = false;
-  insightsRequested = false;
-  insights = null;
     if (workspaceController.state.status === "open") showError(error);
   }
 }
@@ -7390,7 +7410,10 @@ function setView(nextView, focusHeading = false) {
     void loadStackProfile();
   }
   if (view === "issues") void loadIssues();
-  if (view === "insights") void loadInsights();
+  if (view === "insights") {
+    insightsEntranceShown = false;
+    void loadInsights();
+  }
   recordProjectLayout();
   if (focusHeading) {
     const focusedView = view;
@@ -7494,6 +7517,10 @@ function renderWorkspaceState(state, focus = false) {
   closeIssueDetail(false);
   closePalette();
   heatmapRequested = false;
+  insightsRequested = false;
+  insights = null;
+  insightsSignature = "";
+  insightsEntranceShown = false;
   stackProfileRequested = false;
   stackProfile = null;
   board = null;
