@@ -2222,6 +2222,10 @@ function renderDrift(section) {
   drift.findings.filter((finding) => finding.severity !== "warning").forEach(appendFinding);
 }
 
+// How many discovered projects the Repository panel lists before summarizing
+// the rest. A Cargo workspace routinely discovers more than a dozen.
+const STACK_PANEL_PROJECTS = 12;
+
 // The Repository panel's stack section. Every state is explicit: a project
 // that cannot be scanned says so rather than rendering an empty list that
 // reads as "no code here".
@@ -2255,7 +2259,12 @@ function renderStackProfile() {
   if (!stackProfile.projects.length) {
     elements.stackProjects.append(emptyMemory("No project manifest found in tracked files."));
   } else {
-    stackProfile.projects.forEach((project) => {
+    // The panel is the evidence view, so it stays per-project — but a large
+    // workspace discovers dozens, and the panel is not a place to scroll
+    // through 64 rows. The Overview carries the per-language totals.
+    const shown = stackProfile.projects.slice(0, STACK_PANEL_PROJECTS);
+    const hidden = stackProfile.projects.length - shown.length;
+    shown.forEach((project) => {
       elements.stackProjects.append(
         intelligenceItem(
           `${project.root || "."} · ${languageLabel(project.language)}`,
@@ -2263,6 +2272,11 @@ function renderStackProfile() {
         ),
       );
     });
+    if (hidden > 0) {
+      elements.stackProjects.append(
+        emptyMemory(`+${hidden} more discovered project${hidden === 1 ? "" : "s"}`),
+      );
+    }
   }
   elements.stackScanned.textContent = stackProfile.scannedHead
     ? `Scanned at ${stackProfile.scannedHead.slice(0, 8)}`
