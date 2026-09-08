@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::model::{Branch, ChangedArea, Commit, Divergence, Remote, RepositoryState, Snapshot};
 use crate::runner::{CancellationToken, ExecRunner, RepositoryError, Runner, args, os};
@@ -205,6 +205,22 @@ impl RepositoryService {
         }
         STALE_BRANCH_POLICY.clone_into(&mut snapshot.stale_branch_policy);
         Ok(snapshot)
+    }
+
+    /// Constructs a service sized for tracked-path scans.
+    ///
+    /// A repository's full `ls-files` listing dwarfs any snapshot command, so
+    /// the snapshot's 4 MiB, 3-second bounds would reject or time out on a
+    /// large repository long before the 200,000-path cap applied.
+    #[must_use]
+    pub fn for_stack_scan() -> Self {
+        Self {
+            runner: Arc::new(ExecRunner::with_limits(
+                Duration::from_secs(30),
+                32 * 1024 * 1024,
+            )),
+            now: unix_now,
+        }
     }
 
     #[cfg(test)]
