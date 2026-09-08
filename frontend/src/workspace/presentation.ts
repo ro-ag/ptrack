@@ -1123,3 +1123,66 @@ export function heatmapWeeks(days: HeatmapDay[]): HeatmapCell[][] {
   if (column.length > 0) columns.push(column);
   return columns;
 }
+
+export interface StackProfileProject {
+  root: string;
+  language: string;
+  files: number;
+  lines?: number;
+  evidence: string[];
+}
+
+export interface StackTile {
+  language: string;
+  files: number;
+  lines: number;
+  projects: number;
+}
+
+export interface StackLanguageRow extends StackTile {
+  /** Files in this language over the profile's attributed files, 0..1. */
+  share: number;
+}
+
+/**
+ * Builds the expanded per-language breakdown: every language, largest first,
+ * each with its file count, how many discovered projects it spans, and its
+ * share of the attributed files. The share exists only to size a bar — the
+ * count is always rendered beside it, so nothing is read from length alone.
+ */
+export function stackLanguageRows(projects: StackProfileProject[]): StackLanguageRow[] {
+  const tiles = stackTiles(projects, Number.MAX_SAFE_INTEGER);
+  const total = tiles.reduce((sum, tile) => sum + tile.files, 0);
+  return tiles.map((tile) => ({ ...tile, share: total > 0 ? tile.files / total : 0 }));
+}
+
+/**
+ * Aggregates a stack profile into Overview tiles: one per language, never one
+ * per discovered project. A Cargo workspace discovers a project per crate, so
+ * per-project tiles render as a row of identical "Rust" labels carrying
+ * fragments of the same number.
+ *
+ * Languages are ordered by tracked files, then by name so equal counts do not
+ * reorder between scans.
+ */
+export function stackTiles(projects: StackProfileProject[], limit = 4): StackTile[] {
+  const totals = new Map<string, StackTile>();
+  projects.forEach((project) => {
+    const tile = totals.get(project.language);
+    if (tile) {
+      tile.files += project.files;
+      tile.lines += project.lines ?? 0;
+      tile.projects += 1;
+    } else {
+      totals.set(project.language, {
+        language: project.language,
+        files: project.files,
+        lines: project.lines ?? 0,
+        projects: 1,
+      });
+    }
+  });
+  return [...totals.values()]
+    .sort((left, right) => right.files - left.files || left.language.localeCompare(right.language))
+    .slice(0, limit);
+}

@@ -12,12 +12,31 @@ fn now() -> i64 {
 }
 
 fn service(output: Result<Vec<u8>, RepositoryError>) -> RepositoryService {
+    service_with_counts(output, Err(RepositoryError::CommandFailed))
+}
+
+fn service_with_counts(
+    listing: Result<Vec<u8>, RepositoryError>,
+    counts: Result<Vec<u8>, RepositoryError>,
+) -> RepositoryService {
     let runner = Arc::new(FakeRunner::default());
-    match output {
+    match listing {
         Ok(value) => runner.output("/repo|ls-files", value),
         Err(error) => runner.error("/repo|ls-files", error),
     }
+    match counts {
+        Ok(value) => runner.output("/repo|grep", value),
+        Err(error) => runner.error("/repo|grep", error),
+    }
     RepositoryService::with_runner_and_clock(runner, now)
+}
+
+fn path_names(listing: &crate::tracked::TrackedPaths) -> Vec<&str> {
+    listing
+        .paths
+        .iter()
+        .map(|entry| entry.path.as_str())
+        .collect()
 }
 
 #[test]
@@ -28,12 +47,8 @@ fn tracked_paths_are_sorted_and_complete() {
     .capture_tracked_paths(&CancellationToken::new(), std::path::Path::new("/repo"))
     .expect("capture");
     assert_eq!(
-        listing.paths,
-        vec![
-            "Cargo.toml".to_owned(),
-            "frontend/package.json".to_owned(),
-            "src/lib.rs".to_owned(),
-        ]
+        path_names(&listing),
+        vec!["Cargo.toml", "frontend/package.json", "src/lib.rs"]
     );
     assert!(!listing.incomplete);
 }
@@ -87,4 +102,56 @@ fn cancellation_stops_the_scan() {
         .capture_tracked_paths(&cancellation, std::path::Path::new("/repo"))
         .expect_err("cancelled");
     assert_eq!(error, RepositoryError::Cancelled);
+}
+
+#[test]
+fn line_counts_attach_to_their_tracked_paths() {
+    let listing = service_with_counts(
+        Ok(b"Cargo.toml\0src/lib.rs\0assets/logo.png\0".to_vec()),
+        Ok(b"HEAD:Cargo.toml\x0012\nHEAD:src/lib.rs\x00400\n".to_vec()),
+    )
+    .capture_tracked_paths(&CancellationToken::new(), std::path::Path::new("/repo"))
+    .expect("capture");
+    assert!(listing.lines_counted);
+    let counts: Vec<(&str, u32)> = listing
+        .paths
+        .iter()
+        .map(|entry| (entry.path.as_str(), entry.lines))
+        .collect();
+    // The PNG never appears in the count output: `git grep -I` skips binaries,
+    // and an absent record means no counted lines.
+    assert_eq!(
+        counts,
+        vec![
+            ("Cargo.toml", 12),
+            ("assets/logo.png", 0),
+            ("src/lib.rs", 400)
+        ]
+    );
+}
+
+#[test]
+fn a_repository_with_no_countable_head_still_lists_its_files() {
+    let listing = service_with_counts(
+        Ok(b"Cargo.toml\0".to_vec()),
+        Err(RepositoryError::CommandFailed),
+    )
+    .capture_tracked_paths(&CancellationToken::new(), std::path::Path::new("/repo"))
+    .expect("capture");
+    assert!(!listing.lines_counted);
+    assert_eq!(path_names(&listing), vec!["Cargo.toml"]);
+    assert_eq!(listing.paths[0].lines, 0);
+}
+
+#[test]
+fn an_unparsable_count_record_is_skipped_rather_than_failing_the_scan() {
+    let listing = service_with_counts(
+        Ok(b"Cargo.toml\0src/lib.rs\0".to_vec()),
+        Ok(b"garbage\nHEAD:src/lib.rs\x00400\nHEAD:Cargo.toml\x00nine\n".to_vec()),
+    )
+    .capture_tracked_paths(&CancellationToken::new(), std::path::Path::new("/repo"))
+    .expect("capture");
+    assert!(listing.lines_counted);
+    assert_eq!(listing.paths[0].lines, 0);
+    assert_eq!(listing.paths[1].lines, 400);
 }

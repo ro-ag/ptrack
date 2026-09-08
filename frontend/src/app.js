@@ -194,6 +194,7 @@ import {
   runtimeAssociationLabel,
   runtimeEventIsCurrent,
   shortcutIntent,
+  stackLanguageRows,
   workflowMutationFocusKey,
   worktreeSelectionForRerender,
   workspaceStateCopy,
@@ -687,6 +688,7 @@ let pendingDetailTaskId = 0;
 let heatmapRequested = false;
 let stackProfileRequested = false;
 let stackProfile = null;
+let stackDetailExpanded = false;
 const expandedLanes = new Set();
 const foldedLanes = new Set();
 
@@ -997,6 +999,75 @@ function languageLabel(id) {
   return languageLabels[id] || id;
 }
 
+// The Tracked files tile doubles as the breakdown's disclosure control: the
+// languages live one click away instead of crowding the tile row.
+function stackTrackedFilesToggle(profile, languages) {
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "stat stat-toggle";
+  toggle.dataset.expanded = String(stackDetailExpanded);
+  toggle.setAttribute("aria-expanded", String(stackDetailExpanded));
+  toggle.setAttribute("aria-controls", "stack-breakdown");
+  const label = document.createElement("span");
+  label.className = "stat-label";
+  // The tile column is narrow; a longer label truncates. The language count
+  // lives in the tooltip and in the breakdown the tile opens.
+  label.textContent = "Tracked files";
+  const discovered = languages === 1 ? "1 language" : `${languages} languages`;
+  toggle.title = profile.linesCounted
+    ? `${discovered}, ${profile.lines.toLocaleString()} lines — click for the breakdown`
+    : `${discovered} — click for the breakdown`;
+  const value = document.createElement("span");
+  value.className = "stat-value";
+  value.textContent = profile.trackedFiles.toLocaleString();
+  toggle.append(label, value);
+  toggle.addEventListener("click", () => {
+    stackDetailExpanded = !stackDetailExpanded;
+    renderMemory();
+    if (stackDetailExpanded) {
+      document.querySelector("#stack-breakdown")?.scrollIntoView({ block: "nearest" });
+    }
+  });
+  return toggle;
+}
+
+// The expanded breakdown: one row per language, largest first. The bar is
+// sized by share, but the count sits beside it — a proportion is never the
+// only thing rendered.
+function stackBreakdown(rows) {
+  const list = document.createElement("dl");
+  list.className = "stack-breakdown";
+  list.id = "stack-breakdown";
+  rows.forEach((row) => {
+    const term = document.createElement("dt");
+    term.className = "stack-breakdown-language";
+    term.textContent = languageLabel(row.language);
+    const detail = document.createElement("dd");
+    detail.className = "stack-breakdown-detail";
+    const bar = document.createElement("span");
+    bar.className = "stack-breakdown-bar";
+    bar.setAttribute("aria-hidden", "true");
+    const fill = document.createElement("span");
+    fill.style.width = `${Math.max(2, Math.round(row.share * 100))}%`;
+    bar.append(fill);
+    // Files, lines, and projects each get their own cell so the digits line up
+    // down the list. A language with no counted lines still emits its cell,
+    // empty, rather than shifting every column left on that row.
+    const count = document.createElement("span");
+    count.className = "stack-breakdown-count";
+    count.textContent = `${row.files.toLocaleString()} file${row.files === 1 ? "" : "s"}`;
+    const lines = document.createElement("span");
+    lines.className = "stack-breakdown-lines";
+    lines.textContent = row.lines > 0 ? `${row.lines.toLocaleString()} lines` : "";
+    const scope = document.createElement("span");
+    scope.className = "stack-breakdown-scope";
+    scope.textContent = row.projects === 1 ? "1 project" : `${row.projects} projects`;
+    detail.append(bar, count, lines, scope);
+    list.append(term, detail);
+  });
+  return list;
+}
+
 function statElement(value, label) {
   const stat = document.createElement("div");
   stat.className = "stat";
@@ -1115,19 +1186,21 @@ function renderMemory() {
     statElement(board.stats.notes, "Notes"),
     statElement(board.stats.commits, "Commits"),
   );
-  // Discovered languages, counted in tracked files. A line count is not
+  // Tracked files, counted from the manifests git tracks. A line count is not
   // reported: one vendored directory or generated bundle outweighs the code
-  // that defines the project.
+  // that defines the project. The tile expands into the per-language
+  // breakdown rather than spending a tile on each language — a Cargo
+  // workspace discovers a project per crate, and those tiles all read "Rust".
+  const sections = [progress, counts];
   if (stackProfile?.state === "ready") {
-    counts.append(statElement(stackProfile.trackedFiles.toLocaleString(), "Tracked files"));
-    stackProfile.projects.slice(0, 4).forEach((project) => {
-      counts.append(statElement(project.files.toLocaleString(), languageLabel(project.language)));
-    });
+    const rows = stackLanguageRows(stackProfile.projects);
+    counts.append(stackTrackedFilesToggle(stackProfile, rows.length));
     if (stackProfile.incomplete) {
       counts.append(statElement("partial", "Scan truncated"));
     }
+    if (stackDetailExpanded && rows.length) sections.push(stackBreakdown(rows));
   }
-  elements.stats.replaceChildren(progress, counts);
+  elements.stats.replaceChildren(...sections);
   renderPlanRing(board.stats.tasksDone, board.stats.tasks);
 
   elements.issueTotal.textContent = board.stats.openIssues;
@@ -2219,6 +2292,10 @@ function renderDrift(section) {
   drift.findings.filter((finding) => finding.severity !== "warning").forEach(appendFinding);
 }
 
+// How many discovered projects the Repository panel lists before summarizing
+// the rest. A Cargo workspace routinely discovers more than a dozen.
+const STACK_PANEL_PROJECTS = 12;
+
 // The Repository panel's stack section. Every state is explicit: a project
 // that cannot be scanned says so rather than rendering an empty list that
 // reads as "no code here".
@@ -2252,7 +2329,12 @@ function renderStackProfile() {
   if (!stackProfile.projects.length) {
     elements.stackProjects.append(emptyMemory("No project manifest found in tracked files."));
   } else {
-    stackProfile.projects.forEach((project) => {
+    // The panel is the evidence view, so it stays per-project — but a large
+    // workspace discovers dozens, and the panel is not a place to scroll
+    // through 64 rows. The Overview carries the per-language totals.
+    const shown = stackProfile.projects.slice(0, STACK_PANEL_PROJECTS);
+    const hidden = stackProfile.projects.length - shown.length;
+    shown.forEach((project) => {
       elements.stackProjects.append(
         intelligenceItem(
           `${project.root || "."} · ${languageLabel(project.language)}`,
@@ -2260,6 +2342,11 @@ function renderStackProfile() {
         ),
       );
     });
+    if (hidden > 0) {
+      elements.stackProjects.append(
+        emptyMemory(`+${hidden} more discovered project${hidden === 1 ? "" : "s"}`),
+      );
+    }
   }
   elements.stackScanned.textContent = stackProfile.scannedHead
     ? `Scanned at ${stackProfile.scannedHead.slice(0, 8)}`

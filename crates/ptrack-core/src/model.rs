@@ -638,6 +638,10 @@ pub struct StackProject {
     pub depth: u8,
     /// Tracked files attributed to this project.
     pub files: u32,
+    /// Lines in this project's tracked text files. Zero when the scan could
+    /// not count lines; [`StackProfile::lines_counted`] distinguishes that
+    /// from a project that genuinely has none.
+    pub lines: u32,
 }
 
 /// The durable result of one tracked-file scan.
@@ -654,8 +658,22 @@ pub struct StackProfile {
     pub scanned_head: String,
     pub scanned_at: Timestamp,
     pub tracked_files: u32,
+    /// Lines across every counted tracked file.
+    pub lines: u32,
+    /// The scan counted lines. False when the line pass was unavailable — an
+    /// empty repository, or a listing too large for the count — in which case
+    /// every `lines` value is zero and surfaces omit lines rather than
+    /// reporting nothing.
+    pub lines_counted: bool,
     /// The tracked path listing hit the scan cap and was truncated.
     pub incomplete: bool,
+    /// Trailing profile bytes written by a newer build, preserved verbatim.
+    ///
+    /// The profile is length-framed on the wire, so a build that predates a
+    /// field can still read the record: it parses what it knows, keeps the
+    /// rest here, and writes it back untouched. Nothing in this crate
+    /// interprets these bytes.
+    pub future_fields: Vec<u8>,
 }
 
 /// The compact per-project summary carried by the global registry.
@@ -666,6 +684,9 @@ pub struct StackSummary {
     pub tracked_files: u32,
     pub scanned_head: String,
     pub incomplete: bool,
+    /// Trailing summary bytes written by a newer build, preserved verbatim.
+    /// See [`StackProfile::future_fields`].
+    pub future_fields: Vec<u8>,
 }
 
 persistent_enum!(RecordKind {

@@ -456,9 +456,18 @@ fn write_stack(output: &mut String, projects: &[StackProject], incomplete: bool)
         } else {
             project.root.as_str()
         };
+        // Lines are reported per discovered project, never as one repository
+        // total: a vendored or generated tree would dominate that number. A
+        // project with no counted lines omits the clause rather than saying
+        // zero.
+        let lines = if project.lines == 0 {
+            String::new()
+        } else {
+            format!(" · {} lines", project.lines)
+        };
         writeln!(
             output,
-            "- {root} — {} ({} tracked files)",
+            "- {root} — {} ({} tracked files{lines})",
             project.language, project.files
         )
         .expect("writing to String cannot fail");

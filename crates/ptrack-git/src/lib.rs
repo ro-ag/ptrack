@@ -17,7 +17,7 @@ pub use model::{
 };
 pub use runner::{CancellationToken, RepositoryError};
 pub use snapshot::{RepositoryService, capture};
-pub use tracked::{MAX_TRACKED_PATHS, TrackedPaths};
+pub use tracked::{MAX_TRACKED_PATHS, TrackedPath, TrackedPaths};
 pub use worktree::inspect_worktree;
 
 #[cfg(test)]
