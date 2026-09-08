@@ -9,6 +9,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.38.0] - 2026-09-08
 
 ### Added
+- **Insights**, a fourth workspace view beside Overview, Board and Issues. It
+  reports how a project has moved rather than where it stands: repository
+  history drawn from git with tags marked as releases, activity momentum
+  against the previous week, tasks created against tasks completed, a
+  weekday-by-hour view of when work actually happens, how long completed tasks
+  took, issues by severity with the age of the oldest open one, and task
+  completion per plan. `Cmd+4` and the View menu select it.
+- Completion figures on Insights are dated by last update, not by a status
+  history, and say so: p-track records creation and last change per record, so
+  editing a finished task moves its point. Creation counts, issue ages and the
+  repository history are exact. The distinction is carried in the payload's own
+  field names, in the interface, and in the Help Center.
+- The Insights payload is computed on demand and reused until the project
+  record or the repository HEAD changes, so returning to the page costs a
+  message rather than a walk over the repository. Nothing is persisted, so the
+  storage format is unchanged.
+- A bound on the rolling project summary. `MAX_SUMMARY_BYTES` is 1000 and is
+  checked when a summary is written; summaries already on disk keep loading
+  however long they are, the same rule the payload schema follows. The refusal
+  names the shape as well as the number, because an agent mid-run acts on the
+  message it is handed rather than re-reading the guide.
 - Line counts per discovered language, inside the Overview's stack breakdown.
   Lines are counted per tracked text file at HEAD (`git grep -I` skips
   binaries), attributed to the project that owns the file, and reported per
@@ -17,6 +38,35 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   lines. `ptrack context` carries the same per-project figures.
 
 ### Changed
+- The agent guide separates the two fields it was conflating. Notes are the
+  evidence record — one event each, with the exact identifiers, hashes and
+  counts, and terse by design. The rolling summary is the handoff narrative
+  that answers "where does this project stand" for someone arriving cold: two
+  to four sentences, and never a concatenation of recent notes. Both are asked
+  for in ordinary spacing, because squeezing the spaces out of a list of counts
+  makes the tokens no cheaper and the line harder to read.
+- The Overview's rolling summary is shown as prose, unclamped, on a reading
+  measure. It folds only when the stored text fails the guide's shape rule, and
+  the card then names which rule it broke rather than hiding the text behind a
+  fade with no explanation.
+- The Overview lays out by available width rather than in a fixed two columns.
+  Two stylesheet rules had been silently overridden by later duplicates, so the
+  grid never widened past two columns on any display and the wide cards
+  stretched to the full row; both are now single rules, wide cards span two
+  columns, and on a large display the page reports in two bands where it
+  previously ran about twice the height.
+- The progress ring is sized to the height its status tiles produce, and its
+  arc carries the same teal-through-mint ramp as the north star card. The Tasks
+  tile no longer repeats the ring's own two numbers as a second bar.
+- The activity chart draws its labels at the scale of the drawing rather than
+  in pixels, so the month and weekday names are no longer oversized, and empty
+  days are visible enough for the calendar to read as a calendar.
+- The Repository panel folds its discovered-project rows behind a line naming
+  how many were found and in what. On a workspace that discovers a project per
+  crate the list was the tallest thing on the page.
+- The sidebar project actions say what they do: **Open another project…** and
+  **Back to all projects**, since closing a project is how the list of all of
+  them is reached. The application menu keeps the conventional File-menu names.
 - The Overview reports one tile per language rather than one per discovered
   project: a Cargo workspace discovers a project per crate, so the row read as
   a series of identical `Rust` tiles carrying fragments of the same number. The
@@ -37,6 +87,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   A build that predates a later field reads the record, keeps the bytes it does
   not understand, and writes them back untouched — so adding to the profile
   after this release no longer costs a schema bump or breaks an older build.
+
+### Fixed
+- Re-rendering the Overview no longer throws the reader back to the top. The
+  page is its own scroll container and a render empties several tall lists
+  before refilling them; a layout read while they were empty clamped the scroll
+  offset to the momentarily shorter content, and refilling never restored it. A
+  snapshot sync, a stack rescan or an activity load was enough to lose your
+  place.
+- The rolling summary's "Show full summary" control now works. It had been a
+  pseudo-element on the disclosure rather than part of its summary, so it
+  rendered as a link and did nothing when clicked.
+- `make package` no longer patches a stale application bundle. `CARGO_TARGET_DIR`
+  was relative, and the Tauri CLI runs cargo with `src-tauri` as its working
+  directory, so cargo wrote to `src-tauri/target` while the Makefile resolved
+  the bundle path against the repository root — the build succeeded, reported a
+  bundle, and left whatever already sat in `./target` untouched for packaging.
 
 ## [0.37.0] - 2026-09-07
 

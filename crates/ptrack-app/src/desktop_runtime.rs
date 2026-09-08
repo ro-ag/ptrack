@@ -71,7 +71,7 @@ const WORKSPACE_OPERATION_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub const FIRST_RUN_GOAL_MAX_BYTES: usize = 4_096;
 
-const COMMANDS: [&str; 105] = [
+const COMMANDS: [&str; 106] = [
     "AcknowledgeAgentHandoffV2",
     "AddIssueV1",
     "AddPlanV1",
@@ -112,6 +112,7 @@ const COMMANDS: [&str; 105] = [
     "GetCapabilityAuditsV2",
     "GetDiagnosticsReport",
     "GetInitializationStatusV1",
+    "GetInsightsV1",
     "GetIssueDetailV1",
     "GetIssuesV1",
     "GetLayoutState",
@@ -2384,6 +2385,62 @@ pub struct BoundDesktopWorkspace {
     resource_admission: Arc<ResourceAdmissionGate>,
     workspace_calls: Arc<WorkspaceCallGate>,
     task_challenges: Mutex<BTreeMap<String, TaskChallenge>>,
+    insights: Mutex<Option<InsightsCache>>,
+}
+
+/// A computed Insights payload and the state it was computed from.
+///
+/// The aggregation is a linear pass over records already in memory, but the
+/// timeline spawns git over the whole history, so recomputing on every visit to
+/// the page would make an expensive external call for an answer that has not
+/// changed. The entry is reused while the window, HEAD and the record
+/// fingerprint all still match; any of them moving is exactly the case where
+/// the numbers would differ.
+struct InsightsCache {
+    weeks: i64,
+    head: Option<String>,
+    fingerprint: InsightsFingerprint,
+    value: Value,
+}
+
+/// What the payload depends on, cheap enough to compute on every request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct InsightsFingerprint {
+    tasks: usize,
+    plans: usize,
+    notes: usize,
+    commits: usize,
+    issues: usize,
+    milestones: usize,
+    /// The latest update recorded anywhere, so an edit that changes no count
+    /// still invalidates the entry.
+    latest: i64,
+}
+
+impl InsightsFingerprint {
+    fn of(snapshot: &ProjectSnapshot) -> Self {
+        let latest = snapshot
+            .tasks
+            .iter()
+            .map(|task| task.updated_at)
+            .chain(snapshot.plans.iter().map(|plan| plan.updated_at))
+            .chain(snapshot.issues.iter().map(|issue| issue.updated_at))
+            .filter_map(|value| match value {
+                Timestamp::Fixed { seconds, .. } => Some(seconds),
+                Timestamp::Zero => None,
+            })
+            .max()
+            .unwrap_or_default();
+        Self {
+            tasks: snapshot.tasks.len(),
+            plans: snapshot.plans.len(),
+            notes: snapshot.notes.len(),
+            commits: snapshot.commits.len(),
+            issues: snapshot.issues.len(),
+            milestones: snapshot.milestones.len(),
+            latest,
+        }
+    }
 }
 
 impl BoundDesktopWorkspace {
@@ -2430,6 +2487,7 @@ impl BoundDesktopWorkspace {
                 idle: Condvar::new(),
             }),
             task_challenges: Mutex::new(BTreeMap::new()),
+            insights: Mutex::new(None),
         }
     }
 
@@ -2545,6 +2603,71 @@ impl BoundDesktopWorkspace {
             StackScanOutcome::Serve(profile) => StackProfileView::ready(&profile),
             StackScanOutcome::Failed(_) => StackProfileView::failed(),
             StackScanOutcome::Unavailable => StackProfileView::unavailable(),
+        }
+    }
+
+    /// Builds the Insights payload, reusing the last one while nothing it
+    /// depends on has moved.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error only when the project snapshot cannot be read; a
+    /// repository that cannot be walked yields an empty timeline rather than
+    /// failing the page, because every other section is still worth showing.
+    fn insights_v1(&self, weeks: i64) -> AppResult<Value> {
+        let snapshot = self.snapshot()?;
+        let fingerprint = InsightsFingerprint::of(&snapshot);
+        let head = self.repository_head();
+
+        if let Ok(cache) = self.insights.lock()
+            && let Some(entry) = cache.as_ref()
+            && entry.weeks == weeks
+            && entry.head == head
+            && entry.fingerprint == fingerprint
+        {
+            return Ok(entry.value.clone());
+        }
+
+        let mut value = crate::insights::insights_at(
+            &snapshot,
+            weeks,
+            OffsetDateTime::now_utc(),
+            |timestamp| UtcOffset::local_offset_at(timestamp).unwrap_or(UtcOffset::UTC),
+        );
+        value["timeline"] = self.repository_timeline();
+
+        if let Ok(mut cache) = self.insights.lock() {
+            *cache = Some(InsightsCache {
+                weeks,
+                head,
+                fingerprint,
+                value: value.clone(),
+            });
+        }
+        Ok(value)
+    }
+
+    /// Commit and tag history for the timeline, empty when the root is not a
+    /// repository this build can walk.
+    fn repository_timeline(&self) -> Value {
+        let cancellation = ptrack_git::CancellationToken::new();
+        match ptrack_git::capture_timeline(&cancellation, &self.endpoint.root) {
+            Ok(timeline) => json!({
+                "commits": timeline.commits,
+                "tags": timeline
+                    .tags
+                    .iter()
+                    .map(|tag| json!({ "name": tag.name, "at": tag.at }))
+                    .collect::<Vec<_>>(),
+                "truncated": timeline.truncated,
+                "available": true,
+            }),
+            Err(_) => json!({
+                "commits": [],
+                "tags": [],
+                "truncated": false,
+                "available": false,
+            }),
         }
     }
 
@@ -3994,6 +4117,10 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
                 })
             }
             "GetActivityHeatmapV2" => value(heatmap(&self.snapshot()?, i64_arg(arguments, 0)?)),
+            "GetInsightsV1" => {
+                require_argument_count(method, arguments, 1)?;
+                value(self.insights_v1(i64_arg(arguments, 0)?)?)
+            }
             "GetStackProfileV1" => {
                 require_argument_count(method, arguments, 1)?;
                 value(self.stack_profile_v1(bool_arg(arguments, 0)?))

@@ -5831,3 +5831,217 @@ html[data-window-mode="terminal"] #app {
   white-space: nowrap;
   border: 0;
 }
+
+/* ------------------------------------------------------------- insights */
+
+.insights-page {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: var(--space-200) var(--space-250) var(--space-250);
+}
+
+.insights-heading {
+  padding: 0 2px var(--space-150);
+}
+
+.insights-heading h2 {
+  margin-bottom: 0;
+  font-size: 1.375rem;
+  line-height: 1.2;
+  letter-spacing: -0.038em;
+}
+
+.insights-caption {
+  margin: var(--space-050) 0 0;
+  color: var(--muted);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Same rule as the Overview: width buys columns, never inches. The figures
+   are drawn to a fixed aspect and stretch within their card. */
+.insights-body {
+  container-type: inline-size;
+  display: grid;
+  grid-auto-flow: row dense;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--space-150);
+  align-items: start;
+}
+
+.insight-card {
+  min-width: 0;
+  border: 1px solid var(--line-subtle);
+  border-radius: 10px;
+  background: var(--fill-subtle);
+  padding: var(--space-100) var(--space-150) var(--space-150);
+  box-shadow: var(--highlight-inset);
+}
+
+.insight-card .section-label {
+  margin-bottom: var(--space-050);
+  color: var(--muted);
+  letter-spacing: 0.12em;
+}
+
+.insight-wide,
+.insight-timeline {
+  grid-column: span 2;
+}
+
+/* The history is the page's centrepiece and gets the full row wherever the
+   grid is wide enough to give it one. */
+@container (min-width: 1300px) {
+  .insight-timeline {
+    grid-column: 1 / -1;
+  }
+}
+
+.insight-figure {
+  min-width: 0;
+  margin-top: var(--space-100);
+}
+
+.insight-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.insight-timeline .insight-svg {
+  height: 150px;
+}
+
+.insight-momentum .insight-svg {
+  height: 120px;
+}
+
+/* Every figure draws from the same ramp as the progress ring, so the page
+   reads as one family rather than seven chart styles. */
+.insight-stop-strong {
+  stop-color: var(--accent);
+  stop-opacity: 0.42;
+}
+
+.insight-stop-dim {
+  stop-color: var(--accent-dim);
+  stop-opacity: 0.02;
+}
+
+.insight-area {
+  stroke: none;
+}
+
+.insight-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.insight-line-muted {
+  stroke: var(--faint);
+  stroke-width: 1.25;
+  stroke-dasharray: 3 3;
+}
+
+.insight-tick {
+  stroke: rgba(var(--accent-rgb), 0.28);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+
+.insight-axis {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+}
+
+.insight-grid {
+  stroke: var(--line-subtle);
+  stroke-width: 1;
+}
+
+.insight-axis-label,
+.insight-plan-label {
+  fill: var(--muted);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.insight-plan-label {
+  fill: var(--text-soft);
+  font-size: 10px;
+}
+
+.insight-key {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.insight-key-line {
+  fill: var(--faint);
+}
+
+.insight-key-area {
+  fill: var(--accent);
+}
+
+/* A release is a landmark, so it is marked with the hold tone rather than the
+   accent every series already uses. */
+.insight-marker {
+  stroke: var(--hold);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+  opacity: 0.7;
+}
+
+.insight-marker-label {
+  fill: var(--hold);
+  font-size: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.insight-bar {
+  stroke: rgba(var(--accent-rgb), 0.5);
+  stroke-width: 1;
+}
+
+.insight-punch {
+  fill: var(--accent);
+  fill-opacity: 0.75;
+}
+
+.insight-issue-open {
+  fill: var(--muted);
+}
+
+.insight-issue-open.severity-critical {
+  fill: var(--blocked);
+}
+
+.insight-issue-open.severity-high {
+  fill: var(--issue-chip);
+}
+
+.insight-issue-open.severity-medium {
+  fill: var(--hold);
+}
+
+.insight-issue-open.severity-low {
+  fill: var(--info);
+}
+
+.insight-issue-closed {
+  fill: var(--fill-strong);
+}
+
+.insight-plan-track {
+  fill: var(--fill-strong);
+}
+
+.insight-plan-fill {
+  stroke: none;
+}

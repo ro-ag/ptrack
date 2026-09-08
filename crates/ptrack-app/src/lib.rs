@@ -9,6 +9,7 @@ mod agent_runtime;
 mod desktop_runtime;
 mod diagnostics_report;
 mod identity;
+mod insights;
 mod layout_state;
 mod preferences;
 mod production;
@@ -97,6 +98,8 @@ mod desktop_runtime_test;
 mod diagnostics_report_test;
 #[cfg(test)]
 mod identity_test;
+#[cfg(test)]
+mod insights_test;
 #[cfg(test)]
 mod layout_state_test;
 #[cfg(test)]

@@ -44,6 +44,7 @@ const COMMANDS = Object.freeze([
   "GetCapabilityAuditsV2",
   "GetDiagnosticsReport",
   "GetInitializationStatusV1",
+  "GetInsightsV1",
   "GetIssueDetailV1",
   "GetIssuesV1",
   "GetLayoutState",
