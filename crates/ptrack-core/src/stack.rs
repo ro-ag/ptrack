@@ -10,6 +10,28 @@ use std::collections::BTreeMap;
 
 use crate::model::{LanguageId, StackProfile, StackProject, StackSummary};
 
+/// One tracked file and its line count.
+///
+/// `lines` is zero for a file whose lines were not counted — a binary, an
+/// empty file, or a scan whose line pass was unavailable. The profile's
+/// `lines_counted` flag says which of those a zero means.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TrackedFile {
+    pub path: String,
+    pub lines: u32,
+}
+
+impl TrackedFile {
+    /// Constructs a tracked file with no counted lines.
+    #[must_use]
+    pub fn new(path: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            lines: 0,
+        }
+    }
+}
+
 /// The most discovered projects one profile carries.
 pub const MAX_STACK_PROJECTS: usize = 64;
 /// The most evidence paths one discovered project carries.
@@ -51,16 +73,17 @@ const MARKERS: &[(Marker, LanguageId)] = &[
 /// TypeScript sources without one is refined the same way, from those sources.
 const TYPESCRIPT_MARKER: &str = "tsconfig.json";
 
-/// Resolves discovered projects from a tracked-path list.
+/// Resolves discovered projects from a tracked-file list.
 ///
 /// Paths are repository-relative and use `/` separators. The result does not
 /// depend on the order they arrive in.
 #[must_use]
-pub fn resolve(paths: &[String]) -> Vec<StackProject> {
+pub fn resolve(files: &[TrackedFile]) -> Vec<StackProject> {
     let mut discovered: BTreeMap<String, Discovery> = BTreeMap::new();
     let mut typescript_roots: Vec<&str> = Vec::new();
 
-    for path in paths {
+    for file in files {
+        let path = &file.path;
         let (directory, name) = split_path(path);
         if name == TYPESCRIPT_MARKER {
             typescript_roots.push(directory);
@@ -95,7 +118,7 @@ pub fn resolve(paths: &[String]) -> Vec<StackProject> {
     });
     projects.truncate(MAX_STACK_PROJECTS);
 
-    let typescript_sources = attribute_files(&mut projects, paths);
+    let typescript_sources = attribute_files(&mut projects, files);
     for (index, project) in projects.iter_mut().enumerate() {
         if project.language == LanguageId::JavaScript && typescript_sources[index] {
             project.language = LanguageId::TypeScript;
@@ -164,6 +187,7 @@ fn build_project(root: String, discovery: Discovery, typescript_roots: &[&str]) 
         evidence,
         depth,
         files: 0,
+        lines: 0,
     }
 }
 
@@ -173,12 +197,12 @@ fn build_project(root: String, discovery: Discovery, typescript_roots: &[&str]) 
 /// source. That answer drives the JavaScript refinement for projects that
 /// track no `tsconfig.json`, and it is a by-product of a pass the resolver
 /// already makes over every path.
-fn attribute_files(projects: &mut [StackProject], paths: &[String]) -> Vec<bool> {
+fn attribute_files(projects: &mut [StackProject], files: &[TrackedFile]) -> Vec<bool> {
     let mut typescript_sources = vec![false; projects.len()];
-    for path in paths {
+    for file in files {
         let mut best: Option<usize> = None;
         for (index, project) in projects.iter().enumerate() {
-            if !contains(&project.root, path) {
+            if !contains(&project.root, &file.path) {
                 continue;
             }
             let deeper =
@@ -189,7 +213,8 @@ fn attribute_files(projects: &mut [StackProject], paths: &[String]) -> Vec<bool>
         }
         if let Some(index) = best {
             projects[index].files = projects[index].files.saturating_add(1);
-            if is_typescript_source(path) {
+            projects[index].lines = projects[index].lines.saturating_add(file.lines);
+            if is_typescript_source(&file.path) {
                 typescript_sources[index] = true;
             }
         }

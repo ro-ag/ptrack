@@ -345,6 +345,7 @@ fn the_digest_names_the_discovered_stack_and_omits_it_when_unscanned() {
                 evidence: vec!["Cargo.toml".to_owned()],
                 depth: 0,
                 files: 214,
+                lines: 1498,
             },
             StackProject {
                 root: "frontend".to_owned(),
@@ -352,17 +353,20 @@ fn the_digest_names_the_discovered_stack_and_omits_it_when_unscanned() {
                 evidence: vec!["frontend/package.json".to_owned()],
                 depth: 1,
                 files: 38,
+                lines: 266,
             },
         ],
         scanned_head: "abc123".to_owned(),
         scanned_at: Timestamp::Zero,
         tracked_files: 252,
+        lines: 1764,
+        lines_counted: true,
         incomplete: false,
     });
     let markdown = context(&snapshot).markdown();
     assert!(markdown.contains("## Stack"));
-    assert!(markdown.contains("- . — rust (214 tracked files)"));
-    assert!(markdown.contains("- frontend — typescript (38 tracked files)"));
+    assert!(markdown.contains("- . — rust (214 tracked files · 1498 lines)"));
+    assert!(markdown.contains("- frontend — typescript (38 tracked files · 266 lines)"));
     assert!(!markdown.contains("_partial"));
 }
 
@@ -376,10 +380,13 @@ fn a_truncated_scan_is_labelled_partial_in_the_digest() {
             evidence: vec!["Cargo.toml".to_owned()],
             depth: 0,
             files: 200_000,
+            lines: 1400000,
         }],
         scanned_head: "abc123".to_owned(),
         scanned_at: Timestamp::Zero,
         tracked_files: 200_000,
+        lines: 1400000,
+        lines_counted: true,
         incomplete: true,
     });
     assert!(context(&snapshot).markdown().contains("_partial"));

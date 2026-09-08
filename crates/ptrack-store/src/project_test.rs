@@ -3102,10 +3102,13 @@ fn sample_stack_profile() -> StackProfile {
             evidence: vec!["Cargo.toml".to_owned()],
             depth: 0,
             files: 9,
+            lines: 63,
         }],
         scanned_head: "deadbeef".to_owned(),
         scanned_at: Timestamp::Zero,
         tracked_files: 9,
+        lines: 63,
+        lines_counted: true,
         incomplete: false,
     }
 }
@@ -3149,6 +3152,8 @@ fn a_registry_stack_summary_survives_re_registration_and_relocation() {
     let summary = StackSummary {
         languages: vec![(LanguageId::Rust, 9)],
         tracked_files: 9,
+        lines: 63,
+        lines_counted: true,
         scanned_head: "deadbeef".to_owned(),
         incomplete: false,
     };
@@ -3183,6 +3188,8 @@ fn a_stack_summary_for_an_unregistered_project_writes_nothing() {
             StackSummary {
                 languages: vec![(LanguageId::Rust, 1)],
                 tracked_files: 1,
+                lines: 7,
+                lines_counted: true,
                 scanned_head: "deadbeef".to_owned(),
                 incomplete: false,
             },

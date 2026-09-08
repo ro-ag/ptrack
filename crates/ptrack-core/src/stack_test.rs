@@ -1,9 +1,25 @@
 use crate::model::LanguageId;
-use crate::stack::{MAX_STACK_PROJECTS, resolve};
+use crate::stack::{MAX_STACK_PROJECTS, TrackedFile, resolve};
 
-fn paths(values: &[&str]) -> Vec<String> {
-    let mut owned: Vec<String> = values.iter().map(|value| (*value).to_owned()).collect();
-    owned.sort();
+fn paths(values: &[&str]) -> Vec<TrackedFile> {
+    let mut owned: Vec<TrackedFile> = values
+        .iter()
+        .map(|value| TrackedFile::new(*value))
+        .collect();
+    owned.sort_by(|left, right| left.path.cmp(&right.path));
+    owned
+}
+
+/// Tracked files carrying line counts, for the attribution tests.
+fn counted(values: &[(&str, u32)]) -> Vec<TrackedFile> {
+    let mut owned: Vec<TrackedFile> = values
+        .iter()
+        .map(|(path, lines)| TrackedFile {
+            path: (*path).to_owned(),
+            lines: *lines,
+        })
+        .collect();
+    owned.sort_by(|left, right| left.path.cmp(&right.path));
     owned
 }
 
@@ -114,11 +130,11 @@ fn evidence_kept_under_the_cap_does_not_depend_on_input_order() {
 
 #[test]
 fn discovered_projects_are_capped_and_the_shallowest_survive() {
-    let mut values: Vec<String> = (0..MAX_STACK_PROJECTS + 10)
-        .map(|index| format!("crates/c{index:03}/Cargo.toml"))
+    let mut values: Vec<TrackedFile> = (0..MAX_STACK_PROJECTS + 10)
+        .map(|index| TrackedFile::new(format!("crates/c{index:03}/Cargo.toml")))
         .collect();
-    values.push("Cargo.toml".to_owned());
-    values.sort();
+    values.push(TrackedFile::new("Cargo.toml"));
+    values.sort_by(|left, right| left.path.cmp(&right.path));
     let resolved = resolve(&values);
     assert_eq!(resolved.len(), MAX_STACK_PROJECTS);
     assert_eq!(resolved[0].root, "");
@@ -182,4 +198,27 @@ fn typescript_sources_refine_only_the_project_that_owns_them() {
             ("tools", LanguageId::TypeScript)
         ]
     );
+}
+
+#[test]
+fn lines_are_attributed_to_the_nearest_enclosing_project() {
+    let resolved = resolve(&counted(&[
+        ("Cargo.toml", 12),
+        ("src/lib.rs", 400),
+        ("crates/one/Cargo.toml", 8),
+        ("crates/one/src/lib.rs", 250),
+    ]));
+    assert_eq!(resolved[0].root, "");
+    assert_eq!((resolved[0].files, resolved[0].lines), (2, 412));
+    assert_eq!((resolved[1].files, resolved[1].lines), (2, 258));
+}
+
+#[test]
+fn uncounted_files_contribute_no_lines_but_still_count_as_files() {
+    let resolved = resolve(&counted(&[
+        ("Cargo.toml", 12),
+        ("assets/logo.png", 0),
+        ("src/lib.rs", 100),
+    ]));
+    assert_eq!((resolved[0].files, resolved[0].lines), (3, 112));
 }

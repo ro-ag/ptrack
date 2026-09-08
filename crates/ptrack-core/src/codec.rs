@@ -13,14 +13,14 @@ use crate::{
 /// Stable envelope codec ID for native ptrack positional records.
 pub const NATIVE_CODEC: u16 = 3;
 /// Current schema of native ptrack positional record payloads.
-pub const NATIVE_PAYLOAD_SCHEMA: u32 = 5;
+pub const NATIVE_PAYLOAD_SCHEMA: u32 = 6;
 /// Oldest native payload schema this build still decodes.
 ///
 /// Schema 1 predates the plan and task hold reason, which schema 2 added.
 /// Schema 3 adds actor attribution, reserved entity ULIDs, plan claims, and the
 /// per-actor `Meta` maps. Schema 4 adds plan and task dependency edges.
 /// Schema 5 adds the deterministic stack profile on `Meta` and its summary on
-/// `ProjectRef`.
+/// `ProjectRef`. Schema 6 adds that profile's line counts.
 /// Payloads at any older schema decode with all of those fields empty and are
 /// re-encoded at [`NATIVE_PAYLOAD_SCHEMA`] on their next write, so stored
 /// records upgrade lazily and no database is rewritten on open.
@@ -537,6 +537,13 @@ fn decode_meta(reader: &mut Reader<'_>, payload_schema: u32) -> Result<Meta, Cod
     Ok(meta)
 }
 
+/// The payload schema that introduced the stack profile's line counts.
+///
+/// A schema-5 profile carries file counts only, so it decodes with every line
+/// count zero and `lines_counted` false — the surfaces then omit lines instead
+/// of reporting a project with none.
+const STACK_LINES_PAYLOAD_SCHEMA: u32 = 6;
+
 /// The payload schema that introduced the deterministic stack profile.
 ///
 /// Like every other field gate here this is an absolute schema number: a later
@@ -582,10 +589,21 @@ fn encode_stack_profile(
         writer.strings(&project.evidence)?;
         writer.u8(project.depth)?;
         writer.u32(project.files)?;
+        if payload_schema >= STACK_LINES_PAYLOAD_SCHEMA {
+            writer.u32(project.lines)?;
+        } else if project.lines != 0 {
+            return Err(CodecError::NonCanonical);
+        }
     }
     writer.string(&profile.scanned_head)?;
     writer.timestamp(profile.scanned_at)?;
     writer.u32(profile.tracked_files)?;
+    if payload_schema >= STACK_LINES_PAYLOAD_SCHEMA {
+        writer.u32(profile.lines)?;
+        writer.bool(profile.lines_counted)?;
+    } else if profile.lines != 0 || profile.lines_counted {
+        return Err(CodecError::NonCanonical);
+    }
     writer.bool(profile.incomplete)
 }
 
@@ -615,19 +633,37 @@ fn decode_stack_profile(
                 maximum: MAX_STACK_EVIDENCE,
             });
         }
+        let depth = reader.u8()?;
+        let files = reader.u32()?;
+        let lines = if payload_schema >= STACK_LINES_PAYLOAD_SCHEMA {
+            reader.u32()?
+        } else {
+            0
+        };
         projects.push(StackProject {
             root,
             language,
             evidence,
-            depth: reader.u8()?,
-            files: reader.u32()?,
+            depth,
+            files,
+            lines,
         });
     }
+    let scanned_head = reader.string()?;
+    let scanned_at = reader.timestamp()?;
+    let tracked_files = reader.u32()?;
+    let (lines, lines_counted) = if payload_schema >= STACK_LINES_PAYLOAD_SCHEMA {
+        (reader.u32()?, reader.bool()?)
+    } else {
+        (0, false)
+    };
     Ok(Some(StackProfile {
         projects,
-        scanned_head: reader.string()?,
-        scanned_at: reader.timestamp()?,
-        tracked_files: reader.u32()?,
+        scanned_head,
+        scanned_at,
+        tracked_files,
+        lines,
+        lines_counted,
         incomplete: reader.bool()?,
     }))
 }

@@ -1013,9 +1013,10 @@ function stackTrackedFilesToggle(profile, languages) {
   // The tile column is narrow; a longer label truncates. The language count
   // lives in the tooltip and in the breakdown the tile opens.
   label.textContent = "Tracked files";
-  toggle.title = languages === 1
-    ? "1 language discovered — click for the breakdown"
-    : `${languages} languages discovered — click for the breakdown`;
+  const discovered = languages === 1 ? "1 language" : `${languages} languages`;
+  toggle.title = profile.linesCounted
+    ? `${discovered}, ${profile.lines.toLocaleString()} lines — click for the breakdown`
+    : `${discovered} — click for the breakdown`;
   const value = document.createElement("span");
   value.className = "stat-value";
   value.textContent = profile.trackedFiles.toLocaleString();
@@ -1054,7 +1055,12 @@ function stackBreakdown(rows) {
     count.textContent = `${row.files.toLocaleString()} file${row.files === 1 ? "" : "s"}`;
     const scope = document.createElement("span");
     scope.className = "stack-breakdown-scope";
-    scope.textContent = row.projects === 1 ? "1 project" : `${row.projects} projects`;
+    // Lines are per language, and only when the scan counted them — a
+    // repository with no commit yet lists files and stays silent about lines.
+    const projects = row.projects === 1 ? "1 project" : `${row.projects} projects`;
+    scope.textContent = row.lines > 0
+      ? `${row.lines.toLocaleString()} lines · ${projects}`
+      : projects;
     detail.append(bar, count, scope);
     list.append(term, detail);
   });

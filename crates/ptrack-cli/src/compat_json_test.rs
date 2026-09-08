@@ -128,10 +128,13 @@ fn a_scanned_project_encodes_its_stack_as_structured_rows() {
             evidence: vec!["frontend/package.json".to_owned()],
             depth: 1,
             files: 38,
+            lines: 266,
         }],
         scanned_head: "abc123".to_owned(),
         scanned_at: ptrack_core::Timestamp::Zero,
         tracked_files: 38,
+        lines: 266,
+        lines_counted: true,
         incomplete: true,
     });
     let snapshot = ptrack_core::ProjectSnapshot::new(

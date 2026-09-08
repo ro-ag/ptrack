@@ -362,6 +362,8 @@ pub struct StackProjectJson<'a> {
     root: &'a str,
     language: &'a str,
     files: u32,
+    /// Lines in this project's tracked text files; zero when uncounted.
+    lines: u32,
     evidence: &'a [String],
 }
 
@@ -399,6 +401,7 @@ impl<'a> From<&'a Digest> for DigestJson<'a> {
                         root: &project.root,
                         language: project.language.as_str(),
                         files: project.files,
+                        lines: project.lines,
                         evidence: &project.evidence,
                     })
                     .collect(),

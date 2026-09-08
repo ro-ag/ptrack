@@ -729,6 +729,7 @@ fn stack_profile() -> StackProfile {
                 evidence: vec!["Cargo.toml".to_owned()],
                 depth: 0,
                 files: 214,
+                lines: 1498,
             },
             StackProject {
                 root: "frontend".to_owned(),
@@ -739,11 +740,14 @@ fn stack_profile() -> StackProfile {
                 ],
                 depth: 1,
                 files: 38,
+                lines: 266,
             },
         ],
         scanned_head: "abc123".to_owned(),
         scanned_at: fixed_time(),
         tracked_files: 252,
+        lines: 1764,
+        lines_counted: true,
         incomplete: false,
     }
 }
@@ -831,6 +835,34 @@ fn encoding_a_registry_summary_below_its_schema_is_non_canonical() {
     });
     assert_eq!(
         encode_record_at_schema(&record, STACK_PAYLOAD_SCHEMA - 1),
+        Err(CodecError::NonCanonical)
+    );
+}
+
+#[test]
+fn a_schema_five_profile_decodes_with_no_counted_lines() {
+    let mut meta = test_support::meta(1);
+    let mut profile = stack_profile();
+    profile.lines = 0;
+    profile.lines_counted = false;
+    for project in &mut profile.projects {
+        project.lines = 0;
+    }
+    meta.stack = Some(profile);
+    let record = NativeRecord::Meta(meta);
+    let encoded = encode_record_at_schema(&record, STACK_PAYLOAD_SCHEMA).expect("encode");
+    assert_eq!(
+        decode_record_at_schema(RecordKind::Meta, STACK_PAYLOAD_SCHEMA, &encoded).expect("decode"),
+        record
+    );
+}
+
+#[test]
+fn encoding_counted_lines_below_their_schema_is_non_canonical() {
+    let mut meta = test_support::meta(1);
+    meta.stack = Some(stack_profile());
+    assert_eq!(
+        encode_record_at_schema(&NativeRecord::Meta(meta), STACK_PAYLOAD_SCHEMA),
         Err(CodecError::NonCanonical)
     );
 }

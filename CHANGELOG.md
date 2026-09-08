@@ -6,6 +6,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Line counts per discovered language, inside the Overview's stack breakdown.
+  Lines are counted per tracked text file at HEAD (`git grep -I` skips
+  binaries), attributed to the project that owns the file, and reported per
+  language beside the file count — never as one repository-wide total. A
+  repository whose lines cannot be counted lists files and stays silent about
+  lines. `ptrack context` carries the same per-project figures.
+
+### Changed
+- The Overview reports one tile per language rather than one per discovered
+  project: a Cargo workspace discovers a project per crate, so the row read as
+  a series of identical `Rust` tiles carrying fragments of the same number. The
+  `Tracked files` tile now expands into the full per-language breakdown, with a
+  proportion bar beside every count.
+- The Repository panel lists at most twelve discovered projects and summarizes
+  the rest, instead of rendering a row per crate.
+- The native record payload schema is now 6, adding the stack profile's line
+  counts. Databases written at schema 5 decode with no counted lines and
+  upgrade on their next write.
+
 ## [0.37.0] - 2026-09-07
 
 ### Added

@@ -1128,12 +1128,14 @@ export interface StackProfileProject {
   root: string;
   language: string;
   files: number;
+  lines?: number;
   evidence: string[];
 }
 
 export interface StackTile {
   language: string;
   files: number;
+  lines: number;
   projects: number;
 }
 
@@ -1169,11 +1171,13 @@ export function stackTiles(projects: StackProfileProject[], limit = 4): StackTil
     const tile = totals.get(project.language);
     if (tile) {
       tile.files += project.files;
+      tile.lines += project.lines ?? 0;
       tile.projects += 1;
     } else {
       totals.set(project.language, {
         language: project.language,
         files: project.files,
+        lines: project.lines ?? 0,
         projects: 1,
       });
     }

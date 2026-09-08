@@ -721,8 +721,8 @@ describe("stack tiles", () => {
       { root: "frontend", language: "typescript", files: 96, evidence: [] },
     ]);
     expect(tiles).toEqual([
-      { language: "rust", files: 250, projects: 3 },
-      { language: "typescript", files: 96, projects: 1 },
+      { language: "rust", files: 250, lines: 0, projects: 3 },
+      { language: "typescript", files: 96, lines: 0, projects: 1 },
     ]);
   });
 
@@ -752,8 +752,8 @@ describe("stack language rows", () => {
       { root: "web", language: "typescript", files: 20, evidence: [] },
     ]);
     expect(rows).toEqual([
-      { language: "rust", files: 80, projects: 2, share: 0.8 },
-      { language: "typescript", files: 20, projects: 1, share: 0.2 },
+      { language: "rust", files: 80, lines: 0, projects: 2, share: 0.8 },
+      { language: "typescript", files: 20, lines: 0, projects: 1, share: 0.2 },
     ]);
   });
 
@@ -772,7 +772,28 @@ describe("stack language rows", () => {
   it("gives an empty profile no rows and never divides by zero", () => {
     expect(stackLanguageRows([])).toEqual([]);
     expect(stackLanguageRows([{ root: "", language: "rust", files: 0, evidence: [] }])).toEqual([
-      { language: "rust", files: 0, projects: 1, share: 0 },
+      { language: "rust", files: 0, lines: 0, projects: 1, share: 0 },
     ]);
+  });
+});
+
+describe("stack line totals", () => {
+  it("sums lines per language alongside the file counts", () => {
+    const rows = stackLanguageRows([
+      { root: "", language: "rust", files: 60, lines: 12_000, evidence: [] },
+      { root: "crates/a", language: "rust", files: 20, lines: 4_000, evidence: [] },
+      { root: "web", language: "typescript", files: 20, lines: 3_000, evidence: [] },
+    ]);
+    expect(rows.map((row) => [row.language, row.files, row.lines])).toEqual([
+      ["rust", 80, 16_000],
+      ["typescript", 20, 3_000],
+    ]);
+  });
+
+  it("treats a profile with no counted lines as zero rather than undefined", () => {
+    const [row] = stackLanguageRows([
+      { root: "", language: "rust", files: 3, evidence: [] },
+    ]);
+    expect(row.lines).toBe(0);
   });
 });

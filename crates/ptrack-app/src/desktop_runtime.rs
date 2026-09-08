@@ -2564,11 +2564,24 @@ impl BoundDesktopWorkspace {
         let listing = ptrack_git::RepositoryService::for_stack_scan()
             .capture_tracked_paths(&cancellation, &self.endpoint.root)
             .ok()?;
+        let files: Vec<ptrack_core::stack::TrackedFile> = listing
+            .paths
+            .iter()
+            .map(|entry| ptrack_core::stack::TrackedFile {
+                path: entry.path.clone(),
+                lines: entry.lines,
+            })
+            .collect();
+        let lines = files
+            .iter()
+            .fold(0u32, |total, file| total.saturating_add(file.lines));
         Some(StackProfile {
-            projects: ptrack_core::stack::resolve(&listing.paths),
+            projects: ptrack_core::stack::resolve(&files),
             scanned_head: head.to_owned(),
             scanned_at: now_timestamp(),
-            tracked_files: u32::try_from(listing.paths.len()).unwrap_or(u32::MAX),
+            tracked_files: u32::try_from(files.len()).unwrap_or(u32::MAX),
+            lines,
+            lines_counted: listing.lines_counted,
             incomplete: listing.incomplete,
         })
     }
@@ -5549,6 +5562,9 @@ pub(super) struct StackProfileView {
     pub(super) scanned_head: String,
     pub(super) scanned_at: String,
     pub(super) tracked_files: u32,
+    /// Lines across counted tracked files; zero when `lines_counted` is false.
+    pub(super) lines: u32,
+    pub(super) lines_counted: bool,
     pub(super) incomplete: bool,
     pub(super) projects: Vec<StackProjectView>,
 }
@@ -5560,6 +5576,7 @@ pub(super) struct StackProjectView {
     pub(super) root: String,
     pub(super) language: String,
     pub(super) files: u32,
+    pub(super) lines: u32,
     pub(super) evidence: Vec<String>,
 }
 
@@ -5578,6 +5595,8 @@ impl StackProfileView {
             scanned_head: String::new(),
             scanned_at: String::new(),
             tracked_files: 0,
+            lines: 0,
+            lines_counted: false,
             incomplete: false,
             projects: Vec::new(),
         }
@@ -5589,6 +5608,8 @@ impl StackProfileView {
             scanned_head: profile.scanned_head.clone(),
             scanned_at: timestamp(profile.scanned_at),
             tracked_files: profile.tracked_files,
+            lines: profile.lines,
+            lines_counted: profile.lines_counted,
             incomplete: profile.incomplete,
             projects: profile
                 .projects
@@ -5597,6 +5618,7 @@ impl StackProfileView {
                     root: project.root.clone(),
                     language: project.language.as_str().to_owned(),
                     files: project.files,
+                    lines: project.lines,
                     evidence: project.evidence.clone(),
                 })
                 .collect(),

@@ -638,6 +638,10 @@ pub struct StackProject {
     pub depth: u8,
     /// Tracked files attributed to this project.
     pub files: u32,
+    /// Lines in this project's tracked text files. Zero when the scan could
+    /// not count lines; [`StackProfile::lines_counted`] distinguishes that
+    /// from a project that genuinely has none.
+    pub lines: u32,
 }
 
 /// The durable result of one tracked-file scan.
@@ -654,6 +658,13 @@ pub struct StackProfile {
     pub scanned_head: String,
     pub scanned_at: Timestamp,
     pub tracked_files: u32,
+    /// Lines across every counted tracked file.
+    pub lines: u32,
+    /// The scan counted lines. False when the line pass was unavailable — an
+    /// empty repository, or a listing too large for the count — in which case
+    /// every `lines` value is zero and surfaces omit lines rather than
+    /// reporting nothing.
+    pub lines_counted: bool,
     /// The tracked path listing hit the scan cap and was truncated.
     pub incomplete: bool,
 }
