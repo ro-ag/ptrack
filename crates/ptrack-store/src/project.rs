@@ -179,6 +179,7 @@ impl ProjectStore {
                     last_write_version: writer,
                     active_plans: Vec::new(),
                     actors: Vec::new(),
+                    stack: None,
                 },
             )?;
             Ok(())

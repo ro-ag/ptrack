@@ -1,10 +1,11 @@
-use crate::codec::{ACTOR_PAYLOAD_SCHEMA, HOLD_REASON_PAYLOAD_SCHEMA};
+use crate::codec::{ACTOR_PAYLOAD_SCHEMA, HOLD_REASON_PAYLOAD_SCHEMA, STACK_PAYLOAD_SCHEMA};
 use crate::test_support;
 use crate::{
     Capability, CapabilityAuditPolicy, CapabilityKind, CapabilityLimits, CodecError, Digest32,
-    GitScope, HttpScope, IssueStatus, MAX_LIST_ITEMS, MAX_PAYLOAD_BYTES, MIN_NATIVE_PAYLOAD_SCHEMA,
-    MemoryKind, Meta, MilestoneStatus, NATIVE_PAYLOAD_SCHEMA, NativeRecord, Note, NoteTarget, Plan,
-    PlanStatus, RecordKind, Severity, SshScope, Task, TaskStatus, Timestamp, decode_record,
+    GitScope, HttpScope, IssueStatus, LanguageId, MAX_LIST_ITEMS, MAX_PAYLOAD_BYTES,
+    MIN_NATIVE_PAYLOAD_SCHEMA, MemoryKind, Meta, MilestoneStatus, NATIVE_PAYLOAD_SCHEMA,
+    NativeRecord, Note, NoteTarget, Plan, PlanStatus, ProjectRef, RecordKind, Severity, SshScope,
+    StackProfile, StackProject, StackSummary, Task, TaskStatus, Timestamp, decode_record,
     decode_record_at_schema, encode_record, encode_record_at_schema,
 };
 
@@ -102,6 +103,7 @@ fn golden_meta_bytes_cover_zero_and_fixed_offset_times() {
         last_write_version: "v1".to_owned(),
         active_plans: Vec::new(),
         actors: Vec::new(),
+        stack: None,
     });
     let expected = [
         0, 0, 0, 1, b'g', // goal
@@ -113,6 +115,7 @@ fn golden_meta_bytes_cover_zero_and_fixed_offset_times() {
         0, 0, 0, 2, b'v', b'1', // last write version
         0, 0, 0, 0, // empty per-actor active plans
         0, 0, 0, 0, // empty actor directory
+        0, // absent stack profile
     ];
     assert_eq!(encode_record(&record).expect("encode"), expected);
     assert_eq!(
@@ -715,4 +718,119 @@ fn hex_nibble(value: u8) -> u8 {
         b'a'..=b'f' => value - b'a' + 10,
         _ => panic!("invalid fixture hex"),
     }
+}
+
+fn stack_profile() -> StackProfile {
+    StackProfile {
+        projects: vec![
+            StackProject {
+                root: String::new(),
+                language: LanguageId::Rust,
+                evidence: vec!["Cargo.toml".to_owned()],
+                depth: 0,
+                files: 214,
+            },
+            StackProject {
+                root: "frontend".to_owned(),
+                language: LanguageId::TypeScript,
+                evidence: vec![
+                    "frontend/package.json".to_owned(),
+                    "frontend/tsconfig.json".to_owned(),
+                ],
+                depth: 1,
+                files: 38,
+            },
+        ],
+        scanned_head: "abc123".to_owned(),
+        scanned_at: fixed_time(),
+        tracked_files: 252,
+        incomplete: false,
+    }
+}
+
+fn stack_summary() -> StackSummary {
+    StackSummary {
+        languages: vec![(LanguageId::Rust, 214), (LanguageId::TypeScript, 38)],
+        tracked_files: 252,
+        scanned_head: "abc123".to_owned(),
+        incomplete: false,
+    }
+}
+
+#[test]
+fn a_meta_stack_profile_round_trips_at_the_native_schema() {
+    let mut meta = test_support::meta(1);
+    meta.stack = Some(stack_profile());
+    let record = NativeRecord::Meta(meta);
+    let encoded = encode_record(&record).expect("encode");
+    assert_eq!(
+        decode_record(RecordKind::Meta, &encoded).expect("decode"),
+        record
+    );
+}
+
+#[test]
+fn a_meta_written_before_the_stack_schema_decodes_without_one() {
+    let record = NativeRecord::Meta(test_support::meta(1));
+    let encoded = encode_record_at_schema(&record, STACK_PAYLOAD_SCHEMA - 1).expect("encode");
+    assert_eq!(
+        decode_record_at_schema(RecordKind::Meta, STACK_PAYLOAD_SCHEMA - 1, &encoded)
+            .expect("decode"),
+        record
+    );
+}
+
+#[test]
+fn encoding_a_stack_below_its_schema_is_non_canonical() {
+    let mut meta = test_support::meta(1);
+    meta.stack = Some(stack_profile());
+    assert_eq!(
+        encode_record_at_schema(&NativeRecord::Meta(meta), STACK_PAYLOAD_SCHEMA - 1),
+        Err(CodecError::NonCanonical)
+    );
+}
+
+#[test]
+fn a_project_ref_stack_summary_round_trips_at_the_native_schema() {
+    let record = NativeRecord::ProjectRef(ProjectRef {
+        name: "ptrack".to_owned(),
+        path: "/tmp/ptrack".to_owned(),
+        last_seen: fixed_time(),
+        stack: Some(stack_summary()),
+    });
+    let encoded = encode_record(&record).expect("encode");
+    assert_eq!(
+        decode_record(RecordKind::ProjectRef, &encoded).expect("decode"),
+        record
+    );
+}
+
+#[test]
+fn a_project_ref_written_before_the_stack_schema_decodes_without_a_summary() {
+    let record = NativeRecord::ProjectRef(ProjectRef {
+        name: "ptrack".to_owned(),
+        path: "/tmp/ptrack".to_owned(),
+        last_seen: fixed_time(),
+        stack: None,
+    });
+    let encoded = encode_record_at_schema(&record, STACK_PAYLOAD_SCHEMA - 1).expect("encode");
+    assert_eq!(
+        decode_record_at_schema(RecordKind::ProjectRef, STACK_PAYLOAD_SCHEMA - 1, &encoded)
+            .expect("decode"),
+        record
+    );
+}
+
+#[test]
+fn encoding_a_registry_summary_below_its_schema_is_non_canonical() {
+    let record = NativeRecord::ProjectRef(ProjectRef {
+        name: "ptrack".to_owned(),
+        path: "/tmp/ptrack".to_owned(),
+        last_seen: fixed_time(),
+        stack: Some(stack_summary()),
+    });
+    assert_eq!(
+        encode_record_at_schema(&record, STACK_PAYLOAD_SCHEMA - 1),
+        Err(CodecError::NonCanonical)
+    );
 }

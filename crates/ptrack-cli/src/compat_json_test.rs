@@ -53,6 +53,7 @@ fn empty_go_nil_slices_encode_as_null_while_derived_rows_can_remain_arrays() {
             last_write_version: String::new(),
             active_plans: Vec::new(),
             actors: Vec::new(),
+            stack: None,
         },
         Vec::new(),
         Vec::new(),

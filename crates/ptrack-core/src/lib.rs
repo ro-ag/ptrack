@@ -11,6 +11,7 @@ mod model;
 mod report;
 mod search;
 mod snapshot;
+pub mod stack;
 mod validation;
 mod views;
 
@@ -24,9 +25,9 @@ pub use guide::{GUIDE_BEGIN, GUIDE_END, guide_block, guide_body, render_guide, u
 pub use model::{
     CAPABILITY_MODEL_VERSION, Capability, CapabilityAudit, CapabilityAuditPolicy, CapabilityKind,
     CapabilityLimits, Commit, Counts, Digest32, GitScope, HttpScope, Issue, IssueStatus,
-    MemoryKind, MemoryWritebackRecord, Meta, Milestone, MilestoneStatus, NativeRecord, Note,
-    NoteTarget, ParseEnumError, Plan, PlanStatus, ProjectRef, RecordKind, Severity, SshScope,
-    StoredDate, Task, TaskStatus, Timestamp,
+    LanguageId, MemoryKind, MemoryWritebackRecord, Meta, Milestone, MilestoneStatus, NativeRecord,
+    Note, NoteTarget, ParseEnumError, Plan, PlanStatus, ProjectRef, RecordKind, Severity, SshScope,
+    StackProfile, StackProject, StackSummary, StoredDate, Task, TaskStatus, Timestamp,
 };
 pub use report::{
     DepWait, Digest, IssueLine, NoteLine, PlanBrief, ReportError, TaskLine, claim_marker, context,
@@ -58,6 +59,8 @@ mod report_test;
 mod search_test;
 #[cfg(test)]
 mod snapshot_test;
+#[cfg(test)]
+mod stack_test;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]

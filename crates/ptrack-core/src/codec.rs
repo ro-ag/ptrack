@@ -1,22 +1,26 @@
 use std::fmt;
 use std::str;
 
+use crate::stack::{MAX_STACK_EVIDENCE, MAX_STACK_PROJECTS};
 use crate::{
     Capability, CapabilityAudit, CapabilityAuditPolicy, CapabilityKind, CapabilityLimits, Commit,
-    Digest32, GitScope, HttpScope, Issue, IssueStatus, MemoryKind, MemoryWritebackRecord, Meta,
-    Milestone, MilestoneStatus, NativeRecord, Note, NoteTarget, Plan, PlanStatus, ProjectRef,
-    RecordKind, Severity, SshScope, Task, TaskStatus, Timestamp, Validate, ValidationError,
+    Digest32, GitScope, HttpScope, Issue, IssueStatus, LanguageId, MemoryKind,
+    MemoryWritebackRecord, Meta, Milestone, MilestoneStatus, NativeRecord, Note, NoteTarget, Plan,
+    PlanStatus, ProjectRef, RecordKind, Severity, SshScope, StackProfile, StackProject,
+    StackSummary, Task, TaskStatus, Timestamp, Validate, ValidationError,
 };
 
 /// Stable envelope codec ID for native ptrack positional records.
 pub const NATIVE_CODEC: u16 = 3;
 /// Current schema of native ptrack positional record payloads.
-pub const NATIVE_PAYLOAD_SCHEMA: u32 = 4;
+pub const NATIVE_PAYLOAD_SCHEMA: u32 = 5;
 /// Oldest native payload schema this build still decodes.
 ///
 /// Schema 1 predates the plan and task hold reason, which schema 2 added.
 /// Schema 3 adds actor attribution, reserved entity ULIDs, plan claims, and the
 /// per-actor `Meta` maps. Schema 4 adds plan and task dependency edges.
+/// Schema 5 adds the deterministic stack profile on `Meta` and its summary on
+/// `ProjectRef`.
 /// Payloads at any older schema decode with all of those fields empty and are
 /// re-encoded at [`NATIVE_PAYLOAD_SCHEMA`] on their next write, so stored
 /// records upgrade lazily and no database is rewritten on open.
@@ -196,7 +200,9 @@ pub fn decode_record_at_schema(
         RecordKind::MemoryWriteback => {
             NativeRecord::MemoryWriteback(decode_memory_writeback(&mut reader)?)
         }
-        RecordKind::ProjectRef => NativeRecord::ProjectRef(decode_project_ref(&mut reader)?),
+        RecordKind::ProjectRef => {
+            NativeRecord::ProjectRef(decode_project_ref(&mut reader, payload_schema)?)
+        }
         RecordKind::GlobalConfig | RecordKind::GlobalBackup => {
             return Err(CodecError::UnsupportedRecordKind(kind));
         }
@@ -224,7 +230,7 @@ fn encode_unchecked(record: &NativeRecord, payload_schema: u32) -> Result<Vec<u8
         NativeRecord::Capability(value) => encode_capability(&mut writer, value)?,
         NativeRecord::CapabilityAudit(value) => encode_capability_audit(&mut writer, value)?,
         NativeRecord::MemoryWriteback(value) => encode_memory_writeback(&mut writer, value)?,
-        NativeRecord::ProjectRef(value) => encode_project_ref(&mut writer, value)?,
+        NativeRecord::ProjectRef(value) => encode_project_ref(&mut writer, value, payload_schema)?,
     }
     Ok(writer.bytes)
 }
@@ -509,7 +515,8 @@ fn encode_meta(writer: &mut Writer, value: &Meta, payload_schema: u32) -> Result
     writer.timestamp(value.updated_at)?;
     writer.u64(value.format_version)?;
     writer.string(&value.last_write_version)?;
-    encode_meta_maps(writer, value, payload_schema)
+    encode_meta_maps(writer, value, payload_schema)?;
+    encode_stack_profile(writer, value.stack.as_ref(), payload_schema)
 }
 
 fn decode_meta(reader: &mut Reader<'_>, payload_schema: u32) -> Result<Meta, CodecError> {
@@ -523,9 +530,167 @@ fn decode_meta(reader: &mut Reader<'_>, payload_schema: u32) -> Result<Meta, Cod
         last_write_version: reader.string()?,
         active_plans: Vec::new(),
         actors: Vec::new(),
+        stack: None,
     };
     decode_meta_maps(reader, &mut meta, payload_schema)?;
+    meta.stack = decode_stack_profile(reader, payload_schema)?;
     Ok(meta)
+}
+
+/// The payload schema that introduced the deterministic stack profile.
+///
+/// Like every other field gate here this is an absolute schema number: a later
+/// bump must keep writing and reading the profile for schema-5 records.
+pub(crate) const STACK_PAYLOAD_SCHEMA: u32 = 5;
+
+/// Writes the trailing stack profile, which exists only from payload schema 5.
+///
+/// An older schema has no canonical form for a profile, so encoding one at that
+/// schema is rejected rather than silently dropped.
+fn encode_stack_profile(
+    writer: &mut Writer,
+    value: Option<&StackProfile>,
+    payload_schema: u32,
+) -> Result<(), CodecError> {
+    if payload_schema < STACK_PAYLOAD_SCHEMA {
+        return if value.is_some() {
+            Err(CodecError::NonCanonical)
+        } else {
+            Ok(())
+        };
+    }
+    let Some(profile) = value else {
+        return writer.bool(false);
+    };
+    if profile.projects.len() > MAX_STACK_PROJECTS {
+        return Err(CodecError::ListTooLarge {
+            actual: profile.projects.len(),
+            maximum: MAX_STACK_PROJECTS,
+        });
+    }
+    writer.bool(true)?;
+    writer.u32(u32::try_from(profile.projects.len()).map_err(|_| CodecError::LengthOverflow)?)?;
+    for project in &profile.projects {
+        if project.evidence.len() > MAX_STACK_EVIDENCE {
+            return Err(CodecError::ListTooLarge {
+                actual: project.evidence.len(),
+                maximum: MAX_STACK_EVIDENCE,
+            });
+        }
+        writer.string(&project.root)?;
+        writer.u8(project.language.wire_tag())?;
+        writer.strings(&project.evidence)?;
+        writer.u8(project.depth)?;
+        writer.u32(project.files)?;
+    }
+    writer.string(&profile.scanned_head)?;
+    writer.timestamp(profile.scanned_at)?;
+    writer.u32(profile.tracked_files)?;
+    writer.bool(profile.incomplete)
+}
+
+/// Reads the trailing stack profile, absent before payload schema 5.
+fn decode_stack_profile(
+    reader: &mut Reader<'_>,
+    payload_schema: u32,
+) -> Result<Option<StackProfile>, CodecError> {
+    if payload_schema < STACK_PAYLOAD_SCHEMA || !reader.bool()? {
+        return Ok(None);
+    }
+    let count = reader.u32()? as usize;
+    if count > MAX_STACK_PROJECTS {
+        return Err(CodecError::ListTooLarge {
+            actual: count,
+            maximum: MAX_STACK_PROJECTS,
+        });
+    }
+    let mut projects = Vec::with_capacity(count);
+    for _ in 0..count {
+        let root = reader.string()?;
+        let language = LanguageId::from_wire_tag(reader.u8()?).ok_or(CodecError::NonCanonical)?;
+        let evidence = reader.strings()?;
+        if evidence.len() > MAX_STACK_EVIDENCE {
+            return Err(CodecError::ListTooLarge {
+                actual: evidence.len(),
+                maximum: MAX_STACK_EVIDENCE,
+            });
+        }
+        projects.push(StackProject {
+            root,
+            language,
+            evidence,
+            depth: reader.u8()?,
+            files: reader.u32()?,
+        });
+    }
+    Ok(Some(StackProfile {
+        projects,
+        scanned_head: reader.string()?,
+        scanned_at: reader.timestamp()?,
+        tracked_files: reader.u32()?,
+        incomplete: reader.bool()?,
+    }))
+}
+
+/// Writes the trailing registry stack summary, from payload schema 5.
+fn encode_stack_summary(
+    writer: &mut Writer,
+    value: Option<&StackSummary>,
+    payload_schema: u32,
+) -> Result<(), CodecError> {
+    if payload_schema < STACK_PAYLOAD_SCHEMA {
+        return if value.is_some() {
+            Err(CodecError::NonCanonical)
+        } else {
+            Ok(())
+        };
+    }
+    let Some(summary) = value else {
+        return writer.bool(false);
+    };
+    if summary.languages.len() > MAX_STACK_PROJECTS {
+        return Err(CodecError::ListTooLarge {
+            actual: summary.languages.len(),
+            maximum: MAX_STACK_PROJECTS,
+        });
+    }
+    writer.bool(true)?;
+    writer.u32(u32::try_from(summary.languages.len()).map_err(|_| CodecError::LengthOverflow)?)?;
+    for (language, files) in &summary.languages {
+        writer.u8(language.wire_tag())?;
+        writer.u32(*files)?;
+    }
+    writer.u32(summary.tracked_files)?;
+    writer.string(&summary.scanned_head)?;
+    writer.bool(summary.incomplete)
+}
+
+/// Reads the trailing registry stack summary, absent before payload schema 5.
+fn decode_stack_summary(
+    reader: &mut Reader<'_>,
+    payload_schema: u32,
+) -> Result<Option<StackSummary>, CodecError> {
+    if payload_schema < STACK_PAYLOAD_SCHEMA || !reader.bool()? {
+        return Ok(None);
+    }
+    let count = reader.u32()? as usize;
+    if count > MAX_STACK_PROJECTS {
+        return Err(CodecError::ListTooLarge {
+            actual: count,
+            maximum: MAX_STACK_PROJECTS,
+        });
+    }
+    let mut languages = Vec::with_capacity(count);
+    for _ in 0..count {
+        let language = LanguageId::from_wire_tag(reader.u8()?).ok_or(CodecError::NonCanonical)?;
+        languages.push((language, reader.u32()?));
+    }
+    Ok(Some(StackSummary {
+        languages,
+        tracked_files: reader.u32()?,
+        scanned_head: reader.string()?,
+        incomplete: reader.bool()?,
+    }))
 }
 
 /// The payload schema that introduced the plan and task hold reason.
@@ -1170,16 +1335,25 @@ fn decode_memory_writeback(reader: &mut Reader<'_>) -> Result<MemoryWritebackRec
     })
 }
 
-fn encode_project_ref(writer: &mut Writer, value: &ProjectRef) -> Result<(), CodecError> {
+fn encode_project_ref(
+    writer: &mut Writer,
+    value: &ProjectRef,
+    payload_schema: u32,
+) -> Result<(), CodecError> {
     writer.string(&value.name)?;
     writer.string(&value.path)?;
-    writer.timestamp(value.last_seen)
+    writer.timestamp(value.last_seen)?;
+    encode_stack_summary(writer, value.stack.as_ref(), payload_schema)
 }
 
-fn decode_project_ref(reader: &mut Reader<'_>) -> Result<ProjectRef, CodecError> {
+fn decode_project_ref(
+    reader: &mut Reader<'_>,
+    payload_schema: u32,
+) -> Result<ProjectRef, CodecError> {
     Ok(ProjectRef {
         name: reader.string()?,
         path: reader.string()?,
         last_seen: reader.timestamp()?,
+        stack: decode_stack_summary(reader, payload_schema)?,
     })
 }

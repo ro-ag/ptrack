@@ -181,10 +181,20 @@ impl GlobalStore {
             .to_str()
             .ok_or_else(|| StoreError::InvalidManifest("project path must be UTF-8".to_owned()))?
             .to_owned();
+        // A re-registration is a last-seen touch, not a reset: the stack
+        // summary a scan established must survive it.
+        let stack = self
+            .active
+            .store()
+            .read(|transaction| {
+                typed::get::<ProjectRef>(transaction, RecordKey::Bytes(path.as_bytes()))
+            })?
+            .and_then(|existing| existing.stack);
         let value = ProjectRef {
             name: name.into(),
             path: path.clone(),
             last_seen: self.clock.now_local(),
+            stack,
         };
         self.active.write(|tx| {
             typed::put(tx, RecordKey::Bytes(path.as_bytes()), &value)?;
@@ -228,6 +238,7 @@ impl GlobalStore {
             name: name.into(),
             path: path.clone(),
             last_seen: self.clock.now_local(),
+            stack: expected.stack.clone(),
         };
         self.active.write(|transaction| {
             let old_key = RecordKey::Bytes(expected.path.as_bytes());

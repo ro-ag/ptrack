@@ -1286,6 +1286,7 @@ fn heatmap_buckets_instants_in_the_host_local_calendar_day() {
             last_write_version: String::new(),
             active_plans: Vec::new(),
             actors: Vec::new(),
+            stack: None,
         },
         Vec::new(),
         Vec::new(),
@@ -1368,6 +1369,7 @@ fn board_view_carries_dep_edges_and_their_computed_open_subset() {
             last_write_version: String::new(),
             active_plans: Vec::new(),
             actors: Vec::new(),
+            stack: None,
         },
         Vec::new(),
         vec![
@@ -1478,6 +1480,7 @@ fn activity_snapshot() -> ProjectSnapshot {
             last_write_version: String::new(),
             active_plans: Vec::new(),
             actors: Vec::new(),
+            stack: None,
         },
         Vec::new(),
         vec![activity_plan(1), activity_plan(2)],

@@ -127,6 +127,7 @@ fn snapshot(status: TaskStatus) -> ProjectSnapshot {
             last_write_version: "test".to_owned(),
             active_plans: Vec::new(),
             actors: Vec::new(),
+            stack: None,
         },
         vec![],
         vec![Plan {

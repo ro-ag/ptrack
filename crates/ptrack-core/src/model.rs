@@ -286,6 +286,9 @@ pub struct Meta {
     /// ascending by ID. Display-only; nothing resolves permissions through it.
     /// Empty for records written before payload schema 3.
     pub actors: Vec<(String, String)>,
+    /// The most recent deterministic stack scan. `None` for records written
+    /// before payload schema 5 and for projects never scanned.
+    pub stack: Option<StackProfile>,
 }
 
 impl Meta {
@@ -577,6 +580,9 @@ pub struct ProjectRef {
     pub name: String,
     pub path: String,
     pub last_seen: Timestamp,
+    /// Compact stack summary for the project cards. `None` for records written
+    /// before payload schema 5.
+    pub stack: Option<StackSummary>,
 }
 
 /// Project-wide inventory totals used by the bounded context footer.
@@ -599,6 +605,67 @@ pub struct Counts {
     pub issues_open: usize,
     pub commits: usize,
     pub notes: usize,
+}
+
+persistent_enum!(LanguageId {
+    Rust = 1 => "rust",
+    Go = 2 => "go",
+    JavaScript = 3 => "javascript",
+    TypeScript = 4 => "typescript",
+    Python = 5 => "python",
+    Swift = 6 => "swift",
+    Java = 7 => "java",
+    Kotlin = 8 => "kotlin",
+    CSharp = 9 => "csharp",
+    Ruby = 10 => "ruby",
+    Php = 11 => "php",
+    Elixir = 12 => "elixir",
+    Dart = 13 => "dart",
+    C = 14 => "c",
+    Terraform = 15 => "terraform",
+    Container = 16 => "container",
+});
+
+/// One project discovered by a tracked manifest.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StackProject {
+    /// Repository-relative directory holding the manifest; empty at the root.
+    pub root: String,
+    pub language: LanguageId,
+    /// Manifest paths that produced this project, sorted, at most
+    /// [`crate::stack::MAX_STACK_EVIDENCE`].
+    pub evidence: Vec<String>,
+    pub depth: u8,
+    /// Tracked files attributed to this project.
+    pub files: u32,
+}
+
+/// The durable result of one tracked-file scan.
+///
+/// Sizes and line counts are deliberately absent: a vendored directory or one
+/// generated bundle outweighs the code that defines a project, so discovery
+/// reports manifests and tracked-file counts instead.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct StackProfile {
+    /// Discovered projects, shallowest first; at most
+    /// [`crate::stack::MAX_STACK_PROJECTS`].
+    pub projects: Vec<StackProject>,
+    /// HEAD the scan ran against; a rescan is due when it no longer matches.
+    pub scanned_head: String,
+    pub scanned_at: Timestamp,
+    pub tracked_files: u32,
+    /// The tracked path listing hit the scan cap and was truncated.
+    pub incomplete: bool,
+}
+
+/// The compact per-project summary carried by the global registry.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct StackSummary {
+    /// Languages with their file counts, ranked by the profile's own order.
+    pub languages: Vec<(LanguageId, u32)>,
+    pub tracked_files: u32,
+    pub scanned_head: String,
+    pub incomplete: bool,
 }
 
 persistent_enum!(RecordKind {

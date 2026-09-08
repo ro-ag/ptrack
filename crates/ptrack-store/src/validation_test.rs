@@ -28,6 +28,7 @@ fn store_validation_binds_native_payloads_to_collection_keys() {
         last_write_version: "v0.21.0".to_owned(),
         active_plans: Vec::new(),
         actors: Vec::new(),
+        stack: None,
     }));
     validation::record(Collection::ProjectMeta, &OwnedRecordKey::Singleton, &meta).unwrap();
     assert!(validation::record(Collection::Plans, &OwnedRecordKey::Id(1), &meta).is_err());
@@ -40,6 +41,7 @@ fn store_validation_binds_native_payloads_to_collection_keys() {
         name: "project".to_owned(),
         path: project_path.clone(),
         last_seen: Timestamp::Zero,
+        stack: None,
     }));
     validation::record(
         Collection::GlobalProjects,
@@ -61,6 +63,7 @@ fn store_validation_binds_native_payloads_to_collection_keys() {
             name: "project".to_owned(),
             path: project_path,
             last_seen: Timestamp::Zero,
+            stack: None,
         })
     );
 }
