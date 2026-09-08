@@ -23,8 +23,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The Repository panel lists at most twelve discovered projects and summarizes
   the rest, instead of rendering a row per crate.
 - The native record payload schema is now 6, adding the stack profile's line
-  counts. Databases written at schema 5 decode with no counted lines and
-  upgrade on their next write.
+  counts. Every database an earlier build wrote still opens: a pre-0.37 record
+  reads with no stack profile, a 0.37 record reads with its profile and no
+  counted lines, and both upgrade in place on their next write. No migration
+  step, no export and reimport.
+- The stack profile and its registry summary are now length-framed on the wire.
+  A build that predates a later field reads the record, keeps the bytes it does
+  not understand, and writes them back untouched — so adding to the profile
+  after this release no longer costs a schema bump or breaks an older build.
 
 ## [0.37.0] - 2026-09-07
 

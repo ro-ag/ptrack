@@ -3110,6 +3110,7 @@ fn sample_stack_profile() -> StackProfile {
         lines: 63,
         lines_counted: true,
         incomplete: false,
+        future_fields: Vec::new(),
     }
 }
 
@@ -3154,6 +3155,7 @@ fn a_registry_stack_summary_survives_re_registration_and_relocation() {
         tracked_files: 9,
         scanned_head: "deadbeef".to_owned(),
         incomplete: false,
+        future_fields: Vec::new(),
     };
     global.set_project_stack(&root, summary.clone()).unwrap();
     let registered = global.register_project("stack", &root).unwrap();
@@ -3188,8 +3190,98 @@ fn a_stack_summary_for_an_unregistered_project_writes_nothing() {
                 tracked_files: 1,
                 scanned_head: "deadbeef".to_owned(),
                 incomplete: false,
+                future_fields: Vec::new(),
             },
         )
         .unwrap();
     assert!(global.projects().unwrap().is_empty());
+}
+
+#[test]
+fn a_project_database_written_before_stack_discovery_opens_and_upgrades() {
+    // The exact shape a 0.36 database has: meta stored under payload schema 4,
+    // with no stack profile at all. Opening it must not fail, and the first
+    // write must upgrade it in place rather than requiring a migration step.
+    let temp = Temp::new();
+    let path = temp.path("pre-stack.redb");
+    let expected = binding(&path, StoreKind::Project, "pre-stack");
+    let store =
+        ProjectStore::create_new_with_clock(&path, expected.clone(), "test", clock()).unwrap();
+    let mut meta = store.meta().unwrap();
+    meta.stack = None;
+
+    let legacy_payload = encode_record_at_schema(&NativeRecord::Meta(meta.clone()), 4).unwrap();
+    let legacy = RecordEnvelope::new(NATIVE_CODEC, 4, legacy_payload);
+    store
+        .write(|transaction| {
+            transaction.put(Collection::ProjectMeta, RecordKey::Singleton, &legacy)?;
+            Ok(())
+        })
+        .unwrap();
+    drop(store);
+
+    // Reopening is the moment a stale schema would surface; every stored
+    // record is re-validated there.
+    let reopened = reopen_as(&path, "pre-stack", None);
+    assert_eq!(reopened.stack_profile().unwrap(), None);
+
+    // A scan writes the profile, and the record lands at the current schema.
+    reopened
+        .set_stack_profile(sample_stack_profile())
+        .expect("write profile");
+    assert_eq!(
+        reopened.stack_profile().unwrap(),
+        Some(sample_stack_profile())
+    );
+    drop(reopened);
+    assert_eq!(
+        reopen_as(&path, "pre-stack", None).stack_profile().unwrap(),
+        Some(sample_stack_profile())
+    );
+}
+
+#[test]
+fn a_project_database_written_at_the_first_stack_schema_opens_and_gains_line_counts() {
+    // A 0.37.0 database: a stack profile at payload schema 5, before line
+    // counts existed. It must open with the profile intact and no counted
+    // lines, then take counts on the next scan.
+    let temp = Temp::new();
+    let path = temp.path("stack-schema-five.redb");
+    let expected = binding(&path, StoreKind::Project, "stack-five");
+    let store =
+        ProjectStore::create_new_with_clock(&path, expected.clone(), "test", clock()).unwrap();
+
+    let mut profile = sample_stack_profile();
+    profile.lines = 0;
+    profile.lines_counted = false;
+    for project in &mut profile.projects {
+        project.lines = 0;
+    }
+    let mut meta = store.meta().unwrap();
+    meta.stack = Some(profile.clone());
+    let payload = encode_record_at_schema(&NativeRecord::Meta(meta), 5).unwrap();
+    store
+        .write(|transaction| {
+            transaction.put(
+                Collection::ProjectMeta,
+                RecordKey::Singleton,
+                &RecordEnvelope::new(NATIVE_CODEC, 5, payload),
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    drop(store);
+
+    let reopened = reopen_as(&path, "stack-five", None);
+    let stored = reopened.stack_profile().unwrap().expect("profile");
+    assert_eq!(stored.projects.len(), profile.projects.len());
+    assert!(!stored.lines_counted);
+    assert_eq!(stored.lines, 0);
+
+    reopened
+        .set_stack_profile(sample_stack_profile())
+        .expect("rescan");
+    let rescanned = reopened.stack_profile().unwrap().expect("profile");
+    assert!(rescanned.lines_counted);
+    assert_eq!(rescanned.lines, sample_stack_profile().lines);
 }

@@ -362,6 +362,7 @@ fn the_digest_names_the_discovered_stack_and_omits_it_when_unscanned() {
         lines: 1764,
         lines_counted: true,
         incomplete: false,
+        future_fields: Vec::new(),
     });
     let markdown = context(&snapshot).markdown();
     assert!(markdown.contains("## Stack"));
@@ -388,6 +389,7 @@ fn a_truncated_scan_is_labelled_partial_in_the_digest() {
         lines: 1_400_000,
         lines_counted: true,
         incomplete: true,
+        future_fields: Vec::new(),
     });
     assert!(context(&snapshot).markdown().contains("_partial"));
 }

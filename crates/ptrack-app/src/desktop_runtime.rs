@@ -2583,6 +2583,7 @@ impl BoundDesktopWorkspace {
             lines,
             lines_counted: listing.lines_counted,
             incomplete: listing.incomplete,
+            future_fields: Vec::new(),
         })
     }
 

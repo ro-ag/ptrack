@@ -667,6 +667,13 @@ pub struct StackProfile {
     pub lines_counted: bool,
     /// The tracked path listing hit the scan cap and was truncated.
     pub incomplete: bool,
+    /// Trailing profile bytes written by a newer build, preserved verbatim.
+    ///
+    /// The profile is length-framed on the wire, so a build that predates a
+    /// field can still read the record: it parses what it knows, keeps the
+    /// rest here, and writes it back untouched. Nothing in this crate
+    /// interprets these bytes.
+    pub future_fields: Vec<u8>,
 }
 
 /// The compact per-project summary carried by the global registry.
@@ -677,6 +684,9 @@ pub struct StackSummary {
     pub tracked_files: u32,
     pub scanned_head: String,
     pub incomplete: bool,
+    /// Trailing summary bytes written by a newer build, preserved verbatim.
+    /// See [`StackProfile::future_fields`].
+    pub future_fields: Vec<u8>,
 }
 
 persistent_enum!(RecordKind {

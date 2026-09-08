@@ -136,6 +136,7 @@ fn a_scanned_project_encodes_its_stack_as_structured_rows() {
         lines: 266,
         lines_counted: true,
         incomplete: true,
+        future_fields: Vec::new(),
     });
     let snapshot = ptrack_core::ProjectSnapshot::new(
         meta,

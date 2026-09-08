@@ -147,6 +147,7 @@ pub fn summarize(profile: &StackProfile) -> StackSummary {
         tracked_files: profile.tracked_files,
         scanned_head: profile.scanned_head.clone(),
         incomplete: profile.incomplete,
+        future_fields: Vec::new(),
     }
 }
 

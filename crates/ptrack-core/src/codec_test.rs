@@ -749,6 +749,7 @@ fn stack_profile() -> StackProfile {
         lines: 1764,
         lines_counted: true,
         incomplete: false,
+        future_fields: Vec::new(),
     }
 }
 
@@ -758,6 +759,7 @@ fn stack_summary() -> StackSummary {
         tracked_files: 252,
         scanned_head: "abc123".to_owned(),
         incomplete: false,
+        future_fields: Vec::new(),
     }
 }
 
@@ -865,4 +867,86 @@ fn encoding_counted_lines_below_their_schema_is_non_canonical() {
         encode_record_at_schema(&NativeRecord::Meta(meta), STACK_PAYLOAD_SCHEMA),
         Err(CodecError::NonCanonical)
     );
+}
+
+#[test]
+fn a_profile_written_by_a_newer_build_keeps_its_unknown_fields_through_a_rewrite() {
+    // Simulate a schema-6 record that a later build extended: the framed body
+    // carries trailing bytes this build does not understand.
+    let mut profile = stack_profile();
+    profile.future_fields = vec![0xde, 0xad, 0xbe, 0xef];
+    let mut meta = test_support::meta(1);
+    meta.stack = Some(profile.clone());
+    let record = NativeRecord::Meta(meta);
+
+    let encoded = encode_record(&record).expect("encode");
+    let decoded = decode_record(RecordKind::Meta, &encoded).expect("decode");
+    assert_eq!(decoded, record);
+
+    let NativeRecord::Meta(decoded_meta) = decoded else {
+        panic!("meta record");
+    };
+    let stored = decoded_meta.stack.expect("profile");
+    assert_eq!(stored.future_fields, vec![0xde, 0xad, 0xbe, 0xef]);
+    // Re-encoding writes those bytes back untouched, so a round trip through
+    // this build never drops a newer build's field.
+    assert_eq!(
+        encode_record(&NativeRecord::Meta(Meta {
+            stack: Some(stored),
+            ..test_support::meta(1)
+        }))
+        .expect("re-encode"),
+        encoded
+    );
+}
+
+#[test]
+fn a_registry_summary_from_a_newer_build_keeps_its_unknown_fields() {
+    let mut summary = stack_summary();
+    summary.future_fields = vec![7, 7, 7];
+    let record = NativeRecord::ProjectRef(ProjectRef {
+        name: "ptrack".to_owned(),
+        path: "/tmp/ptrack".to_owned(),
+        last_seen: fixed_time(),
+        stack: Some(summary),
+    });
+    let encoded = encode_record(&record).expect("encode");
+    assert_eq!(
+        decode_record(RecordKind::ProjectRef, &encoded).expect("decode"),
+        record
+    );
+}
+
+#[test]
+fn unknown_fields_have_no_canonical_form_before_the_framed_schema() {
+    let mut profile = stack_profile();
+    profile.lines = 0;
+    profile.lines_counted = false;
+    for project in &mut profile.projects {
+        project.lines = 0;
+    }
+    profile.future_fields = vec![1];
+    let mut meta = test_support::meta(1);
+    meta.stack = Some(profile);
+    assert_eq!(
+        encode_record_at_schema(&NativeRecord::Meta(meta), STACK_PAYLOAD_SCHEMA),
+        Err(CodecError::NonCanonical)
+    );
+}
+
+#[test]
+fn every_supported_schema_round_trips_a_record_written_at_it() {
+    // The decoder must keep reading every schema a shipped build could have
+    // written, or an existing database stops opening.
+    for schema in MIN_NATIVE_PAYLOAD_SCHEMA..=NATIVE_PAYLOAD_SCHEMA {
+        let record = NativeRecord::Meta(test_support::meta(1));
+        let encoded = encode_record_at_schema(&record, schema)
+            .unwrap_or_else(|error| panic!("encode at schema {schema}: {error}"));
+        assert_eq!(
+            decode_record_at_schema(RecordKind::Meta, schema, &encoded)
+                .unwrap_or_else(|error| panic!("decode at schema {schema}: {error}")),
+            record,
+            "schema {schema} must round trip"
+        );
+    }
 }

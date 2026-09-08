@@ -297,6 +297,12 @@ impl Writer {
         self.write(value.as_bytes())
     }
 
+    /// Appends already-encoded bytes verbatim. Used for length-framed bodies
+    /// and for trailing fields a newer build wrote.
+    fn raw(&mut self, bytes: &[u8]) {
+        self.bytes.extend_from_slice(bytes);
+    }
+
     fn strings(&mut self, values: &[String]) -> Result<(), CodecError> {
         if values.len() > MAX_LIST_ITEMS {
             return Err(CodecError::ListTooLarge {
@@ -576,6 +582,30 @@ fn encode_stack_profile(
         });
     }
     writer.bool(true)?;
+    if payload_schema < STACK_LINES_PAYLOAD_SCHEMA {
+        // Schema 5's layout is fixed by the databases 0.37.0 already wrote:
+        // unframed, with no line counts. Anything this build added afterwards
+        // has no canonical form there.
+        if profile.lines != 0 || profile.lines_counted || !profile.future_fields.is_empty() {
+            return Err(CodecError::NonCanonical);
+        }
+        return encode_stack_profile_body(writer, profile, false);
+    }
+    // From schema 6 the body is length-framed, so a build that predates a
+    // later field still reads the record: it parses what it knows and carries
+    // the rest in `future_fields`. Without the frame, one unknown trailing
+    // field reads as a corrupt record and the database refuses to open.
+    let mut body = Writer::default();
+    encode_stack_profile_body(&mut body, profile, true)?;
+    body.raw(&profile.future_fields);
+    frame(writer, &body.bytes)
+}
+
+fn encode_stack_profile_body(
+    writer: &mut Writer,
+    profile: &StackProfile,
+    lines: bool,
+) -> Result<(), CodecError> {
     writer.u32(u32::try_from(profile.projects.len()).map_err(|_| CodecError::LengthOverflow)?)?;
     for project in &profile.projects {
         if project.evidence.len() > MAX_STACK_EVIDENCE {
@@ -584,27 +614,45 @@ fn encode_stack_profile(
                 maximum: MAX_STACK_EVIDENCE,
             });
         }
+        if !lines && project.lines != 0 {
+            return Err(CodecError::NonCanonical);
+        }
         writer.string(&project.root)?;
         writer.u8(project.language.wire_tag())?;
         writer.strings(&project.evidence)?;
         writer.u8(project.depth)?;
         writer.u32(project.files)?;
-        if payload_schema >= STACK_LINES_PAYLOAD_SCHEMA {
+        if lines {
             writer.u32(project.lines)?;
-        } else if project.lines != 0 {
-            return Err(CodecError::NonCanonical);
         }
     }
     writer.string(&profile.scanned_head)?;
     writer.timestamp(profile.scanned_at)?;
     writer.u32(profile.tracked_files)?;
-    if payload_schema >= STACK_LINES_PAYLOAD_SCHEMA {
+    if lines {
         writer.u32(profile.lines)?;
         writer.bool(profile.lines_counted)?;
-    } else if profile.lines != 0 || profile.lines_counted {
-        return Err(CodecError::NonCanonical);
     }
     writer.bool(profile.incomplete)
+}
+
+/// Writes a length-framed body: a `u32` byte count, then the bytes.
+fn frame(writer: &mut Writer, body: &[u8]) -> Result<(), CodecError> {
+    if body.len() > MAX_PAYLOAD_BYTES {
+        return Err(CodecError::LengthOverflow);
+    }
+    writer.u32(u32::try_from(body.len()).map_err(|_| CodecError::LengthOverflow)?)?;
+    writer.raw(body);
+    Ok(())
+}
+
+/// Reads a length-framed body, returning a reader bounded to it.
+fn unframe<'a>(reader: &mut Reader<'a>) -> Result<Reader<'a>, CodecError> {
+    let length = usize::try_from(reader.u32()?).map_err(|_| CodecError::LengthOverflow)?;
+    if length > MAX_PAYLOAD_BYTES {
+        return Err(CodecError::LengthOverflow);
+    }
+    Ok(Reader::new(reader.take(length)?))
 }
 
 /// Reads the trailing stack profile, absent before payload schema 5.
@@ -615,7 +663,22 @@ fn decode_stack_profile(
     if payload_schema < STACK_PAYLOAD_SCHEMA || !reader.bool()? {
         return Ok(None);
     }
-    let count = reader.u32()? as usize;
+    if payload_schema < STACK_LINES_PAYLOAD_SCHEMA {
+        return decode_stack_profile_body(reader, false).map(Some);
+    }
+    let mut body = unframe(reader)?;
+    let mut profile = decode_stack_profile_body(&mut body, true)?;
+    // Whatever a newer build appended is kept verbatim and written back
+    // unchanged, so reading a record here never drops a field.
+    profile.future_fields = body.take(body.remaining())?.to_vec();
+    Ok(Some(profile))
+}
+
+fn decode_stack_profile_body(
+    reader: &mut Reader<'_>,
+    lines: bool,
+) -> Result<StackProfile, CodecError> {
+    let count = usize::try_from(reader.u32()?).map_err(|_| CodecError::LengthOverflow)?;
     if count > MAX_STACK_PROJECTS {
         return Err(CodecError::ListTooLarge {
             actual: count,
@@ -635,37 +698,33 @@ fn decode_stack_profile(
         }
         let depth = reader.u8()?;
         let files = reader.u32()?;
-        let lines = if payload_schema >= STACK_LINES_PAYLOAD_SCHEMA {
-            reader.u32()?
-        } else {
-            0
-        };
         projects.push(StackProject {
             root,
             language,
             evidence,
             depth,
             files,
-            lines,
+            lines: if lines { reader.u32()? } else { 0 },
         });
     }
     let scanned_head = reader.string()?;
     let scanned_at = reader.timestamp()?;
     let tracked_files = reader.u32()?;
-    let (lines, lines_counted) = if payload_schema >= STACK_LINES_PAYLOAD_SCHEMA {
+    let (total_lines, lines_counted) = if lines {
         (reader.u32()?, reader.bool()?)
     } else {
         (0, false)
     };
-    Ok(Some(StackProfile {
+    Ok(StackProfile {
         projects,
         scanned_head,
         scanned_at,
         tracked_files,
-        lines,
+        lines: total_lines,
         lines_counted,
         incomplete: reader.bool()?,
-    }))
+        future_fields: Vec::new(),
+    })
 }
 
 /// Writes the trailing registry stack summary, from payload schema 5.
@@ -691,6 +750,22 @@ fn encode_stack_summary(
         });
     }
     writer.bool(true)?;
+    if payload_schema < STACK_LINES_PAYLOAD_SCHEMA {
+        if !summary.future_fields.is_empty() {
+            return Err(CodecError::NonCanonical);
+        }
+        return encode_stack_summary_body(writer, summary);
+    }
+    let mut body = Writer::default();
+    encode_stack_summary_body(&mut body, summary)?;
+    body.raw(&summary.future_fields);
+    frame(writer, &body.bytes)
+}
+
+fn encode_stack_summary_body(
+    writer: &mut Writer,
+    summary: &StackSummary,
+) -> Result<(), CodecError> {
     writer.u32(u32::try_from(summary.languages.len()).map_err(|_| CodecError::LengthOverflow)?)?;
     for (language, files) in &summary.languages {
         writer.u8(language.wire_tag())?;
@@ -709,7 +784,17 @@ fn decode_stack_summary(
     if payload_schema < STACK_PAYLOAD_SCHEMA || !reader.bool()? {
         return Ok(None);
     }
-    let count = reader.u32()? as usize;
+    if payload_schema < STACK_LINES_PAYLOAD_SCHEMA {
+        return decode_stack_summary_body(reader).map(Some);
+    }
+    let mut body = unframe(reader)?;
+    let mut summary = decode_stack_summary_body(&mut body)?;
+    summary.future_fields = body.take(body.remaining())?.to_vec();
+    Ok(Some(summary))
+}
+
+fn decode_stack_summary_body(reader: &mut Reader<'_>) -> Result<StackSummary, CodecError> {
+    let count = usize::try_from(reader.u32()?).map_err(|_| CodecError::LengthOverflow)?;
     if count > MAX_STACK_PROJECTS {
         return Err(CodecError::ListTooLarge {
             actual: count,
@@ -721,12 +806,13 @@ fn decode_stack_summary(
         let language = LanguageId::from_wire_tag(reader.u8()?).ok_or(CodecError::NonCanonical)?;
         languages.push((language, reader.u32()?));
     }
-    Ok(Some(StackSummary {
+    Ok(StackSummary {
         languages,
         tracked_files: reader.u32()?,
         scanned_head: reader.string()?,
         incomplete: reader.bool()?,
-    }))
+        future_fields: Vec::new(),
+    })
 }
 
 /// The payload schema that introduced the plan and task hold reason.
