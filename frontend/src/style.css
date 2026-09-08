@@ -2353,6 +2353,30 @@ select option {
   overflow-y: auto;
 }
 
+/* An expanded panel must not set the height of its whole grid row. On a busy
+   repository the branch list alone ran seven hundred pixels, which left a
+   third of the page empty beside it and pushed everything below out of sight.
+   Each list scrolls within a bound instead. */
+.overview-page .intelligence-section .intelligence-list {
+  max-height: 264px;
+  overflow-y: auto;
+}
+
+/* A branch name, a path and a SHA all want monospace. A note body does not:
+   it is prose, and at this size the monospace turned the panel into a wall
+   nobody could read. Two lines each, in the reading face, with the whole note
+   a click away in memory history. */
+.overview-page #overview-blockers .intelligence-detail,
+.overview-page #overview-notes .intelligence-detail {
+  display: -webkit-box;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 0.6875rem;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .snapshot-details {
   margin-top: var(--space-250);
   padding-top: var(--space-150);
