@@ -1001,34 +1001,40 @@ function languageLabel(id) {
 
 // The Tracked files tile doubles as the breakdown's disclosure control: the
 // languages live one click away instead of crowding the tile row.
-function stackTrackedFilesToggle(profile, languages) {
-  const toggle = document.createElement("button");
-  toggle.type = "button";
-  toggle.className = "stat stat-toggle";
-  toggle.dataset.expanded = String(stackDetailExpanded);
-  toggle.setAttribute("aria-expanded", String(stackDetailExpanded));
-  toggle.setAttribute("aria-controls", "stack-breakdown");
+//
+// This is a native <details>, not a button with a click handler. The browser
+// owns the open/closed state, so the interaction cannot be broken by anything
+// that happens during a re-render — and it keeps keyboard and screen-reader
+// behaviour for free.
+function stackDisclosure(profile, rows) {
+  const details = document.createElement("details");
+  details.className = "stat stack-details";
+  details.open = stackDetailExpanded;
+
+  const summary = document.createElement("summary");
+  summary.className = "stack-details-summary";
   const label = document.createElement("span");
   label.className = "stat-label";
   // The tile column is narrow; a longer label truncates. The language count
   // lives in the tooltip and in the breakdown the tile opens.
   label.textContent = "Tracked files";
-  const discovered = languages === 1 ? "1 language" : `${languages} languages`;
-  toggle.title = profile.linesCounted
-    ? `${discovered}, ${profile.lines.toLocaleString()} lines — click for the breakdown`
-    : `${discovered} — click for the breakdown`;
   const value = document.createElement("span");
   value.className = "stat-value";
   value.textContent = profile.trackedFiles.toLocaleString();
-  toggle.append(label, value);
-  toggle.addEventListener("click", () => {
-    stackDetailExpanded = !stackDetailExpanded;
-    renderMemory();
-    if (stackDetailExpanded) {
-      document.querySelector("#stack-breakdown")?.scrollIntoView({ block: "nearest" });
-    }
+  const discovered = rows.length === 1 ? "1 language" : `${rows.length} languages`;
+  summary.title = profile.linesCounted
+    ? `${discovered}, ${profile.lines.toLocaleString()} lines`
+    : discovered;
+  summary.append(label, value);
+  details.append(summary);
+
+  if (rows.length) details.append(stackBreakdown(rows));
+  // Remember the state so a snapshot refresh does not collapse the panel
+  // under the reader.
+  details.addEventListener("toggle", () => {
+    stackDetailExpanded = details.open;
   });
-  return toggle;
+  return details;
 }
 
 // The expanded breakdown: one row per language, largest first. The bar is
@@ -1191,16 +1197,13 @@ function renderMemory() {
   // that defines the project. The tile expands into the per-language
   // breakdown rather than spending a tile on each language — a Cargo
   // workspace discovers a project per crate, and those tiles all read "Rust".
-  const sections = [progress, counts];
   if (stackProfile?.state === "ready") {
-    const rows = stackLanguageRows(stackProfile.projects);
-    counts.append(stackTrackedFilesToggle(stackProfile, rows.length));
+    counts.append(stackDisclosure(stackProfile, stackLanguageRows(stackProfile.projects)));
     if (stackProfile.incomplete) {
       counts.append(statElement("partial", "Scan truncated"));
     }
-    if (stackDetailExpanded && rows.length) sections.push(stackBreakdown(rows));
   }
-  elements.stats.replaceChildren(...sections);
+  elements.stats.replaceChildren(progress, counts);
   renderPlanRing(board.stats.tasksDone, board.stats.tasks);
 
   elements.issueTotal.textContent = board.stats.openIssues;
@@ -1566,10 +1569,13 @@ function renderHeatmap(days) {
     return;
   }
   const columns = heatmapWeeks(days);
-  const cell = 14;
-  const pitch = 18;
-  const left = 30;
-  const top = 20;
+  // Denser cells: the chart is read as a shape, not cell by cell, and the
+  // saved height is what lets the Activity block sit beside its totals rather
+  // than towering over them. The SVG scales, so retina sharpness is unaffected.
+  const cell = 10;
+  const pitch = 13;
+  const left = 26;
+  const top = 16;
   const width = left + columns.length * pitch;
   const height = top + 7 * pitch;
   const chart = document.createElement("div");

@@ -1506,38 +1506,52 @@ select option {
   box-shadow: var(--highlight-inset);
 }
 
-.stat-toggle {
+/* The tracked-files tile is a native disclosure: the browser owns open and
+   closed, so the interaction survives any re-render of the panel. Closed it
+   sits in the tile row; open it takes the whole row and the breakdown reads
+   underneath it. */
+.stack-details {
   cursor: pointer;
-  position: relative;
+}
+
+.stack-details[open] {
+  grid-column: 1 / -1;
+}
+
+.stack-details-summary {
+  display: flex;
+  flex-direction: column;
   align-items: flex-start;
-  text-align: left;
-  font: inherit;
+  gap: 2px;
+  list-style: none;
 }
 
-.stat-toggle:hover,
-.stat-toggle:focus-visible {
-  border-color: rgba(var(--accent-rgb), 0.45);
+/* WebKit keeps its own disclosure triangle on a flex summary; the tile draws
+   its own caret beside the label instead. */
+.stack-details-summary::marker,
+.stack-details-summary::-webkit-details-marker {
+  content: "";
+  display: none;
 }
 
-/* The counts row strips the tile border down to a left rule, so the toggle's
-   affordance has to live on that rule rather than on a full outline. */
-.status-counts .stat-toggle:hover,
-.status-counts .stat-toggle:focus-visible {
-  border-left-color: var(--accent);
-  background: var(--fill-subtle);
+/* The tile reads value-first like every other stat. */
+.stack-details-summary .stat-value {
+  order: -1;
 }
 
-.status-counts .stat-toggle[data-expanded="true"] {
-  border-left-color: var(--accent);
-}
-
-.stat-toggle .stat-label::after {
+.stack-details-summary .stat-label::after {
   content: "  \25B8";
   color: var(--muted);
 }
 
-.stat-toggle[data-expanded="true"] .stat-label::after {
+.stack-details[open] .stack-details-summary .stat-label::after {
   content: "  \25BE";
+}
+
+.status-counts .stack-details:hover,
+.status-counts .stack-details:focus-within,
+.status-counts .stack-details[open] {
+  border-left-color: var(--accent);
 }
 
 .stack-breakdown {
@@ -2008,7 +2022,14 @@ select option {
   min-height: 0;
   flex: 1 1 auto;
   overflow-y: auto;
-  padding: var(--space-250) var(--space-300) var(--space-300);
+  padding: var(--space-200) var(--space-250) var(--space-250);
+}
+
+/* Wide displays get more cards per row rather than wider cards: at half of a
+   2K window a two-column grid stretches every card until the page reads as
+   oversized. */
+.overview-grid {
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
 }
 
 /* ---------------------------------------------------------------- issues */
@@ -2160,9 +2181,9 @@ select option {
 /* The north star keeps its own accent card treatment. */
 .overview-page .memory-section:not(.north-star) {
   border: 1px solid var(--line-subtle);
-  border-radius: 12px;
+  border-radius: 10px;
   background: var(--fill-subtle);
-  padding: var(--space-150) var(--space-200);
+  padding: var(--space-100) var(--space-150);
   box-shadow: var(--highlight-inset);
 }
 
@@ -2171,7 +2192,7 @@ select option {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
-  gap: var(--space-250);
+  gap: var(--space-200);
 }
 
 .status-layout .stats-grid {
@@ -2179,18 +2200,18 @@ select option {
   flex: 1 1 420px;
   display: flex;
   flex-direction: column;
-  gap: var(--space-250);
+  gap: var(--space-150);
 }
 
 .status-progress {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr));
-  gap: var(--space-150);
+  grid-template-columns: repeat(auto-fit, minmax(min(120px, 100%), 1fr));
+  gap: var(--space-100);
 }
 
 .status-progress .stat {
-  padding: var(--space-200);
-  gap: var(--space-050);
+  padding: var(--space-100) var(--space-150);
+  gap: 2px;
 }
 
 .status-progress progress {
@@ -2220,8 +2241,12 @@ select option {
 
 .status-counts {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(115px, 1fr));
-  gap: var(--space-150);
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: var(--space-100);
+}
+
+.status-counts .stat-value {
+  font-size: 0.9375rem;
 }
 
 .status-counts .stat {
@@ -2253,8 +2278,8 @@ select option {
 
 .plan-ring {
   flex: 0 0 auto;
-  width: 112px;
-  height: 112px;
+  width: 84px;
+  height: 84px;
 }
 
 .plan-ring-svg {
@@ -2295,12 +2320,12 @@ select option {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-300);
-  padding: var(--space-100) 0;
+  gap: var(--space-200);
+  padding: var(--space-050) 0;
 }
 
 .heatmap-chart {
-  flex: 0 1 440px;
+  flex: 0 1 360px;
   min-width: 0;
 }
 
@@ -2364,7 +2389,24 @@ select option {
 
 /* Keep the list bounded so the "Show more…" fit logic still applies. */
 .overview-page .activity-section {
-  max-height: 380px;
+  max-height: 260px;
+}
+
+/* The four activity totals read as one compact row, not as four slabs the
+   size of the chart beside them. */
+.activity-totals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: var(--space-100);
+}
+
+.activity-totals .stat {
+  padding: var(--space-100) var(--space-150);
+  gap: 2px;
+}
+
+.activity-totals .stat-value {
+  font-size: 0.9375rem;
 }
 
 /* ----------------------------------------------------------------- board */
