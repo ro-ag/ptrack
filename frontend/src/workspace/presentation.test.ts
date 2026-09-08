@@ -32,6 +32,8 @@ import {
   runtimeEventIsCurrent,
   shortcutIntent,
   stackLanguageRows,
+  summaryShape,
+  summaryShapeCaption,
   stackTiles,
   workflowMutationFocusKey,
   worktreeSelectionForRerender,
@@ -40,6 +42,44 @@ import {
   durableProjectGuideReviewCopy,
   firstRunRecoveryActions,
 } from "./presentation";
+
+it("flags a rolling summary that was written as a digest of notes", () => {
+  const narrative =
+    "Stack discovery landed and reports per-language tiles on the Overview. " +
+    "The v0.38.0 release is staged but the tag is not pushed yet.";
+  expect(summaryShape(narrative).problem).toBe("");
+  // A version number is not three sentence ends.
+  expect(summaryShape(narrative).sentences).toBe(2);
+  expect(summaryShape("Shipped v0.38.0 today.").sentences).toBe(1);
+
+  // Mashed tokens are the tell that survives any byte cap.
+  const joined = summaryShape(
+    "Agents finished. fullrun95new source-boundvalidatedexports+confirmedcloses",
+  );
+  expect(joined.problem).toBe("joined-tokens");
+  expect(summaryShapeCaption(joined)).toBe(
+    "Written as joined tokens, not sentences: one unbroken run of 44 characters.",
+  );
+
+  // A long stretch with no sentence end reads as a note dump.
+  const unbroken = summaryShape("x ".repeat(220));
+  expect(unbroken.problem).toBe("no-sentences");
+  expect(summaryShapeCaption(unbroken)).toBe(
+    "440 characters with no sentence break. Write 2-4 sentences.",
+  );
+
+  // Past the write bound, length is the part to fix first.
+  const long = summaryShape("word. ".repeat(200));
+  expect(long.problem).toBe("over-limit");
+  expect(summaryShapeCaption(long)).toBe(
+    "Too long to read at a glance: 1,200 characters, past the 1,000-byte limit. Write 2-4 sentences.",
+  );
+
+  // Short and unpunctuated is fine: it is not pretending to be a narrative.
+  expect(summaryShape("Release staged, tag pending").problem).toBe("");
+  expect(summaryShape("").problem).toBe("");
+});
+
 
 describe("workspace presentation policy", () => {
   it("formats release versions without inventing a development release", () => {

@@ -195,6 +195,8 @@ import {
   runtimeEventIsCurrent,
   shortcutIntent,
   stackLanguageRows,
+  summaryShape,
+  summaryShapeCaption,
   workflowMutationFocusKey,
   worktreeSelectionForRerender,
   workspaceStateCopy,
@@ -407,6 +409,10 @@ const elements = {
   planTitleMenu: document.querySelector("#plan-title-menu"),
   goal: document.querySelector("#goal"),
   summary: document.querySelector("#summary"),
+  summaryFlag: document.querySelector("#summary-flag"),
+  summaryShapeRow: document.querySelector("#summary-shape"),
+  summaryMetrics: document.querySelector("#summary-metrics"),
+  summaryExpand: document.querySelector("#summary-expand"),
   stats: document.querySelector("#project-stats"),
   snapshotBounds: document.querySelector("#snapshot-bounds"),
   issues: document.querySelector("#issue-list"),
@@ -1161,10 +1167,26 @@ function fitRecentMemory() {
   );
 }
 
+// A summary that keeps to the guide is shown whole, as prose. One written as a
+// digest of notes cannot be made readable by styling it, so the card folds it
+// and says which rule it broke instead of pretending it reads.
+function renderSummary() {
+  const text = board.summary ?? "";
+  elements.summary.textContent =
+    text || "No rolling summary yet. Agents can update it with ptrack summary set.";
+  const shape = text ? summaryShape(text) : null;
+  const dense = Boolean(shape?.problem);
+  elements.summary.dataset.dense = dense ? "true" : "false";
+  elements.summary.dataset.expanded = "false";
+  elements.summaryFlag.hidden = !dense;
+  elements.summaryShapeRow.hidden = !dense;
+  elements.summaryExpand.textContent = "Show all";
+  elements.summaryMetrics.textContent = dense ? summaryShapeCaption(shape) : "";
+}
+
 function renderMemory() {
   elements.goal.textContent = board.goal || "No north star set for this project.";
-  elements.summary.textContent =
-    board.summary || "No rolling summary yet. Agents can update it with ptrack summary set.";
+  renderSummary();
   // The Overview is project-wide: totals never change with the selected
   // plan (the per-plan numbers stay on the board header).
   const progress = document.createElement("div");
@@ -1176,11 +1198,16 @@ function renderMemory() {
   ];
   metrics.filter(([, total, label]) => total || label !== "Milestones").forEach(([done, total, label]) => {
     const metric = statElement(`${done}/${total}`, label);
-    const bar = document.createElement("progress");
-    bar.max = total || 1;
-    bar.value = done;
-    bar.setAttribute("aria-label", `${label}: ${done} of ${total} done`);
-    metric.append(bar);
+    // Tasks get no bar: the ring beside this tile is already that bar, drawn
+    // from the same two numbers. The fraction stays as the exact count the
+    // ring rounds off.
+    if (label !== "Tasks") {
+      const bar = document.createElement("progress");
+      bar.max = total || 1;
+      bar.value = done;
+      bar.setAttribute("aria-label", `${label}: ${done} of ${total} done`);
+      metric.append(bar);
+    }
     progress.append(metric);
   });
   const counts = document.createElement("div");
@@ -1569,13 +1596,14 @@ function renderHeatmap(days) {
     return;
   }
   const columns = heatmapWeeks(days);
-  // Denser cells: the chart is read as a shape, not cell by cell, and the
-  // saved height is what lets the Activity block sit beside its totals rather
-  // than towering over them. The SVG scales, so retina sharpness is unaffected.
-  const cell = 8;
-  const pitch = 11;
-  const left = 22;
-  const top = 14;
+  // The chart is read as a shape, not cell by cell, so the cells are sized for
+  // the shape rather than for pointing at one day. Keeping the block short is
+  // what lets Activity sit beside Status on a wide display instead of taking a
+  // row of its own. The SVG scales, so retina sharpness is unaffected.
+  const cell = 7;
+  const pitch = 10;
+  const left = 20;
+  const top = 13;
   const width = left + columns.length * pitch;
   const height = top + 7 * pitch;
   const chart = document.createElement("div");
@@ -8295,6 +8323,11 @@ elements.onboardingFinishSetup.addEventListener("click", () =>
   void finishFirstPlanOnboarding(firstPlanState.planId),
 );
 elements.activityMore.addEventListener("click", openMemoryHistory);
+elements.summaryExpand.addEventListener("click", () => {
+  const expanded = elements.summary.dataset.expanded === "true";
+  elements.summary.dataset.expanded = expanded ? "false" : "true";
+  elements.summaryExpand.textContent = expanded ? "Show all" : "Show less";
+});
 elements.appVersion.addEventListener("click", (event) => {
   openAboutUpdates(event.currentTarget);
 });

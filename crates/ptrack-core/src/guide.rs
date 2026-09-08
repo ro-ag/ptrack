@@ -49,11 +49,15 @@ someone else are refused. Holds, notes, and issue links stay open to everyone\n\
 claim, finishing a plan releases it automatically, and\n\
 `ptrack plan use <id> --steal` takes over someone else's claim.\n\
 \n\
-**Record decisions, not narration.** Notes are the human-visible audit trail of\n\
-what you did and *why*. When you make a choice, hit a blocker, or find a\n\
-constraint, capture it — one decision per note:\n\
-`ptrack note add \"chose X over Y because Z\" --task N`. Do not log routine\n\
-steps, tool output, or restate the code.\n\
+**Record decisions, not narration.** Notes are the evidence record and the\n\
+human-visible audit trail of what you did and *why*: one event per note, with\n\
+the exact identifiers, hashes, and counts. When you make a choice, hit a\n\
+blocker, or find a constraint, capture it —\n\
+`ptrack note add \"chose X over Y because Z\" --task N`. Terse and\n\
+identifier-heavy is correct here; that is what notes are for. Do not log\n\
+routine steps, tool output, or restate the code, and write with ordinary\n\
+spacing — squeezing the spaces out of \"95 started, 95 validated, 95 closed\"\n\
+makes the tokens no cheaper and the line harder to scan.\n\
 \n\
 **Commits are tracked.** Reference the task in commit messages as `#<id>` so the\n\
 commit links to it (`ptrack hook install` records commits automatically; each\n\
@@ -81,8 +85,13 @@ re-prints the block on demand.\n\
 exceptions (abandoned work, external changes); every use is recorded as a note\n\
 on the record. Do not use it to skip the workflow.\n\
 \n\
-**Before ending** — save the narrative for the next agent:\n\
-- `ptrack summary set \"where we are\"`\n\
+**Before ending** — save the narrative for the next agent with\n\
+`ptrack summary set \"where we are\"`. The rolling summary is the handoff\n\
+narrative: it answers \"where does this project stand\" for an agent or a person\n\
+arriving cold. Write 2-4 sentences, around 400 characters and under 1000 bytes.\n\
+Do not concatenate recent notes into it — if a reader would need the note to\n\
+decode the sentence, it belongs in the note, not the summary. Ordinary spacing\n\
+and ordinary sentences here too.\n\
 \n\
 **Query on demand** (all bounded, `--json` available):\n\
 - `ptrack next` · `ptrack board` · `ptrack milestone list` · `ptrack plan show <id>` · `ptrack task show <id>` · `ptrack task list --status doing,blocked` · `ptrack issue list` · `ptrack search <term>` · `ptrack note list`\n\

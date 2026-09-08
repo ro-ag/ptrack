@@ -963,11 +963,16 @@
               <p id="goal" class="goal">Loading project goal…</p>
             </section>
 
-            <section class="memory-section">
-              <p class="section-label">Rolling project summary</p>
-              <details class="summary-disclosure">
-                <summary class="summary-preview"><span id="summary" class="summary">No rolling summary yet.</span></summary>
-              </details>
+            <section class="memory-section summary-section">
+              <div class="section-heading">
+                <p class="section-label">Rolling project summary</p>
+                <span id="summary-flag" class="summary-flag" hidden>note digest</span>
+              </div>
+              <p id="summary" class="summary">No rolling summary yet.</p>
+              <p id="summary-shape" class="summary-shape" hidden>
+                <span id="summary-metrics"></span>
+                <button id="summary-expand" type="button" class="summary-expand">Show all</button>
+              </p>
             </section>
 
             <section class="memory-section overview-wide">
@@ -985,7 +990,7 @@
             <section class="memory-section overview-wide">
               <div class="section-heading">
                 <p class="section-label">Activity</p>
-                <span class="section-caption">Notes + commits · 16 weeks</span>
+                <span class="section-caption">Notes and commits, last 16 weeks</span>
               </div>
               <div id="activity-heatmap" class="heatmap"></div>
             </section>
@@ -1001,7 +1006,7 @@
             <section class="memory-section activity-section">
               <div class="section-heading">
                 <p class="section-label">Recent memory</p>
-                <span class="section-caption">Notes + commits</span>
+                <span class="section-caption">Notes and commits</span>
               </div>
               <div id="activity-list" class="activity-list"></div>
               <button

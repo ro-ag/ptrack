@@ -1441,7 +1441,7 @@ select option {
 }
 
 .memory-section .section-label {
-  margin-bottom: var(--space-100);
+  margin-bottom: var(--space-050);
   color: var(--muted);
   letter-spacing: 0.12em;
 }
@@ -1471,59 +1471,76 @@ select option {
   color: var(--accent);
 }
 
-.goal,
-/* Rolling summaries are written by agents and often arrive as dense,
-   space-poor machine text. The card shows the first lines, breaks long
-   unbroken tokens instead of letting them run off, and opens to the full text
-   on click rather than ending in an ellipsis with nowhere to go. */
-.summary {
-  display: -webkit-box;
-  overflow: hidden;
+.goal {
   margin-bottom: 0;
   color: var(--text-soft);
   font-size: 0.75rem;
-  line-height: 1.6;
+  line-height: 1.55;
+}
+
+/* The rolling summary is the only text on this page meant to be read rather
+   than scanned, so it is set larger and looser than the labels and tiles
+   around it, on a measure short enough to track from line to line. A summary
+   that keeps to the guide (2-4 sentences, under 1000 bytes) fits here whole,
+   which is why there is no clamp in the default state. */
+.summary {
+  max-width: 68ch;
+  margin-bottom: 0;
+  color: var(--text-soft);
+  font-size: 0.8125rem;
+  line-height: 1.55;
   overflow-wrap: anywhere;
+}
+
+/* A summary written as a digest of notes is unreadable by nature: mashed
+   tokens, no sentence breaks, hundreds of characters. Rather than pretend it
+   is prose, the card folds it to five lines and says what is wrong with it. */
+.summary[data-dense="true"]:not([data-expanded="true"]) {
+  display: -webkit-box;
+  overflow: hidden;
+  mask-image: linear-gradient(180deg, #000 62%, transparent);
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 5;
 }
 
-.summary-disclosure[open] .summary {
-  display: block;
-  overflow: visible;
-  max-height: 260px;
-  overflow-y: auto;
+/* The flag borrows the hold tone, the app's existing "needs attention, not
+   broken" colour, and a left rule rather than a badge, matching how the status
+   counts already mark a column. */
+.summary-flag {
+  flex: 0 0 auto;
+  border-left: 2px solid var(--hold);
+  padding-left: var(--space-050);
+  color: var(--hold);
+  font-size: 0.6875rem;
+  line-height: 1.3;
 }
 
-.summary-preview {
-  position: relative;
-  cursor: pointer;
-  list-style: none;
-}
-
-.summary-preview::marker,
-.summary-preview::-webkit-details-marker {
-  content: "";
-  display: none;
-}
-
-/* The last line fades out to show the text continues. A mask is used rather
-   than a gradient in the card colour: the card fill is translucent, so a
-   painted gradient would not match it. */
-.summary-disclosure:not([open]) .summary {
-  mask-image: linear-gradient(180deg, #000 55%, transparent);
-}
-
-.summary-disclosure::after {
-  content: "Show full summary";
-  display: block;
-  margin-top: var(--space-050);
+/* Measurements, not decoration: the two numbers the guide rule is written in. */
+.summary-shape {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-100);
+  margin: var(--space-100) 0 0;
   color: var(--muted);
   font-size: 0.6875rem;
+  line-height: 1.4;
 }
 
-.summary-disclosure[open]::after {
-  content: "Show less";
+.summary-expand {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: 0.6875rem;
+  cursor: pointer;
+}
+
+.summary-expand:hover {
+  color: var(--accent-strong);
+  background: transparent;
+  box-shadow: none;
 }
 
 .stats-grid {
@@ -2065,12 +2082,6 @@ select option {
   padding: var(--space-200) var(--space-250) var(--space-250);
 }
 
-/* Wide displays get more cards per row rather than wider cards: at half of a
-   2K window a two-column grid stretches every card until the page reads as
-   oversized. */
-.overview-grid {
-  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
-}
 
 /* ---------------------------------------------------------------- issues */
 
@@ -2197,7 +2208,7 @@ select option {
 }
 
 .overview-heading {
-  padding: 0 2px var(--space-200);
+  padding: 0 2px var(--space-150);
 }
 
 .overview-heading h2 {
@@ -2207,15 +2218,36 @@ select option {
   letter-spacing: -0.038em;
 }
 
+/* Wide displays get more cards per row rather than wider cards: on a 2K
+   display a two-column grid stretches every card until a progress bar runs
+   half the width of the screen. The grid is its own query container because
+   it lives in a resizable pane — how much room it has is not a fact about the
+   window. */
 .overview-grid {
+  container-type: inline-size;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-200);
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: var(--space-150);
   align-items: start;
 }
 
+/* Status and Activity need about twice a card's width, not the whole row. At
+   two columns that is still full width; from four columns up the two of them
+   share a row instead of stacking, which is where the screen space on a 2K
+   display actually goes. */
 .overview-wide {
-  grid-column: 1 / -1;
+  min-width: 0;
+  grid-column: span 2;
+}
+
+/* Once the grid holds four columns, the north star and the rolling summary
+   take two apiece: both are sentences to read rather than tiles to scan, and a
+   340px column sets them to about forty characters a line. */
+@container (min-width: 1400px) {
+  .north-star,
+  .summary-section {
+    grid-column: span 2;
+  }
 }
 
 /* The north star keeps its own accent card treatment. */
@@ -2281,7 +2313,7 @@ select option {
 
 .status-counts {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
   gap: var(--space-100);
 }
 
@@ -2360,7 +2392,7 @@ select option {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-200);
+  gap: var(--space-150);
   padding: var(--space-050) 0;
 }
 
@@ -2390,20 +2422,13 @@ select option {
 }
 
 .activity-totals {
-  flex: 1 1 240px;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-150);
-}
-
-.activity-totals .stat {
-  padding: var(--space-200);
+  flex: 1 1 220px;
 }
 
 .heatmap-svg {
   display: block;
   width: 100%;
-  max-width: 440px;
+  max-width: 380px;
   height: auto;
 }
 
@@ -2432,11 +2457,11 @@ select option {
   max-height: 220px;
 }
 
-/* The four activity totals read as one compact row, not as four slabs the
-   size of the chart beside them. */
+/* Two by two beside the chart: the four totals should read as one block, not
+   as a row that drops its last tile onto a second line. */
 .activity-totals {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-100);
 }
 

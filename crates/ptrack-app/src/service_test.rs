@@ -99,6 +99,33 @@ fn agent_observation_requires_the_active_project_host() {
 }
 
 #[test]
+fn setting_the_rolling_summary_refuses_a_note_dump() {
+    let directory = TestDirectory::new("summary-bound");
+    let (mut application, _) = configured(&directory, true);
+
+    let narrative = "Stack discovery landed and the release is staged. \
+                     Acceptance is green; the tag is not pushed yet.";
+    application
+        .mutate(Mutation::SetSummary(narrative.to_owned()))
+        .expect("a handoff narrative stores");
+    assert_eq!(
+        application.snapshot().unwrap().meta.summary,
+        narrative,
+        "the stored summary is the text that was set"
+    );
+
+    let dump = "x".repeat(ptrack_core::MAX_SUMMARY_BYTES + 1);
+    let error = application
+        .mutate(Mutation::SetSummary(dump))
+        .expect_err("an oversized summary is refused");
+    let message = error.to_string();
+    assert!(
+        message.starts_with("the rolling summary is") && message.contains("2-4 sentences"),
+        "the refusal has to be actionable mid-run: {message}"
+    );
+}
+
+#[test]
 fn operations_reopen_and_drop_the_store() {
     let directory = TestDirectory::new("reopen");
     let (mut application, endpoint) = configured(&directory, true);

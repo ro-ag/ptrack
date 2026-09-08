@@ -29,6 +29,16 @@ const MAX_AUDIT_TARGET_BYTES: usize = 256;
 /// hold reason can never dominate a record payload.
 pub const MAX_HOLD_REASON_BYTES: usize = 1024;
 
+/// Maximum accepted UTF-8 bytes in the rolling project summary.
+///
+/// The summary is the handoff narrative an agent or a person reads on arrival:
+/// two to four sentences saying where the project stands. It is not a digest of
+/// recent notes, which carry the exact identifiers and counts on their own. The
+/// bound is deliberately small so a summary stays readable at a glance, and it
+/// is enforced on write only — a longer summary written before the limit
+/// existed still loads, exactly like a payload from an older schema.
+pub const MAX_SUMMARY_BYTES: usize = 1_000;
+
 /// A stable field-level reason a native record cannot be trusted.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidationError {
@@ -190,6 +200,29 @@ pub fn check_hold_reason(reason: &str) -> Result<(), String> {
             Err("the hold reason must be one line without control characters".to_owned())
         }
     }
+}
+
+/// Checks a rolling project summary at the write boundary.
+///
+/// Only length is refused. A summary is multi-line prose by design, so the
+/// single-line rules that apply to a hold reason do not apply here, and a blank
+/// summary is a legitimate "nothing recorded yet". The message names the shape
+/// as well as the number because an agent mid-run acts on the refusal it is
+/// handed rather than re-reading the guide.
+///
+/// # Errors
+///
+/// Returns a printable sentence when the summary is too long to store.
+pub fn check_summary(summary: &str) -> Result<(), String> {
+    if summary.len() > MAX_SUMMARY_BYTES {
+        return Err(format!(
+            "the rolling summary is {} bytes; keep it under {MAX_SUMMARY_BYTES} \
+             and write 2-4 sentences of handoff narrative — the exact \
+             identifiers and counts belong in notes",
+            summary.len()
+        ));
+    }
+    Ok(())
 }
 
 /// Maximum accepted UTF-8 bytes in a user identity display name.

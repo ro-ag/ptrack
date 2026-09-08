@@ -1089,6 +1089,63 @@ export interface HeatmapDay {
   count: number;
 }
 
+export interface SummaryShape {
+  characters: number;
+  sentences: number;
+  longestRun: number;
+  // "" when the summary reads as prose; otherwise which rule it broke.
+  problem: "" | "over-limit" | "joined-tokens" | "no-sentences";
+}
+
+// The guide asks for 2-4 sentences of handoff narrative and the store refuses
+// anything over 1000 bytes on write, so a summary that still reads as a digest
+// of notes is either older than those rules or was assembled to slip under
+// them. Three signals catch it: past the byte bound, an unbroken token long
+// enough to be several words run together, or a long stretch with no sentence
+// end. Counting a sentence end only when the mark is followed by whitespace or
+// the end of the text keeps "v0.38.0" from reading as three sentences.
+const SUMMARY_MAX_BYTES = 1000;
+const SUMMARY_PROSE_LIMIT = 400;
+const SUMMARY_RUN_LIMIT = 40;
+
+export function summaryShape(text: string): SummaryShape {
+  const characters = [...text].length;
+  const sentences = (text.match(/[.!?](?=\s|$)/g) ?? []).length;
+  const longestRun = (text.match(/\S+/g) ?? []).reduce(
+    (longest, token) => Math.max(longest, token.length),
+    0,
+  );
+  // Length first: when a summary is both too long and badly written, its
+  // length is the part the writer has to fix before anything else matters.
+  let problem: SummaryShape["problem"] = "";
+  if (new TextEncoder().encode(text).length > SUMMARY_MAX_BYTES) {
+    problem = "over-limit";
+  } else if (longestRun >= SUMMARY_RUN_LIMIT) {
+    problem = "joined-tokens";
+  } else if (characters > SUMMARY_PROSE_LIMIT && sentences < 2) {
+    problem = "no-sentences";
+  }
+  return { characters, sentences, longestRun, problem };
+}
+
+// The card says which rule the summary broke and what to do about it, in the
+// terms the rule is written in, so the fix is obvious without opening the
+// guide. Each reads as a sentence: the diagnosis first, then the measurement
+// that supports it.
+export function summaryShapeCaption(shape: SummaryShape): string {
+  const characters = `${shape.characters.toLocaleString()} characters`;
+  switch (shape.problem) {
+    case "over-limit":
+      return `Too long to read at a glance: ${characters}, past the ${SUMMARY_MAX_BYTES.toLocaleString()}-byte limit. Write 2-4 sentences.`;
+    case "joined-tokens":
+      return `Written as joined tokens, not sentences: one unbroken run of ${shape.longestRun} characters.`;
+    case "no-sentences":
+      return `${characters} with no sentence break. Write 2-4 sentences.`;
+    default:
+      return "";
+  }
+}
+
 export interface HeatmapCell {
   date: string; // "" for leading padding cells
   count: number;

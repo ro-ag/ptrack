@@ -1,7 +1,8 @@
 use crate::{
     CapabilityAudit, CapabilityKind, Digest32, LEGACY_ACTOR, MAX_HOLD_REASON_BYTES,
-    MAX_IDENTITY_NAME_BYTES, MemoryKind, Meta, NativeRecord, Note, NoteTarget, PlanStatus,
-    TaskStatus, Timestamp, Validate, check_hold_reason, check_identity_name, is_identity_id,
+    MAX_IDENTITY_NAME_BYTES, MAX_SUMMARY_BYTES, MemoryKind, Meta, NativeRecord, Note, NoteTarget,
+    PlanStatus, TaskStatus, Timestamp, Validate, check_hold_reason, check_identity_name,
+    check_summary, is_identity_id,
 };
 
 use super::codec_test::valid_capability;
@@ -286,6 +287,44 @@ fn the_input_boundary_check_agrees_with_the_record_validator() {
         plan.hold_reason = Some(reason.to_owned());
         assert!(plan.validate().is_ok());
     }
+}
+
+#[test]
+fn the_rolling_summary_is_bounded_on_write_only() {
+    // Blank and multi-line prose are both legitimate summaries.
+    assert_eq!(check_summary(""), Ok(()));
+    assert_eq!(
+        check_summary("Stack discovery landed.\n\nThe release is staged."),
+        Ok(())
+    );
+    assert_eq!(check_summary(&"x".repeat(MAX_SUMMARY_BYTES)), Ok(()));
+
+    let over = "x".repeat(MAX_SUMMARY_BYTES + 1);
+    assert_eq!(
+        check_summary(&over),
+        Err(format!(
+            "the rolling summary is {} bytes; keep it under {MAX_SUMMARY_BYTES} \
+             and write 2-4 sentences of handoff narrative — the exact \
+             identifiers and counts belong in notes",
+            MAX_SUMMARY_BYTES + 1
+        ))
+    );
+
+    // The bound is a write-time rule: a longer summary already on disk still
+    // loads, exactly like a payload written under an older schema.
+    let meta = Meta {
+        goal: String::new(),
+        summary: over,
+        active_plan: 0,
+        created_at: Timestamp::Zero,
+        updated_at: Timestamp::Zero,
+        format_version: 0,
+        last_write_version: String::new(),
+        active_plans: Vec::new(),
+        actors: Vec::new(),
+        stack: None,
+    };
+    assert!(meta.validate().is_ok());
 }
 
 #[test]
