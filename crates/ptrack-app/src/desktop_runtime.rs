@@ -467,6 +467,25 @@ pub struct RecentProjectV1 {
     pub canonical_path: String,
     pub last_opened_at: String,
     pub availability: RecentProjectAvailabilityV1,
+    /// Stack label for the card, absent until this project has been scanned by
+    /// a build carrying stack discovery.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stack: Option<RecentProjectStackV1>,
+}
+
+/// The card's stack label: languages with tracked-file counts, never a size.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentProjectStackV1 {
+    pub languages: Vec<RecentProjectLanguageV1>,
+    pub tracked_files: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentProjectLanguageV1 {
+    pub language: String,
+    pub files: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

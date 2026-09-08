@@ -4,6 +4,16 @@ export type RecentProjectAvailability =
   | "permission-required"
   | "changed";
 
+export interface RecentProjectLanguage {
+  language: string;
+  files: number;
+}
+
+export interface RecentProjectStack {
+  languages: RecentProjectLanguage[];
+  trackedFiles: number;
+}
+
 export interface RecentProjectEntry {
   entryId: string;
   base: string;
@@ -11,6 +21,8 @@ export interface RecentProjectEntry {
   canonicalPath: string;
   lastOpenedAt: string;
   availability: RecentProjectAvailability;
+  /** Absent until a build carrying stack discovery has scanned the project. */
+  stack?: RecentProjectStack;
 }
 
 export interface RecentProjectResolution {
@@ -190,6 +202,40 @@ export function reduceRecentProjects(
   }
 }
 
+function fileCount(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`Recent project ${label} is invalid.`);
+  }
+  return value;
+}
+
+/**
+ * Parses the optional stack summary. Absent is normal — it means the project
+ * has not been scanned — but a malformed summary is rejected rather than
+ * rendered as a partial label.
+ */
+function parseStack(value: unknown): RecentProjectStack | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object") {
+    throw new Error("Recent project stack is invalid.");
+  }
+  const stack = value as Record<string, unknown>;
+  if (!Array.isArray(stack.languages) || stack.languages.length > 16) {
+    throw new Error("Recent project stack languages are invalid.");
+  }
+  const languages = stack.languages.map((candidate) => {
+    if (!candidate || typeof candidate !== "object") {
+      throw new Error("Recent project stack language is invalid.");
+    }
+    const entry = candidate as Record<string, unknown>;
+    return {
+      language: requiredString(entry.language, "stack language", 64),
+      files: fileCount(entry.files, "stack language file count"),
+    };
+  });
+  return { languages, trackedFiles: fileCount(stack.trackedFiles, "tracked file count") };
+}
+
 function requiredString(value: unknown, label: string, maximum = 32_768): string {
   if (typeof value !== "string" || !value || value.length > maximum) {
     throw new Error(`Recent project ${label} is invalid.`);
@@ -233,6 +279,7 @@ export function parseRecentProjects(value: unknown): RecentProjectEntry[] {
     }
     if (seen.has(entryId)) throw new Error("Recent project entry IDs must be unique.");
     seen.add(entryId);
+    const stack = parseStack(project.stack);
     return {
       entryId,
       base,
@@ -240,6 +287,7 @@ export function parseRecentProjects(value: unknown): RecentProjectEntry[] {
       canonicalPath,
       lastOpenedAt,
       availability,
+      ...(stack ? { stack } : {}),
     };
   });
   for (let index = 1; index < parsed.length; index += 1) {

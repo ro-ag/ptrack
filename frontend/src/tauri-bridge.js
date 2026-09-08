@@ -51,7 +51,7 @@ const COMMANDS = Object.freeze([
   "GetPreferences",
   "GetRecentProjects",
   "GetRecentProjectsV1",
-  "GetRepoStatsV1",
+  "GetStackProfileV1",
   "GetTaskDetailV2",
   "GetTerminalProfiles",
   "GetTerminalProfilesV2",

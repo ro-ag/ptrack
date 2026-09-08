@@ -16,7 +16,7 @@ describe("Tauri compatibility bridge", () => {
       "GetAgentRunsV2", "GetBoard", "GetBoardV2", "GetCapabilitiesV2",
       "GetCapabilityAuditsV2", "GetDiagnosticsReport", "GetInitializationStatusV1", "GetIssueDetailV1", "GetIssuesV1",
       "GetLayoutState", "GetPendingInitializationV1",
-      "GetPreferences", "GetRecentProjects", "GetRecentProjectsV1", "GetRepoStatsV1", "GetTaskDetailV2",
+      "GetPreferences", "GetRecentProjects", "GetRecentProjectsV1", "GetStackProfileV1", "GetTaskDetailV2",
       "GetTerminalProfiles", "GetTerminalProfilesV2", "GetTerminalWindowTab",
       "GetUpdateState",
       "GetWorkspaceSnapshot", "GetWorkspaceState", "HoldPlanV1", "InitializeProjectV1", "InstallShellCommand",

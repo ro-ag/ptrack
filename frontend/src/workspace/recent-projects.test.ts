@@ -23,6 +23,57 @@ const entry = {
   availability: "missing" as const,
 };
 
+describe("recent project stack summaries", () => {
+  it("parses a stack summary when the entry carries one", () => {
+    const [parsed] = parseRecentProjects({
+      projects: [
+        {
+          ...entry,
+          stack: {
+            languages: [
+              { language: "rust", files: 214 },
+              { language: "typescript", files: 38 },
+            ],
+            trackedFiles: 252,
+          },
+        },
+      ],
+    });
+    expect(parsed.stack).toEqual({
+      languages: [
+        { language: "rust", files: 214 },
+        { language: "typescript", files: 38 },
+      ],
+      trackedFiles: 252,
+    });
+  });
+
+  it("accepts an entry with no stack summary", () => {
+    const [parsed] = parseRecentProjects({ projects: [entry] });
+    expect(parsed.stack).toBeUndefined();
+  });
+
+  it("rejects a malformed stack summary instead of rendering half of it", () => {
+    expect(() =>
+      parseRecentProjects({
+        projects: [
+          { ...entry, stack: { languages: [{ language: "rust", files: -1 }], trackedFiles: 1 } },
+        ],
+      }),
+    ).toThrow();
+    expect(() =>
+      parseRecentProjects({
+        projects: [{ ...entry, stack: { languages: [{ files: 1 }], trackedFiles: 1 } }],
+      }),
+    ).toThrow();
+    expect(() =>
+      parseRecentProjects({
+        projects: [{ ...entry, stack: { languages: [], trackedFiles: "many" } }],
+      }),
+    ).toThrow();
+  });
+});
+
 describe("recent project recovery", () => {
   it("parses every typed availability and enforces newest-first bounded rows", () => {
     const states = ["available", "missing", "permission-required", "changed"];

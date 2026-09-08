@@ -1366,6 +1366,15 @@ select option {
   font-size: 0.6875rem;
 }
 
+.recent-project-stack {
+  overflow: hidden;
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 0.6875rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .recent-project-state {
   margin: var(--space-050) 0 0;
   color: var(--text-soft);
