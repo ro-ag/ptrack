@@ -194,7 +194,7 @@ import {
   runtimeAssociationLabel,
   runtimeEventIsCurrent,
   shortcutIntent,
-  stackTiles,
+  stackLanguageRows,
   workflowMutationFocusKey,
   worktreeSelectionForRerender,
   workspaceStateCopy,
@@ -688,6 +688,7 @@ let pendingDetailTaskId = 0;
 let heatmapRequested = false;
 let stackProfileRequested = false;
 let stackProfile = null;
+let stackDetailExpanded = false;
 const expandedLanes = new Set();
 const foldedLanes = new Set();
 
@@ -998,6 +999,63 @@ function languageLabel(id) {
   return languageLabels[id] || id;
 }
 
+// The Tracked files tile doubles as the breakdown's disclosure control: the
+// languages live one click away instead of crowding the tile row.
+function stackTrackedFilesToggle(profile, languages) {
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "stat stat-toggle";
+  toggle.dataset.expanded = String(stackDetailExpanded);
+  toggle.setAttribute("aria-expanded", String(stackDetailExpanded));
+  toggle.setAttribute("aria-controls", "stack-breakdown");
+  const label = document.createElement("span");
+  label.className = "stat-label";
+  label.textContent = languages === 1 ? "Tracked files · 1 language" : `Tracked files · ${languages} languages`;
+  const value = document.createElement("span");
+  value.className = "stat-value";
+  value.textContent = profile.trackedFiles.toLocaleString();
+  toggle.append(label, value);
+  toggle.addEventListener("click", () => {
+    stackDetailExpanded = !stackDetailExpanded;
+    renderMemory();
+    if (stackDetailExpanded) {
+      document.querySelector("#stack-breakdown")?.scrollIntoView({ block: "nearest" });
+    }
+  });
+  return toggle;
+}
+
+// The expanded breakdown: one row per language, largest first. The bar is
+// sized by share, but the count sits beside it — a proportion is never the
+// only thing rendered.
+function stackBreakdown(rows) {
+  const list = document.createElement("dl");
+  list.className = "stack-breakdown";
+  list.id = "stack-breakdown";
+  rows.forEach((row) => {
+    const term = document.createElement("dt");
+    term.className = "stack-breakdown-language";
+    term.textContent = languageLabel(row.language);
+    const detail = document.createElement("dd");
+    detail.className = "stack-breakdown-detail";
+    const bar = document.createElement("span");
+    bar.className = "stack-breakdown-bar";
+    bar.setAttribute("aria-hidden", "true");
+    const fill = document.createElement("span");
+    fill.style.width = `${Math.max(2, Math.round(row.share * 100))}%`;
+    bar.append(fill);
+    const count = document.createElement("span");
+    count.className = "stack-breakdown-count";
+    count.textContent = `${row.files.toLocaleString()} file${row.files === 1 ? "" : "s"}`;
+    const scope = document.createElement("span");
+    scope.className = "stack-breakdown-scope";
+    scope.textContent = row.projects === 1 ? "1 project" : `${row.projects} projects`;
+    detail.append(bar, count, scope);
+    list.append(term, detail);
+  });
+  return list;
+}
+
 function statElement(value, label) {
   const stat = document.createElement("div");
   stat.className = "stat";
@@ -1116,21 +1174,21 @@ function renderMemory() {
     statElement(board.stats.notes, "Notes"),
     statElement(board.stats.commits, "Commits"),
   );
-  // Discovered languages, counted in tracked files. One tile per language, not
-  // per discovered project: a Cargo workspace discovers a project per crate,
-  // and per-project tiles would repeat the same label across the row. A line
-  // count is not reported — one vendored directory or generated bundle
-  // outweighs the code that defines the project.
+  // Tracked files, counted from the manifests git tracks. A line count is not
+  // reported: one vendored directory or generated bundle outweighs the code
+  // that defines the project. The tile expands into the per-language
+  // breakdown rather than spending a tile on each language — a Cargo
+  // workspace discovers a project per crate, and those tiles all read "Rust".
+  const sections = [progress, counts];
   if (stackProfile?.state === "ready") {
-    counts.append(statElement(stackProfile.trackedFiles.toLocaleString(), "Tracked files"));
-    stackTiles(stackProfile.projects).forEach((tile) => {
-      counts.append(statElement(tile.files.toLocaleString(), languageLabel(tile.language)));
-    });
+    const rows = stackLanguageRows(stackProfile.projects);
+    counts.append(stackTrackedFilesToggle(stackProfile, rows.length));
     if (stackProfile.incomplete) {
       counts.append(statElement("partial", "Scan truncated"));
     }
+    if (stackDetailExpanded && rows.length) sections.push(stackBreakdown(rows));
   }
-  elements.stats.replaceChildren(progress, counts);
+  elements.stats.replaceChildren(...sections);
   renderPlanRing(board.stats.tasksDone, board.stats.tasks);
 
   elements.issueTotal.textContent = board.stats.openIssues;

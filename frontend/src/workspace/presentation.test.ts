@@ -31,6 +31,7 @@ import {
   runtimeCountLabel,
   runtimeEventIsCurrent,
   shortcutIntent,
+  stackLanguageRows,
   stackTiles,
   workflowMutationFocusKey,
   worktreeSelectionForRerender,
@@ -740,5 +741,38 @@ describe("stack tiles", () => {
 
   it("returns nothing for an unscanned project", () => {
     expect(stackTiles([])).toEqual([]);
+  });
+});
+
+describe("stack language rows", () => {
+  it("reports every language with its share of attributed files", () => {
+    const rows = stackLanguageRows([
+      { root: "", language: "rust", files: 60, evidence: [] },
+      { root: "crates/a", language: "rust", files: 20, evidence: [] },
+      { root: "web", language: "typescript", files: 20, evidence: [] },
+    ]);
+    expect(rows).toEqual([
+      { language: "rust", files: 80, projects: 2, share: 0.8 },
+      { language: "typescript", files: 20, projects: 1, share: 0.2 },
+    ]);
+  });
+
+  it("keeps every language rather than capping like the tile row", () => {
+    const rows = stackLanguageRows(
+      ["rust", "go", "python", "ruby", "php", "dart"].map((language, index) => ({
+        root: language,
+        language,
+        files: index + 1,
+        evidence: [],
+      })),
+    );
+    expect(rows).toHaveLength(6);
+  });
+
+  it("gives an empty profile no rows and never divides by zero", () => {
+    expect(stackLanguageRows([])).toEqual([]);
+    expect(stackLanguageRows([{ root: "", language: "rust", files: 0, evidence: [] }])).toEqual([
+      { language: "rust", files: 0, projects: 1, share: 0 },
+    ]);
   });
 });

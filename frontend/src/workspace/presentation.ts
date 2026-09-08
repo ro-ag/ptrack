@@ -1137,6 +1137,23 @@ export interface StackTile {
   projects: number;
 }
 
+export interface StackLanguageRow extends StackTile {
+  /** Files in this language over the profile's attributed files, 0..1. */
+  share: number;
+}
+
+/**
+ * Builds the expanded per-language breakdown: every language, largest first,
+ * each with its file count, how many discovered projects it spans, and its
+ * share of the attributed files. The share exists only to size a bar — the
+ * count is always rendered beside it, so nothing is read from length alone.
+ */
+export function stackLanguageRows(projects: StackProfileProject[]): StackLanguageRow[] {
+  const tiles = stackTiles(projects, Number.MAX_SAFE_INTEGER);
+  const total = tiles.reduce((sum, tile) => sum + tile.files, 0);
+  return tiles.map((tile) => ({ ...tile, share: total > 0 ? tile.files / total : 0 }));
+}
+
 /**
  * Aggregates a stack profile into Overview tiles: one per language, never one
  * per discovered project. A Cargo workspace discovers a project per crate, so
