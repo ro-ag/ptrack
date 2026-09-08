@@ -70,13 +70,6 @@
             title="Issues — ⌘3"
             disabled
           >Issues</button>
-          <button
-            id="nav-insights"
-            class="sidebar-nav-item"
-            type="button"
-            title="Insights — ⌘4"
-            disabled
-          >Insights</button>
         </nav>
 
         <div class="sidebar-plans">
@@ -996,6 +989,14 @@
 
             <section class="memory-section overview-wide">
               <div class="section-heading">
+                <p class="section-label">Project history</p>
+                <span id="history-caption" class="section-caption"></span>
+              </div>
+              <div id="project-history" class="project-history"></div>
+            </section>
+
+            <section class="memory-section overview-wide">
+              <div class="section-heading">
                 <p class="section-label">Activity</p>
                 <span class="section-caption">Notes and commits, last 16 weeks</span>
               </div>
@@ -1096,77 +1097,6 @@
               <div id="overview-blockers" class="intelligence-list"></div>
               <div id="overview-notes" class="intelligence-list"></div>
             </details>
-          </div>
-        </section>
-
-        <section
-          id="insights-page"
-          class="insights-page"
-          aria-label="Project insights"
-          hidden
-        >
-          <header class="insights-heading">
-            <p class="eyebrow">Project memory</p>
-            <h2 id="insights-heading" tabindex="-1">Insights</h2>
-            <p id="insights-caption" class="insights-caption"></p>
-          </header>
-
-          <div id="insights-body" class="insights-body">
-            <section class="insight-card insight-timeline">
-              <div class="section-heading">
-                <p class="section-label">History</p>
-                <span id="timeline-caption" class="section-caption"></span>
-              </div>
-              <div id="insights-timeline" class="insight-figure"></div>
-            </section>
-
-            <section class="insight-card insight-momentum">
-              <div class="section-heading">
-                <p class="section-label">Momentum</p>
-                <span id="momentum-caption" class="section-caption"></span>
-              </div>
-              <div id="insights-momentum" class="insight-figure"></div>
-            </section>
-
-            <section class="insight-card insight-wide">
-              <div class="section-heading">
-                <p class="section-label">Tasks created and completed</p>
-                <span class="section-caption">Completion is dated by last update</span>
-              </div>
-              <div id="insights-burnup" class="insight-figure"></div>
-            </section>
-
-            <section class="insight-card insight-wide">
-              <div class="section-heading">
-                <p class="section-label">When the work happens</p>
-                <span id="punchcard-caption" class="section-caption"></span>
-              </div>
-              <div id="insights-punchcard" class="insight-figure"></div>
-            </section>
-
-            <section class="insight-card">
-              <div class="section-heading">
-                <p class="section-label">How long tasks take</p>
-                <span id="lead-time-caption" class="section-caption"></span>
-              </div>
-              <div id="insights-lead-time" class="insight-figure"></div>
-            </section>
-
-            <section class="insight-card">
-              <div class="section-heading">
-                <p class="section-label">Issues</p>
-                <span id="issue-mix-caption" class="section-caption"></span>
-              </div>
-              <div id="insights-issues" class="insight-figure"></div>
-            </section>
-
-            <section class="insight-card insight-wide">
-              <div class="section-heading">
-                <p class="section-label">Plans</p>
-                <span id="plan-progress-caption" class="section-caption"></span>
-              </div>
-              <div id="insights-plans" class="insight-figure"></div>
-            </section>
           </div>
         </section>
 

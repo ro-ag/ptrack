@@ -59,12 +59,11 @@ pub enum MenuDispatch {
     Ignore,
 }
 
-const MENU_EVENTS: [&str; 12] = [
+const MENU_EVENTS: [&str; 11] = [
     "update:open-requested",
     "workspace:board-requested",
     "workspace:close-requested",
     "workspace:command-palette-requested",
-    "workspace:insights-requested",
     "workspace:install-shell-command-requested",
     "workspace:intelligence-requested",
     "workspace:issues-requested",
@@ -144,11 +143,6 @@ pub fn menu_spec(platform: DesktopPlatform) -> Vec<MenuSpec> {
             ),
             command("workspace:board-requested", "Board", Some("CmdOrCtrl+1")),
             command("workspace:issues-requested", "Issues", Some("CmdOrCtrl+3")),
-            command(
-                "workspace:insights-requested",
-                "Insights",
-                Some("CmdOrCtrl+4"),
-            ),
             MenuEntrySpec::Separator,
             command(
                 "workspace:terminal-panel-toggle-requested",

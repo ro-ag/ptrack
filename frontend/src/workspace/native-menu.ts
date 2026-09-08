@@ -13,7 +13,6 @@ export interface NativeMenuActions {
   showBoard(): void;
   showIntelligence(): void;
   showIssues(): void;
-  showInsights(): void;
   toggleTerminalPanel(): void;
   toggleCommandPalette(): void;
   installShellCommand(): void;
@@ -22,7 +21,7 @@ export interface NativeMenuActions {
 
 export type NativeMenuCommand = keyof NativeMenuActions;
 
-export type NativeMenuView = "board" | "overview" | "issues" | "insights";
+export type NativeMenuView = "board" | "overview" | "issues";
 
 // Settings is an application dialog, not a view, so showSettings has no view
 // target.
@@ -32,7 +31,6 @@ export function nativeMenuViewTarget(
   if (command === "showBoard") return "board";
   if (command === "showIntelligence") return "overview";
   if (command === "showIssues") return "issues";
-  if (command === "showInsights") return "insights";
   return null;
 }
 
@@ -74,7 +72,6 @@ const nativeMenuBindings: ReadonlyArray<
   ["workspace:board-requested", "showBoard"],
   ["workspace:intelligence-requested", "showIntelligence"],
   ["workspace:issues-requested", "showIssues"],
-  ["workspace:insights-requested", "showInsights"],
   ["workspace:terminal-panel-toggle-requested", "toggleTerminalPanel"],
   ["workspace:command-palette-requested", "toggleCommandPalette"],
   ["workspace:install-shell-command-requested", "installShellCommand"],

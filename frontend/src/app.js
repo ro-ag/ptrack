@@ -1,6 +1,3 @@
-import { scaleLinear, scaleBand } from "d3-scale";
-import { area, line, curveMonotoneX } from "d3-shape";
-import { max as d3max } from "d3-array";
 import "./tauri-bridge";
 import { filterPlans, splitCurrentPlan } from "./workspace/plan-list";
 import { agentContextText } from "./workspace/copy-context";
@@ -204,19 +201,7 @@ import {
   worktreeSelectionForRerender,
   workspaceStateCopy,
 } from "./workspace/presentation";
-import {
-  dayTotal,
-  hasActivity,
-  momentum,
-  momentumLabel,
-  planBars,
-  punchcardGrid,
-  rollingMean,
-  severityRows,
-  timelineBuckets,
-  timelineMarkers,
-  windowLabel,
-} from "./workspace/insights";
+import { timelineBuckets, timelineMarkers } from "./workspace/project-timeline";
 
 const statuses = ["todo", "doing", "blocked", "done"];
 const laneColors = {
@@ -244,28 +229,11 @@ const elements = {
   overviewPage: document.querySelector("#overview-page"),
   overviewHeading: document.querySelector("#overview-heading"),
   issuesPage: document.querySelector("#issues-page"),
-  insightsPage: document.querySelector("#insights-page"),
-  insightsHeading: document.querySelector("#insights-heading"),
-  insightsCaption: document.querySelector("#insights-caption"),
-  insightsBody: document.querySelector("#insights-body"),
-  insightsTimeline: document.querySelector("#insights-timeline"),
-  insightsMomentum: document.querySelector("#insights-momentum"),
-  insightsBurnup: document.querySelector("#insights-burnup"),
-  insightsPunchcard: document.querySelector("#insights-punchcard"),
-  insightsLeadTime: document.querySelector("#insights-lead-time"),
-  insightsIssues: document.querySelector("#insights-issues"),
-  insightsPlans: document.querySelector("#insights-plans"),
   timelineCaption: document.querySelector("#timeline-caption"),
-  momentumCaption: document.querySelector("#momentum-caption"),
-  punchcardCaption: document.querySelector("#punchcard-caption"),
-  leadTimeCaption: document.querySelector("#lead-time-caption"),
-  issueMixCaption: document.querySelector("#issue-mix-caption"),
-  planProgressCaption: document.querySelector("#plan-progress-caption"),
   issuesHeading: document.querySelector("#issues-heading"),
   navBoard: document.querySelector("#nav-board"),
   navOverview: document.querySelector("#nav-overview"),
   navIssues: document.querySelector("#nav-issues"),
-  navInsights: document.querySelector("#nav-insights"),
   stateScreen: document.querySelector("#workspace-state-screen"),
   stateCard: document.querySelector("#project-state-card"),
   welcomePanel: document.querySelector("#welcome-panel"),
@@ -621,6 +589,8 @@ const elements = {
   paletteResults: document.querySelector("#palette-results"),
   planRing: document.querySelector("#plan-ring"),
   heatmap: document.querySelector("#activity-heatmap"),
+  projectHistory: document.querySelector("#project-history"),
+  historyCaption: document.querySelector("#history-caption"),
   toast: document.querySelector("#toast"),
 };
 
@@ -1771,599 +1741,120 @@ function renderHeatmap(days) {
 }
 
 
-// ------------------------------------------------------------------ insights
+// ------------------------------------------------------- project history
 //
-// Charts are drawn by hand into SVG rather than handed to a charting library:
-// d3 supplies the scales and path generators, and everything visible here —
-// the gradient the ring already uses, the hairlines, the type — belongs to
-// this app rather than to a library's defaults.
+// The repository's whole life, read from git rather than from p-track's own
+// commit records: those begin only when the hook was installed, so a chart
+// built from them would draw a project that started the day tracking did.
 //
-// Motion is one entrance per figure and nothing that loops. A reader who has
-// asked for reduced motion gets the final state immediately.
+// The shape is drawn by hand. A charting library was tried here and removed:
+// at a hundred buckets across the card the curve smoothing it offered is not
+// visible, and it cost a dependency and its own visual idiom.
 
-const INSIGHTS_WEEKS = 16;
-let insights = null;
-let insightsRequested = false;
-// What was last drawn, so a snapshot event that changes nothing on this page
-// costs nothing on this page.
-let insightsSignature = "";
-// Entrances belong to the first reveal of the page, not to every data refresh.
-// The workspace emits `workspace:data-changed` whenever the project database
-// moves, and replaying seven staggered entrances on each one reads as an
-// animation that never stops.
-let insightsEntranceShown = false;
+let projectHistory = null;
+let projectHistoryRequested = false;
 
-function reducedMotion() {
-  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-}
+const HISTORY_BUCKETS = 100;
 
-/// Whether this render should animate at all: only the first drawing of the
-/// page, and never for a reader who has asked for reduced motion.
-function insightsMotion() {
-  return !insightsEntranceShown && !reducedMotion();
-}
-
-/// Draws a path in over its own length. Returns immediately under reduced
-/// motion, so the figure is complete rather than merely still.
-function drawIn(path, duration = 700, delay = 0) {
-  if (!insightsMotion() || typeof path.getTotalLength !== "function") return;
-  const length = path.getTotalLength();
-  if (!Number.isFinite(length) || length === 0) return;
-  path.animate(
-    [
-      { strokeDasharray: `${length}`, strokeDashoffset: `${length}` },
-      { strokeDasharray: `${length}`, strokeDashoffset: "0" },
-    ],
-    { duration, delay, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)", fill: "backwards" },
-  );
-}
-
-/// Grows a figure's marks from their baseline, staggered so the eye follows the
-/// series rather than seeing everything arrive at once.
-function growIn(nodes, { duration = 420, stagger = 18, origin = "bottom" } = {}) {
-  if (!insightsMotion()) return;
-  nodes.forEach((node, index) => {
-    node.animate(
-      [{ transform: "scaleY(0)" }, { transform: "scaleY(1)" }],
-      {
-        duration,
-        delay: index * stagger,
-        easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
-        fill: "backwards",
-      },
-    );
-    node.style.transformOrigin = origin;
-    node.style.transformBox = "fill-box";
+function historyPath(buckets, width, floor, peak, close) {
+  const step = buckets.length > 1 ? width / (buckets.length - 1) : 0;
+  const points = buckets.map((bucket, index) => {
+    const x = index * step;
+    const y = floor - (bucket.count / peak) * (floor - 8);
+    return `${x.toFixed(1)} ${y.toFixed(1)}`;
   });
+  const line = `M ${points.join(" L ")}`;
+  return close ? `${line} L ${width} ${floor} L 0 ${floor} Z` : line;
 }
 
-function fadeIn(nodes, { duration = 320, stagger = 12 } = {}) {
-  if (!insightsMotion()) return;
-  nodes.forEach((node, index) => {
-    node.animate([{ opacity: 0 }, { opacity: 1 }], {
-      duration,
-      delay: index * stagger,
-      easing: "ease-out",
-      fill: "backwards",
-    });
-  });
-}
-
-function insightFigure(host, viewBox, label) {
+function renderProjectHistory() {
+  const host = elements.projectHistory;
+  if (!host) return;
   host.replaceChildren();
-  const svg = svgElement("svg", {
-    viewBox,
-    class: "insight-svg",
-    role: "img",
-    "aria-label": label,
-    preserveAspectRatio: "none",
-  });
-  host.append(svg);
-  return svg;
-}
-
-function insightEmpty(host, message) {
-  host.replaceChildren(emptyMemory(message));
-}
-
-/// One reusable accent ramp per figure: the same teal-through-mint the progress
-/// ring uses, so every chart on the page reads as one family.
-function insightGradient(id, vertical = true) {
-  const defs = svgElement("defs");
-  const gradient = svgElement("linearGradient", {
-    id,
-    x1: "0",
-    y1: vertical ? "0" : "0",
-    x2: vertical ? "0" : "1",
-    y2: vertical ? "1" : "0",
-  });
-  gradient.append(
-    svgElement("stop", { offset: "0", class: "insight-stop-strong" }),
-    svgElement("stop", { offset: "1", class: "insight-stop-dim" }),
-  );
-  defs.append(gradient);
-  return defs;
-}
-
-function renderInsightsTimeline() {
-  const host = elements.insightsTimeline;
-  const timeline = insights?.timeline;
+  const timeline = projectHistory;
   if (!timeline?.available || timeline.commits.length === 0) {
-    elements.timelineCaption.textContent = "";
-    insightEmpty(host, "No repository history to draw. The timeline reads git, not p-track's own commit records.");
+    elements.historyCaption.textContent = "";
+    host.append(
+      emptyMemory("No repository history to draw. This reads git, not p-track's commit records."),
+    );
     return;
   }
 
   const width = 720;
-  const height = 150;
-  const floor = height - 26;
-  const buckets = timelineBuckets(timeline.commits, 96);
-  const markers = timelineMarkers(timeline);
-  const peak = d3max(buckets, (bucket) => bucket.count) || 1;
+  const height = 96;
+  const floor = height - 22;
+  const buckets = timelineBuckets(timeline.commits, HISTORY_BUCKETS);
+  const peak = buckets.reduce((top, bucket) => Math.max(top, bucket.count), 0) || 1;
 
-  const x = scaleLinear().domain([0, buckets.length - 1]).range([0, width]);
-  const y = scaleLinear().domain([0, peak]).range([floor, 8]);
+  const svg = svgElement("svg", {
+    viewBox: `0 0 ${width} ${height}`,
+    class: "history-svg",
+    role: "img",
+    preserveAspectRatio: "none",
+    "aria-label": `Commit history, ${timeline.commits.length} commits`,
+  });
 
-  const svg = insightFigure(
-    host,
-    `0 0 ${width} ${height}`,
-    `Commit history across the project, ${timeline.commits.length} commits`,
+  const defs = svgElement("defs");
+  const gradient = svgElement("linearGradient", {
+    id: "history-sweep",
+    x1: "0",
+    y1: "0",
+    x2: "0",
+    y2: "1",
+  });
+  gradient.append(
+    svgElement("stop", { offset: "0", class: "history-stop-strong" }),
+    svgElement("stop", { offset: "1", class: "history-stop-dim" }),
   );
-  svg.append(insightGradient("insight-timeline-fill"));
-
-  const shape = area()
-    .x((_, index) => x(index))
-    .y0(floor)
-    .y1((bucket) => y(bucket.count))
-    .curve(curveMonotoneX);
-  const stroke = line()
-    .x((_, index) => x(index))
-    .y((bucket) => y(bucket.count))
-    .curve(curveMonotoneX);
+  defs.append(gradient);
+  svg.append(defs);
 
   svg.append(
-    svgElement("path", { d: shape(buckets), class: "insight-area", fill: "url(#insight-timeline-fill)" }),
+    svgElement("path", {
+      d: historyPath(buckets, width, floor, peak, true),
+      class: "history-area",
+      fill: "url(#history-sweep)",
+    }),
+    svgElement("path", { d: historyPath(buckets, width, floor, peak, false), class: "history-line" }),
+    svgElement("line", { x1: 0, y1: floor, x2: width, y2: floor, class: "history-axis" }),
   );
-  const edge = svgElement("path", { d: stroke(buckets), class: "insight-line" });
-  svg.append(edge);
-  drawIn(edge, 900);
 
-  svg.append(
-    svgElement("line", { x1: 0, y1: floor, x2: width, y2: floor, class: "insight-axis" }),
-  );
-
-  // Releases are the landmarks a reader navigates by, so they are drawn on top
-  // of the shape rather than beneath it.
-  const marks = [];
-  markers.forEach((marker) => {
+  // Releases are the landmarks a reader navigates this by.
+  timelineMarkers(timeline).forEach((marker) => {
     const at = marker.position * width;
-    const rule = svgElement("line", { x1: at, y1: 6, x2: at, y2: floor, class: "insight-marker" });
-    const label = svgElement("text", { x: at, y: height - 10, class: "insight-marker-label" });
-    label.textContent = marker.name;
-    label.setAttribute("text-anchor", at > width - 40 ? "end" : at < 40 ? "start" : "middle");
+    const rule = svgElement("line", { x1: at, y1: 4, x2: at, y2: floor, class: "history-marker" });
     const tip = svgElement("title");
     tip.textContent = `${marker.name} · ${new Date(marker.at * 1000).toLocaleDateString()}`;
     rule.append(tip);
+    const label = svgElement("text", { x: at, y: height - 6, class: "history-marker-label" });
+    label.textContent = marker.name;
+    label.setAttribute("text-anchor", at > width - 40 ? "end" : at < 40 ? "start" : "middle");
     svg.append(rule, label);
-    marks.push(rule, label);
   });
-  fadeIn(marks, { duration: 420, stagger: 40 });
+
+  host.append(svg);
 
   const first = new Date(timeline.commits[0] * 1000);
   const last = new Date(timeline.commits[timeline.commits.length - 1] * 1000);
   const span = `${first.toLocaleDateString()} to ${last.toLocaleDateString()}`;
-  elements.timelineCaption.textContent = timeline.truncated
+  elements.historyCaption.textContent = timeline.truncated
     ? `${timeline.commits.length.toLocaleString()} most recent commits, ${span}`
     : `${timeline.commits.length.toLocaleString()} commits, ${span}`;
 }
 
-function renderInsightsMomentum() {
-  const host = elements.insightsMomentum;
-  const days = insights?.daily ?? [];
-  if (!hasActivity(days)) {
-    elements.momentumCaption.textContent = "";
-    insightEmpty(host, "No notes or commits in this window yet.");
-    return;
-  }
-
-  const width = 340;
-  const height = 120;
-  const floor = height - 18;
-  const totals = days.map(dayTotal);
-  const smooth = rollingMean(totals, 7);
-  const peak = d3max(totals) || 1;
-  const x = scaleLinear().domain([0, totals.length - 1]).range([0, width]);
-  const y = scaleLinear().domain([0, peak]).range([floor, 10]);
-
-  const svg = insightFigure(host, `0 0 ${width} ${height}`, "Daily activity with a seven-day average");
-  svg.append(insightGradient("insight-momentum-fill"));
-
-  const band = area()
-    .x((_, index) => x(index))
-    .y0(floor)
-    .y1((value) => y(value))
-    .curve(curveMonotoneX);
-  svg.append(
-    svgElement("path", { d: band(smooth), class: "insight-area", fill: "url(#insight-momentum-fill)" }),
-  );
-
-  // The raw days sit behind the average as hairlines: the shape is the story,
-  // the spikes are the evidence for it.
-  const ticks = totals.map((value, index) =>
-    svgElement("line", {
-      x1: x(index),
-      y1: floor,
-      x2: x(index),
-      y2: y(value),
-      class: "insight-tick",
-    }),
-  );
-  ticks.forEach((tick) => svg.append(tick));
-  growIn(ticks, { duration: 380, stagger: 4 });
-
-  const trend = line()
-    .x((_, index) => x(index))
-    .y((value) => y(value))
-    .curve(curveMonotoneX);
-  const path = svgElement("path", { d: trend(smooth), class: "insight-line" });
-  svg.append(path);
-  drawIn(path, 800);
-
-  const trailing = momentum(days);
-  elements.momentumCaption.textContent =
-    `${trailing.current.toLocaleString()} in the last 7 days, ${momentumLabel(trailing)}`;
-}
-
-function renderInsightsBurnup() {
-  const host = elements.insightsBurnup;
-  const weeks = insights?.cumulative ?? [];
-  if (weeks.length === 0) {
-    insightEmpty(host, "No tasks recorded yet.");
-    return;
-  }
-
-  const width = 720;
-  const height = 190;
-  const floor = height - 24;
-  const peak = d3max(weeks, (week) => week.created) || 1;
-  const x = scaleLinear().domain([0, Math.max(1, weeks.length - 1)]).range([40, width - 8]);
-  const y = scaleLinear().domain([0, peak]).range([floor, 12]);
-
-  const svg = insightFigure(
-    host,
-    `0 0 ${width} ${height}`,
-    "Tasks created and tasks reaching done, cumulative by week",
-  );
-  svg.append(insightGradient("insight-burnup-fill"));
-
-  // Gridlines carry the reading, so they are drawn first and stay quiet.
-  y.ticks(4).forEach((tick) => {
-    const at = y(tick);
-    svg.append(svgElement("line", { x1: 40, y1: at, x2: width - 8, y2: at, class: "insight-grid" }));
-    const label = svgElement("text", { x: 34, y: at + 3, class: "insight-axis-label" });
-    label.setAttribute("text-anchor", "end");
-    label.textContent = tick;
-    svg.append(label);
-  });
-
-  const done = area()
-    .x((_, index) => x(index))
-    .y0(floor)
-    .y1((week) => y(week.completedByUpdate))
-    .curve(curveMonotoneX);
-  svg.append(
-    svgElement("path", { d: done(weeks), class: "insight-area", fill: "url(#insight-burnup-fill)" }),
-  );
-
-  const createdLine = line()
-    .x((_, index) => x(index))
-    .y((week) => y(week.created))
-    .curve(curveMonotoneX);
-  const doneLine = line()
-    .x((_, index) => x(index))
-    .y((week) => y(week.completedByUpdate))
-    .curve(curveMonotoneX);
-
-  const scope = svgElement("path", { d: createdLine(weeks), class: "insight-line insight-line-muted" });
-  const progress = svgElement("path", { d: doneLine(weeks), class: "insight-line" });
-  svg.append(scope, progress);
-  drawIn(scope, 900);
-  drawIn(progress, 900, 120);
-
-  const latest = weeks[weeks.length - 1];
-  const legend = [
-    ["insight-key-line", `${latest.created.toLocaleString()} created`],
-    ["insight-key-area", `${latest.completedByUpdate.toLocaleString()} done`],
-  ];
-  legend.forEach(([kind, text], index) => {
-    const label = svgElement("text", { x: 44, y: 18 + index * 14, class: `insight-key ${kind}` });
-    label.textContent = text;
-    svg.append(label);
-  });
-}
-
-function renderInsightsPunchcard() {
-  const host = elements.insightsPunchcard;
-  const { grid, max } = punchcardGrid(insights?.punchcard ?? []);
-  if (max === 0) {
-    elements.punchcardCaption.textContent = "";
-    insightEmpty(host, "No activity to place yet.");
-    return;
-  }
-
-  const cell = 20;
-  const gap = 3;
-  const left = 34;
-  const top = 16;
-  const width = left + 24 * (cell + gap);
-  const height = top + 7 * (cell + gap) + 6;
-  const svg = insightFigure(host, `0 0 ${width} ${height}`, "Notes and commits by weekday and hour");
-  const radius = scaleLinear().domain([0, max]).range([2, cell / 2]);
-
-  ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].forEach((name, row) => {
-    const label = svgElement("text", { x: 0, y: top + row * (cell + gap) + cell * 0.7, class: "insight-axis-label" });
-    label.textContent = name;
-    svg.append(label);
-  });
-  [0, 6, 12, 18, 23].forEach((hour) => {
-    const label = svgElement("text", {
-      x: left + hour * (cell + gap) + cell / 2,
-      y: 10,
-      class: "insight-axis-label",
-    });
-    label.setAttribute("text-anchor", "middle");
-    label.textContent = `${hour}`;
-    svg.append(label);
-  });
-
-  // Area, not colour, carries the count: a disc twice as wide is unmistakably
-  // busier, where two shades of the same accent are not.
-  const discs = [];
-  grid.forEach((row, weekday) => {
-    row.forEach((count, hour) => {
-      if (count === 0) return;
-      const disc = svgElement("circle", {
-        cx: left + hour * (cell + gap) + cell / 2,
-        cy: top + weekday * (cell + gap) + cell / 2,
-        r: radius(count),
-        class: "insight-punch",
-      });
-      const tip = svgElement("title");
-      tip.textContent = `${count} ${count === 1 ? "item" : "items"} · ${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][weekday]} ${hour}:00`;
-      disc.append(tip);
-      svg.append(disc);
-      discs.push(disc);
-    });
-  });
-  fadeIn(discs, { duration: 300, stagger: 4 });
-
-  const busiest = grid.flatMap((row, weekday) =>
-    row.map((count, hour) => ({ count, weekday, hour })),
-  ).reduce((best, cell2) => (cell2.count > best.count ? cell2 : best), { count: 0, weekday: 0, hour: 0 });
-  elements.punchcardCaption.textContent =
-    `Busiest around ${["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"][busiest.weekday]} at ${busiest.hour}:00`;
-}
-
-function renderInsightsLeadTime() {
-  const host = elements.insightsLeadTime;
-  const lead = insights?.leadTime;
-  if (!lead || lead.counted === 0) {
-    elements.leadTimeCaption.textContent = "";
-    insightEmpty(host, "No completed tasks to measure yet.");
-    return;
-  }
-
-  const width = 340;
-  const height = 170;
-  const floor = height - 30;
-  const buckets = lead.buckets;
-  const peak = d3max(buckets, (bucket) => bucket.count) || 1;
-  const x = scaleBand().domain(buckets.map((bucket) => bucket.label)).range([8, width - 8]).padding(0.28);
-  const y = scaleLinear().domain([0, peak]).range([floor, 12]);
-
-  const svg = insightFigure(host, `0 0 ${width} ${height}`, "How long completed tasks took");
-  svg.append(insightGradient("insight-lead-fill"));
-
-  const bars = buckets.map((bucket) => {
-    const bar = svgElement("rect", {
-      x: x(bucket.label),
-      y: y(bucket.count),
-      width: x.bandwidth(),
-      height: Math.max(0, floor - y(bucket.count)),
-      rx: 3,
-      class: "insight-bar",
-      fill: "url(#insight-lead-fill)",
-    });
-    const tip = svgElement("title");
-    tip.textContent = `${bucket.count} ${bucket.count === 1 ? "task" : "tasks"} ${bucket.label}`;
-    bar.append(tip);
-    svg.append(bar);
-
-    const label = svgElement("text", {
-      x: x(bucket.label) + x.bandwidth() / 2,
-      y: height - 16,
-      class: "insight-axis-label",
-    });
-    label.setAttribute("text-anchor", "middle");
-    label.textContent = bucket.label.replace(" days", "d").replace("under a day", "<1d").replace("over ", ">");
-    svg.append(label);
-    return bar;
-  });
-  growIn(bars, { stagger: 40 });
-
-  svg.append(svgElement("line", { x1: 8, y1: floor, x2: width - 8, y2: floor, class: "insight-axis" }));
-
-  const median = lead.medianDays;
-  elements.leadTimeCaption.textContent =
-    median === null
-      ? `${lead.counted} measured`
-      : `${lead.counted} measured, median ${median} ${median === 1 ? "day" : "days"}`;
-}
-
-function renderInsightsIssues() {
-  const host = elements.insightsIssues;
-  const rows = severityRows(insights?.issues?.bySeverity ?? []);
-  const total = rows.reduce((sum, row) => sum + row.open + row.closed, 0);
-  if (total === 0) {
-    elements.issueMixCaption.textContent = "";
-    insightEmpty(host, "No issues have been reported. The path is clear.");
-    return;
-  }
-
-  const width = 340;
-  const height = 170;
-  const rowHeight = 28;
-  const left = 62;
-  const svg = insightFigure(host, `0 0 ${width} ${height}`, "Issues by severity, open against closed");
-  const peak = d3max(rows, (row) => row.open + row.closed) || 1;
-  const x = scaleLinear().domain([0, peak]).range([0, width - left - 12]);
-
-  const bars = [];
-  rows.forEach((row, index) => {
-    const y = 14 + index * rowHeight;
-    const label = svgElement("text", { x: left - 8, y: y + 11, class: "insight-axis-label" });
-    label.setAttribute("text-anchor", "end");
-    label.textContent = row.severity;
-    svg.append(label);
-
-    // Open first and in the severity's own colour; closed trails behind it in a
-    // neutral tone, so the eye lands on what still needs attention.
-    const open = svgElement("rect", {
-      x: left,
-      y,
-      width: Math.max(row.open === 0 ? 0 : 2, x(row.open)),
-      height: 14,
-      rx: 3,
-      class: `insight-issue-open severity-${row.severity}`,
-    });
-    const closed = svgElement("rect", {
-      x: left + x(row.open),
-      y,
-      width: Math.max(row.closed === 0 ? 0 : 2, x(row.closed)),
-      height: 14,
-      rx: 3,
-      class: "insight-issue-closed",
-    });
-    const tip = svgElement("title");
-    tip.textContent = `${row.severity}: ${row.open} open, ${row.closed} closed`;
-    open.append(tip);
-    svg.append(open, closed);
-    bars.push(open, closed);
-  });
-  fadeIn(bars, { duration: 340, stagger: 30 });
-
-  const openTotal = rows.reduce((sum, row) => sum + row.open, 0);
-  const ages = insights?.issues?.openAges ?? [];
-  const oldest = ages[0];
-  elements.issueMixCaption.textContent = oldest
-    ? `${openTotal} open, oldest ${oldest.days} ${oldest.days === 1 ? "day" : "days"}`
-    : `${openTotal} open`;
-}
-
-function renderInsightsPlans() {
-  const host = elements.insightsPlans;
-  const bars = planBars(insights?.plans ?? []);
-  if (bars.length === 0) {
-    elements.planProgressCaption.textContent = "";
-    insightEmpty(host, "No plans carry tasks yet.");
-    return;
-  }
-
-  const shown = bars.slice(0, 14);
-  const rowHeight = 22;
-  const width = 720;
-  const left = 190;
-  const height = shown.length * rowHeight + 10;
-  const svg = insightFigure(host, `0 0 ${width} ${height}`, "Task completion per plan");
-  svg.append(insightGradient("insight-plan-fill", false));
-  const x = scaleLinear().domain([0, 1]).range([0, width - left - 56]);
-
-  const fills = [];
-  shown.forEach((plan, index) => {
-    const y = index * rowHeight + 6;
-    const label = svgElement("text", { x: left - 10, y: y + 10, class: "insight-plan-label" });
-    label.setAttribute("text-anchor", "end");
-    label.textContent = plan.title.length > 30 ? `${plan.title.slice(0, 29)}…` : plan.title;
-    svg.append(label);
-
-    svg.append(
-      svgElement("rect", { x: left, y, width: x(1), height: 12, rx: 6, class: "insight-plan-track" }),
-    );
-    const fill = svgElement("rect", {
-      x: left,
-      y,
-      width: Math.max(2, x(plan.ratio)),
-      height: 12,
-      rx: 6,
-      class: "insight-plan-fill",
-      fill: "url(#insight-plan-fill)",
-    });
-    const tip = svgElement("title");
-    tip.textContent = `${plan.title}: ${plan.done} of ${plan.total} done${plan.blocked ? `, ${plan.blocked} blocked` : ""}`;
-    fill.append(tip);
-    svg.append(fill);
-    fills.push(fill);
-
-    const count = svgElement("text", { x: width - 48, y: y + 10, class: "insight-axis-label" });
-    count.textContent = `${plan.done}/${plan.total}`;
-    svg.append(count);
-  });
-
-  if (insightsMotion()) {
-    fills.forEach((fill, index) => {
-      const target = fill.getAttribute("width");
-      fill.animate([{ width: "2" }, { width: target }], {
-        duration: 520,
-        delay: index * 35,
-        easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
-        fill: "backwards",
-      });
-    });
-  }
-
-  const hidden = bars.length - shown.length;
-  elements.planProgressCaption.textContent = hidden > 0
-    ? `${bars.length} plans with tasks, ${shown.length} shown`
-    : `${bars.length} ${bars.length === 1 ? "plan" : "plans"} with tasks`;
-}
-
-function renderInsights() {
-  if (!insights) return;
-  const totals = insights.totals ?? {};
-  elements.insightsCaption.textContent =
-    `${(totals.tasks ?? 0).toLocaleString()} tasks · ${(totals.notes ?? 0).toLocaleString()} notes · ${(totals.commits ?? 0).toLocaleString()} tracked commits · ${windowLabel(insights.weeks)}`;
-  renderInsightsTimeline();
-  renderInsightsMomentum();
-  renderInsightsBurnup();
-  renderInsightsPunchcard();
-  renderInsightsLeadTime();
-  renderInsightsIssues();
-  renderInsightsPlans();
-  insightsEntranceShown = true;
-}
-
-// Fetched lazily on first visit, and again after a snapshot lands while the
-// page is showing. The backend reuses its last answer while nothing it depends
-// on has moved, so a repeat visit costs a message rather than a git walk.
-async function loadInsights(force = false) {
+// Read once per project and re-read only when a snapshot lands, since the
+// backend reuses its answer until HEAD moves.
+async function loadProjectHistory(force = false) {
   if (workspaceController.state.status !== "open") return;
-  if (insightsRequested && !force) return;
-  insightsRequested = true;
+  if (projectHistoryRequested && !force) return;
+  projectHistoryRequested = true;
   try {
-    const next = await api().GetInsightsV1(INSIGHTS_WEEKS);
-    const signature = JSON.stringify(next);
-    // The backend reuses its answer while nothing it depends on has moved, so
-    // an unchanged payload means there is nothing to redraw.
-    if (signature === insightsSignature && insightsEntranceShown) return;
-    insights = next;
-    insightsSignature = signature;
-    renderInsights();
-  } catch (error) {
-    insightsRequested = false;
-    insights = null;
-    insightsSignature = "";
-    elements.insightsCaption.textContent = "";
-    insightEmpty(elements.insightsTimeline, "Insights could not be read for this project.");
+    projectHistory = await api().GetProjectTimelineV1();
+    withOverviewScrollPreserved(renderProjectHistory);
+  } catch {
+    projectHistoryRequested = false;
+    projectHistory = null;
+    withOverviewScrollPreserved(renderProjectHistory);
   }
 }
 
@@ -3698,7 +3189,7 @@ async function loadSnapshot(
     openPendingTaskDetail();
     if (view === "issues") void loadIssues(true);
     if (view === "overview" && heatmapRequested) void loadHeatmap(true);
-    if (view === "insights" && insightsRequested) void loadInsights(true);
+    if (view === "overview" && projectHistoryRequested) void loadProjectHistory(true);
     // Every snapshot re-reads the stack: opening a project lands one, and the
     // backend scans only when HEAD moved since the stored profile.
     void loadStackProfile(!stackProfileRequested);
@@ -7038,7 +6529,6 @@ function renderFirstPlanOnboarding(focus = false) {
   elements.workspace.hidden = true;
   elements.overviewPage.hidden = true;
   elements.issuesPage.hidden = true;
-  elements.insightsPage.hidden = true;
   elements.welcomePanel.hidden = true;
   elements.welcomePanel.inert = true;
   elements.setupPanel.hidden = true;
@@ -7046,7 +6536,6 @@ function renderFirstPlanOnboarding(focus = false) {
   elements.navBoard.disabled = true;
   elements.navOverview.disabled = true;
   elements.navIssues.disabled = true;
-  elements.navInsights.disabled = true;
   elements.switchProject.disabled = true;
   elements.closeProject.disabled = true;
 
@@ -7158,12 +6647,9 @@ async function finishFirstPlanOnboarding(planId = firstPlanState.planId) {
   elements.overviewPage.removeAttribute("aria-busy");
   elements.issuesPage.inert = false;
   elements.issuesPage.removeAttribute("aria-busy");
-  elements.insightsPage.inert = false;
-  elements.insightsPage.removeAttribute("aria-busy");
   elements.navBoard.disabled = false;
   elements.navOverview.disabled = false;
   elements.navIssues.disabled = false;
-  elements.navInsights.disabled = false;
   elements.switchProject.disabled = false;
   elements.closeProject.disabled = false;
   view = "board";
@@ -7392,36 +6878,29 @@ function applyView() {
   elements.workspace.hidden = !open || view !== "board";
   elements.overviewPage.hidden = !open || view !== "overview";
   elements.issuesPage.hidden = !open || view !== "issues";
-  elements.insightsPage.hidden = !open || view !== "insights";
   elements.navBoard.classList.toggle("active", view === "board");
   elements.navOverview.classList.toggle("active", view === "overview");
   elements.navIssues.classList.toggle("active", view === "issues");
-  elements.navInsights.classList.toggle("active", view === "insights");
   if (view === "board") elements.navBoard.setAttribute("aria-current", "page");
   else elements.navBoard.removeAttribute("aria-current");
   if (view === "overview") elements.navOverview.setAttribute("aria-current", "page");
   else elements.navOverview.removeAttribute("aria-current");
   if (view === "issues") elements.navIssues.setAttribute("aria-current", "page");
   else elements.navIssues.removeAttribute("aria-current");
-  if (view === "insights") elements.navInsights.setAttribute("aria-current", "page");
-  else elements.navInsights.removeAttribute("aria-current");
   terminalHandle?.setVisible(open && view === "board");
 }
 
 function setView(nextView, focusHeading = false) {
   if (firstPlanState.phase !== "idle") return;
-  view = ["overview", "issues", "insights"].includes(nextView) ? nextView : "board";
+  view = ["overview", "issues"].includes(nextView) ? nextView : "board";
   applyView();
   if (view === "overview") {
     requestAnimationFrame(fitRecentMemory);
     void loadHeatmap();
     void loadStackProfile();
+    void loadProjectHistory();
   }
   if (view === "issues") void loadIssues();
-  if (view === "insights") {
-    insightsEntranceShown = false;
-    void loadInsights();
-  }
   recordProjectLayout();
   if (focusHeading) {
     const focusedView = view;
@@ -7431,7 +6910,6 @@ function setView(nextView, focusHeading = false) {
         board: elements.planTitle,
         overview: elements.overviewHeading,
         issues: elements.issuesHeading,
-        insights: elements.insightsHeading,
       }[focusedView];
       heading?.focus();
     });
@@ -7464,7 +6942,6 @@ function renderWorkspaceState(state, focus = false) {
   elements.navBoard.disabled = !open;
   elements.navOverview.disabled = !open;
   elements.navIssues.disabled = !open;
-  elements.navInsights.disabled = !open;
   elements.planAdd.disabled = !open;
   elements.planFilterToggle.disabled = !open;
   elements.switchProject.hidden = !open;
@@ -7525,10 +7002,8 @@ function renderWorkspaceState(state, focus = false) {
   closeIssueDetail(false);
   closePalette();
   heatmapRequested = false;
-  insightsRequested = false;
-  insights = null;
-  insightsSignature = "";
-  insightsEntranceShown = false;
+  projectHistoryRequested = false;
+  projectHistory = null;
   stackProfileRequested = false;
   stackProfile = null;
   board = null;
@@ -8720,9 +8195,6 @@ function registerNativeProjectActions() {
       showIssues: () => {
         showNativeView("showIssues");
       },
-      showInsights: () => {
-        showNativeView("showInsights");
-      },
       toggleTerminalPanel: () => {
         if (nativeCommandAllowed("toggleTerminalPanel")) {
           document.querySelector("#terminal-panel-toggle")?.click();
@@ -8773,7 +8245,6 @@ elements.navBoard.addEventListener("click", () => setView("board"));
 elements.stackRescan?.addEventListener("click", () => void loadStackProfile(true));
 elements.navOverview.addEventListener("click", () => setView("overview"));
 elements.navIssues.addEventListener("click", () => setView("issues"));
-elements.navInsights.addEventListener("click", () => setView("insights"));
 elements.issuesFilter.addEventListener("change", () => { issuesOffset = 0; void loadIssues(); });
 elements.issuesPrevious.addEventListener("click", () => { issuesOffset = Math.max(0, issuesOffset - 50); void loadIssues(); });
 elements.issuesNext.addEventListener("click", () => { issuesOffset += 50; void loadIssues(); });

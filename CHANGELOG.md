@@ -9,22 +9,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.38.0] - 2026-09-08
 
 ### Added
-- **Insights**, a fourth workspace view beside Overview, Board and Issues. It
-  reports how a project has moved rather than where it stands: repository
-  history drawn from git with tags marked as releases, activity momentum
-  against the previous week, tasks created against tasks completed, a
-  weekday-by-hour view of when work actually happens, how long completed tasks
-  took, issues by severity with the age of the oldest open one, and task
-  completion per plan. `Cmd+4` and the View menu select it.
-- Completion figures on Insights are dated by last update, not by a status
-  history, and say so: p-track records creation and last change per record, so
-  editing a finished task moves its point. Creation counts, issue ages and the
-  repository history are exact. The distinction is carried in the payload's own
-  field names, in the interface, and in the Help Center.
-- The Insights payload is computed on demand and reused until the project
-  record or the repository HEAD changes, so returning to the page costs a
-  message rather than a walk over the repository. Nothing is persisted, so the
-  storage format is unchanged.
+- **Project history** on the Overview: every commit git can report across the
+  life of the repository, drawn as one shape with tags marked as releases. This
+  is a longer record than the commits p-track stores, which begin only when
+  `ptrack hook install` was run — a repository with hundreds of commits may
+  have a handful of tracked ones, so a chart built from the store would have
+  drawn a project that began the day tracking did. The read asks git for
+  timestamps and tag names only, is bounded by the same byte budget as the rest
+  of the repository capture, and is reused until HEAD moves.
 - A bound on the rolling project summary. `MAX_SUMMARY_BYTES` is 1000 and is
   checked when a summary is written; summaries already on disk keep loading
   however long they are, the same rule the payload schema follows. The refusal
@@ -89,6 +81,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   after this release no longer costs a schema bump or breaks an older build.
 
 ### Fixed
+- Expanding the rolling summary survives a re-render. The card rebuilt its
+  state from scratch on every snapshot, so the reader's own action was the one
+  thing a refresh was guaranteed to discard. Text that has actually changed
+  still folds; the same text keeps the state it was left in.
 - Re-rendering the Overview no longer throws the reader back to the top. The
   page is its own scroll container and a render empties several tall lists
   before refilling them; a layout read while they were empty clamped the scroll
