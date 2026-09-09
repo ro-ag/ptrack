@@ -2946,47 +2946,6 @@ fn desktop_initializes_a_second_project_after_the_first_one_is_open() {
 }
 
 #[test]
-fn desktop_initialization_waits_for_a_command_line_initialization() {
-    let temp = Temp::new();
-    let home = temp.0.join("home");
-    let project = temp.0.join("project");
-    fs::create_dir(&home).unwrap();
-    fs::create_dir(&project).unwrap();
-    private_directory(&home);
-    let desktop = production_desktop_runtime(home.clone(), "test", &temp.0, None, 0).unwrap();
-    let validation = desktop
-        .invoke(desktop_request(
-            "ValidateProjectTargetV1",
-            vec![serde_json::json!(project)],
-        ))
-        .unwrap();
-
-    // A `ptrack init` mid-publication owns the bootstrap lock.
-    let publication = acquire_bootstrap_lock(&home.canonicalize().unwrap()).unwrap();
-    let request = desktop_request(
-        "InitializeProjectV1",
-        vec![serde_json::json!({
-            "operationId": validation["operationId"],
-            "root": validation["canonicalRoot"],
-            "goal": "Ship the serialized initialization",
-            "guideChoice": "skip",
-            "guidePreviewToken": ""
-        })],
-    );
-    let error = desktop.invoke(request.clone()).unwrap_err().to_string();
-    assert_eq!(
-        error,
-        "another p-track initialization is in progress; retry once it finishes"
-    );
-    assert!(!project.join(".ptrack/ptrack.redb").exists());
-
-    drop(publication);
-    let initialized = desktop.invoke(request).unwrap();
-    assert_eq!(initialized["initialization"]["outcome"], "complete");
-    assert!(project.join(".ptrack/ptrack.redb").is_file());
-}
-
-#[test]
 fn desktop_initialization_status_transitions_never_regress_or_cross_operations() {
     use crate::production::validate_desktop_initialization_transition;
 

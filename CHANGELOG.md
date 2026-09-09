@@ -17,6 +17,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   guide binding, and the durable guide rule applies across two operations only
   while the earlier one is still unfinished — a racing authority still has to
   reconcile the winner's manifest.
+- Two initializations racing from different processes no longer both fail. The
+  desktop path took the initializers' bootstrap lock before its cutover lease,
+  so a refused initialization could reload its authority — reclaiming the
+  shared runtime lease — before the other one reached the exclusive lease it
+  needs. The lease modes already serialize the two publications, so the
+  desktop path takes only the cutover lease again.
 
 ## [0.38.1] - 2026-09-09
 
