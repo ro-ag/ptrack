@@ -1932,16 +1932,13 @@ impl ProductionDesktopAuthority {
         }
         ensure_private_home(&self.global_home)?;
         let home = fs::canonicalize(&self.global_home)?;
-        // Taken before the cutover lease, in the same order the CLI takes them,
-        // so a command-line initialization appending to the live generation and
-        // this one can never publish over each other.
-        let _publication = match acquire_bootstrap_lock(&home) {
-            Ok(lease) => lease,
-            Err(error) if error.to_string().contains("lock is unavailable") => {
-                return Err(AppError::Message(INITIALIZATION_IN_PROGRESS.to_owned()));
-            }
-            Err(error) => return Err(recovery(error)),
-        };
+        // The lease modes already serialize this against a command-line
+        // initialization: that one appends under the shared lease and
+        // re-checks the marker before it publishes, and this exclusive lease
+        // cannot coexist with it. Taking the initializers' bootstrap lock here
+        // as well only let a refused initialization reload its authority —
+        // reclaiming the shared lease — before this one reached the lease it
+        // needs, so both raced to failure.
         let lease = acquire_cutover_lock(&home, CutoverLockMode::Exclusive).map_err(recovery)?;
         if let Some(journal) = read_desktop_initialization(&home)? {
             if journal.status.outcome != InitializationOutcomeV1::Complete
@@ -4802,8 +4799,7 @@ fn initialization_error_kind(error: &AppError) -> &'static str {
         AppError::Message(message)
             if message.contains("cutover")
                 || message.contains("lock")
-                || message.contains("busy")
-                || message == INITIALIZATION_IN_PROGRESS =>
+                || message.contains("busy") =>
         {
             "runtime-busy"
         }
