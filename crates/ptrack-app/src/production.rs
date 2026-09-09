@@ -376,6 +376,13 @@ impl RoutedApplication {
         if !path_is_present(&plan_path)? && self.adopt_listed_project(&home, &root)? {
             return Ok(false);
         }
+        // Startup self-heal runs first, while the bootstrap lock this
+        // initialization is about to take is still free: a marker listing some
+        // other project whose folder was deleted would otherwise fail
+        // validation below, and the prune that fixes it could not run from
+        // inside this publication. A marker that stays unhealthy still fails
+        // closed, with its own message, a few lines down.
+        let _ = self.active_runtime();
         let publication = match acquire_bootstrap_lock(&home) {
             Ok(lease) => lease,
             Err(error) if error.to_string().contains("lock is unavailable") => {

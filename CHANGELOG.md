@@ -13,6 +13,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   publishes under the shared runtime lease instead of demanding the exclusive
   one. Until now, deleting a project directory made every command fail with
   `runtime recovery is required` until the last app or session was closed.
+  `ptrack init` heals the marker the same way when it is the first command
+  after a deletion, instead of refusing to register anything.
 - `ptrack init` no longer fails while p-track is open. Registering a project
   appends it to the live generation — same generation number, same global
   database, same bindings for every project already listed — so it now
