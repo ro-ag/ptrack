@@ -6,7 +6,8 @@ use crate::{
     ActiveBinding, ActiveGeneration, ActiveGenerationProject, CutoverLockMode, GlobalStore,
     ProjectStore, StoreKind, acquire_bootstrap_lock, acquire_cutover_lock,
     append_active_generation, install_active_generation, load_active_generation,
-    protect_private_directory, protect_private_file, validate_active_generation,
+    protect_private_directory, protect_private_file, retire_active_generation,
+    validate_active_generation,
 };
 
 static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -316,6 +317,98 @@ fn appending_refuses_a_marker_that_moved_since_the_plan_was_built() {
         .unwrap_err()
         .to_string()
         .contains("marker changed")
+    );
+}
+
+#[test]
+fn retiring_a_vanished_project_publishes_beside_live_shared_leases() {
+    let temp = Temp::new();
+    let world = append_world(&temp);
+    let exclusive = acquire_cutover_lock(&temp.0, CutoverLockMode::Exclusive).unwrap();
+    install_active_generation(&temp.0, &exclusive, &world.appended, "test").unwrap();
+    drop(exclusive);
+    let retired = world
+        .appended
+        .projects
+        .iter()
+        .find(|project| project.database_id == "project-2")
+        .unwrap()
+        .clone();
+    fs::remove_dir_all(&retired.root).unwrap();
+    let live = acquire_cutover_lock(&temp.0, CutoverLockMode::Shared).unwrap();
+
+    let publication = acquire_bootstrap_lock(&temp.0).unwrap();
+    let lease = acquire_cutover_lock(&temp.0, CutoverLockMode::Shared).unwrap();
+    retire_active_generation(
+        &temp.0,
+        &lease,
+        &publication,
+        &world.appended,
+        &world.previous,
+        "test",
+    )
+    .unwrap();
+
+    assert_eq!(
+        load_active_generation(&temp.0, &lease).unwrap().unwrap(),
+        world.previous
+    );
+    drop(live);
+}
+
+#[test]
+fn retiring_refuses_a_live_root_an_addition_or_a_moved_marker() {
+    let temp = Temp::new();
+    let world = append_world(&temp);
+    let exclusive = acquire_cutover_lock(&temp.0, CutoverLockMode::Exclusive).unwrap();
+    install_active_generation(&temp.0, &exclusive, &world.appended, "test").unwrap();
+    drop(exclusive);
+    let publication = acquire_bootstrap_lock(&temp.0).unwrap();
+    let lease = acquire_cutover_lock(&temp.0, CutoverLockMode::Shared).unwrap();
+
+    // Every retired root still exists, so there is no evidence to act on.
+    assert!(
+        retire_active_generation(
+            &temp.0,
+            &lease,
+            &publication,
+            &world.appended,
+            &world.previous,
+            "test",
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("root still exists")
+    );
+
+    assert!(
+        retire_active_generation(
+            &temp.0,
+            &lease,
+            &publication,
+            &world.previous,
+            &world.appended,
+            "test",
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("retires no project")
+    );
+
+    let mut stale = world.appended.clone();
+    stale.generation = "8".to_owned();
+    assert!(
+        retire_active_generation(
+            &temp.0,
+            &lease,
+            &publication,
+            &stale,
+            &world.previous,
+            "test"
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("changes the live generation")
     );
 }
 

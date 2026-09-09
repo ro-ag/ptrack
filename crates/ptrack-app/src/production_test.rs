@@ -3584,6 +3584,50 @@ fn load_self_heals_marker_projects_with_missing_roots() {
 }
 
 #[test]
+fn load_self_heals_a_missing_root_beside_a_live_runtime() {
+    let temp = Temp::new();
+    let home = temp.0.join("home");
+    let kept = temp.0.join("kept");
+    let doomed = temp.0.join("doomed");
+    fs::create_dir(&home).unwrap();
+    fs::create_dir(&kept).unwrap();
+    fs::create_dir(&doomed).unwrap();
+    private_directory(&home);
+
+    let mut running = RoutedApplication::new(home.clone(), kept.clone(), "test");
+    running
+        .initialize(InitRequest {
+            root: Some(kept.clone()),
+            goal: String::new(),
+            force: false,
+            no_guide: true,
+        })
+        .unwrap();
+    let mut application = RoutedApplication::new(home.clone(), doomed.clone(), "test");
+    application
+        .initialize(InitRequest {
+            root: Some(doomed.clone()),
+            goal: String::new(),
+            force: false,
+            no_guide: true,
+        })
+        .unwrap();
+    drop(application);
+
+    // The deleted folder used to lock every command out until the last live
+    // process — here `running`, holding the shared lease — was closed.
+    fs::remove_dir_all(&doomed).unwrap();
+
+    let runtime = ActiveRuntime::load(&home, "test").unwrap().unwrap();
+    assert_eq!(runtime.marker().projects.len(), 1);
+    assert_eq!(runtime.marker().projects[0].root, kept.to_string_lossy());
+    assert_eq!(
+        running.bindings().unwrap().project.unwrap().root,
+        kept.canonicalize().unwrap()
+    );
+}
+
+#[test]
 fn load_still_fails_closed_for_a_noncanonical_marker() {
     let temp = Temp::new();
     let home = temp.0.join("home");

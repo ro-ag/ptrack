@@ -7,6 +7,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- A deleted project folder no longer locks the runtime out while p-track is
+  open. Startup self-heal retires marker projects whose roots are gone, and
+  that retirement rebinds nothing a live process routed to, so it now
+  publishes under the shared runtime lease instead of demanding the exclusive
+  one. Until now, deleting a project directory made every command fail with
+  `runtime recovery is required` until the last app or session was closed.
 - `ptrack init` no longer fails while p-track is open. Registering a project
   appends it to the live generation — same generation number, same global
   database, same bindings for every project already listed — so it now

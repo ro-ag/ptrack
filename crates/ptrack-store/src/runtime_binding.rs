@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -229,15 +229,7 @@ pub fn append_active_generation(
     marker: &ActiveGeneration,
     writer_version: &str,
 ) -> StoreResult<()> {
-    require_matching_lease(global_home, lease)?;
-    if lease.mode() != CutoverLockMode::Shared {
-        return marker_error("active-generation append requires the shared cutover lease");
-    }
-    if publication.path() != global_home.join("runtime/bootstrap.lock")
-        || publication.mode() != CutoverLockMode::Exclusive
-    {
-        return marker_error("active-generation append requires the bootstrap publication lease");
-    }
+    require_publication_leases(global_home, lease, publication)?;
     require_appended_projects(previous, marker)?;
     if load_active_generation(global_home, lease)?.as_ref() != Some(previous) {
         return marker_error("active-generation marker changed before the append");
@@ -246,7 +238,32 @@ pub fn append_active_generation(
     publish_marker(global_home, marker)
 }
 
-fn require_appended_projects(
+/// Both publications that run beside live readers need the shared cutover
+/// lease — which still fences an activation or rollback for their duration —
+/// and the exclusive bootstrap lease that serializes them against each other.
+fn require_publication_leases(
+    global_home: &Path,
+    lease: &CutoverLease,
+    publication: &CutoverLease,
+) -> StoreResult<()> {
+    require_matching_lease(global_home, lease)?;
+    if lease.mode() != CutoverLockMode::Shared {
+        return marker_error(
+            "this active-generation publication requires the shared cutover lease",
+        );
+    }
+    if publication.path() != global_home.join("runtime/bootstrap.lock")
+        || publication.mode() != CutoverLockMode::Exclusive
+    {
+        return marker_error(
+            "this active-generation publication requires the bootstrap publication lease",
+        );
+    }
+    Ok(())
+}
+
+/// Refuses any marker that rebinds what live processes already routed to.
+fn require_live_generation(
     previous: &ActiveGeneration,
     marker: &ActiveGeneration,
 ) -> StoreResult<()> {
@@ -256,8 +273,16 @@ fn require_appended_projects(
         || marker.generation != previous.generation
         || marker.global != previous.global
     {
-        return marker_error("active-generation append changes the live generation");
+        return marker_error("this active-generation publication changes the live generation");
     }
+    Ok(())
+}
+
+fn require_appended_projects(
+    previous: &ActiveGeneration,
+    marker: &ActiveGeneration,
+) -> StoreResult<()> {
+    require_live_generation(previous, marker)?;
     if marker.projects.len() <= previous.projects.len() {
         return marker_error("active-generation append adds no project");
     }
@@ -267,6 +292,67 @@ fn require_appended_projects(
         .any(|project| !marker.projects.contains(project))
     {
         return marker_error("active-generation append drops or rewrites a live project");
+    }
+    Ok(())
+}
+
+/// Publishes a marker that only retires projects whose roots are gone.
+///
+/// Dropping a vanished project rebinds nothing either: the generation number,
+/// the global database, and every surviving project keep their exact identity,
+/// and the entries that leave route to directories that no longer exist. Like
+/// an append, this runs under the shared cutover lease plus the exclusive
+/// bootstrap lease, so one deleted project folder can be healed without
+/// closing every running app and session first.
+///
+/// # Errors
+/// Returns an activation error unless both leases belong to this home, the
+/// marker only removes projects from the exact marker still on disk, every
+/// removed root is genuinely absent, and the survivors attest.
+pub fn retire_active_generation(
+    global_home: &Path,
+    lease: &CutoverLease,
+    publication: &CutoverLease,
+    previous: &ActiveGeneration,
+    marker: &ActiveGeneration,
+    writer_version: &str,
+) -> StoreResult<()> {
+    require_publication_leases(global_home, lease, publication)?;
+    require_retired_projects(previous, marker)?;
+    if load_active_generation(global_home, lease)?.as_ref() != Some(previous) {
+        return marker_error("active-generation marker changed before the retirement");
+    }
+    validate_active_generation(global_home, marker, writer_version)?;
+    publish_marker(global_home, marker)
+}
+
+fn require_retired_projects(
+    previous: &ActiveGeneration,
+    marker: &ActiveGeneration,
+) -> StoreResult<()> {
+    require_live_generation(previous, marker)?;
+    if marker.projects.len() >= previous.projects.len() {
+        return marker_error("active-generation retirement retires no project");
+    }
+    if marker
+        .projects
+        .iter()
+        .any(|project| !previous.projects.contains(project))
+    {
+        return marker_error("active-generation retirement adds or rewrites a project");
+    }
+    for project in previous
+        .projects
+        .iter()
+        .filter(|project| !marker.projects.contains(project))
+    {
+        match fs::symlink_metadata(&project.root) {
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Ok(_) => {
+                return marker_error("active-generation retirement names a root still exists");
+            }
+            Err(error) => return Err(error.into()),
+        }
     }
     Ok(())
 }
