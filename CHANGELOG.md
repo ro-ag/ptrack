@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.38.1] - 2026-09-09
+
 ### Fixed
 - A deleted project folder no longer locks the runtime out while p-track is
   open. Startup self-heal retires marker projects whose roots are gone, and
