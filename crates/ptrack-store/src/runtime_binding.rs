@@ -208,6 +208,69 @@ pub fn install_active_generation(
     publish_marker(global_home, marker)
 }
 
+/// Publishes a marker that only appends projects to the live generation.
+///
+/// Adding a project rebinds nothing: the generation number, the global
+/// database, and every already-listed project keep their exact identity, so no
+/// live process loses the routing it loaded. That is why this publication runs
+/// under the *shared* cutover lease — which still fences an activation or a
+/// rollback for its duration — plus the exclusive bootstrap lease that
+/// serializes concurrent initializers.
+///
+/// # Errors
+/// Returns an activation error unless both leases belong to this home, the
+/// marker is a pure append onto the exact marker still on disk, and every
+/// destination attests.
+pub fn append_active_generation(
+    global_home: &Path,
+    lease: &CutoverLease,
+    publication: &CutoverLease,
+    previous: &ActiveGeneration,
+    marker: &ActiveGeneration,
+    writer_version: &str,
+) -> StoreResult<()> {
+    require_matching_lease(global_home, lease)?;
+    if lease.mode() != CutoverLockMode::Shared {
+        return marker_error("active-generation append requires the shared cutover lease");
+    }
+    if publication.path() != global_home.join("runtime/bootstrap.lock")
+        || publication.mode() != CutoverLockMode::Exclusive
+    {
+        return marker_error("active-generation append requires the bootstrap publication lease");
+    }
+    require_appended_projects(previous, marker)?;
+    if load_active_generation(global_home, lease)?.as_ref() != Some(previous) {
+        return marker_error("active-generation marker changed before the append");
+    }
+    validate_active_generation(global_home, marker, writer_version)?;
+    publish_marker(global_home, marker)
+}
+
+fn require_appended_projects(
+    previous: &ActiveGeneration,
+    marker: &ActiveGeneration,
+) -> StoreResult<()> {
+    marker.validate_shape()?;
+    if marker.format != previous.format
+        || marker.version != previous.version
+        || marker.generation != previous.generation
+        || marker.global != previous.global
+    {
+        return marker_error("active-generation append changes the live generation");
+    }
+    if marker.projects.len() <= previous.projects.len() {
+        return marker_error("active-generation append adds no project");
+    }
+    if previous
+        .projects
+        .iter()
+        .any(|project| !marker.projects.contains(project))
+    {
+        return marker_error("active-generation append drops or rewrites a live project");
+    }
+    Ok(())
+}
+
 /// Publishes a marker while exact active redb handles remain live and locked.
 ///
 /// # Errors

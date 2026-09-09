@@ -16,10 +16,10 @@ use ptrack_core::{ProjectRef, ProjectSnapshot};
 use ptrack_store::{
     ActiveBinding, ActiveGeneration, ActiveGenerationProject, ActorIdentity, CutoverLease,
     CutoverLockMode, GlobalStore, PinnedProjectDirectory, PrivatePathIdentity,
-    ProjectRegistryCasResult, ProjectStore, StoreError, StoreKind, acquire_cutover_lock,
-    install_active_generation, load_active_generation, open_private_path,
-    protect_private_directory, protect_private_file, replace_private_file, sha256_digest,
-    sync_private_directory, validate_active_generation,
+    ProjectRegistryCasResult, ProjectStore, StoreError, StoreKind, acquire_bootstrap_lock,
+    acquire_cutover_lock, append_active_generation, install_active_generation,
+    load_active_generation, open_private_path, protect_private_directory, protect_private_file,
+    replace_private_file, sha256_digest, sync_private_directory, validate_active_generation,
 };
 use ptrack_terminal::{
     Manager, ProfileKind, discover_profiles, load_profile_config_if_exists, merge_profiles,
@@ -54,6 +54,9 @@ use crate::{
 
 const RECOVERY_REQUIRED: &str = "runtime recovery is required";
 const BOOTSTRAP_PLAN: &str = "bootstrap.json";
+/// Refusal shared by both initializers when the other one holds the lock.
+const INITIALIZATION_IN_PROGRESS: &str =
+    "another p-track initialization is in progress; retry once it finishes";
 const BOOTSTRAP_LIMIT: u64 = 1024 * 1024;
 const DESKTOP_INITIALIZATION: &str = "desktop-initialization.json";
 const DESKTOP_INITIALIZATION_LOCK: &str = "desktop-initialization.lock";
@@ -353,12 +356,103 @@ impl RoutedApplication {
         ))
     }
 
+    /// Registers a project without disturbing any live p-track process.
+    ///
+    /// Adding a project appends to the live generation — same generation
+    /// number, same global database, same bindings for every project already
+    /// listed — so the publication runs under the shared cutover lease that
+    /// running apps and sessions also hold, serialized against other
+    /// initializers by the bootstrap lease. Only the first generation, which
+    /// has no marker to append to, still publishes under the exclusive lease.
     fn bootstrap(&mut self, request: &InitRequest) -> AppResult<bool> {
         ensure_private_home(&self.global_home)?;
         let home = fs::canonicalize(&self.global_home)?;
-        let lease = match acquire_cutover_lock(&home, CutoverLockMode::Exclusive) {
+        let requested = request.root.as_deref().unwrap_or(&self.current_dir);
+        let root = fs::canonicalize(requested)?;
+        let plan_path = home.join("runtime").join(BOOTSTRAP_PLAN);
+        // A root the marker already lists publishes nothing, so it must never
+        // wait on a lease that a running app or session holds for its life.
+        if !path_is_present(&plan_path)? && self.adopt_listed_project(&home, &root)? {
+            return Ok(false);
+        }
+        let publication = match acquire_bootstrap_lock(&home) {
             Ok(lease) => lease,
-            Err(error) if error.to_string().contains("cutover lock is unavailable") => {
+            Err(error) if error.to_string().contains("lock is unavailable") => {
+                return Err(AppError::Message(INITIALIZATION_IN_PROGRESS.to_owned()));
+            }
+            Err(error) => return Err(recovery(error)),
+        };
+        let lease = acquire_cutover_lock(&home, CutoverLockMode::Shared).map_err(recovery)?;
+        let Some(previous) = load_active_generation(&home, &lease).map_err(recovery)? else {
+            drop(lease);
+            return self.bootstrap_first_generation(&home, &root, &plan_path);
+        };
+        validate_active_generation(&home, &previous, &self.writer_version).map_err(recovery)?;
+        let Some((plan, pinned_project)) =
+            self.plan_bootstrap(&home, &root, &plan_path, Some(&previous))?
+        else {
+            drop(lease);
+            self.active = ActiveRuntime::load(&home, &self.writer_version)?;
+            return Ok(false);
+        };
+        if previous == plan.target_marker {
+            clear_bootstrap_plan(&plan_path)?;
+            drop(lease);
+            self.active = ActiveRuntime::load(&home, &self.writer_version)?;
+            return Ok(false);
+        }
+        if plan.previous_marker.as_ref() != Some(&previous) {
+            return Err(recovery(
+                "bootstrap plan does not match the active-generation marker",
+            ));
+        }
+        ensure_bootstrap_stores(&home, &plan, &self.writer_version, Some(&pinned_project))?;
+        append_active_generation(
+            &home,
+            &lease,
+            &publication,
+            &previous,
+            &plan.target_marker,
+            &self.writer_version,
+        )
+        .map_err(recovery)?;
+        clear_bootstrap_plan(&plan_path)?;
+        drop(lease);
+        self.active = ActiveRuntime::load(&home, &self.writer_version)?;
+        Ok(true)
+    }
+
+    /// Loads the runtime when the marker already lists `root`, reporting
+    /// whether initialization has nothing left to publish.
+    fn adopt_listed_project(&mut self, home: &Path, root: &Path) -> AppResult<bool> {
+        let lease = acquire_cutover_lock(home, CutoverLockMode::Shared).map_err(recovery)?;
+        let listed = load_active_generation(home, &lease)
+            .map_err(recovery)?
+            .is_some_and(|marker| {
+                marker
+                    .projects
+                    .iter()
+                    .any(|project| Path::new(&project.root) == root)
+            });
+        drop(lease);
+        if !listed {
+            return Ok(false);
+        }
+        self.active = ActiveRuntime::load(home, &self.writer_version)?;
+        Ok(true)
+    }
+
+    /// Publishes the very first generation, which creates the global store and
+    /// has no live bindings to preserve, under the exclusive cutover lease.
+    fn bootstrap_first_generation(
+        &mut self,
+        home: &Path,
+        root: &Path,
+        plan_path: &Path,
+    ) -> AppResult<bool> {
+        let lease = match acquire_cutover_lock(home, CutoverLockMode::Exclusive) {
+            Ok(lease) => lease,
+            Err(error) if error.to_string().contains("lock is unavailable") => {
                 return Err(AppError::Message(
                     "another p-track process holds the runtime lease; close p-track apps/sessions and retry"
                         .to_owned(),
@@ -366,55 +460,21 @@ impl RoutedApplication {
             }
             Err(error) => return Err(recovery(error)),
         };
-        let existing = load_active_generation(&home, &lease).map_err(recovery)?;
+        let existing = load_active_generation(home, &lease).map_err(recovery)?;
         if let Some(marker) = &existing {
-            validate_active_generation(&home, marker, &self.writer_version).map_err(recovery)?;
+            validate_active_generation(home, marker, &self.writer_version).map_err(recovery)?;
         }
-        let requested = request.root.as_deref().unwrap_or(&self.current_dir);
-        let root = fs::canonicalize(requested)?;
-        let plan_path = home.join("runtime").join(BOOTSTRAP_PLAN);
-        let (plan, pinned_project) = if plan_path.exists() {
-            let plan = read_bootstrap_plan(&plan_path)?;
-            validate_bootstrap_plan(&home, &root, &plan, &self.writer_version)?;
-            let pinned = PinnedProjectDirectory::prepare_expected_identities(
-                &root,
-                plan.project_root_identity,
-                plan.project_directory_identity,
-            )
-            .map_err(recovery)?;
-            (plan, pinned)
-        } else if existing.as_ref().is_some_and(|marker| {
-            marker
-                .projects
-                .iter()
-                .any(|project| Path::new(&project.root) == root)
-        }) {
+        let Some((plan, pinned_project)) =
+            self.plan_bootstrap(home, root, plan_path, existing.as_ref())?
+        else {
             drop(lease);
-            self.active = ActiveRuntime::load(&home, &self.writer_version)?;
+            self.active = ActiveRuntime::load(home, &self.writer_version)?;
             return Ok(false);
-        } else {
-            let project_root_identity =
-                PinnedProjectDirectory::identify_root(&root).map_err(recovery)?;
-            validate_new_bootstrap_target(&home, &root, existing.as_ref())?;
-            let pinned = PinnedProjectDirectory::prepare_new_expected(&root, project_root_identity)
-                .map_err(recovery)?;
-            let plan = new_bootstrap_plan(
-                &home,
-                &root,
-                project_root_identity,
-                pinned.directory_identity(),
-                existing.clone(),
-                None,
-            )?;
-            publish_bootstrap_plan(&plan_path, &plan)?;
-            (plan, pinned)
         };
         if existing.as_ref() == Some(&plan.target_marker) {
-            validate_active_generation(&home, &plan.target_marker, &self.writer_version)
-                .map_err(recovery)?;
-            clear_bootstrap_plan(&plan_path)?;
+            clear_bootstrap_plan(plan_path)?;
             drop(lease);
-            self.active = ActiveRuntime::load(&home, &self.writer_version)?;
+            self.active = ActiveRuntime::load(home, &self.writer_version)?;
             return Ok(false);
         }
         if existing != plan.previous_marker {
@@ -422,13 +482,59 @@ impl RoutedApplication {
                 "bootstrap plan does not match the active-generation marker",
             ));
         }
-        ensure_bootstrap_stores(&home, &plan, &self.writer_version, Some(&pinned_project))?;
-        install_active_generation(&home, &lease, &plan.target_marker, &self.writer_version)
+        ensure_bootstrap_stores(home, &plan, &self.writer_version, Some(&pinned_project))?;
+        install_active_generation(home, &lease, &plan.target_marker, &self.writer_version)
             .map_err(recovery)?;
-        clear_bootstrap_plan(&plan_path)?;
+        clear_bootstrap_plan(plan_path)?;
         drop(lease);
-        self.active = ActiveRuntime::load(&home, &self.writer_version)?;
+        self.active = ActiveRuntime::load(home, &self.writer_version)?;
         Ok(true)
+    }
+
+    /// Resolves the plan this initialization must publish: a resumed durable
+    /// plan, a freshly published one, or `None` when the marker already lists
+    /// the root and nothing has to change.
+    fn plan_bootstrap(
+        &self,
+        home: &Path,
+        root: &Path,
+        plan_path: &Path,
+        existing: Option<&ActiveGeneration>,
+    ) -> AppResult<Option<(BootstrapPlan, PinnedProjectDirectory)>> {
+        if plan_path.exists() {
+            let plan = read_bootstrap_plan(plan_path)?;
+            validate_bootstrap_plan(home, root, &plan, &self.writer_version)?;
+            let pinned = PinnedProjectDirectory::prepare_expected_identities(
+                root,
+                plan.project_root_identity,
+                plan.project_directory_identity,
+            )
+            .map_err(recovery)?;
+            return Ok(Some((plan, pinned)));
+        }
+        if existing.is_some_and(|marker| {
+            marker
+                .projects
+                .iter()
+                .any(|project| Path::new(&project.root) == root)
+        }) {
+            return Ok(None);
+        }
+        let project_root_identity =
+            PinnedProjectDirectory::identify_root(root).map_err(recovery)?;
+        validate_new_bootstrap_target(home, root, existing)?;
+        let pinned = PinnedProjectDirectory::prepare_new_expected(root, project_root_identity)
+            .map_err(recovery)?;
+        let plan = new_bootstrap_plan(
+            home,
+            root,
+            project_root_identity,
+            pinned.directory_identity(),
+            existing.cloned(),
+            None,
+        )?;
+        publish_bootstrap_plan(plan_path, &plan)?;
+        Ok(Some((plan, pinned)))
     }
 
     /// Re-registers a project store whose folder was physically moved.
@@ -1818,6 +1924,16 @@ impl ProductionDesktopAuthority {
         }
         ensure_private_home(&self.global_home)?;
         let home = fs::canonicalize(&self.global_home)?;
+        // Taken before the cutover lease, in the same order the CLI takes them,
+        // so a command-line initialization appending to the live generation and
+        // this one can never publish over each other.
+        let _publication = match acquire_bootstrap_lock(&home) {
+            Ok(lease) => lease,
+            Err(error) if error.to_string().contains("lock is unavailable") => {
+                return Err(AppError::Message(INITIALIZATION_IN_PROGRESS.to_owned()));
+            }
+            Err(error) => return Err(recovery(error)),
+        };
         let lease = acquire_cutover_lock(&home, CutoverLockMode::Exclusive).map_err(recovery)?;
         if let Some(journal) = read_desktop_initialization(&home)? {
             if journal.status.outcome != InitializationOutcomeV1::Complete
@@ -4655,7 +4771,8 @@ fn initialization_error_kind(error: &AppError) -> &'static str {
         AppError::Message(message)
             if message.contains("cutover")
                 || message.contains("lock")
-                || message.contains("busy") =>
+                || message.contains("busy")
+                || message == INITIALIZATION_IN_PROGRESS =>
         {
             "runtime-busy"
         }

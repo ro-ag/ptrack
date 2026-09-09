@@ -7,8 +7,8 @@ use std::time::Duration;
 use ptrack_core::NoteTarget;
 use ptrack_store::{
     ActiveBinding, ActiveGeneration, ActiveGenerationProject, CutoverLockMode, GlobalStore,
-    PinnedProjectDirectory, PrivatePathIdentity, ProjectStore, StoreKind, acquire_cutover_lock,
-    load_active_generation, protect_private_directory, protect_private_file,
+    PinnedProjectDirectory, PrivatePathIdentity, ProjectStore, StoreKind, acquire_bootstrap_lock,
+    acquire_cutover_lock, load_active_generation, protect_private_directory, protect_private_file,
 };
 
 use crate::{
@@ -529,7 +529,7 @@ fn routed_init_publishes_marker_before_user_writes_and_nested_cwd_resolves() {
 }
 
 #[test]
-fn routed_init_reports_a_live_runtime_lease_as_another_process() {
+fn routed_init_registers_a_new_project_beside_a_live_runtime() {
     let temp = Temp::new();
     let home = temp.0.join("home");
     let first_project = temp.0.join("first-project");
@@ -542,12 +542,93 @@ fn routed_init_reports_a_live_runtime_lease_as_another_process() {
     let mut running = RoutedApplication::new(home.clone(), first_project.clone(), "test");
     running
         .initialize(InitRequest {
+            root: Some(first_project.clone()),
+            goal: String::new(),
+            force: false,
+            no_guide: true,
+        })
+        .unwrap();
+
+    // `running` still holds the shared runtime lease, exactly like an open app.
+    let mut second = RoutedApplication::new(home.clone(), second_project.clone(), "test");
+    let result = second
+        .initialize(InitRequest {
+            root: Some(second_project.clone()),
+            goal: String::new(),
+            force: false,
+            no_guide: true,
+        })
+        .unwrap();
+    assert!(!result.already_initialized);
+
+    // The live process keeps its own routing, and both projects are listed.
+    assert_eq!(
+        running.bindings().unwrap().project.unwrap().root,
+        first_project
+    );
+    let lease = acquire_cutover_lock(&home, CutoverLockMode::Shared).unwrap();
+    let marker = load_active_generation(&home, &lease).unwrap().unwrap();
+    let roots: Vec<&str> = marker
+        .projects
+        .iter()
+        .map(|project| project.root.as_str())
+        .collect();
+    assert!(roots.contains(&first_project.to_str().unwrap()));
+    assert!(roots.contains(&second_project.to_str().unwrap()));
+}
+
+#[test]
+fn routed_init_refreshes_a_listed_project_beside_a_live_runtime() {
+    let temp = Temp::new();
+    let home = temp.0.join("home");
+    let project = temp.0.join("project");
+    fs::create_dir(&home).unwrap();
+    fs::create_dir(&project).unwrap();
+    private_directory(&home);
+
+    let mut running = RoutedApplication::new(home.clone(), project.clone(), "test");
+    running
+        .initialize(InitRequest {
+            root: Some(project.clone()),
+            goal: "ship".to_owned(),
+            force: false,
+            no_guide: true,
+        })
+        .unwrap();
+
+    let mut second = RoutedApplication::new(home, project.clone(), "test");
+    let result = second
+        .initialize(InitRequest {
+            root: Some(project),
+            goal: String::new(),
+            force: false,
+            no_guide: true,
+        })
+        .unwrap();
+    assert!(result.already_initialized);
+}
+
+#[test]
+fn routed_init_reports_a_conflicting_initializer_as_another_initialization() {
+    let temp = Temp::new();
+    let home = temp.0.join("home");
+    let first_project = temp.0.join("first-project");
+    let second_project = temp.0.join("second-project");
+    fs::create_dir(&home).unwrap();
+    fs::create_dir(&first_project).unwrap();
+    fs::create_dir(&second_project).unwrap();
+    private_directory(&home);
+
+    let mut first = RoutedApplication::new(home.clone(), first_project.clone(), "test");
+    first
+        .initialize(InitRequest {
             root: Some(first_project),
             goal: String::new(),
             force: false,
             no_guide: true,
         })
         .unwrap();
+    let publication = acquire_bootstrap_lock(&home.canonicalize().unwrap()).unwrap();
 
     let mut second = RoutedApplication::new(home, second_project.clone(), "test");
     let error = second
@@ -561,9 +642,40 @@ fn routed_init_reports_a_live_runtime_lease_as_another_process() {
         .to_string();
     assert_eq!(
         error,
+        "another p-track initialization is in progress; retry once it finishes"
+    );
+    drop(publication);
+}
+
+#[test]
+fn routed_first_init_reports_a_live_runtime_lease_as_another_process() {
+    let temp = Temp::new();
+    let home = temp.0.join("home");
+    let project = temp.0.join("project");
+    fs::create_dir(&home).unwrap();
+    fs::create_dir(&project).unwrap();
+    private_directory(&home);
+    // No marker exists yet, so the first generation still needs the exclusive
+    // lease that any live shared lease withholds.
+    let reader =
+        acquire_cutover_lock(&home.canonicalize().unwrap(), CutoverLockMode::Shared).unwrap();
+
+    let mut application = RoutedApplication::new(home, project.clone(), "test");
+    let error = application
+        .initialize(InitRequest {
+            root: Some(project),
+            goal: String::new(),
+            force: false,
+            no_guide: true,
+        })
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        error,
         "another p-track process holds the runtime lease; close p-track apps/sessions and retry"
     );
     assert!(!error.contains("runtime recovery is required"));
+    drop(reader);
 }
 
 #[test]
@@ -2779,6 +2891,47 @@ fn interrupted_install_before_prepared_can_restart_and_explicitly_skip() {
     assert_eq!(skipped.checkpoint, InitializationCheckpointV1::GuideApplied);
     assert!(!project.join("AGENTS.md").exists());
     assert!(!project.join("CLAUDE.md").exists());
+}
+
+#[test]
+fn desktop_initialization_waits_for_a_command_line_initialization() {
+    let temp = Temp::new();
+    let home = temp.0.join("home");
+    let project = temp.0.join("project");
+    fs::create_dir(&home).unwrap();
+    fs::create_dir(&project).unwrap();
+    private_directory(&home);
+    let desktop = production_desktop_runtime(home.clone(), "test", &temp.0, None, 0).unwrap();
+    let validation = desktop
+        .invoke(desktop_request(
+            "ValidateProjectTargetV1",
+            vec![serde_json::json!(project)],
+        ))
+        .unwrap();
+
+    // A `ptrack init` mid-publication owns the bootstrap lock.
+    let publication = acquire_bootstrap_lock(&home.canonicalize().unwrap()).unwrap();
+    let request = desktop_request(
+        "InitializeProjectV1",
+        vec![serde_json::json!({
+            "operationId": validation["operationId"],
+            "root": validation["canonicalRoot"],
+            "goal": "Ship the serialized initialization",
+            "guideChoice": "skip",
+            "guidePreviewToken": ""
+        })],
+    );
+    let error = desktop.invoke(request.clone()).unwrap_err().to_string();
+    assert_eq!(
+        error,
+        "another p-track initialization is in progress; retry once it finishes"
+    );
+    assert!(!project.join(".ptrack/ptrack.redb").exists());
+
+    drop(publication);
+    let initialized = desktop.invoke(request).unwrap();
+    assert_eq!(initialized["initialization"]["outcome"], "complete");
+    assert!(project.join(".ptrack/ptrack.redb").is_file());
 }
 
 #[test]

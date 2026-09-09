@@ -5,6 +5,7 @@ use crate::{StoreError, StoreResult};
 
 const RUNTIME_DIRECTORY: &str = "runtime";
 const CUTOVER_LOCK: &str = "cutover.lock";
+const BOOTSTRAP_LOCK: &str = "bootstrap.lock";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CutoverLockMode {
@@ -55,6 +56,29 @@ pub fn acquire_cutover_lock(
     global_home: &Path,
     mode: CutoverLockMode,
 ) -> StoreResult<CutoverLease> {
+    acquire_runtime_lock(global_home, CUTOVER_LOCK, mode)
+}
+
+/// Acquires the exclusive bootstrap-publication lock.
+///
+/// Adding a project appends to the live generation instead of replacing it, so
+/// its publication only has to exclude other initializers — never the readers
+/// that hold shared cutover leases for the life of an app or session. That
+/// mutual exclusion lives on its own lock file for exactly that reason.
+///
+/// # Errors
+///
+/// Returns an activation or I/O error when the home is unsafe, the lock file
+/// cannot be protected, or another initializer holds the lock.
+pub fn acquire_bootstrap_lock(global_home: &Path) -> StoreResult<CutoverLease> {
+    acquire_runtime_lock(global_home, BOOTSTRAP_LOCK, CutoverLockMode::Exclusive)
+}
+
+fn acquire_runtime_lock(
+    global_home: &Path,
+    file_name: &str,
+    mode: CutoverLockMode,
+) -> StoreResult<CutoverLease> {
     let metadata = fs::symlink_metadata(global_home)?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(StoreError::ActivationBinding(
@@ -64,7 +88,7 @@ pub fn acquire_cutover_lock(
     require_private_directory(global_home, "global home")?;
     let runtime = global_home.join(RUNTIME_DIRECTORY);
     ensure_private_directory(&runtime)?;
-    let path = runtime.join(CUTOVER_LOCK);
+    let path = runtime.join(file_name);
     let file = open_lock_file(&path)?;
     require_private_file(&file, &path)?;
     lock(&file, mode)?;

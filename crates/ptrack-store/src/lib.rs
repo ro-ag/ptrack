@@ -26,9 +26,9 @@ pub use bounded::{
     Bounded, MAX_ASSOCIATION_SCAN, MAX_BOUNDED_READ, ScanBounded, TaskAssociations, TaskProgress,
 };
 pub use cutover::{
-    CutoverLease, CutoverLockMode, PrivatePathIdentity, acquire_cutover_lock, open_private_path,
-    protect_private_directory, protect_private_file, replace_private_file, sync_private_directory,
-    verify_private_open_handle, verify_private_path,
+    CutoverLease, CutoverLockMode, PrivatePathIdentity, acquire_bootstrap_lock,
+    acquire_cutover_lock, open_private_path, protect_private_directory, protect_private_file,
+    replace_private_file, sync_private_directory, verify_private_open_handle, verify_private_path,
 };
 pub use discovery::{
     GLOBAL_DATABASE_FILENAME, PROJECT_DATABASE_FILENAME, PROJECT_DIRECTORY, PinnedProjectDirectory,
@@ -59,8 +59,9 @@ pub use project::{
 pub use quarantine::{QuarantineReason, QuarantinedLegacyRecord};
 pub use runtime_binding::{
     ACTIVE_GENERATION_MARKER, ActiveGeneration, ActiveGenerationDatabase, ActiveGenerationProject,
-    RetainedActiveStore, install_active_generation, install_active_generation_retained,
-    load_active_generation, restore_active_generation, validate_active_generation,
+    RetainedActiveStore, append_active_generation, install_active_generation,
+    install_active_generation_retained, load_active_generation, restore_active_generation,
+    validate_active_generation,
 };
 pub use schema::{Collection, OwnedRecordKey, RecordKey, STORE_SCHEMA_VERSION, StoreKind};
 pub use sha256::digest as sha256_digest;
