@@ -2894,6 +2894,58 @@ fn interrupted_install_before_prepared_can_restart_and_explicitly_skip() {
 }
 
 #[test]
+fn desktop_initializes_a_second_project_after_the_first_one_is_open() {
+    let temp = Temp::new();
+    let home = temp.0.join("home");
+    let first = temp.0.join("first");
+    let second = temp.0.join("second");
+    fs::create_dir(&home).unwrap();
+    fs::create_dir(&first).unwrap();
+    fs::create_dir(&second).unwrap();
+    private_directory(&home);
+    let desktop = production_desktop_runtime(home.clone(), "test", &temp.0, None, 0).unwrap();
+
+    for (index, (root, goal)) in [(&first, "First goal"), (&second, "Second goal")]
+        .into_iter()
+        .enumerate()
+    {
+        if index > 0 {
+            // The product rule: a new project is initialized with no workspace
+            // open, exactly as the Welcome flow does it.
+            desktop
+                .invoke(desktop_request("CloseProject", vec![serde_json::json!("")]))
+                .unwrap();
+        }
+        let validation = desktop
+            .invoke(desktop_request(
+                "ValidateProjectTargetV1",
+                vec![serde_json::json!(root)],
+            ))
+            .unwrap();
+        assert_eq!(validation["kind"], "new", "target {}", root.display());
+        let initialized = desktop
+            .invoke(desktop_request(
+                "InitializeProjectV1",
+                vec![serde_json::json!({
+                    "operationId": validation["operationId"],
+                    "root": validation["canonicalRoot"],
+                    "goal": goal,
+                    "guideChoice": "skip",
+                    "guidePreviewToken": ""
+                })],
+            ))
+            .unwrap_or_else(|error| panic!("initialize {}: {error}", root.display()));
+        assert_eq!(
+            initialized["initialization"]["outcome"],
+            "complete",
+            "target {}",
+            root.display()
+        );
+        assert!(root.join(".ptrack/ptrack.redb").is_file());
+    }
+}
+
+#[test]
 fn desktop_initialization_waits_for_a_command_line_initialization() {
     let temp = Temp::new();
     let home = temp.0.join("home");

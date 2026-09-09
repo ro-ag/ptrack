@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- Initializing a second project from the app no longer refuses its own guide
+  choice. The finished operation's guide manifest stayed bound — in memory and
+  in the durable journal — so the next initialization was measured against the
+  previous project's root and consent and failed with
+  `project-guide-preview-stale`. The status screen then reported only
+  "initialization operation is unknown", because the poll had nothing but the
+  older operation to answer with. A new operation now starts from a clean
+  guide binding, and the durable guide rule applies across two operations only
+  while the earlier one is still unfinished — a racing authority still has to
+  reconcile the winner's manifest.
+
 ## [0.38.1] - 2026-09-09
 
 ### Fixed
