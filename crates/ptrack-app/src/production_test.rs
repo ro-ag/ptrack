@@ -3628,6 +3628,45 @@ fn load_self_heals_a_missing_root_beside_a_live_runtime() {
 }
 
 #[test]
+fn routed_init_registers_a_project_after_another_root_was_deleted() {
+    let temp = Temp::new();
+    let home = temp.0.join("home");
+    let doomed = temp.0.join("doomed");
+    let fresh = temp.0.join("fresh");
+    fs::create_dir(&home).unwrap();
+    fs::create_dir(&doomed).unwrap();
+    fs::create_dir(&fresh).unwrap();
+    private_directory(&home);
+    let mut application = RoutedApplication::new(home.clone(), doomed.clone(), "test");
+    application
+        .initialize(InitRequest {
+            root: Some(doomed.clone()),
+            goal: String::new(),
+            force: false,
+            no_guide: true,
+        })
+        .unwrap();
+    drop(application);
+    fs::remove_dir_all(&doomed).unwrap();
+
+    // `init` is the first command after the deletion, so it has to heal the
+    // marker itself before it can publish onto it.
+    let mut application = RoutedApplication::new(home.clone(), fresh.clone(), "test");
+    let result = application
+        .initialize(InitRequest {
+            root: Some(fresh.clone()),
+            goal: String::new(),
+            force: false,
+            no_guide: true,
+        })
+        .unwrap();
+    assert!(!result.already_initialized);
+    let runtime = ActiveRuntime::load(&home, "test").unwrap().unwrap();
+    assert_eq!(runtime.marker().projects.len(), 1);
+    assert_eq!(runtime.marker().projects[0].root, fresh.to_string_lossy());
+}
+
+#[test]
 fn load_still_fails_closed_for_a_noncanonical_marker() {
     let temp = Temp::new();
     let home = temp.0.join("home");
