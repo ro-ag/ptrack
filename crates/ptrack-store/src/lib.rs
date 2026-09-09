@@ -61,7 +61,7 @@ pub use runtime_binding::{
     ACTIVE_GENERATION_MARKER, ActiveGeneration, ActiveGenerationDatabase, ActiveGenerationProject,
     RetainedActiveStore, append_active_generation, install_active_generation,
     install_active_generation_retained, load_active_generation, restore_active_generation,
-    validate_active_generation,
+    retire_active_generation, validate_active_generation,
 };
 pub use schema::{Collection, OwnedRecordKey, RecordKey, STORE_SCHEMA_VERSION, StoreKind};
 pub use sha256::digest as sha256_digest;

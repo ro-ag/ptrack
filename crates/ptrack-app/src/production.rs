@@ -19,7 +19,8 @@ use ptrack_store::{
     ProjectRegistryCasResult, ProjectStore, StoreError, StoreKind, acquire_bootstrap_lock,
     acquire_cutover_lock, append_active_generation, install_active_generation,
     load_active_generation, open_private_path, protect_private_directory, protect_private_file,
-    replace_private_file, sha256_digest, sync_private_directory, validate_active_generation,
+    replace_private_file, retire_active_generation, sha256_digest, sync_private_directory,
+    validate_active_generation,
 };
 use ptrack_terminal::{
     Manager, ProfileKind, discover_profiles, load_profile_config_if_exists, merge_profiles,
@@ -3074,9 +3075,10 @@ fn recovery(error: impl std::fmt::Display) -> AppError {
 /// Prunes marker projects whose root directories no longer exist so one
 /// deleted project cannot block every startup. Returns true only when a
 /// pruned marker was published; any other outcome leaves the caller's
-/// original fail-closed error in force. The exclusive lock is non-blocking,
-/// so a live process holding the shared lease makes this return an error
-/// rather than wait.
+/// original fail-closed error in force. Retiring a vanished root rebinds
+/// nothing that a live process routed to, so this publishes under the shared
+/// cutover lease that running apps and sessions hold — one deleted folder no
+/// longer locks the whole runtime out until every one of them is closed.
 fn prune_missing_marker_projects(global_home: &Path, writer_version: &str) -> AppResult<bool> {
     if !global_home.exists() {
         return Ok(false);
@@ -3085,7 +3087,8 @@ fn prune_missing_marker_projects(global_home: &Path, writer_version: &str) -> Ap
     if path_is_present(&home.join("runtime").join(BOOTSTRAP_PLAN))? {
         return Ok(false);
     }
-    let lease = acquire_cutover_lock(&home, CutoverLockMode::Exclusive).map_err(recovery)?;
+    let publication = acquire_bootstrap_lock(&home).map_err(recovery)?;
+    let lease = acquire_cutover_lock(&home, CutoverLockMode::Shared).map_err(recovery)?;
     let Some(marker) = load_active_generation(&home, &lease).map_err(recovery)? else {
         return Ok(false);
     };
@@ -3101,9 +3104,17 @@ fn prune_missing_marker_projects(global_home: &Path, writer_version: &str) -> Ap
     backup_marker(&home)?;
     let pruned = ActiveGeneration {
         projects: kept,
-        ..marker
+        ..marker.clone()
     };
-    install_active_generation(&home, &lease, &pruned, writer_version).map_err(recovery)?;
+    retire_active_generation(
+        &home,
+        &lease,
+        &publication,
+        &marker,
+        &pruned,
+        writer_version,
+    )
+    .map_err(recovery)?;
     Ok(true)
 }
 
