@@ -2462,6 +2462,10 @@ impl DesktopInitializationService for ProductionDesktopAuthority {
                     error_kind: String::new(),
                 });
                 state.initialization_goal = None;
+                // The guide manifest is bound to one operation. Leaving the
+                // previous project's manifest in place made the next
+                // initialization refuse its own guide choice as stale.
+                state.initialization_guide = None;
             }
         }
         Ok(validation)
@@ -4633,6 +4637,15 @@ fn validate_guide_transition(
     existing_status: &InitializationStatusV1,
     incoming_status: &InitializationStatusV1,
 ) -> AppResult<()> {
+    if existing_status.operation_id != incoming_status.operation_id
+        && existing_status.outcome == InitializationOutcomeV1::Complete
+    {
+        // A finished operation's manifest binds nothing in the next one, which
+        // brings its own root, choice, and consent. An unfinished operation
+        // still owns the journal: the status rule above refuses replacing it,
+        // and a racing authority must reconcile the winner's manifest.
+        return Ok(());
+    }
     if existing.is_some_and(|existing| {
         incoming.is_some_and(|incoming| existing.root_identity != incoming.root_identity)
     }) {
