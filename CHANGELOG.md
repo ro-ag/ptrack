@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.38.2] - 2026-09-09
+
 ### Fixed
 - Initializing a second project from the app no longer refuses its own guide
   choice. The finished operation's guide manifest stayed bound — in memory and
