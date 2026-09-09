@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- `ptrack init` no longer fails while p-track is open. Registering a project
+  appends it to the live generation — same generation number, same global
+  database, same bindings for every project already listed — so it now
+  publishes under the shared runtime lease that a running app or session
+  holds, serialized against other initializers by a separate bootstrap lock.
+  Only the very first project on a machine, which has no generation to append
+  to, still needs every other p-track process closed. Re-running `init` inside
+  a project the runtime already lists publishes nothing at all and no longer
+  takes a publication lease for it, so refreshing the agent guide works with
+  the app open too. An app that was already running still has to be reopened
+  before it can open a project the CLI registered after it started.
+
 ## [0.38.0] - 2026-09-08
 
 ### Added

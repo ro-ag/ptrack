@@ -2,7 +2,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::{CutoverLockMode, acquire_cutover_lock, protect_private_directory};
+use crate::{
+    CutoverLockMode, acquire_bootstrap_lock, acquire_cutover_lock, protect_private_directory,
+};
 
 static NEXT: AtomicU64 = AtomicU64::new(1);
 
@@ -56,4 +58,19 @@ fn leaked_global_home_permissions_are_healed_on_use() {
         fs::metadata(&temp.0).unwrap().permissions().mode() & 0o777,
         0o700
     );
+}
+
+#[test]
+fn the_bootstrap_lock_serializes_initializers_without_excluding_readers() {
+    let temp = Temp::new();
+    let reader = acquire_cutover_lock(&temp.0, CutoverLockMode::Shared).unwrap();
+    let publication = acquire_bootstrap_lock(&temp.0).unwrap();
+    assert_eq!(publication.path(), temp.0.join("runtime/bootstrap.lock"));
+    assert_eq!(publication.mode(), CutoverLockMode::Exclusive);
+
+    let error = acquire_bootstrap_lock(&temp.0).unwrap_err();
+    assert!(error.to_string().contains("lock is unavailable"));
+    drop(publication);
+    drop(acquire_bootstrap_lock(&temp.0).unwrap());
+    drop(reader);
 }
