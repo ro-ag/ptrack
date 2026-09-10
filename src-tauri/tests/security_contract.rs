@@ -85,9 +85,11 @@ fn main_window_has_only_one_way_event_subscription_authority() {
     let capability = read_json(&manifest_dir.join("capabilities/main-window.json"));
 
     // Plan #15 widens the label list to admit runtime-created terminal
-    // windows. The permission array below and every forbidden-permission
-    // assertion are unchanged: the windows that may listen grew, what any of
-    // them may do did not.
+    // windows. The window-drag permissions below are the deliberate exception
+    // to event-only authority: the Overlay title bar style leaves nothing
+    // native to grab, so the frontend's data-tauri-drag-region strips need
+    // start-dragging (and internal toggle-maximize for double-click zoom).
+    // Everything else stays forbidden.
     assert_eq!(
         capability["windows"],
         Value::Array(vec![
@@ -100,6 +102,8 @@ fn main_window_has_only_one_way_event_subscription_authority() {
         Value::Array(vec![
             Value::String("core:event:allow-listen".into()),
             Value::String("core:event:allow-unlisten".into()),
+            Value::String("core:window:allow-start-dragging".into()),
+            Value::String("core:window:allow-internal-toggle-maximize".into()),
         ])
     );
     let encoded = capability["permissions"].to_string();
@@ -111,7 +115,7 @@ fn main_window_has_only_one_way_event_subscription_authority() {
         "menu",
         "notification",
         "tray",
-        "window",
+        "core:window:default",
         "webview",
     ] {
         assert!(
