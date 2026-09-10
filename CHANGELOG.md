@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.38.3] - 2026-09-10
+
+### Fixed
+- The desktop window can be moved again. The top bar and sidebar strip were
+  still marked with the Wails-only `--wails-draggable` property after the
+  Tauri recode, and Tauri never reads it, so under the Overlay title bar
+  style nothing on the window could be grabbed. Both strips now carry
+  `data-tauri-drag-region`, the main and terminal windows hold the matching
+  `start-dragging` and `internal toggle-maximize` grants — double-click to
+  zoom included — and the capability security contract admits exactly those
+  two grants.
+
 ## [0.38.2] - 2026-09-09
 
 ### Fixed
