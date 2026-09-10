@@ -28,7 +28,7 @@
   <body>
     <div id="app">
       <aside id="sidebar" class="sidebar" aria-label="Workspace navigation">
-        <div class="sidebar-top" aria-hidden="true"></div>
+        <div class="sidebar-top" aria-hidden="true" data-tauri-drag-region></div>
 
         <div class="brand sidebar-brand">
           <span class="brand-mark" aria-hidden="true"></span>
@@ -159,7 +159,7 @@
       ></div>
 
       <div class="canvas">
-      <header class="topbar">
+      <header class="topbar" data-tauri-drag-region="deep">
         <div class="panel-controls" role="group" aria-label="Workspace view controls">
           <button
             id="sidebar-toggle"
