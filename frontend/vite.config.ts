@@ -2,9 +2,11 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   build: {
+    // Preserve the Vite 7 browser floor when upgrading the bundler.
+    target: ["chrome107", "edge107", "firefox104", "safari16"],
     assetsDir: "",
     emptyOutDir: true,
-    rollupOptions: {
+    rolldownOptions: {
       output: {
         entryFileNames: "app.js",
         assetFileNames: (assetInfo) =>

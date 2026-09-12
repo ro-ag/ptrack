@@ -35,10 +35,16 @@ describe("production asset layout", () => {
     expect(existsSync(indexPath)).toBe(true);
     expect(existsSync(resolve(distRoot, "app.js"))).toBe(true);
     expect(existsSync(resolve(distRoot, "style.css"))).toBe(true);
+    const fontPath = "fonts/hack-nerd-font/HackNerdFontMono-Regular.ttf";
+    expect(readFileSync(resolve(distRoot, fontPath))).toEqual(
+      readFileSync(resolve(frontendRoot, "public", fontPath)),
+    );
+    expect(existsSync(resolve(distRoot, "fonts/hack-nerd-font/LICENSE.md"))).toBe(true);
 
     const index = readFileSync(indexPath, "utf8");
     const app = readFileSync(resolve(distRoot, "app.js"), "utf8");
     const styles = readFileSync(resolve(distRoot, "style.css"), "utf8");
+    expect(styles).toContain(fontPath);
     const paneSource = readFileSync(
       resolve(frontendRoot, "src/terminal/pane.ts"),
       "utf8",
@@ -72,9 +78,10 @@ describe("production asset layout", () => {
     expect(index).toMatch(
       /id="app-version"[^>]*tabindex="0"[^>]*aria-haspopup="dialog"[^>]*>dev<\/button>/,
     );
-    expect(styles).toMatch(
-      /\.app-version\{[^}]*position:relative[^}]*z-index:1[^}]*--wails-draggable:\s*no-drag/,
-    );
+    const versionStyles = styles.match(/\.app-version\{([^}]*)\}/)?.[1];
+    expect(versionStyles).toMatch(/(?:^|;)position:relative(?:;|$)/);
+    expect(versionStyles).toMatch(/(?:^|;)z-index:1(?:;|$)/);
+    expect(versionStyles).toMatch(/(?:^|;)--wails-draggable:\s*no-drag(?:;|$)/);
     expect(styles).toMatch(/\.state-card\{[^}]*box-shadow:/);
     expect(styles).not.toMatch(
       /\.state-card\{[^}]*(?:animation|transform|opacity):/,
@@ -316,7 +323,7 @@ describe("production asset layout", () => {
     );
     // Highlight is only legal under forced colors, so the pair pins both.
     expect(styles).toMatch(
-      /\.recent-project\[aria-current=(?:"true"|true)\]\{[^}]*border-color:Highlight/,
+      /\.recent-project\[aria-current=(?:"true"|true)\]\{[^}]*border-color:highlight/i,
     );
     expect(appSource).toContain('button.setAttribute("aria-describedby", describedBy)');
     expect(appSource).toContain('status.checkpoint !== "desktop-bound"');
@@ -460,7 +467,7 @@ describe("production asset layout", () => {
     // The way back is the window's own close: no in-page control can destroy
     // a window without a capability this feature deliberately does not take.
     expect(index).toMatch(
-      /id="terminal-window-return"[^>]*>\s*Closing this window returns the terminal to the p-track window\./,
+      /id="terminal-window-return"[^>]*>\s*Closing this window returns the original tab to p-track\. Tabs opened here close with this window\./,
     );
     // The gap notice states the fact in words, is not an alert, and keeps a
     // border under forced colors so it never reads by colour alone.
@@ -468,7 +475,7 @@ describe("production asset layout", () => {
       /id="terminal-window-gap"[^>]*role="note"[^>]*hidden>\s*<strong>Scrollback gap\.<\/strong>/,
     );
     expect(styles).toMatch(
-      /\.terminal-window-gap\s*\{\s*border-color:\s*CanvasText/,
+      /\.terminal-window-gap\s*\{[^}]*border-color:\s*canvastext/i,
     );
     expect(app).toContain("Earlier output was not carried over.");
     expect(app).toContain("This terminal is running in its own window.");
@@ -532,22 +539,22 @@ describe("production asset layout", () => {
     expect(styles).toMatch(
       /data-state=(?:"closed"|closed)\]\[data-layout-interactive=(?:"false"|false)\]/,
     );
-    expect(styles).toMatch(/data-board-hidden=(?:"true"|true)\] \.terminal-dock\{height:100%/);
+    expect(styles).toMatch(/data-board-hidden=(?:"true"|true)\] \.terminal-dock\{[^}]*height:100%/);
     expect(styles).toMatch(/data-terminal-hidden=(?:"true"|true)\] \.terminal-dock\{display:none/);
     expect(styles).toMatch(
       /\.board-heading\{[^}]*min-width:0[^}]*flex-wrap:wrap/,
     );
     expect(styles).toMatch(
-      /\.title-row h2\{[^}]*min-width:0[^}]*flex:1 1 auto[^}]*text-overflow:ellipsis/,
+      /\.title-row h2\{[^}]*(?=[^}]*min-width:0)(?=[^}]*flex:(?:1 1 auto|auto))(?=[^}]*text-overflow:ellipsis)/,
     );
     expect(styles).toMatch(
-      /\.board-actions\{[^}]*min-width:0[^}]*flex-wrap:wrap[^}]*justify-content:flex-end/,
+      /\.board-actions\{[^}]*(?=[^}]*min-width:0)(?=[^}]*flex-wrap:wrap)(?=[^}]*justify-content:flex-end)/,
     );
     expect(styles).toMatch(
-      /\.add-form input\{[^}]*min-width:120px[^}]*flex:1 1 170px/,
+      /\.add-form input\{[^}]*(?=[^}]*min-width:120px)(?=[^}]*flex:(?:1 1 170px|170px))/,
     );
     expect(styles).toMatch(
-      /@media\(max-width:960px\)\{[^}]*#app[^}]*\}[^}]*\.board-heading[^}]*\}\.plan-context,\.board-actions\{width:100%;min-width:0;max-width:100%;flex:0 0 100%\}\.board-actions\{justify-content:flex-start\}\.add-form\{min-width:0;flex-basis:250px\}/,
+      /@media\s*\((?:max-width:960px|width<=960px)\)\{[^}]*#app[^}]*\}[^}]*\.board-heading[^}]*\}\.plan-context,\.board-actions\{(?=[^}]*width:100%)(?=[^}]*min-width:0)(?=[^}]*max-width:100%)(?=[^}]*flex:0 0 100%)[^}]*\}\.board-actions\{justify-content:flex-start\}\.add-form\{(?=[^}]*min-width:0)(?=[^}]*flex-basis:250px)[^}]*\}/,
     );
     expect(styles).toMatch(
       /\.panel-toggle:focus-visible,[^{]*\.terminal-context-menu button:focus-visible\{[^}]*outline:2px solid var\(--accent\)[^}]*outline-offset:-2px/,
@@ -609,7 +616,7 @@ describe("production asset layout", () => {
     );
     expect(index).not.toContain("No rolling handoff yet.");
     expect(styles).toMatch(
-      /\.canvas-main\s*\{[^}]*min-width:\s*0[^}]*min-height:\s*0[^}]*flex:\s*1 1 auto[^}]*display:\s*flex[^}]*flex-direction:\s*column/s,
+      /\.canvas-main\s*\{[^}]*(?=[^}]*min-width:0)(?=[^}]*min-height:0)(?=[^}]*flex:(?:1 1 auto|auto))(?=[^}]*display:flex)(?=[^}]*flex-direction:column)/s,
     );
     // The deprecated Capabilities view is gone; capability brokering is
     // delegated to the companion project pam.
@@ -662,7 +669,7 @@ describe("production asset layout", () => {
     );
     expect(styles).toMatch(/\.settings-reset-actions\{[^}]*flex-wrap:wrap/);
     expect(styles).toMatch(
-      /\.settings-reset-actions button\{border-color:CanvasText\}/,
+      /\.settings-reset-actions button\{border-color:canvastext\}/i,
     );
     // The save-status live region sits outside the aria-busy wrapper, and
     // shares one footer row with the reset instead of being pinned to the
@@ -714,14 +721,14 @@ describe("production asset layout", () => {
     expect(appSource).not.toMatch(/copy\.textContent = "Copy"/);
     expect(appSource).toMatch(/setSettingsStatus\(`\$\{row\.label\} copied\.`\)/);
     expect(styles).toMatch(
-      /\.settings-diagnostic-copy\{[^}]*width:26px[^}]*min-height:26px[^}]*height:26px/,
+      /\.settings-diagnostic-copy\{[^}]*(?=[^}]*width:26px)(?=[^}]*min-height:26px)(?=[^}]*height:26px)/,
     );
     expect(styles).toMatch(/\.settings-diagnostic-copy svg\{[^}]*stroke:currentColor/);
     expect(styles).toMatch(
       /\.settings-diagnostic-copy:focus-visible[^{]*\{[^}]*outline:2px solid var\(--accent\)/,
     );
     expect(styles).toMatch(
-      /\.settings-diagnostic-copy,[^{]*\{border-color:CanvasText\}/,
+      /\.settings-diagnostic-copy,[^{]*\{border-color:canvastext\}/i,
     );
     expect(index).toMatch(
       /id="settings-terminal-font-size"[\s\S]*min="10"[\s\S]*max="24"[\s\S]*aria-describedby="settings-terminal-font-size-help"/,

@@ -1,7 +1,14 @@
 import "./tauri-bridge";
 import { filterPlans, splitCurrentPlan } from "./workspace/plan-list";
+import { bindPlanMotion } from "./workspace/plan-motion";
 import { agentContextText } from "./workspace/copy-context";
 import { FitAddon } from "@xterm/addon-fit";
+import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
+import { WebLinksAddon } from "@xterm/addon-web-links";
+import { readModernUnicodeSetting } from "./terminal/unicode";
+import { TerminalResizeDispatcher } from "./terminal/resize-dispatch";
+import { terminalControlIcon } from "./terminal/control-icon";
+import { workspaceTabElementIds } from "./workspace/tab-bar";
 import { SearchAddon } from "@xterm/addon-search";
 import { Terminal } from "@xterm/xterm";
 import { mountTerminalDock } from "./terminal/pane";
@@ -16,6 +23,7 @@ import {
 } from "./terminal/paste";
 import { terminalSearchResultLabel } from "./terminal/search";
 import {
+  loadTerminalFont,
   normalizeTerminalProfileSettings,
   terminalRendererOptions,
 } from "./terminal/profile-settings";
@@ -31,7 +39,7 @@ import {
   linkedAssociationPointer,
   selectedInstalledAgentProfile,
 } from "./terminal/linked-launch";
-import { findTerminalPane, paneIds } from "./workspace/model";
+import { findTerminalPane, paneIds, maximumWorkspaceTabs } from "./workspace/model";
 import {
   WorkspaceTabController,
   createCryptoIdFactory,
@@ -41,7 +49,7 @@ import {
   stableTerminalWritebackRequestID,
   terminalWritebackContentPolicy,
 } from "./terminal/writeback";
-import { THEME_STORAGE_KEY, initTheme, resolveTheme } from "./theme";
+import { THEME_STORAGE_KEY, initTheme } from "./theme";
 import {
   applyPreferenceMirrors,
   defaultPreferences,
@@ -2225,6 +2233,7 @@ function renderPlanList() {
     title.className = "sidebar-plan-title";
     title.textContent = `#${plan.id} ${plan.title}`;
     item.append(title);
+    bindPlanMotion(item, title);
     if (plan.status === "done") item.append(planDoneTick());
     if (plan.holdReason) {
       const hold = document.createElement("span");
@@ -8471,22 +8480,24 @@ document.querySelectorAll("[data-close-palette]").forEach((element) => {
   element.addEventListener("click", closePalette);
 });
 
+const themeButtons = [elements.themeToggle, document.getElementById("terminal-window-theme-toggle")];
 const themeController = initTheme({
   root: document.documentElement,
   storage: localStorage,
   media: matchMedia("(prefers-color-scheme: light)"),
   onChange: (theme) => {
     // Show the theme a click switches to: sun in dark mode, moon in light.
-    elements.themeToggle.textContent = theme === "dark" ? "☀" : "☾";
-    elements.themeToggle.title =
-      theme === "dark" ? "Switch to light theme" : "Switch to dark theme";
+    for (const button of themeButtons) {
+      button.textContent = theme === "dark" ? "☀" : "☾";
+      button.title = theme === "dark" ? "Switch to light theme" : "Switch to dark theme";
+    }
   },
 });
-elements.themeToggle.addEventListener("click", () => {
+themeButtons.forEach((button) => button.addEventListener("click", () => {
   // The topbar toggle is the same setting as Appearance ▸ Color theme, so it
   // writes through to the stored record instead of only the cache.
   void savePreferences({ appearance: { theme: themeController.toggle() } });
-});
+}));
 
 elements.openProject.addEventListener("click", (event) =>
   void requestOpenProject("", event.currentTarget),
@@ -9135,10 +9146,15 @@ async function waitForBridge() {
 async function startTerminalWindow(label) {
   const section = document.getElementById("terminal-window");
   const status = document.getElementById("terminal-window-status");
+  const setStatus = (message) => {
+    status.textContent = message;
+    status.dataset.connected = String(message === terminalWindowStatusLabel("open"));
+  };
   const gap = document.getElementById("terminal-window-gap");
   const gapDetail = document.getElementById("terminal-window-gap-detail");
   const host = document.getElementById("terminal-window-host");
   section.hidden = false;
+  section.dataset.macos = String(/Mac/.test(navigator.platform));
   gapDetail.textContent = terminalGapNotice;
   const showGap = () => {
     gap.hidden = false;
@@ -9146,10 +9162,11 @@ async function startTerminalWindow(label) {
 
   try {
     await waitForBridge();
+    await loadTerminalFont();
     const assignment = await api().GetTerminalWindowTab(label);
     const sessions = assignment?.sessions;
     if (!sessions || sessions.length === 0) {
-      status.textContent = "This window no longer shows a terminal. Close it.";
+      setStatus("This window no longer shows a terminal. Close it.");
       return;
     }
     const workspaceState = await api().GetWorkspaceState();
@@ -9159,24 +9176,22 @@ async function startTerminalWindow(label) {
       createCryptoIdFactory(),
       {
         version: 1,
-        activeTabId: assignment.shape?.id ?? "",
-        tabs: [assignment.shape],
+        activeTabId: assignment.shape?.activeWindowTabId || assignment.shape?.id || "",
+        tabs: assignment.shape?.windowTabs || [assignment.shape],
       },
       {
-        // The tab's structure belongs to the main window; this window may
-        // focus panes and resize splits, nothing else.
-        allowAction: (action) =>
-          action.type === "resize-split" || action.type === "focus-pane",
+        allowAction: (action) => ["resize-split", "focus-pane", "select-tab", "create-tab"].includes(action.type) ||
+          (action.type === "close-tab" && action.tabId !== assignment.shape.id),
       },
     );
-    const tab = controller.workspace.tabs[0];
+    const tab = controller.workspace.tabs.find((item) => item.id === assignment.shape.id);
     if (!tab) {
-      status.textContent = "This window no longer shows a terminal. Close it.";
+      setStatus("This window no longer shows a terminal. Close it.");
       return;
     }
     const heading = document.getElementById("terminal-window-heading");
     if (tab.title) {
-      heading.textContent = tab.title;
+      heading.textContent = "p-track";
       document.title = `Terminal — ${tab.title}`;
     }
 
@@ -9196,14 +9211,13 @@ async function startTerminalWindow(label) {
       });
     };
 
-    const paneOrder = paneIds(tab.root);
+    const paneOrder = controller.workspace.tabs.flatMap((item) => paneIds(item.root));
     const panes = new Map();
-    for (const [index, paneId] of paneOrder.entries()) {
-      const sessionId = sessions[index];
-      if (!sessionId) continue;
+    const createRenderer = (paneId, sessionId) => {
+      const owner = controller.workspace.tabs.find((item) => paneIds(item.root).includes(paneId));
       const paneHost = document.createElement("div");
       paneHost.className = "terminal-window-pane";
-      const profileId = findTerminalPane(tab.root, paneId)?.profileId ?? "";
+      const profileId = findTerminalPane(owner.root, paneId)?.profileId ?? "";
       const settings = settingsForProfile(profileId);
       const fontSize = readTerminalProfileFontSize(localStorage, profileId, settings.fontSize);
       const terminal = new Terminal({
@@ -9214,12 +9228,18 @@ async function startTerminalWindow(label) {
       });
       const fit = new FitAddon();
       terminal.loadAddon(fit);
+      if (readModernUnicodeSetting(localStorage)) terminal.loadAddon(new UnicodeGraphemesAddon());
+      terminal.loadAddon(new WebLinksAddon((event, uri) => {
+        if (/Mac/.test(navigator.platform) ? !event.metaKey : !event.ctrlKey) return;
+        event.preventDefault();
+        window.runtime?.BrowserOpenURL?.(uri);
+      }));
       const search = new SearchAddon();
       terminal.loadAddon(search);
       terminal.open(paneHost);
       terminal.textarea?.setAttribute(
         "aria-label",
-        paneOrder.length === 1 ? "Terminal session" : `Terminal pane ${index + 1}`,
+        `Terminal session — ${owner.title}`,
       );
       panes.set(paneId, {
         sessionId,
@@ -9237,23 +9257,40 @@ async function startTerminalWindow(label) {
         ended: false,
         client: null,
       });
+      const pane = panes.get(paneId);
+      pane.resize = new TerminalResizeDispatcher({
+        now: () => performance.now(),
+        setTimer: (callback, delay) => window.setTimeout(callback, delay),
+        clearTimer: (timer) => window.clearTimeout(timer),
+        accepted: () => pane.state === "open" && !pane.ended && pane.host.isConnected && pane.host.getBoundingClientRect().width > 0,
+        dispatch: (size) => {
+          void api().ResizeTerminalV2(generation, pane.sessionId, size.rows, size.columns).catch((error) => {
+            pane.resize.invalidate(size);
+            setStatus(messageFrom(error));
+          });
+        },
+      });
+      return pane;
+    };
+    for (const [index, paneId] of paneOrder.entries()) {
+      if (sessions[index]) createRenderer(paneId, sessions[index]);
     }
+    const currentTab = () => controller.workspace.tabs.find((item) => item.id === controller.workspace.activeTabId);
 
     // One status line for the window: the least-connected pane speaks for it,
     // and a shell that ended says so in its own scrollback.
     const renderStatus = () => {
-      const states = [...panes.values()].map((pane) => pane.state);
+      const states = paneIds(currentTab().root).map((id) => panes.get(id)?.state || "connecting");
       const aggregate = ["error", "closed", "connecting"].find((candidate) =>
         states.includes(candidate),
       ) ?? "open";
-      status.textContent = terminalWindowStatusLabel(aggregate);
+      setStatus(terminalWindowStatusLabel(aggregate));
     };
 
     const fitPane = (pane) => {
+      if (!pane.host.isConnected || pane.host.getBoundingClientRect().width === 0 || pane.host.getBoundingClientRect().height === 0) return;
       pane.fit.fit();
-      void api()
-        .ResizeTerminalV2(generation, pane.sessionId, pane.terminal.rows, pane.terminal.cols)
-        .catch(() => {});
+      pane.resize.queue({ rows: pane.terminal.rows, columns: pane.terminal.cols });
     };
 
     const splitView = new WorkspaceSplitView({
@@ -9270,30 +9307,24 @@ async function startTerminalWindow(label) {
       },
     });
 
-    // A resized split is pushed back into the assignment, debounced, so the
-    // tab pops back in with the geometry the user last saw in this window.
-    let shapePush = null;
-    controller.subscribe((workspace, previous) => {
-      splitView.refresh(workspace);
-      const current = workspace.tabs[0];
-      const before = previous.tabs[0];
-      if (current && current.activePaneId !== before?.activePaneId) {
-        panes.get(current.activePaneId)?.terminal.focus();
-      }
-      if (!current || current.root === before?.root) return;
-      window.clearTimeout(shapePush ?? undefined);
-      shapePush = window.setTimeout(() => {
-        void api()
-          .SetTerminalWindowTab(label, sessions, current)
-          .catch(() => {});
-      }, 300);
-    });
+    let assignmentWrites = Promise.resolve();
+    const saveWindow = () => {
+      const workspace = controller.workspace;
+      const source = workspace.tabs.find((item) => item.id === tab.id);
+      const ids = workspace.tabs.flatMap((item) => paneIds(item.root));
+      const owned = ids.map((id) => panes.get(id)?.sessionId);
+      if (owned.some((id) => !id)) return assignmentWrites;
+      const shape = { ...source, windowTabs: workspace.tabs, activeWindowTabId: workspace.activeTabId };
+      assignmentWrites = assignmentWrites.catch(() => {}).then(() =>
+        api().SetTerminalWindowTab(label, owned, shape));
+      return assignmentWrites;
+    };
 
     // ------------------------------------------------- per-session surfaces
     // The same search, paste guard, and zoom the dock offers (§4); project
     // chrome — writeback, diagnostics, the association editor — stays in the
     // window that owns the tab.
-    const activePane = () => panes.get(controller.workspace.tabs[0]?.activePaneId ?? "");
+    const activePane = () => panes.get(currentTab()?.activePaneId ?? "");
     const searchBar = document.getElementById("terminal-window-search");
     const searchInput = document.getElementById("terminal-window-search-input");
     const searchResults = document.getElementById("terminal-window-search-results");
@@ -9355,7 +9386,7 @@ async function startTerminalWindow(label) {
       requestAnimationFrame(() => fitPane(pane));
     };
 
-    for (const pane of panes.values()) {
+    const connectPane = async (pane, streamUrl) => {
       pane.search.onDidChangeResults((result) => {
         if (pane !== activePane()) return;
         searchResults.textContent = terminalSearchResultLabel(
@@ -9441,7 +9472,13 @@ async function startTerminalWindow(label) {
             pane.state = state;
             renderStatus();
             // Only a stream that opened earns a fresh re-claim budget.
-            if (state === "open") pane.attempts = 0;
+            if (state === "open") {
+              pane.attempts = 0;
+              // The stream owns the renderer lease only after attachment.
+              // Re-send even an unchanged size when a new lease takes over.
+              pane.resize.invalidate({ rows: pane.terminal.rows, columns: pane.terminal.cols });
+              fitPane(pane);
+            }
             if (state === "closed" || state === "error") scheduleReclaim();
           },
           onGap: showGap,
@@ -9467,10 +9504,10 @@ async function startTerminalWindow(label) {
           },
           reclaiming: () => {
             pane.attempts += 1;
-            status.textContent = reclaimingStreamNotice;
+            setStatus(reclaimingStreamNotice);
           },
           exhausted: () => {
-            status.textContent = streamReclaimFailedNotice;
+            setStatus(streamReclaimFailedNotice);
           },
         }, pane.attempts).finally(() => {
           pane.reclaiming = false;
@@ -9488,38 +9525,213 @@ async function startTerminalWindow(label) {
         }
       });
 
-      const claim = await api().ClaimTerminalStream(pane.sessionId, 0);
+      const claim = streamUrl ? { url: streamUrl, fromSequence: 0, gap: false }
+        : await api().ClaimTerminalStream(pane.sessionId, 0);
       if (claim.gap) showGap();
       attach(claim.url, claim.fromSequence);
-    }
+    };
+    for (const pane of panes.values()) await connectPane(pane);
 
     window.runtime?.EventsOnMultiple?.("terminal:exit", (payload) => {
       for (const pane of panes.values()) {
         if (payload?.sessionId !== pane.sessionId) continue;
         pane.ended = true;
         pane.state = "closed";
-        status.textContent = payload.error || `Exited (${payload.exitCode})`;
+        setStatus(payload.error || `Exited (${payload.exitCode})`);
       }
     }, -1);
 
     const fitAll = () => {
-      for (const pane of panes.values()) fitPane(pane);
+      for (const id of paneIds(currentTab().root)) {
+        const pane = panes.get(id);
+        if (pane) fitPane(pane);
+      }
     };
-    window.addEventListener("resize", () => requestAnimationFrame(fitAll));
+    let resizeFrame = 0;
+    const scheduleFit = () => {
+      cancelAnimationFrame(resizeFrame);
+      resizeFrame = requestAnimationFrame(fitAll);
+    };
+    const resizeObserver = new ResizeObserver(scheduleFit);
+    resizeObserver.observe(host);
+    window.addEventListener("resize", scheduleFit);
+    window.addEventListener("focus", () => {
+      scheduleFit();
+      if (searchBar.hidden) activePane()?.terminal.focus();
+    });
+    window.addEventListener("pagehide", () => {
+      resizeObserver.disconnect();
+      cancelAnimationFrame(resizeFrame);
+      for (const pane of panes.values()) {
+        pane.ended = true;
+        pane.client?.close();
+        pane.resize.dispose();
+        pane.terminal.dispose();
+      }
+    }, { once: true });
+    function setupWindowTabs() {
+      const list = document.getElementById("terminal-window-tabs");
+      const controls = document.getElementById("terminal-window-controls");
+      const shell = profiles.find((profile) => profile.kind === "shell");
+      let busy = false;
+      const iconButton = (label, icon, action) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "terminal-tab-action";
+        button.title = label;
+        button.setAttribute("aria-label", label);
+        if (icon === "close") button.append(terminalControlIcon("close"));
+        else {
+          const source = icon.startsWith("#") ? document.querySelector(`${icon} svg`) : null;
+          if (source) button.append(source.cloneNode(true));
+          else button.textContent = icon;
+        }
+        button.addEventListener("click", () => { void action(); });
+        return button;
+      };
+      const reportError = (error) => { setStatus(messageFrom(error)); };
+      const closeTab = async (item) => {
+        if (busy || item.id === tab.id) return;
+        const members = paneIds(item.root).map((id) => panes.get(id)).filter(Boolean);
+        busy = true;
+        try {
+          if (!(await showConfirmation({
+            eyebrow: "Terminal", heading: `Close ${item.title}?`,
+            detail: "This stops the shell and any programs running in this tab.",
+            cancel: "Keep open", submit: "Close terminal",
+          }))) return;
+          for (const pane of members) {
+            await api().CloseTerminalV2(generation, pane.sessionId, false);
+            pane.ended = true;
+            pane.client?.close();
+            pane.resize.dispose();
+            pane.terminal.dispose();
+          }
+          for (const id of paneIds(item.root)) panes.delete(id);
+          controller.dispatch({ type: "close-tab", tabId: item.id });
+          await saveWindow();
+        } catch (error) { reportError(error); }
+        finally { busy = false; renderTabs(); }
+      };
+      const addTab = async () => {
+        if (busy || !shell || controller.workspace.tabs.length >= maximumWorkspaceTabs) return;
+        busy = true;
+        let created;
+        let added;
+        try {
+          const cwd = findTerminalPane(currentTab().root, currentTab().activePaneId)?.cwd || workspaceState.project?.root || "";
+          created = await api().CreateTerminalV2(generation, shell.id, cwd, 24, 80);
+          if (Number(created.generation) !== generation) throw new Error("Project changed while opening the terminal");
+          const next = controller.dispatch({ type: "create-tab", title: `Terminal ${controller.workspace.tabs.length + 1}`, profileId: shell.id, cwd });
+          if (!next) throw new Error("Could not create a terminal tab");
+          added = currentTab();
+          const pane = createRenderer(added.activePaneId, created.sessionId);
+          splitView.refresh(controller.workspace);
+          splitView.mountForPane(added.activePaneId)?.append(pane.host);
+          await saveWindow();
+          await connectPane(pane, created.streamUrl);
+          scheduleFit();
+          pane.terminal.focus();
+        } catch (error) {
+          if (created) await api().CloseTerminalV2(generation, created.sessionId, false).catch(() => {});
+          if (added) {
+            const pane = panes.get(added.activePaneId);
+            if (pane) {
+              pane.ended = true;
+              pane.client?.close();
+              pane.resize.dispose();
+              pane.terminal.dispose();
+            }
+            panes.delete(added.activePaneId);
+            controller.dispatch({ type: "close-tab", tabId: added.id });
+            await saveWindow().catch(() => {});
+          }
+          reportError(error);
+        } finally { busy = false; renderTabs(); }
+      };
+      const add = iconButton("New terminal tab (⌘T / Ctrl+Shift+T)", "+", addTab);
+      controls.append(
+        add,
+        iconButton("Search terminal output", "#terminal-search-open", openSearch),
+        iconButton("Decrease font size", "−", () => { const pane = activePane(); if (pane) zoomPane(pane, pane.fontSize - 1); }),
+        iconButton("Increase font size", "+", () => { const pane = activePane(); if (pane) zoomPane(pane, pane.fontSize + 1); }),
+        iconButton("Clear scrollback", "#terminal-clear", () => activePane()?.terminal.clear()),
+      );
+      function renderTabs() {
+        list.replaceChildren();
+        for (const item of controller.workspace.tabs) {
+          const wrapper = document.createElement("div");
+          wrapper.className = "terminal-tab-item";
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "terminal-tab";
+          button.textContent = item.title || "Terminal";
+          button.setAttribute("role", "tab");
+          const ids = workspaceTabElementIds(item.id);
+          button.id = ids.tabButtonId;
+          button.setAttribute("aria-controls", ids.panelId);
+          button.setAttribute("aria-selected", String(item.id === controller.workspace.activeTabId));
+          button.tabIndex = item.id === controller.workspace.activeTabId ? 0 : -1;
+          button.addEventListener("click", () => controller.dispatch({ type: "select-tab", tabId: item.id }));
+          wrapper.append(button);
+          if (item.id !== tab.id) wrapper.append(iconButton(`Close ${item.title}`, "close", () => closeTab(item)));
+          list.append(wrapper);
+        }
+        host.dataset.singlePane = String(paneIds(currentTab().root).length === 1);
+        heading.textContent = "p-track";
+        add.disabled = busy || !shell || controller.workspace.tabs.length >= maximumWorkspaceTabs;
+      }
+      const selectRelative = (delta) => {
+        const all = controller.workspace.tabs;
+        const index = all.findIndex((item) => item.id === controller.workspace.activeTabId);
+        controller.dispatch({ type: "select-tab", tabId: all[(index + delta + all.length) % all.length].id });
+      };
+      list.addEventListener("keydown", (event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        event.preventDefault();
+        selectRelative(event.key === "ArrowLeft" ? -1 : 1);
+        list.querySelector('[aria-selected="true"]')?.focus();
+      });
+      window.addEventListener("keydown", (event) => {
+        const modifier = /Mac/.test(navigator.platform) ? event.metaKey : event.ctrlKey && event.shiftKey;
+        if (event.type !== "keydown" || event.repeat || event.isComposing) return;
+        if (event.ctrlKey && event.key === "Tab") {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          selectRelative(event.shiftKey ? -1 : 1);
+        } else if (modifier && event.key.toLowerCase() === "t") {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          void addTab();
+        } else if (modifier && event.key.toLowerCase() === "w" && currentTab().id !== tab.id) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          void closeTab(currentTab());
+        }
+      }, true);
+      controller.subscribe(() => {
+        splitView.refresh(controller.workspace);
+        renderTabs();
+        scheduleFit();
+        if (searchBar.hidden) activePane()?.terminal.focus();
+        renderStatus();
+        void saveWindow().catch(reportError);
+      });
+      renderTabs();
+    }
+
     // A theme picked in the main window reaches this one through the shared
     // stored record; the OS preference path is already followed by initTheme.
     window.addEventListener("storage", (event) => {
       if (event.key !== THEME_STORAGE_KEY && event.key !== null) return;
-      document.documentElement.dataset.theme = resolveTheme(
-        event.key === null ? null : event.newValue,
-        matchMedia("(prefers-color-scheme: light)").matches,
-      );
+      themeController.setTheme(event.key === null ? "system" : event.newValue);
     });
+    setupWindowTabs();
     fitAll();
     renderStatus();
-    panes.get(tab.activePaneId)?.terminal.focus();
+    activePane()?.terminal.focus();
   } catch (error) {
-    status.textContent = messageFrom(error);
+    setStatus(messageFrom(error));
   }
 }
 

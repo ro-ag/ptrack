@@ -92,6 +92,37 @@ describe("terminal resize dispatcher", () => {
     expect(clock.timers.size).toBe(0);
   });
 
+  it("waits for a detached stream and resends the fitted size after reconnect", () => {
+    const clock = new FakeClock();
+    const sent: TerminalSize[] = [];
+    let state = "connecting";
+    const dispatcher = new TerminalResizeDispatcher({
+      now: () => clock.now,
+      setTimer: (callback, delay) => clock.setTimer(callback, delay),
+      clearTimer: (timer) => clock.clearTimer(timer),
+      accepted: () => state === "open",
+      dispatch: (size) => sent.push(size),
+    });
+    const size = { rows: 48, columns: 120 };
+    dispatcher.queue(size);
+    clock.runNext();
+    expect(sent).toEqual([]);
+    state = "open";
+    dispatcher.invalidate(size);
+    dispatcher.queue(size);
+    clock.runNext();
+    expect(sent).toEqual([size]);
+    state = "closed";
+    dispatcher.queue({ rows: 50, columns: 120 });
+    clock.runNext();
+    expect(sent).toEqual([size]);
+    state = "open";
+    dispatcher.invalidate(size);
+    dispatcher.queue(size);
+    clock.runNext();
+    expect(sent).toEqual([size, size]);
+  });
+
   it("cancels a pending backend resize when process-exit cleanup disposes it", () => {
     const clock = new FakeClock();
     const sent: TerminalSize[] = [];

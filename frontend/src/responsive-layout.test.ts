@@ -283,10 +283,15 @@ describe("responsive desktop layout contracts", () => {
     );
   });
 
-  it("reflows the terminal window bar and keeps its terminal shrinkable", () => {
+  it("uses shared titlebar chrome and keeps detached terminals shrinkable", () => {
     expect(styles).toMatch(
-      /\.terminal-window-bar\s*\{[^}]*flex-wrap:\s*wrap;/,
+      /\.terminal-window-bar\s*\{[^}]*justify-content:\s*space-between;/,
     );
+    expect(styles).toMatch(/\.terminal-window-tools \.terminal-tabs\s*\{[^}]*flex:\s*1 1 auto;[^}]*min-width:\s*0;/);
+    // Hiding pane chrome must also remove its grid track, or xterm fits to
+    // the old 32px header row and reports a one-line terminal to the PTY.
+    expect(styles).toMatch(/\.terminal-window-host\[data-single-pane="true"\] \.terminal-split-leaf\s*\{[^}]*grid-template-rows:\s*minmax\(0, 1fr\);/);
+    expect(styles).toMatch(/\.terminal-window-host \.terminal-split-tab-panel\s*\{[^}]*inset:\s*4px;[^}]*height:\s*auto;/);
     expect(styles).toMatch(
       /\.terminal-window-gap\s*\{[^}]*flex-wrap:\s*wrap;/,
     );

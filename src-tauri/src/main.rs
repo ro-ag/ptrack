@@ -215,8 +215,15 @@ fn terminal_window(app: &AppHandle, label: &str) -> Result<(), String> {
     )
     .title(TERMINAL_WINDOW_TITLE)
     .background_color(tauri::window::Color(8, 13, 18, 255))
-    .min_inner_size(f64::from(spec.min_width), f64::from(spec.min_height))
+    .min_inner_size(480.0, 300.0)
     .inner_size(f64::from(spec.min_width), f64::from(spec.min_height));
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true)
+            .traffic_light_position(tauri::LogicalPosition::new(16.0, 17.0));
+    }
     if let Some(placement) = saved_placement(ptrack_cli::version(), label, &monitors, primary) {
         // The builder takes logical units, so the stored logical rect replays
         // without a scale conversion.

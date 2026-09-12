@@ -67,6 +67,7 @@ import {
   writeTerminalProfileFontSize,
 } from "./preferences";
 import {
+  loadTerminalFont,
   normalizeTerminalProfileSettings,
   terminalRendererOptions,
   terminalProfileClosesAfterExit,
@@ -829,6 +830,7 @@ class TerminalDock {
 
   async initialize(): Promise<void> {
     try {
+      await loadTerminalFont();
       const profiles = await this.#backend.GetTerminalProfiles();
       if (this.#disposed) return;
       this.#profiles = profiles.map((profile) => ({ ...profile }));
