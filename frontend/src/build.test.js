@@ -36,9 +36,9 @@ describe("production asset layout", () => {
     expect(existsSync(resolve(distRoot, "app.js"))).toBe(true);
     expect(existsSync(resolve(distRoot, "style.css"))).toBe(true);
     const fontPath = "fonts/hack-nerd-font/HackNerdFontMono-Regular.ttf";
-    expect(readFileSync(resolve(distRoot, fontPath))).toEqual(
+    expect(readFileSync(resolve(distRoot, fontPath)).equals(
       readFileSync(resolve(frontendRoot, "public", fontPath)),
-    );
+    )).toBe(true);
     expect(existsSync(resolve(distRoot, "fonts/hack-nerd-font/LICENSE.md"))).toBe(true);
 
     const index = readFileSync(indexPath, "utf8");
