@@ -21,8 +21,8 @@
     "frontend/src/workspace/plan-list.ts",
     "frontend/src/workspace/copy-context.ts"
   ],
-  "uiSourceSha256": "33b98d455fe4831269277814464a50a1eb21ae1575d437c6f8a9f491a8bdcdc4",
-  "sourceReview": "2026-09-03: Board, Overview, and Terminal recaptured in both themes from the current frontend using isolated Northstar fixture data. Verified plan counters and filters, plan creation and error recovery, project/plan/task context copying, tab close intent, last-tab guard, and pane split/close behavior in the browser. Existing project-search, project-switch, and task-drawer captures retain their unchanged primary dialog content; the new task-drawer Copy context action is described in the desktop and terminal guides.",
+  "uiSourceSha256": "d89553f0d5d3fa0d7a2ace378f4b73fcf6161c8bdb96f0b9c7735a13ebeb2da8",
+  "sourceReview": "2026-09-03: Board, Overview, and Terminal recaptured in both themes from the current frontend using isolated Northstar fixture data. Verified plan counters and filters, plan creation and error recovery, project/plan/task context copying, tab close intent, last-tab guard, and pane split/close behavior in the browser. Existing project-search, project-switch, and task-drawer captures retain their unchanged primary dialog content; the new task-drawer Copy context action is described in the desktop and terminal guides. 2026-09-12: Reviewed this change against the retained embedded-terminal and board captures. Sidebar changes affect pointer/hover motion, and the bundled fallback adds prompt glyphs; the captured embedded workflows remain applicable. The new detached-window header and extra-tab lifecycle are described in the terminal guide; no detached-window screenshot is claimed. Detached layout verified separately at wide and compact sizes.",
   "requiredWorkflows": [
     "board",
     "overview",

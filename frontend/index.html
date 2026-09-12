@@ -1143,23 +1143,22 @@
       aria-labelledby="terminal-window-heading"
       hidden
     >
-      <header class="terminal-window-bar">
+      <header class="topbar terminal-window-bar" data-tauri-drag-region="deep">
         <div class="terminal-window-identity">
-          <p class="eyebrow">p-track</p>
-          <h1 id="terminal-window-heading" tabindex="-1">Terminal</h1>
+          <h1 id="terminal-window-heading" class="eyebrow">p-track</h1>
         </div>
-        <p
-          id="terminal-window-status"
-          class="terminal-window-status"
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-        >Connecting…</p>
-        <p id="terminal-window-return" class="terminal-window-return">
-          Closing this window returns the terminal to the p-track window. The
-          shell keeps running either way.
-        </p>
+        <div class="terminal-window-tools">
+          <div id="terminal-window-tabs" class="terminal-tabs" role="tablist" aria-label="Terminal tabs"></div>
+          <div id="terminal-window-controls" class="terminal-tab-actions" role="toolbar" aria-label="Terminal controls">
+            <button id="terminal-window-theme-toggle" class="terminal-tab-action" type="button" aria-label="Toggle color theme">☾</button>
+          </div>
+        </div>
       </header>
+      <p id="terminal-window-status" class="terminal-window-status" role="status" aria-live="polite" aria-atomic="true">Connecting…</p>
+      <div class="canvas terminal-window-canvas">
+      <p id="terminal-window-return" class="terminal-window-return">
+        Closing this window returns the original tab to p-track. Tabs opened here close with this window.
+      </p>
       <div
         id="terminal-window-search"
         class="terminal-window-search"
@@ -1194,6 +1193,7 @@
         class="terminal-window-host"
         aria-label="Terminal session"
       ></div>
+      </div>
     </section>
 
     <div id="modal" class="modal" hidden>

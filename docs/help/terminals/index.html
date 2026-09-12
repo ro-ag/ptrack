@@ -71,6 +71,9 @@
           </div>
           <p>After an app restart or project reopen, saved descriptors return as stopped panes. Opening one creates a fresh session; it does not restore the prior shell process or terminal contents.</p>
 
+          <p><strong>Detached terminals.</strong> Use Pop out terminal to move the current tab into its own window. Its compact header provides tabs, a color-theme toggle, search, font-size controls, and clear scrollback. The terminal follows window resizing. New tabs created here open shell sessions; closing one asks before stopping its process. Closing the detached window returns the original tab to the main window and stops the extra tabs created in that window.</p>
+          <p>Shell prompt symbols use a bundled Nerd Font fallback, so no system font installation is needed.</p>
+
           <h2 id="splits-and-limits">Splits and limits</h2>
           <p>Split the active pane horizontally or vertically and resize a split with its separator. p-track clamps split ratios from <code>0.1</code> through <code>0.9</code>, so neither side can consume the entire split.</p>
           <div class="table-wrap">

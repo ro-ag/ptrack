@@ -35,12 +35,26 @@ describe("terminal profile settings", () => {
 
   it("maps the portable font sentinel and explicit exit behavior", () => {
     expect(terminalProfileFontFamily("monospace")).toContain("Apple Color Emoji");
-    expect(terminalProfileFontFamily("Iosevka")).toBe("Iosevka");
+    expect(terminalProfileFontFamily("Iosevka")).toMatch(/^Iosevka, /);
     expect(terminalProfileClosesAfterExit("keep", 0)).toBe(false);
     expect(terminalProfileClosesAfterExit("close-on-success", 1)).toBe(false);
     expect(terminalProfileClosesAfterExit("close-on-success", 0)).toBe(true);
     expect(terminalProfileClosesAfterExit("close", 1)).toBe(true);
   });
+
+  it.each(["monospace", "Iosevka", '"JetBrains Mono", monospace'])(
+    "retains symbol and emoji fallbacks for %s",
+    (fontFamily) => {
+      const stack = terminalRendererOptions(
+        normalizeTerminalProfileSettings({ fontFamily }), 14,
+      ).fontFamily!;
+      expect(stack).toContain('"p-track Nerd Font"');
+      expect(stack.indexOf('"p-track Nerd Font"')).toBeLessThan(
+        stack.indexOf('"Apple Color Emoji"'),
+      );
+      expect(stack).toContain('"Segoe UI Emoji"');
+    },
+  );
 
   it.each([100, 50_000, 100_000])(
     "preserves normalized scrollback %i in fresh renderer options",
