@@ -26,7 +26,7 @@
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
-    <div id="app">
+    <div id="app" data-workspace-open="false">
       <aside id="sidebar" class="sidebar" aria-label="Workspace navigation">
         <div class="sidebar-top" aria-hidden="true" data-tauri-drag-region></div>
 
@@ -220,49 +220,38 @@
           class="workspace-state-screen"
         >
           <div id="project-state-card" class="state-card">
-            <div id="welcome-panel">
-              <p id="workspace-state-eyebrow" class="eyebrow">p-track projects</p>
-              <h2 id="workspace-state-heading" tabindex="-1">Start with a project</h2>
-              <p id="workspace-state-detail" class="state-detail">
-                Initialize p-track in a folder, or open a project you already use.
-              </p>
-              <div class="welcome-actions">
-                <button id="state-initialize-project-button" type="button">Initialize Project</button>
-                <button
-                  id="state-open-project-button"
-                  class="button-secondary"
-                  type="button"
-                >Open Project…</button>
-              </div>
-              <div class="recent-projects-section">
-                <div class="section-heading">
-                  <p
-                    id="recent-project-heading"
-                    class="section-label"
-                    tabindex="-1"
-                  >Recent projects</p>
+            <div id="welcome-panel" class="app-shell">
+              <div class="backdrop" aria-hidden="true"><div class="aurora"></div><div class="stars"></div><div class="grid-floor"></div><div class="horizon"></div><div class="grain"></div><div class="vignette"></div></div>
+              <header class="orbit-toolbar">
+                <div class="home-brand"><img src="../assets/brand/AppIcon.icon/Assets/bars.png" width="42" height="42" alt="p-track" /><div><p id="workspace-state-eyebrow" class="eyebrow">p-track</p><h2 id="workspace-state-heading" tabindex="-1">Projects</h2></div></div>
+                <div class="orbit-tools">
+                  <button id="state-open-project-button" class="orbit-tool" type="button">Open folder…</button>
+                  <button id="state-initialize-project-button" class="orbit-tool" type="button">Initialize project</button>
+                  <button id="landing-settings-open" class="orbit-tool" type="button" aria-label="Open Settings" title="Settings" aria-haspopup="dialog" aria-controls="settings-modal">Settings</button>
+                  <button id="landing-help-open" class="orbit-tool" type="button" title="Open online Help Center">Help ↗</button>
                 </div>
-                <div
-                  id="recent-project-list"
-                  class="recent-project-list"
-                  role="list"
-                  aria-labelledby="recent-project-heading"
-                  aria-busy="false"
-                ></div>
-                <p
-                  id="recent-project-status"
-                  class="recent-project-feedback"
-                  role="status"
-                  aria-live="polite"
-                  aria-atomic="true"
-                ></p>
-                <p
-                  id="recent-project-error"
-                  class="recent-project-feedback setup-error"
-                  role="alert"
-                  aria-atomic="true"
-                ></p>
+              </header>
+              <section class="home-summary" aria-label="Global project summary">
+                <div id="global-overview-counts" class="stats-grid" aria-label="Global work statistics"></div>
+                <div class="home-coverage"><span class="panel-kicker">Summary coverage</span><strong id="orbit-sync-status">Loading summaries…</strong><p id="global-overview-coverage" role="status">Work counts reflect synced projects only.</p><button id="overview-refresh-button" class="summary-refresh" type="button">Refresh summaries</button><p id="overview-refresh-status" role="status" aria-live="polite"></p><details class="summary-guidance"><summary>Update work summaries</summary><p id="overview-refresh-guidance">Refresh reads the latest work from registered projects. Unavailable projects keep their previous summaries.</p></details></div>
+              </section>
+              <div class="launch-grid">
+                <section class="project-preview-panel" aria-label="Selected project preview">
+                  <p id="workspace-state-detail" hidden>Choose a project to preview its work.</p>
+                  <article id="orbit-selected-project" class="selected-project" aria-label="Selected project"></article>
+                </section>
+                <section class="projects-panel" aria-labelledby="recent-project-heading">
+                  <div class="panel-head"><div class="panel-title"><h3 id="recent-project-heading" tabindex="-1">Choose a project <span id="overview-project-count"></span></h3></div>
+                    <label class="search-wrap"><span class="orbit-sr-only">Search recent projects</span><input class="search-input" id="recent-project-search" type="search" placeholder="Search projects…" autocomplete="off" /></label>
+                    <div class="chooser-options"><div class="project-view-toggle" role="group" aria-label="Project view"><button type="button" data-project-view="carousel" aria-pressed="true" aria-controls="recent-project-list orbit-project-strip">Carousel</button><button type="button" data-project-view="list" aria-pressed="false" aria-controls="orbit-project-strip">List</button></div><div class="filter-row" aria-label="Project filters"><button class="chip active" type="button" data-orbit-filter="all" aria-pressed="true">All</button><button class="chip" type="button" data-orbit-filter="available" aria-pressed="false">Available</button><button class="chip" type="button" data-orbit-filter="synced" aria-pressed="false">With summary</button></div></div>
+                  </div>
+                  <div class="project-stage-wrap"><div id="recent-project-list" class="project-stage" role="list" aria-label="Project carousel" aria-labelledby="recent-project-heading" aria-busy="false"></div><div class="stage-nav" aria-label="Project carousel controls"><button id="orbit-previous" type="button" aria-label="Previous project">←</button><button id="orbit-next" type="button" aria-label="Next project">→</button></div></div>
+                  <div class="project-index"><p class="panel-kicker">Recent projects · direct access</p><div id="orbit-project-strip" class="project-strip" role="list" aria-label="Recent tracked projects"></div></div>
+                  <div class="orbit-feedback"><p id="recent-project-status" role="status" aria-live="polite" aria-atomic="true"></p><p id="recent-project-error" role="alert" aria-atomic="true"></p></div>
+                </section>
               </div>
+              <footer class="orbit-footer"><span>Select a project to preview its work. Open continues in that project.</span><button id="orbit-activity-toggle" type="button" aria-expanded="false" aria-controls="orbit-activity-panel">Recent updates across synced projects</button></footer>
+              <section id="orbit-activity-panel" class="orbit-activity-panel" hidden aria-labelledby="overview-updates-heading"><div class="panel-head"><h3 id="overview-updates-heading">Recent record updates</h3><label>Period <select id="global-overview-period"><option value="30">Last 30 days</option><option value="all">All time</option></select></label><button id="orbit-activity-close" type="button" aria-label="Close recent updates">Close</button></div><p>Latest cached changes with current status, not a complete event history.</p><div id="global-overview-activity" class="overview-activity" role="list"></div></section>
             </div>
 
             <section

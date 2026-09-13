@@ -734,6 +734,46 @@ fn get_pending_initialization_v1_is_strict_and_omits_absent_metadata() {
 }
 
 #[test]
+fn startup_pending_read_does_not_reopen_a_completed_initialization() {
+    let directory = TestDirectory::new("completed-initialization-startup");
+    let project = directory.0.join("project");
+    std::fs::create_dir(&project).unwrap();
+    let (runtime, factory, initialization, events) = first_run_runtime(
+        &project,
+        Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+    );
+    *initialization.status.lock().unwrap() = Some(InitializationStatusV1 {
+        operation_id: "A".repeat(43),
+        canonical_root: project.to_string_lossy().into_owned(),
+        checkpoint: InitializationCheckpointV1::DesktopBound,
+        outcome: InitializationOutcomeV1::Complete,
+        error_kind: String::new(),
+    });
+    for _ in 0..2 {
+        assert_eq!(
+            runtime
+                .invoke(request("GetWorkspaceState", Vec::new()))
+                .unwrap()["status"],
+            "welcome"
+        );
+        assert_eq!(
+            runtime
+                .invoke(request("GetPendingInitializationV1", Vec::new()))
+                .unwrap(),
+            json!({ "pending": false })
+        );
+        assert_eq!(
+            runtime
+                .invoke(request("GetWorkspaceState", Vec::new()))
+                .unwrap()["status"],
+            "welcome"
+        );
+    }
+    assert!(factory.built.lock().unwrap().is_empty());
+    assert!(events.0.lock().unwrap().is_empty());
+}
+
+#[test]
 fn concurrent_completed_status_checks_reload_and_bind_exactly_once() {
     let directory = TestDirectory::new("completed-initialization-concurrency");
     let project = directory.0.join("project");
@@ -941,6 +981,7 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "GetCapabilitiesV2",
             "GetCapabilityAuditsV2",
             "GetDiagnosticsReport",
+            "GetGlobalOverviewV1",
             "GetInitializationStatusV1",
             "GetIssueDetailV1",
             "GetIssuesV1",
@@ -979,6 +1020,7 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "PreviewCapabilityV2",
             "PreviewProjectGuideV1",
             "PreviewTerminalWritebackV2",
+            "RefreshGlobalOverviewV1",
             "RemoveCapabilityV2",
             "RenamePlanV1",
             "RenameTask",
@@ -1883,6 +1925,20 @@ fn failed_shutdown_remains_fenced_and_retries_cleanup() {
     );
     assert_eq!(
         runtime.begin_native_action().err().unwrap().to_string(),
+        "terminal lifecycle is shutting down"
+    );
+    assert_eq!(
+        runtime
+            .invoke(request("GetGlobalOverviewV1", vec![]))
+            .unwrap_err()
+            .to_string(),
+        "terminal lifecycle is shutting down"
+    );
+    assert_eq!(
+        runtime
+            .invoke(request("RefreshGlobalOverviewV1", vec![]))
+            .unwrap_err()
+            .to_string(),
         "terminal lifecycle is shutting down"
     );
     runtime.begin_shutdown().unwrap();
@@ -4037,4 +4093,24 @@ fn a_repository_with_no_head_is_unavailable() {
         stack_scan_outcome(None, None, true, || panic!("no scan without a HEAD")),
         StackScanOutcome::Unavailable
     );
+}
+
+#[test]
+fn refresh_global_overview_requires_no_arguments_and_keeps_welcome() {
+    let runtime = DesktopRuntime::new(DesktopRuntimeConfig::unavailable("test"));
+    assert!(
+        runtime
+            .invoke(request(
+                "RefreshGlobalOverviewV1",
+                vec![json!("/untrusted")]
+            ))
+            .is_err()
+    );
+    let response = runtime
+        .invoke(request("RefreshGlobalOverviewV1", vec![]))
+        .unwrap();
+    assert_eq!(response["refreshedProjects"], 0);
+    assert_eq!(response["skippedProjects"], 0);
+    assert_eq!(response["overview"]["trackedProjects"], 0);
+    assert_eq!(runtime.workspace_state().status, WorkspaceStatus::Welcome);
 }

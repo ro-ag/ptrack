@@ -1,3 +1,9 @@
+import "./settings-kimi.css";
+import "./landing.css";
+import "./cover-flow.css";
+import { bindProjectView } from "./workspace/project-view";
+import { landingProjects, selectedLandingProject, renderLandingProjects, relativeTimestamp } from "./workspace/landing";
+import { overviewActivity, overviewRefreshMessage } from "./workspace/overview";
 import "./tauri-bridge";
 import { filterPlans, splitCurrentPlan } from "./workspace/plan-list";
 import { bindPlanMotion } from "./workspace/plan-motion";
@@ -196,6 +202,7 @@ import {
   paletteStatusPresentation,
   paletteTarget,
   preserveSectionOnError,
+  workspaceProjectChanged,
   postProjectOnboardingActions,
   projectGuideRecoveryCopy,
   projectGuideReviewCopy,
@@ -341,6 +348,7 @@ const elements = {
   board: document.querySelector("#board"),
   appVersion: document.querySelector("#app-version"),
   settingsOpen: document.querySelector("#settings-open"),
+  landingSettingsOpen: document.querySelector("#landing-settings-open"),
   settingsModal: document.querySelector("#settings-modal"),
   settingsClose: document.querySelector("#settings-close"),
   settingsBody: document.querySelector("#settings-body"),
@@ -620,6 +628,13 @@ const runtimeRefreshes = new RuntimeRefreshCoalescer((generation) => {
 let workspaceState = { status: "welcome", generation: 0 };
 let firstRunState = { ...initialFirstRunState };
 let firstPlanState = { ...initialFirstPlanState };
+let globalOverview = null;
+let landingSelectedId = "";
+let landingFilter = "all";
+let overviewError = "";
+let overviewRequest = 0;
+let overviewLoading = false;
+let overviewRefreshNotice = "";
 let recentProjectsState = { ...initialRecentProjectsState };
 let view = "board";
 let snapshot = null;
@@ -662,6 +677,7 @@ let updateCancelRequested = false;
 let confirmReturnFocus = null;
 let confirmResolve = null;
 let recentListRequest = 0;
+let recentWorkspaceEpoch = 0;
 let recentOperationSequence = 0;
 let terminalHandle = null;
 let terminalGeneration = 0;
@@ -1863,10 +1879,14 @@ async function loadProjectHistory(force = false) {
   if (workspaceController.state.status !== "open") return;
   if (projectHistoryRequested && !force) return;
   projectHistoryRequested = true;
+  const ticket = workspaceController.capture();
   try {
-    projectHistory = await api().GetProjectTimelineV1();
+    const response = await api().GetProjectTimelineV1();
+    if (!workspaceController.accepts(ticket, ticket.generation)) return;
+    projectHistory = response;
     withOverviewScrollPreserved(renderProjectHistory);
   } catch {
+    if (!workspaceController.accepts(ticket, ticket.generation)) return;
     projectHistoryRequested = false;
     projectHistory = null;
     withOverviewScrollPreserved(renderProjectHistory);
@@ -1882,14 +1902,18 @@ async function loadStackProfile(force = false) {
   if (workspaceController.state.status !== "open") return;
   if (stackProfileRequested && !force) return;
   stackProfileRequested = true;
+  const ticket = workspaceController.capture();
   if (force) stackProfile = { state: "scanning" };
   try {
-    stackProfile = await api().GetStackProfileV1(force);
+    const response = await api().GetStackProfileV1(force);
+    if (!workspaceController.accepts(ticket, ticket.generation)) return;
+    stackProfile = response;
     withOverviewScrollPreserved(() => {
       if (board) renderMemory();
       renderStackProfile();
     });
   } catch {
+    if (!workspaceController.accepts(ticket, ticket.generation)) return;
     stackProfileRequested = false;
     stackProfile = { state: "failed" };
     withOverviewScrollPreserved(() => {
@@ -1905,10 +1929,13 @@ async function loadHeatmap(force = false) {
   if (workspaceController.state.status !== "open") return;
   if (heatmapRequested && !force) return;
   heatmapRequested = true;
+  const ticket = workspaceController.capture();
   try {
     const days = await api().GetActivityHeatmapV2(16);
+    if (!workspaceController.accepts(ticket, ticket.generation)) return;
     withOverviewScrollPreserved(() => renderHeatmap(days));
   } catch (error) {
+    if (!workspaceController.accepts(ticket, ticket.generation)) return;
     heatmapRequested = false;
     if (workspaceController.state.status === "open") showError(error);
   }
@@ -3202,6 +3229,7 @@ async function loadSnapshot(
       recordProjectLayout();
       renderIntelligence();
     });
+    applyView();
     openPendingTaskDetail();
     if (view === "issues") void loadIssues(true);
     if (view === "overview" && heatmapRequested) void loadHeatmap(true);
@@ -5596,11 +5624,12 @@ function showForgetRecentProjectConfirmation(entry) {
 function setRecentProjectsState(event) {
   recentProjectsState = reduceRecentProjects(recentProjectsState, event);
   renderRecentProjects();
+  renderGlobalOverview();
 }
 
 function recentProjectActionElement(focusKey) {
   if (focusKey === "recent-project-heading") return elements.recentHeading;
-  return [...elements.recents.querySelectorAll("[data-recent-focus-key]")]
+  return [...elements.welcomePanel.querySelectorAll("[data-recent-focus-key]")]
     .find((element) => element.dataset.recentFocusKey === focusKey) ||
     elements.recentHeading;
 }
@@ -5660,6 +5689,7 @@ function updateAboutUpdatesAvailability() {
     firstPlanState.phase !== "idle" ||
     recentProjectOperationActive();
   elements.settingsOpen.disabled = elements.appVersion.disabled;
+  elements.landingSettingsOpen.disabled = elements.appVersion.disabled;
 }
 
 function recentProjectActionButton(entry, action, label, describedBy, handler) {
@@ -5682,9 +5712,9 @@ function recentProjectActionButton(entry, action, label, describedBy, handler) {
 }
 
 function renderRecentProjects() {
-  elements.recents.replaceChildren();
-  const projects = recentProjectsState.projects;
+  const projects = landingProjects(recentProjectsState.projects, globalOverview, document.querySelector("#recent-project-search").value, landingFilter);
   const operationActive = recentProjectOperationActive();
+  document.querySelector("#overview-project-count").textContent = `${projects.length} / ${recentProjectsState.projects.length}`;
   updateAboutUpdatesAvailability();
   elements.stateInitialize.disabled = operationActive;
   elements.stateOpen.disabled = operationActive;
@@ -5717,96 +5747,27 @@ function renderRecentProjects() {
       forgetting: `Removing “${active.name}” from Recent projects…`,
     }[recentProjectsState.phase] || "";
   }
-  if (projects.length === 0) {
-    const message = recentProjectsState.listLoading
-      ? "Loading recent projects…"
-      : "No recent projects yet.";
-    const empty = emptyMemory(message);
-    empty.setAttribute("role", "listitem");
-    elements.recents.append(empty);
-    return;
-  }
-  projects.forEach((project, index) => {
-    const item = document.createElement("article");
-    item.className = "recent-project";
-    item.setAttribute("role", "listitem");
-    item.setAttribute(
-      "aria-busy",
-      String(operationActive && project.entryId === recentProjectsState.activeEntryId),
-    );
-    const content = document.createElement("div");
-    const name = document.createElement("p");
-    name.className = "recent-project-name";
-    name.id = `recent-project-name-${index}`;
-    name.textContent = project.name;
-    item.setAttribute("aria-labelledby", name.id);
-    const path = document.createElement("p");
-    path.className = "recent-project-path";
-    path.id = `recent-project-path-${index}`;
-    path.append(`${project.canonicalPath} · `);
-    const lastOpened = document.createElement("time");
-    lastOpened.dateTime = project.lastOpenedAt;
-    lastOpened.title = new Date(project.lastOpenedAt).toLocaleString();
-    lastOpened.textContent = relativeTime(project.lastOpenedAt);
-    path.append(lastOpened);
-    content.append(name, path);
-    const descriptionIDs = [path.id];
-    const stackLabel = recentProjectStackLabel(project.stack);
-    if (stackLabel) {
-      const stack = document.createElement("p");
-      stack.className = "recent-project-stack";
-      stack.id = `recent-project-stack-${index}`;
-      stack.textContent = stackLabel;
-      content.append(stack);
-      descriptionIDs.push(stack.id);
-    }
-    const stateLabel = recentProjectStateLabel(project.availability);
-    if (stateLabel) {
-      const state = document.createElement("p");
-      state.className = "recent-project-state";
-      state.id = `recent-project-state-${index}`;
-      state.textContent = stateLabel;
-      content.append(state);
-      descriptionIDs.push(state.id);
-    }
-    if (project.entryId === preselectedEntryId) {
-      item.setAttribute("aria-current", "true");
-      const preselect = document.createElement("p");
-      preselect.className = "recent-project-preselect";
-      preselect.id = `recent-project-preselect-${index}`;
-      preselect.textContent = "Preselected — last project p-track recorded";
-      content.append(preselect);
-      descriptionIDs.push(preselect.id);
-    }
-    const actions = document.createElement("div");
-    actions.className = "recent-project-actions";
-    const primaryAction = recentProjectPrimaryAction(project.availability);
-    actions.append(recentProjectActionButton(
-      project,
-      primaryAction,
-      recentProjectPrimaryLabel(project.availability),
-      descriptionIDs.join(" "),
-      (event) => {
-        if (primaryAction === "open") {
-          void openAvailableRecentProject(project, event.currentTarget);
-        } else if (primaryAction === "retry") {
-          void retryRecentProject(project, event.currentTarget);
-        } else {
-          void locateRecentProject(project, event.currentTarget);
-        }
-      },
-    ));
-    if (project.availability !== "available") {
-      actions.append(recentProjectActionButton(
-        project,
-        "forget",
-        "Forget",
-        descriptionIDs.join(" "),
-        (event) => void forgetRecentProject(project, event.currentTarget),
-      ));
-    }
-    item.append(content, actions);
-    elements.recents.append(item);
+  landingSelectedId = selectedLandingProject(projects, projects.some((project) => project.entryId === landingSelectedId) ? landingSelectedId : preselectedEntryId)?.entryId || "";
+  renderLandingProjects({
+    projects, summaries: globalOverview?.projects || [], selectedId: landingSelectedId, preselectedId: preselectedEntryId,
+    busy: operationActive || recentProjectsState.listLoading, loading: recentProjectsState.listLoading,
+    select: (id) => { landingSelectedId = id; renderRecentProjects(); },
+    open: (entry, invoker) => void openAvailableRecentProject(entry, invoker),
+    actions: (host, project, descriptionId) => {
+      const primaryAction = recentProjectPrimaryAction(project.availability);
+      const button = recentProjectActionButton(project, primaryAction, recentProjectPrimaryLabel(project.availability), descriptionId, (event) => {
+        if (primaryAction === "open") void openAvailableRecentProject(project, event.currentTarget);
+        else if (primaryAction === "retry") void retryRecentProject(project, event.currentTarget);
+        else void locateRecentProject(project, event.currentTarget);
+      });
+      button.className = "primary-button";
+      host.append(button);
+      if (project.availability !== "available") {
+        const forget = recentProjectActionButton(project, "forget", "Forget", descriptionId, (event) => void forgetRecentProject(project, event.currentTarget));
+        forget.className = "secondary-button";
+        host.append(forget);
+      }
+    },
   });
 }
 
@@ -6831,6 +6792,7 @@ async function loadRecentProjects({
     recentProjectsState.phase !== "idle" ||
     recentProjectsState.listLoading
   ) return false;
+  void loadGlobalOverview();
   const request = ++recentListRequest;
   const ticket = workspaceController.capture();
   const operationSequence = recentOperationSequence;
@@ -6891,6 +6853,10 @@ async function loadRecentProjects({
 
 function applyView() {
   const open = workspaceState.status === "open";
+  // Never reveal a previous project's DOM under a new project's heading.
+  for (const panel of [elements.workspace, elements.overviewPage, elements.issuesPage]) {
+    panel.style.visibility = open && !snapshot ? "hidden" : "";
+  }
   elements.workspace.hidden = !open || view !== "board";
   elements.overviewPage.hidden = !open || view !== "overview";
   elements.issuesPage.hidden = !open || view !== "issues";
@@ -6933,8 +6899,45 @@ function setView(nextView, focusHeading = false) {
 }
 
 function renderWorkspaceState(state, focus = false) {
-  const wasOpen = workspaceState.status === "open";
+  const epoch = workspaceController.capture().epoch;
+  if (epoch !== recentWorkspaceEpoch) {
+    recentWorkspaceEpoch = epoch;
+    // A workspace transition invalidates pending landing reads immediately.
+    // Clearing loading here lets Back to all projects start a fresh request
+    // even while an abandoned startup read is still pending.
+    recentListRequest += 1;
+    overviewRequest += 1;
+    recentProjectsState = reduceRecentProjects(recentProjectsState, { type: "loadCancelled" });
+  }
+  const projectChanged = workspaceProjectChanged(workspaceState, state);
+  if (projectChanged) {
+    snapshotSequence += 1;
+    snapshot = null;
+    board = null;
+    explicitNoPlanSelection = false;
+    queuedSnapshotPlanRequest = undefined;
+    refreshGate.cancelQueued();
+    heatmapRequested = false;
+    projectHistoryRequested = false;
+    projectHistory = null;
+    stackProfileRequested = false;
+    stackProfile = null;
+    issuesState = { issues: [], bounds: { shown: 0, total: 0 } };
+    issuesOffset = 0;
+    issuesRequest += 1;
+    elements.issuesInbox.replaceChildren(emptyMemory("Loading issues…"));
+    elements.issuesStatus.textContent = "";
+    elements.issuesPagination.hidden = true;
+    elements.heatmap.replaceChildren();
+    elements.projectHistory.replaceChildren();
+    elements.historyCaption.textContent = "";
+    closeTaskDetail();
+    closeIssueDetail(false);
+    closePalette();
+    elements.workspace.dataset.snapshotState = "loading";
+  }
   workspaceState = state;
+  elements.app.dataset.workspaceOpen = String(state.status === "open");
   if (typeof state.version === "string") {
     const version = appVersionLabel(state.version);
     elements.appVersion.textContent = version;
@@ -6952,7 +6955,7 @@ function renderWorkspaceState(state, focus = false) {
     closePlanDialog();
   }
   if (!open) hideAgentActionForms();
-  if (open && !wasOpen) restoreProjectLayout(state.project?.root || "");
+  if (projectChanged) restoreProjectLayout(state.project?.root || "");
   applyView();
   elements.stateScreen.hidden = open;
   elements.navBoard.disabled = !open;
@@ -6976,14 +6979,14 @@ function renderWorkspaceState(state, focus = false) {
     firstRunState = { ...initialFirstRunState };
     renderFirstRunFlow(false);
     elements.projectName.textContent = state.project?.name || "Project workspace";
-    if (!wasOpen) {
+    if (projectChanged) {
       elements.planTotal.textContent = "0";
       elements.planList.replaceChildren(emptyMemory("Loading plans…"));
     }
     void loadRecentProjects();
     void ensureTerminalDock(state.generation, state.project.root);
     // The restored view loads its own page the same way a click on it would.
-    if (!wasOpen) setView(view);
+    if (projectChanged) setView(view);
     if (firstPlanState.phase !== "idle") {
       renderFirstPlanOnboarding(focus);
       return;
@@ -7035,8 +7038,8 @@ function renderWorkspaceState(state, focus = false) {
   elements.planList.replaceChildren(emptyMemory("No project open."));
   const copy = workspaceStateCopy(state.status, state.error);
   elements.stateEyebrow.textContent = copy.eyebrow;
-  elements.stateHeading.textContent = copy.heading;
-  elements.stateDetail.textContent = copy.detail;
+  elements.stateHeading.textContent = state.status === "welcome" ? "Projects" : copy.heading;
+  elements.stateDetail.textContent = state.status === "welcome" ? "Choose a project to preview its work." : copy.detail;
   elements.stateOpen.hidden = state.status === "loading";
   elements.stateInitialize.hidden = state.status === "loading" || state.status !== "welcome";
   if (firstRunState.phase === "idle") renderFirstRunFlow(false);
@@ -8606,6 +8609,8 @@ elements.aboutLicenseLink.addEventListener("click", () => {
 elements.aboutHelp.addEventListener("click", () => openHelpDestination("help-center"));
 elements.aboutReport.addEventListener("click", () => openHelpDestination("report-issue"));
 
+document.querySelector("#landing-help-open").addEventListener("click", () => openHelpDestination("help-center"));
+elements.landingSettingsOpen.addEventListener("click", (event) => openSettings(event.currentTarget));
 elements.settingsOpen.addEventListener("click", (event) => {
   openSettings(event.currentTarget);
 });
@@ -9738,3 +9743,144 @@ async function startTerminalWindow(label) {
 const terminalWindow = terminalWindowLabel(window.location.hash);
 if (terminalWindow) void startTerminalWindow(terminalWindow);
 else void start();
+
+
+async function loadGlobalOverview(refresh = false) {
+  const request = ++overviewRequest;
+  overviewLoading = true;
+  const reloadButton = document.querySelector("#overview-refresh-button");
+  if (reloadButton) { reloadButton.disabled = true; reloadButton.textContent = refresh ? "Refreshing…" : "Loading…"; }
+  const ticket = workspaceController.capture();
+  const isCurrent = () => {
+    const current = workspaceController.capture();
+    return request === overviewRequest && current.epoch === ticket.epoch &&
+      current.generation === ticket.generation &&
+      !["open", "loading"].includes(workspaceController.state.status);
+  };
+  try {
+    const result = refresh ? await api().RefreshGlobalOverviewV1() : await api().GetGlobalOverviewV1();
+    if (!isCurrent()) return;
+    globalOverview = refresh ? result.overview : result;
+    overviewRefreshNotice = refresh ? overviewRefreshMessage(result) : "";
+    overviewError = "";
+  } catch {
+    if (!isCurrent()) return;
+    if (!refresh) globalOverview = null;
+    overviewRefreshNotice = refresh ? "Could not refresh summaries. Existing summaries are still available. Try again." : "";
+    overviewError = refresh ? "" : "Could not load summaries. You can still open a project.";
+  } finally {
+    if (request === overviewRequest) {
+      overviewLoading = false;
+      if (reloadButton) { reloadButton.disabled = false; reloadButton.textContent = "Refresh summaries"; }
+    }
+  }
+  renderGlobalOverview();
+  renderRecentProjects();
+}
+
+function renderGlobalOverview() {
+  const counts = document.querySelector("#global-overview-counts");
+  const coverage = document.querySelector("#global-overview-coverage");
+  const activity = document.querySelector("#global-overview-activity");
+  counts.replaceChildren();
+  activity.replaceChildren();
+  coverage.textContent = overviewError;
+  const overview = globalOverview;
+  for (const [index, [label, value]] of [
+    ["Tracked projects", overview?.trackedProjects ?? "—"],
+    ["Active plans", overview?.summarizedProjects ? overview.counts.activePlans : "—"],
+    ["Open tasks", overview?.summarizedProjects ? overview.counts.openTasks : "—"],
+    ["Open issues", overview?.summarizedProjects ? overview.counts.openIssues : "—"],
+  ].entries()) {
+    const card = document.createElement("div");card.className = "stat-card";
+    card.style.setProperty("--stat-color", ["#AFA8FF", "#5FAFFF", "#3DD6A3", "#AFA8FF"][index]);
+    const number = document.createElement("span");number.className = "stat-value";number.textContent = String(value);
+    const title = document.createElement("span");title.className = "stat-label";title.textContent = label;
+    card.append(number, title);counts.append(card);
+  }
+  document.querySelector("#orbit-sync-status").textContent = overview ? `${overview.summarizedProjects} of ${overview.trackedProjects} projects summarized` : "Synced summaries unavailable";
+  const guidance = document.querySelector("#overview-refresh-guidance");
+  if (guidance) guidance.textContent = "Refresh reads the latest work from registered projects. Unavailable projects keep their previous summaries.";
+  document.querySelector("#overview-refresh-status").textContent = overviewRefreshNotice;
+  if (!overview) return;
+  const oldest = Math.min(...overview.projects.map((project) => project.syncedAt));
+  coverage.textContent = "Work counts include only these summaries. " +
+    (overview.projects.length ? `Oldest summary updated ${relativeTimestamp(oldest * 1000)}.` : "Open any project without a summary.");
+  const period = document.querySelector("#global-overview-period").value;
+  const updates = overviewActivity(overview, period === "all" ? null : 30);
+  if (!updates.length) activity.textContent = "No synced record updates in this period.";
+  for (const update of updates) {
+    const row = document.createElement("div");
+    row.setAttribute("role", "listitem");
+    const entry = recentProjectsState.projects.find((project) => project.canonicalPath === update.root);
+    row.className = "overview-update";
+    const content = document.createElement(entry?.availability === "available" ? "button" : "div");
+    content.className = "overview-update-content";
+    const title = document.createElement("span");
+    title.className = "overview-update-title";
+    title.textContent = update.title;
+    const metadata = document.createElement("span");
+    metadata.className = "overview-update-meta";
+    const status = document.createElement("span");
+    status.className = "overview-status";
+    status.dataset.status = update.status;
+    status.textContent = update.status;
+    const context = document.createElement("span");
+    context.textContent = `${entry?.name || update.root.split(/[\\/]/).filter(Boolean).pop() || update.root} · ${update.kind} #${update.id}`;
+    context.title = update.root;
+    const time = document.createElement("time");
+    time.dateTime = new Date(update.updatedAt * 1000).toISOString();
+    time.textContent = relativeTime(time.dateTime);
+    time.title = `Updated ${new Date(update.updatedAt * 1000).toLocaleString()}`;
+    metadata.append(status, context, time);
+    content.append(title, metadata);
+    if (entry?.availability === "available") {
+      content.type = "button";
+      content.title = `Open ${entry.name}`;
+      content.addEventListener("click", (event) => void openAvailableRecentProject(entry, event.currentTarget));
+    }
+    row.append(content);
+    activity.append(row);
+  }
+}
+
+document.querySelector("#recent-project-search").addEventListener("input", renderRecentProjects);
+document.querySelector("#overview-refresh-button").addEventListener("click", () => {
+  if (!overviewLoading) void loadGlobalOverview(true);
+});
+document.querySelector("#global-overview-period").addEventListener("change", renderGlobalOverview);
+
+
+function moveLandingSelection(direction, focus = false) {
+  const projects = landingProjects(recentProjectsState.projects, globalOverview, document.querySelector("#recent-project-search").value, landingFilter);
+  if (projects.length < 2 || recentProjectOperationActive() || recentProjectsState.listLoading) return;
+  const selected = selectedLandingProject(projects, landingSelectedId);
+  const index = projects.indexOf(selected);
+  landingSelectedId = projects[Math.max(0, Math.min(projects.length - 1, index + direction))].entryId;
+  renderRecentProjects();
+  const target = [...document.querySelectorAll("[data-orbit-project-id]")].find((button) => button.dataset.orbitProjectId === landingSelectedId);
+  target?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  if (focus) target?.focus();
+}
+document.querySelector("#orbit-previous").addEventListener("click", () => moveLandingSelection(-1));
+document.querySelector("#orbit-next").addEventListener("click", () => moveLandingSelection(1));
+for (const button of document.querySelectorAll("[data-orbit-filter]")) {
+  button.addEventListener("click", () => {
+    landingFilter = button.dataset.orbitFilter;
+    for (const chip of document.querySelectorAll("[data-orbit-filter]")) {
+      const selected = chip === button;
+      chip.classList.toggle("active", selected);chip.setAttribute("aria-pressed", String(selected));
+    }
+    renderRecentProjects();
+  });
+}
+bindProjectView();
+const activityToggle = document.querySelector("#orbit-activity-toggle");
+const activityPanel = document.querySelector("#orbit-activity-panel");
+function toggleLandingActivity(open) {
+  activityPanel.hidden = !open;activityToggle.setAttribute("aria-expanded", String(open));
+  (open ? document.querySelector("#orbit-activity-close") : activityToggle).focus();
+}
+activityToggle.addEventListener("click", () => toggleLandingActivity(activityPanel.hidden));
+document.querySelector("#orbit-activity-close").addEventListener("click", () => toggleLandingActivity(false));
+activityPanel.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); toggleLandingActivity(false); } });

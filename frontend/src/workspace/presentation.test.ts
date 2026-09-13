@@ -24,6 +24,7 @@ import {
   paletteStatusPresentation,
   paletteTarget,
   preserveSectionOnError,
+  workspaceProjectChanged,
   postProjectOnboardingActions,
   projectGuideRecoveryCopy,
   projectGuideReviewCopy,
@@ -836,4 +837,14 @@ describe("stack line totals", () => {
     ]);
     expect(row.lines).toBe(0);
   });
+});
+
+
+it("discards snapshots on project switches and reactivation but preserves same-project refreshes", () => {
+  const old = { status: "open", generation: 2, project: { root: "/old" } };
+  expect(workspaceProjectChanged(old, { ...old, project: { root: "/new" } })).toBe(true);
+  expect(workspaceProjectChanged(old, { ...old, generation: 3 })).toBe(true);
+  expect(workspaceProjectChanged({ ...old, status: "welcome" }, old)).toBe(true);
+  expect(workspaceProjectChanged(old, { ...old })).toBe(false);
+  expect(workspaceProjectChanged(old, { ...old, status: "loading" })).toBe(false);
 });

@@ -71,7 +71,7 @@ const WORKSPACE_OPERATION_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub const FIRST_RUN_GOAL_MAX_BYTES: usize = 4_096;
 
-const COMMANDS: [&str; 106] = [
+const COMMANDS: [&str; 108] = [
     "AcknowledgeAgentHandoffV2",
     "AddIssueV1",
     "AddPlanV1",
@@ -111,6 +111,7 @@ const COMMANDS: [&str; 106] = [
     "GetCapabilitiesV2",
     "GetCapabilityAuditsV2",
     "GetDiagnosticsReport",
+    "GetGlobalOverviewV1",
     "GetInitializationStatusV1",
     "GetIssueDetailV1",
     "GetIssuesV1",
@@ -149,6 +150,7 @@ const COMMANDS: [&str; 106] = [
     "PreviewCapabilityV2",
     "PreviewProjectGuideV1",
     "PreviewTerminalWritebackV2",
+    "RefreshGlobalOverviewV1",
     "RemoveCapabilityV2",
     "RenamePlanV1",
     "RenameTask",
@@ -180,7 +182,7 @@ const COMMANDS: [&str; 106] = [
     "WriteTerminalMemoryV2",
 ];
 
-/// Exact current 104-method desktop bridge command allowlist.
+/// Exact desktop bridge command allowlist.
 #[must_use]
 pub const fn allowed_desktop_commands() -> &'static [&'static str] {
     &COMMANDS
@@ -663,6 +665,14 @@ pub trait DesktopWorkspaceFactory: Send + Sync {
 pub trait RecentProjectsProvider: Send + Sync {
     fn recent_projects(&self) -> AppResult<Vec<Value>>;
 
+    fn global_overview_v1(&self) -> AppResult<crate::overview::GlobalOverviewV1> {
+        Ok(crate::overview::GlobalOverviewV1::default())
+    }
+
+    fn refresh_global_overview_v1(&self) -> AppResult<crate::overview::RefreshGlobalOverviewV1> {
+        Ok(crate::overview::RefreshGlobalOverviewV1::default())
+    }
+
     fn recent_projects_v1(&self) -> AppResult<RecentProjectsV1> {
         Ok(RecentProjectsV1 {
             projects: Vec::new(),
@@ -1092,6 +1102,8 @@ impl DesktopRuntime {
                 let _lease = self.begin_native_action()?;
                 value(crate::install_shell_command().message)
             }
+            "GetGlobalOverviewV1" => self.get_global_overview_v1(&request.arguments),
+            "RefreshGlobalOverviewV1" => self.refresh_global_overview_v1(&request.arguments),
             "GetRecentProjects" => self.get_recent_projects(),
             "GetRecentProjectsV1" => self.get_recent_projects_v1(&request.arguments),
             "ResolveRecentProjectV1" => self.resolve_recent_project_v1(&request.arguments),
@@ -1332,6 +1344,19 @@ impl DesktopRuntime {
             granted: rows.iter().filter(|row| row["state"] == "enabled").count(),
             total: rows.len(),
         })
+    }
+
+    fn get_global_overview_v1(self: &Arc<Self>, arguments: &[Value]) -> AppResult<Value> {
+        require_argument_count("GetGlobalOverviewV1", arguments, 0)?;
+        let _lease = self.begin_native_action()?;
+        value(self.recent_projects.global_overview_v1()?)
+    }
+
+    fn refresh_global_overview_v1(self: &Arc<Self>, arguments: &[Value]) -> AppResult<Value> {
+        require_argument_count("RefreshGlobalOverviewV1", arguments, 0)?;
+        let _lease = self.begin_native_action()?;
+        let _mutation = lock(&self.recent_mutation);
+        value(self.recent_projects.refresh_global_overview_v1()?)
     }
 
     fn get_recent_projects(self: &Arc<Self>) -> AppResult<Value> {
@@ -1810,13 +1835,10 @@ impl DesktopRuntime {
         require_argument_count("GetPendingInitializationV1", arguments, 0)?;
         let _lease = self.begin_native_action()?;
         let _transition = lock(&self.transition);
-        let pending = self.initialization.pending()?;
-        if !pending.pending
-            && let Some(status) = self.initialization.completed_initialization()?
-        {
-            self.bind_completed_initialization_locked(&status)?;
-        }
-        value(pending)
+        // Startup discovery must not reopen a project from an old completed
+        // initialization journal. Explicit operation-status polling below
+        // still binds a just-completed initialization during recovery.
+        value(self.initialization.pending()?)
     }
 
     fn initialization_status(self: &Arc<Self>, arguments: &[Value]) -> AppResult<Value> {

@@ -29,6 +29,22 @@ describe("production asset layout", () => {
     });
   });
 
+  it("keeps real project journeys separate from carousel selection and native settings", () => {
+    const index = readFileSync(resolve(frontendRoot, "index.html"), "utf8");
+    const hero = index.indexOf('<header class="orbit-toolbar"');
+    const heroEnd = closingIndex(index, hero, "header");
+    const projects = index.indexOf('<section class="projects-panel"');
+    expect(hero).toBeGreaterThan(0);
+    expect(index.indexOf('id="state-open-project-button"')).toBeGreaterThan(hero);
+    expect(index.indexOf('id="state-initialize-project-button"')).toBeLessThan(heroEnd);
+    expect(projects).toBeGreaterThan(heroEnd);
+    expect(index.match(/id="orbit-selected-project"/g)).toHaveLength(1);
+    expect(index).not.toContain('class="hero-panel"');
+    expect(index).not.toContain('id="orbit-ribbon"');
+    expect(index).toContain('id="orbit-previous" type="button" aria-label="Previous project"');
+    expect(index).toContain('id="landing-settings-open"');
+  });
+
   it("emits the embedded board assets with stable names", () => {
     const indexPath = resolve(distRoot, "index.html");
 
@@ -86,15 +102,27 @@ describe("production asset layout", () => {
     expect(styles).not.toMatch(
       /\.state-card\{[^}]*(?:animation|transform|opacity):/,
     );
-    expect(index).toMatch(
-      /id="project-state-card"[\s\S]*id="workspace-state-heading"[^>]*>Start with a project<\/h2>[\s\S]*Initialize p-track in a folder, or open a project you already use\.[\s\S]*id="state-initialize-project-button"[^>]*>Initialize Project<\/button>[\s\S]*id="state-open-project-button"[\s\S]*>Open Project…<\/button>[\s\S]*>Recent projects<\/p>/,
-    );
+    // A suspended background WebView may retain the first animation frame.
+    // Landing content must never depend on animation completion to be visible.
+    const landingSource = readFileSync(resolve(frontendRoot, "src/landing.css"), "utf8");
+    expect(landingSource).not.toMatch(/#welcome-panel\s*\{[^}]*opacity:\s*0(?:;|\s)/);
+    expect(landingSource).toContain('prefers-reduced-motion:reduce');
+    expect(landingSource).toMatch(/#welcome-panel \.stat-label \{[^}]*white-space:normal;[^}]*overflow:visible;/);
+    expect(landingSource).toContain('data-reduced-motion="always"');
+    expect(landingSource).toContain(':root:not([data-reduced-motion="never"]) #welcome-panel');
+    expect(appSource).toContain('elements.welcomePanel.querySelectorAll("[data-recent-focus-key]")');
+    expect(index).toMatch(/id="workspace-state-heading"[^>]*>Projects<\/h2>/);
+    expect(index).toMatch(/id="state-open-project-button"[\s\S]*?Open folder…<\/button>/);
+    expect(index).toMatch(/id="state-initialize-project-button"[\s\S]*?Initialize project<\/button>/);
     expect(index.match(/class="state-card"/g)).toHaveLength(1);
+    expect(existsSync(resolve(distRoot, "bars.png"))).toBe(true);
+    expect(index).toContain('src="/bars.png"');
+    expect(index).toContain('id="landing-help-open"');
     expect(index).toMatch(
       /id="post-project-onboarding"[\s\S]*aria-labelledby="onboarding-heading"[\s\S]*id="onboarding-plan-form"[\s\S]*id="onboarding-create-plan"[^>]*>Create Plan<\/button>[\s\S]*id="onboarding-skip-plan"[^>]*>Skip for Now<\/button>[\s\S]*id="onboarding-task-form"[\s\S]*id="onboarding-start-now"[\s\S]*>Start this task now<[\s\S]*id="onboarding-create-task"[^>]*>Create Task<\/button>[\s\S]*id="onboarding-finish-with-plan"[^>]*>Finish with Plan<\/button>/,
     );
     expect(index).toMatch(
-      /id="recent-project-heading"[\s\S]*tabindex="-1"[\s\S]*>Recent projects<\/p>[\s\S]*id="recent-project-list"[\s\S]*role="list"[\s\S]*aria-busy="false"[\s\S]*id="recent-project-status"[\s\S]*role="status"[\s\S]*aria-live="polite"[\s\S]*id="recent-project-error"[\s\S]*role="alert"/,
+      /id="recent-project-heading"[\s\S]*tabindex="-1"[\s\S]*>Choose a project[\s\S]*?<\/h3>[\s\S]*id="recent-project-list"[\s\S]*role="list"[\s\S]*aria-busy="false"[\s\S]*id="recent-project-status"[\s\S]*role="status"[\s\S]*aria-live="polite"[\s\S]*id="recent-project-error"[\s\S]*role="alert"/,
     );
     expect(index).not.toMatch(/id="workspace-state-screen"[^>]*aria-live/);
     for (const id of [
@@ -222,6 +250,7 @@ describe("production asset layout", () => {
     expect(recentProjectsSource).toContain("Recent projects exceeded the 20-entry limit.");
     expect(recentProjectsSource).toContain("Recent projects were not newest first.");
     expect(appSource).toContain("GetRecentProjectsV1");
+    expect(appSource).toMatch(/function renderWorkspaceState[\s\S]*?epoch !== recentWorkspaceEpoch[\s\S]*?recentListRequest \+= 1[\s\S]*?overviewRequest \+= 1[\s\S]*?type: "loadCancelled"/);
     expect(appSource).toContain("ResolveRecentProjectV1");
     expect(appSource).toContain("OpenRecentProjectV1");
     expect(appSource).toContain("ForgetRecentProjectV1");
@@ -292,25 +321,11 @@ describe("production asset layout", () => {
     );
     expect(appSource.match(/updateAboutUpdatesAvailability\(\);/g)?.length)
       .toBeGreaterThanOrEqual(3);
-    expect(appSource).toContain('lastOpened.dateTime = project.lastOpenedAt');
-    expect(appSource).toContain('item.setAttribute("aria-labelledby", name.id)');
-    // The relocated last project is pointed at, never opened: the row is
-    // marked, says so in text, and no focus moves to it.
-    expect(recentProjectsSource).toContain(
-      "export function preselectedRecentProject(",
-    );
-    expect(appSource).toContain(
-      "preselectedRecentProject(projects, preferences.startup)",
-    );
-    expect(appSource).toMatch(
-      /if \(project\.entryId === preselectedEntryId\) \{\n      item\.setAttribute\("aria-current", "true"\);/,
-    );
-    expect(appSource).toContain(
-      'preselect.textContent = "Preselected — last project p-track recorded"',
-    );
-    // The row's own text carries the state, so the description names it too,
-    // and the existing polite status line announces it without taking focus.
-    expect(appSource).toContain("descriptionIDs.push(preselect.id)");
+    const landingRenderer = readFileSync(resolve(frontendRoot, "src/workspace/landing.ts"), "utf8");
+    expect(landingRenderer).toContain('element.dateTime = date.toISOString()');
+    expect(landingRenderer).toContain('thumbnail.setAttribute("aria-current", String(project === selected))');
+    expect(recentProjectsSource).toContain("export function preselectedRecentProject(");
+    expect(appSource).toContain("preselectedRecentProject(projects, preferences.startup)");
     expect(appSource).toContain("if (startupChanged) renderRecentProjects();");
     expect(appSource).toMatch(
       /elements\.recentStatus\.textContent = recentProjectsState\.announcement \|\|\n {4}\(preselected\n {6}\? `“\$\{preselected\.name\}” is preselected as the last project/,
@@ -623,7 +638,7 @@ describe("production asset layout", () => {
     expect(index).not.toContain('id="capabilities-page"');
     expect(index).not.toContain('id="nav-capabilities"');
     expect(appSource).not.toContain('setView("capabilities"');
-    expect(appSource).toContain('empty.setAttribute("role", "listitem")');
+    expect(landingRenderer).toContain('empty.setAttribute("role", "listitem")');
     expect(appSource).not.toContain('setView("settings"');
     expect(index).toMatch(
       /id="settings-open"[^>]*aria-label="Open Settings"[\s\S]*aria-haspopup="dialog"[\s\S]*aria-controls="settings-modal"/,

@@ -29,6 +29,8 @@ pub fn root() -> Command {
             flag("no-guide"),
         ]))
         .subcommand(leaf("relocate").arg(option("root")))
+        .subcommand(group("local", &["enable", "disable", "status"]))
+        .subcommand(leaf("sync"))
         .subcommand(
             group("goal", &["show", "set"])
                 .mut_subcommand("set", |c| c.arg(positional("text", 1..))),

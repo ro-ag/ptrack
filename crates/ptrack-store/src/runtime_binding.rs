@@ -166,6 +166,30 @@ pub fn validate_active_generation(
     marker: &ActiveGeneration,
     writer_version: &str,
 ) -> StoreResult<()> {
+    validate_generation_stores(global_home, marker, writer_version, false)
+}
+
+/// Validates a published runtime for use without requiring access to every project.
+/// Permission-denied project paths remain unavailable until individually opened.
+/// Publication and recovery must use the strict `validate_active_generation` instead.
+///
+/// # Errors
+/// Returns all marker, global-store, path and project validation errors except
+/// permission denial while resolving or opening an individual project.
+pub fn validate_active_generation_for_load(
+    global_home: &Path,
+    marker: &ActiveGeneration,
+    writer_version: &str,
+) -> StoreResult<()> {
+    validate_generation_stores(global_home, marker, writer_version, true)
+}
+
+fn validate_generation_stores(
+    global_home: &Path,
+    marker: &ActiveGeneration,
+    writer_version: &str,
+    defer_project_permission: bool,
+) -> StoreResult<()> {
     marker.validate_shape()?;
     let expected_global = fs::canonicalize(global_home)?.join("global.redb");
     if Path::new(&marker.global.path) != expected_global {
@@ -174,20 +198,79 @@ pub fn validate_active_generation(
     let global = GlobalStore::open_existing(&marker.global.path, &marker.global_binding()?)?;
     drop(global);
     for project in &marker.projects {
-        let root = fs::canonicalize(&project.root)?;
-        if root != Path::new(&project.root) {
-            return marker_error("project root is not canonical");
-        }
-        let expected = root.join(".ptrack/ptrack.redb");
+        // Check the fixed layout even when filesystem access cannot attest the root.
+        let expected = Path::new(&project.root).join(".ptrack/ptrack.redb");
         if Path::new(&project.path) != expected {
             return marker_error("project database is outside the fixed runtime path");
         }
-        let store = ProjectStore::open_existing(
+        if defer_project_permission {
+            validate_accessible_project_namespace(project)?;
+        }
+        let root = match fs::canonicalize(&project.root) {
+            Ok(root) => root,
+            Err(error)
+                if defer_project_permission && error.kind() == ErrorKind::PermissionDenied =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if root != Path::new(&project.root) {
+            return marker_error("project root is not canonical");
+        }
+        // The store's writer retry maps persistent permission denial to Busy.
+        // A no-follow probe preserves that distinction without adopting linked paths.
+        if defer_project_permission {
+            match crate::open_private_path(Path::new(&project.path), false, true) {
+                Ok(file) => drop(file),
+                Err(StoreError::Io(error)) if error.kind() == ErrorKind::PermissionDenied => {
+                    continue;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        match ProjectStore::open_existing(
             &project.path,
             &marker.project_binding(project)?,
             writer_version,
-        )?;
-        drop(store);
+        ) {
+            Ok(store) => drop(store),
+            Err(StoreError::Io(error))
+                if defer_project_permission && error.kind() == ErrorKind::PermissionDenied => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+fn validate_accessible_project_namespace(project: &ActiveGenerationProject) -> StoreResult<()> {
+    let root = Path::new(&project.root);
+    let directory = root.join(".ptrack");
+    for (path, is_directory) in [
+        (root, true),
+        (directory.as_path(), true),
+        (Path::new(&project.path), false),
+    ] {
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == ErrorKind::PermissionDenied => continue,
+            Err(error) => return Err(error.into()),
+        };
+        if metadata.file_type().is_symlink() {
+            return Err(StoreError::SymbolicLink {
+                path: path.to_path_buf(),
+            });
+        }
+        if is_directory && !metadata.is_dir() {
+            return Err(StoreError::DestinationParentInvalid {
+                path: path.to_path_buf(),
+            });
+        }
+        if !is_directory && !metadata.is_file() {
+            return Err(StoreError::NotRegularFile {
+                path: path.to_path_buf(),
+            });
+        }
     }
     Ok(())
 }

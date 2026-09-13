@@ -20,7 +20,7 @@ use ptrack_store::{
     acquire_cutover_lock, append_active_generation, install_active_generation,
     load_active_generation, open_private_path, protect_private_directory, protect_private_file,
     replace_private_file, retire_active_generation, sha256_digest, sync_private_directory,
-    validate_active_generation,
+    validate_active_generation, validate_active_generation_for_load,
 };
 use ptrack_terminal::{
     Manager, ProfileKind, discover_profiles, load_profile_config_if_exists, merge_profiles,
@@ -213,7 +213,7 @@ impl ActiveRuntime {
         let Some(marker) = load_active_generation(&home, &lease).map_err(recovery)? else {
             return Ok(None);
         };
-        validate_active_generation(&home, &marker, writer_version).map_err(recovery)?;
+        validate_active_generation_for_load(&home, &marker, writer_version).map_err(recovery)?;
         Ok(Some(Arc::new(Self {
             home,
             marker,
@@ -341,20 +341,40 @@ impl RoutedApplication {
     /// # Errors
     /// Returns uninitialized, no-project, or recovery-required.
     pub fn bindings(&mut self) -> AppResult<WorkspaceBindings> {
+        if let Some(metadata) = crate::local_mode::discover(&self.current_dir)? {
+            return crate::local_mode::validate(&metadata, &self.current_dir, &self.writer_version);
+        }
         self.active_runtime()?
             .ok_or_else(uninitialized)?
             .bindings_for(&self.current_dir)
     }
 
     fn local(&mut self) -> AppResult<LocalApplication> {
+        if let Some(metadata) = crate::local_mode::discover(&self.current_dir)? {
+            let bindings =
+                crate::local_mode::validate(&metadata, &self.current_dir, &self.writer_version)?;
+            return Ok(LocalApplication::project_only(bindings, metadata));
+        }
         Ok(LocalApplication::new(self.bindings()?))
     }
 
     fn local_global(&mut self) -> AppResult<LocalApplication> {
+        self.require_global_mode()?;
         let active = self.active_runtime()?.ok_or_else(uninitialized)?;
         Ok(LocalApplication::new(
             active.global_bindings(&self.current_dir)?,
         ))
+    }
+
+    /// Refuse desktop/global entry points while project-local routing is active.
+    ///
+    /// # Errors
+    /// Returns an error for local mode or malformed project metadata.
+    pub fn require_global_mode(&self) -> AppResult<()> {
+        if crate::local_mode::discover(&self.current_dir)?.is_some() {
+            return Err(crate::local_mode::global_refusal());
+        }
+        Ok(())
     }
 
     /// Registers a project without disturbing any live p-track process.
@@ -664,11 +684,92 @@ impl RoutedApplication {
 }
 
 impl ApplicationPort for RoutedApplication {
+    fn local_mode(&mut self, action: &str) -> AppResult<String> {
+        if action == "status" {
+            return match crate::local_mode::discover(&self.current_dir)? {
+                Some(metadata) => {
+                    crate::local_mode::validate(
+                        &metadata,
+                        &self.current_dir,
+                        &self.writer_version,
+                    )?;
+                    Ok("project-local mode is enabled".to_owned())
+                }
+                None => Ok("project-local mode is disabled".to_owned()),
+            };
+        }
+        if action == "disable" {
+            self.active_runtime()?.ok_or_else(uninitialized)?;
+            crate::local_mode::disable(&self.current_dir)?;
+            return Ok("project-local mode disabled; project database retained".to_owned());
+        }
+        if !matches!(action, "enable" | "sync") {
+            return Err(AppError::Message("unknown local mode action".to_owned()));
+        }
+        // Explicit enable/sync/disable are the only escape from project-only routing.
+        // They must be invoked by the user outside the agent sandbox.
+        let previous = if action == "sync" {
+            crate::local_mode::discover(&self.current_dir)?
+                .map(|metadata| {
+                    crate::local_mode::validate(&metadata, &self.current_dir, &self.writer_version)
+                })
+                .transpose()?
+        } else {
+            None
+        };
+        let active = self.active_runtime()?.ok_or_else(uninitialized)?;
+        let bindings = active.bindings_for(&self.current_dir)?;
+        let endpoint = bindings
+            .project
+            .as_ref()
+            .ok_or(AppError::NoProject)?
+            .clone();
+        if previous
+            .as_ref()
+            .is_some_and(|old| old.project.as_ref() != Some(&endpoint))
+        {
+            return Err(AppError::Message(
+                "local authority is stale; run 'ptrack local enable' outside the sandbox"
+                    .to_owned(),
+            ));
+        }
+        // Explicit sync must report registration failures; ordinary project
+        // commands deliberately treat this global bookkeeping as best effort.
+        {
+            let global =
+                GlobalStore::open_existing(&bindings.global_database, &bindings.global_binding)?;
+            global.register_project(project_name(&endpoint.root), &endpoint.root)?;
+        }
+        let mut application = LocalApplication::new(bindings);
+        let snapshot = application.snapshot()?;
+        let metadata = crate::local_mode::LocalMetadata::capture(
+            &endpoint,
+            application.identity()?,
+            application.guide_extra()?,
+        )?;
+        crate::overview::write_project_summary(
+            active.global_home(),
+            &endpoint.root,
+            &endpoint.binding.database_id,
+            &snapshot,
+        )?;
+        if action == "enable" || previous.is_some() {
+            metadata.write()?;
+        }
+        Ok(if action == "sync" {
+            "project summary and settings synchronized; project database retained".to_owned()
+        } else {
+            "project-local mode enabled; run 'ptrack sync' outside the sandbox to refresh shared settings and the overview".to_owned()
+        })
+    }
+
     fn relocate(&mut self, request: RelocateRequest) -> AppResult<RelocateResult> {
+        self.require_global_mode()?;
         self.relocate_project(&request)
     }
 
     fn initialize(&mut self, request: InitRequest) -> AppResult<InitResult> {
+        self.require_global_mode()?;
         let initialized_root = fs::canonicalize(
             request
                 .root
@@ -713,6 +814,9 @@ impl ApplicationPort for RoutedApplication {
     }
 
     fn identity(&mut self) -> AppResult<Option<ActorIdentity>> {
+        if crate::local_mode::discover(&self.current_dir)?.is_some() {
+            return self.local()?.identity();
+        }
         self.local_global()?.identity()
     }
 
@@ -800,6 +904,38 @@ impl ProductionRecentProjects {
             .map_err(|_| recent_projects_unavailable())?;
         GlobalStore::open_existing(&bindings.global_database, &bindings.global_binding)
             .map_err(|_| recent_projects_unavailable())
+    }
+
+    fn refresh_project_summary(&self, project: &ProjectRef) -> AppResult<()> {
+        // Only a registry root that still has the exact active binding is eligible.
+        if !self
+            .runtime
+            .marker()
+            .projects
+            .iter()
+            .any(|entry| entry.root == project.path)
+        {
+            return Err(AppError::NoProject);
+        }
+        let bindings = self
+            .runtime
+            .bindings_for_exact_root(Path::new(&project.path))?;
+        let endpoint = bindings.project.ok_or(AppError::NoProject)?;
+        let pinned = crate::local_mode::pin(&endpoint.root)?;
+        let store = ProjectStore::open_existing_pinned(
+            &pinned,
+            &endpoint.binding,
+            &self.runtime.writer_version,
+        )?;
+        let snapshot = store.snapshot()?;
+        drop(store);
+        pinned.verify()?;
+        crate::overview::write_project_summary(
+            self.runtime.global_home(),
+            &endpoint.root,
+            &endpoint.binding.database_id,
+            &snapshot,
+        )
     }
 
     fn registry_entry(&self, entry_id: &str, base: &str) -> AppResult<ProjectRef> {
@@ -921,6 +1057,37 @@ impl ProductionRecentProjects {
 }
 
 impl RecentProjectsProvider for ProductionRecentProjects {
+    fn global_overview_v1(&self) -> AppResult<crate::overview::GlobalOverviewV1> {
+        let registered = self.global_store()?.projects()?;
+        Ok(crate::overview::read_global_overview(
+            self.runtime.global_home(),
+            &registered,
+            &self.runtime.marker().projects,
+        ))
+    }
+
+    fn refresh_global_overview_v1(&self) -> AppResult<crate::overview::RefreshGlobalOverviewV1> {
+        let registered = self.global_store()?.projects()?;
+        let mut refreshed_projects = 0;
+        let mut skipped_projects = 0;
+        for project in &registered {
+            if self.refresh_project_summary(project).is_ok() {
+                refreshed_projects += 1;
+            } else {
+                skipped_projects += 1;
+            }
+        }
+        Ok(crate::overview::RefreshGlobalOverviewV1 {
+            overview: crate::overview::read_global_overview(
+                self.runtime.global_home(),
+                &registered,
+                &self.runtime.marker().projects,
+            ),
+            refreshed_projects,
+            skipped_projects,
+        })
+    }
+
     fn recent_projects(&self) -> AppResult<Vec<Value>> {
         Ok(self
             .recent_projects_v1()?
@@ -2326,6 +2493,26 @@ pub fn production_desktop_runtime(
     events: Option<Arc<dyn DesktopEventSink>>,
     initial_plan: u64,
 ) -> AppResult<Arc<DesktopRuntime>> {
+    production_desktop_runtime_for_startup(
+        global_home,
+        writer_version,
+        &StartupProjectV1::Open(current.to_path_buf()),
+        events,
+        initial_plan,
+    )
+}
+
+/// Creates the desktop without interpreting a Welcome decision as a project path.
+///
+/// # Errors
+/// Returns an error when the global runtime or selected workspace cannot load.
+pub fn production_desktop_runtime_for_startup(
+    global_home: PathBuf,
+    writer_version: impl Into<String>,
+    startup: &StartupProjectV1,
+    events: Option<Arc<dyn DesktopEventSink>>,
+    initial_plan: u64,
+) -> AppResult<Arc<DesktopRuntime>> {
     let writer_version = writer_version.into();
     let update_events = events
         .as_ref()
@@ -2342,7 +2529,9 @@ pub fn production_desktop_runtime(
     config.recent_projects = authority.clone();
     config.initialization = authority.clone();
     config.update_service = authority.clone();
-    if let Some(runtime) = authority.initial_workspace_runtime() {
+    if let StartupProjectV1::Open(current) = startup
+        && let Some(runtime) = authority.initial_workspace_runtime()
+    {
         match runtime.bindings_for(current) {
             Ok(bindings) => {
                 if let Some(project) = bindings.project {
@@ -2368,6 +2557,22 @@ impl DesktopWorkspaceFactory for ProductionDesktopAuthority {
 }
 
 impl RecentProjectsProvider for ProductionDesktopAuthority {
+    fn global_overview_v1(&self) -> AppResult<crate::overview::GlobalOverviewV1> {
+        let recents = lock(&self.state).recents.clone();
+        recents.map_or_else(
+            || Ok(crate::overview::GlobalOverviewV1::default()),
+            |recents| recents.global_overview_v1(),
+        )
+    }
+
+    fn refresh_global_overview_v1(&self) -> AppResult<crate::overview::RefreshGlobalOverviewV1> {
+        let recents = lock(&self.state).recents.clone();
+        recents.map_or_else(
+            || Ok(crate::overview::RefreshGlobalOverviewV1::default()),
+            |recents| recents.refresh_global_overview_v1(),
+        )
+    }
+
     fn recent_projects(&self) -> AppResult<Vec<Value>> {
         let recents = lock(&self.state).recents.clone();
         recents.map_or_else(|| Ok(Vec::new()), |recents| recents.recent_projects())
@@ -2947,25 +3152,18 @@ pub enum StartupProjectV1 {
 
 /// Decides what a launch opens.
 ///
-/// An explicit context always wins. A path named on the command line is an
-/// explicit instruction, and so is a working directory that is itself a bound
-/// project: a terminal launch from inside a project opens that project, which
-/// is both the pre-existing behavior and the only reading a terminal user
-/// expects. Auto-open applies only when neither is present — the Finder and
-/// Dock launch — and then demands proof: the opt-in, a recorded root, and a
-/// `resolve_recent_project` answer that is both `Available` and `Ready`. A
-/// `ConfirmationRequired` answer is the relocated-project case and never
-/// auto-opens; it preselects the entry on Welcome instead, because confirming
-/// a move is the user's call, not the launcher's.
+/// A named command-line path wins. Otherwise the stored restore preference
+/// decides, even when the process inherits a tracked working directory. A
+/// relocated project requires confirmation on Welcome instead of auto-opening.
 #[must_use]
 pub fn startup_project(
     cli_path: Option<PathBuf>,
-    working_directory_project: Option<PathBuf>,
+    _working_directory_project: Option<PathBuf>,
     restore_last_project: bool,
     last_project_root: Option<&str>,
     resolved: Option<(RecentProjectAvailabilityV1, RecentProjectResolutionV1)>,
 ) -> StartupProjectV1 {
-    if let Some(path) = cli_path.or(working_directory_project) {
+    if let Some(path) = cli_path {
         return StartupProjectV1::Open(path);
     }
     let Some(root) = last_project_root.filter(|_| restore_last_project) else {
@@ -2986,20 +3184,15 @@ pub fn startup_project(
 /// Decides what a launch opens from the working directory and the stored
 /// startup preference.
 ///
-/// Resolves the working directory through the same binding machinery the
-/// runtime uses, so a launch from inside a project opens it without ever
-/// reading the opt-in. Only a working directory that is no project reaches the
-/// `startup` section, whose recorded root is then proven through the same
-/// `resolve_recent_project` path the Welcome list uses, so an auto-open is
-/// held to exactly the evidence a manual reopen is. Every failure — no
-/// runtime, no store, no matching recents entry — lands on Welcome, because a
-/// launcher that cannot prove a project has no business opening one.
+/// Only an explicit path bypasses the preference. The recorded root must be
+/// available and ready through the same resolution used by the project list.
+/// Missing or invalid state leaves the desktop on Welcome.
 #[must_use]
 pub fn resolved_startup_project(
     global_home: &Path,
     writer_version: &str,
     cli_path: Option<PathBuf>,
-    current_dir: &Path,
+    _current_dir: &Path,
 ) -> StartupProjectV1 {
     if cli_path.is_some() {
         return startup_project(cli_path, None, false, None, None);
@@ -3007,14 +3200,6 @@ pub fn resolved_startup_project(
     let Ok(Some(runtime)) = ActiveRuntime::load(global_home, writer_version) else {
         return StartupProjectV1::Welcome(None);
     };
-    let working_directory_project = runtime
-        .bindings_for(current_dir)
-        .ok()
-        .and_then(|bindings| bindings.project)
-        .map(|project| project.root);
-    if working_directory_project.is_some() {
-        return startup_project(None, working_directory_project, false, None, None);
-    }
     let Ok(bindings) = runtime.global_bindings(runtime.global_home()) else {
         return StartupProjectV1::Welcome(None);
     };

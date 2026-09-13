@@ -103,6 +103,14 @@ const ROOT_CHILDREN: &[Child] = &[
     ),
     child("backup", "Back up the current project database"),
     child(
+        "local",
+        "Prepare project-only access for sandboxed commands",
+    ),
+    child(
+        "sync",
+        "Refresh shared settings and the project overview outside the sandbox",
+    ),
+    child(
         "board",
         "Kanban board of a plan's tasks (todo/doing/blocked/done)",
     ),
@@ -164,6 +172,12 @@ const ROOT_CHILDREN: &[Child] = &[
     child("summary", "Show or set the rolling context summary"),
     child("task", "Manage tasks"),
     child("version", "Print the ptrack version"),
+];
+
+const LOCAL_CHILDREN: &[Child] = &[
+    child("enable", "Enable local mode outside the sandbox"),
+    child("disable", "Disable local mode outside the sandbox"),
+    child("status", "Show whether project-local mode is enabled"),
 ];
 
 const GOAL_CHILDREN: &[Child] = &[
@@ -418,6 +432,31 @@ fn specification(path: &[String]) -> Spec {
             flags: ROOT_FLAGS.to_vec(),
             ..group_spec("ptrack", ROOT_LONG, ROOT_CHILDREN)
         },
+        ["local"] => group_spec(
+            "local",
+            "Prepare project-only access for sandboxed commands",
+            LOCAL_CHILDREN,
+        ),
+        ["local", "enable"] => leaf_spec(
+            "local enable",
+            "Capture project identity and settings outside the sandbox. Keeps the existing project database unchanged.",
+            HELP_ONLY,
+        ),
+        ["local", "disable"] => leaf_spec(
+            "local disable",
+            "Disable project-local routing outside the sandbox. Retains all project data.",
+            HELP_ONLY,
+        ),
+        ["local", "status"] => leaf_spec(
+            "local status",
+            "Show whether project-local mode is enabled",
+            HELP_ONLY,
+        ),
+        ["sync"] => leaf_spec(
+            "sync",
+            "Run outside the sandbox to refresh local settings, project registration and the global overview. Retains all project data.",
+            HELP_ONLY,
+        ),
         ["help"] => leaf_spec("help [command]", HELP_LONG, HELP_ONLY),
         ["completion"] => group_spec("completion", COMPLETION_LONG, COMPLETION_CHILDREN),
         [

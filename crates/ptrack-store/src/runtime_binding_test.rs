@@ -462,3 +462,116 @@ fn create_project(temp: &Temp, name: &str, database_id: &str) -> ActiveGeneratio
         path: path.to_str().unwrap().to_owned(),
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn runtime_load_defers_project_permission_but_publication_remains_strict() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = Temp::new();
+    let world = append_world(&temp);
+    let path = Path::new(&world.previous.projects[0].path);
+    fs::set_permissions(path, fs::Permissions::from_mode(0o0)).unwrap();
+    // Privileged test runners can bypass mode bits; do not claim denial there.
+    if fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .is_ok()
+    {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+        return;
+    }
+    crate::validate_active_generation_for_load(&temp.0, &world.previous, "test").unwrap();
+    assert!(validate_active_generation(&temp.0, &world.previous, "test").is_err());
+    let marker_path = temp.0.join("runtime/active-generation.json");
+    let before = fs::read(&marker_path).unwrap();
+    let lease = acquire_cutover_lock(&temp.0, CutoverLockMode::Exclusive).unwrap();
+    assert!(install_active_generation(&temp.0, &lease, &world.previous, "test").is_err());
+    assert_eq!(before, fs::read(marker_path).unwrap());
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+#[test]
+fn runtime_load_still_rejects_invalid_marker_and_corrupt_stores() {
+    let temp = Temp::new();
+    let world = append_world(&temp);
+    let mut invalid = world.previous.clone();
+    invalid.version = "unsupported".into();
+    assert!(crate::validate_active_generation_for_load(&temp.0, &invalid, "test").is_err());
+    let project_before = fs::read(&world.previous.projects[0].path).unwrap();
+    fs::write(&world.previous.projects[0].path, b"corrupt project").unwrap();
+    assert!(crate::validate_active_generation_for_load(&temp.0, &world.previous, "test").is_err());
+    fs::write(&world.previous.projects[0].path, project_before).unwrap();
+    fs::write(&world.previous.global.path, b"corrupt global").unwrap();
+    assert!(crate::validate_active_generation_for_load(&temp.0, &world.previous, "test").is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn runtime_load_defers_denied_ancestor_only_after_fixed_path_validation() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = Temp::new();
+    let world = append_world(&temp);
+    let ancestor = temp.0.join("denied");
+    fs::create_dir(&ancestor).unwrap();
+    private_directory(&ancestor);
+    let project = create_project(&temp, "denied/project", "denied-project");
+    let mut marker = world.previous;
+    marker.projects = vec![project.clone()];
+    fs::set_permissions(&ancestor, fs::Permissions::from_mode(0o0)).unwrap();
+    let denied = fs::canonicalize(&project.root);
+    if denied.is_ok() {
+        fs::set_permissions(&ancestor, fs::Permissions::from_mode(0o700)).unwrap();
+        return;
+    }
+    let loaded = crate::validate_active_generation_for_load(&temp.0, &marker, "test");
+    let strict = validate_active_generation(&temp.0, &marker, "test");
+    marker.projects[0].path = temp.0.join("outside.redb").to_str().unwrap().to_owned();
+    let invalid_path = crate::validate_active_generation_for_load(&temp.0, &marker, "test");
+    fs::set_permissions(&ancestor, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(
+        denied.unwrap_err().kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
+    loaded.unwrap();
+    assert!(strict.is_err());
+    assert!(
+        invalid_path
+            .unwrap_err()
+            .to_string()
+            .contains("fixed runtime path")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn runtime_load_rejects_symlinks_to_permission_denied_targets() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let temp = Temp::new();
+    let world = append_world(&temp);
+    let project = &world.previous.projects[0];
+    let database = Path::new(&project.path);
+    let target = temp.0.join("denied-target.redb");
+    fs::rename(database, &target).unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o0)).unwrap();
+    symlink(&target, database).unwrap();
+    let result = crate::validate_active_generation_for_load(&temp.0, &world.previous, "test");
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(matches!(
+        result,
+        Err(crate::StoreError::SymbolicLink { .. })
+    ));
+    fs::remove_file(database).unwrap();
+    let directory = Path::new(&project.root).join(".ptrack");
+    fs::remove_dir(&directory).unwrap();
+    let denied_directory = temp.0.join("denied-target-directory");
+    fs::create_dir(&denied_directory).unwrap();
+    fs::set_permissions(&denied_directory, fs::Permissions::from_mode(0o0)).unwrap();
+    symlink(&denied_directory, &directory).unwrap();
+    let result = crate::validate_active_generation_for_load(&temp.0, &world.previous, "test");
+    fs::set_permissions(&denied_directory, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(matches!(
+        result,
+        Err(crate::StoreError::SymbolicLink { .. })
+    ));
+}

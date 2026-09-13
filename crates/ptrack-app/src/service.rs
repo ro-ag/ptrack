@@ -545,6 +545,12 @@ pub type CapabilityCancellation = McpCancellation;
 /// The single use-case seam consumed by CLI, TUI, and Tauri adapters.
 #[allow(clippy::missing_errors_doc)]
 pub trait ApplicationPort {
+    fn local_mode(&mut self, _action: &str) -> AppResult<String> {
+        Err(AppError::Message(
+            "local mode is unavailable in this context".to_owned(),
+        ))
+    }
+
     fn initialize(&mut self, request: InitRequest) -> AppResult<InitResult>;
     /// Re-registers a moved project store. Only the marker-owning routed
     /// application can do this; everywhere else the default refusal applies.
@@ -661,6 +667,7 @@ fn no_coordination_host() -> AppError {
 pub struct LocalApplication {
     bindings: WorkspaceBindings,
     capability_environment: Option<CapabilitySessionEnvironment>,
+    local_metadata: Option<crate::local_mode::LocalMetadata>,
 }
 
 impl LocalApplication {
@@ -669,7 +676,33 @@ impl LocalApplication {
         Self {
             bindings,
             capability_environment: None,
+            local_metadata: None,
         }
+    }
+
+    pub(crate) fn project_only(
+        bindings: WorkspaceBindings,
+        metadata: crate::local_mode::LocalMetadata,
+    ) -> Self {
+        Self {
+            bindings,
+            capability_environment: None,
+            local_metadata: Some(metadata),
+        }
+    }
+
+    fn require_global(&self) -> AppResult<()> {
+        if self.local_metadata.is_some() {
+            return Err(crate::local_mode::global_refusal());
+        }
+        Ok(())
+    }
+
+    fn actor(&self) -> AppResult<Option<ActorIdentity>> {
+        if let Some(metadata) = &self.local_metadata {
+            return Ok(metadata.actor());
+        }
+        self.with_global(crate::identity::load_identity)
     }
 
     #[must_use]
@@ -703,6 +736,7 @@ impl LocalApplication {
     }
 
     fn agent_client(&self) -> AppResult<AgentObservationClient> {
+        self.require_global()?;
         let endpoint = self.project()?;
         AgentObservationClient::for_project(&self.bindings.global_home, &endpoint.root).map_err(
             |error| {
@@ -720,12 +754,25 @@ impl LocalApplication {
         operation: impl FnOnce(&ProjectStore) -> AppResult<R>,
     ) -> AppResult<R> {
         let endpoint = self.project()?;
-        let actor = self.with_global(crate::identity::load_identity)?;
-        let store = ProjectStore::open_existing(
-            &endpoint.database,
-            &endpoint.binding,
-            &self.bindings.writer_version,
-        )?
+        let actor = self.actor()?;
+        let pinned = self
+            .local_metadata
+            .as_ref()
+            .map(|_| crate::local_mode::pin(&endpoint.root))
+            .transpose()?;
+        let store = if let Some(pinned) = &pinned {
+            ProjectStore::open_existing_pinned(
+                pinned,
+                &endpoint.binding,
+                &self.bindings.writer_version,
+            )?
+        } else {
+            ProjectStore::open_existing(
+                &endpoint.database,
+                &endpoint.binding,
+                &self.bindings.writer_version,
+            )?
+        }
         .with_actor(actor);
         let result = operation(&store);
         drop(store);
@@ -736,6 +783,7 @@ impl LocalApplication {
     }
 
     fn with_global<R>(&self, operation: impl FnOnce(&GlobalStore) -> AppResult<R>) -> AppResult<R> {
+        self.require_global()?;
         let store = GlobalStore::open_existing(
             &self.bindings.global_database,
             &self.bindings.global_binding,
@@ -746,6 +794,9 @@ impl LocalApplication {
     }
 
     fn register_project_best_effort(&self, endpoint: &ProjectEndpoint) {
+        if self.local_metadata.is_some() {
+            return;
+        }
         let Ok(store) = GlobalStore::open_existing(
             &self.bindings.global_database,
             &self.bindings.global_binding,
@@ -856,7 +907,7 @@ impl LocalApplication {
                 )?,
             )
         };
-        let actor = self.with_global(crate::identity::load_identity)?;
+        let actor = self.actor()?;
         let writer_version = self.bindings.writer_version.clone();
         let source_label = project_label(&source.root);
         self.with_project(|store| {
@@ -916,7 +967,10 @@ impl LocalApplication {
         self.with_project(|_| Ok(self.project()?.root.clone()))
     }
 
-    fn guide_extra(&self) -> AppResult<String> {
+    pub(crate) fn guide_extra(&self) -> AppResult<String> {
+        if let Some(metadata) = &self.local_metadata {
+            return Ok(metadata.guide().to_owned());
+        }
         let path = self.bindings.global_home.join("guide.md");
         Ok(read_regular(&path, "guide template")?.map_or_else(String::new, |file| file.content))
     }
@@ -1200,7 +1254,7 @@ impl ApplicationPort for LocalApplication {
     }
 
     fn identity(&mut self) -> AppResult<Option<ActorIdentity>> {
-        self.with_global(crate::identity::load_identity)
+        self.actor()
     }
 
     fn set_identity(&mut self, name: &str) -> AppResult<ActorIdentity> {
@@ -1208,6 +1262,7 @@ impl ApplicationPort for LocalApplication {
     }
 
     fn backup(&mut self) -> AppResult<PathBuf> {
+        self.require_global()?;
         let endpoint = self.project()?.clone();
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1257,6 +1312,7 @@ impl ApplicationPort for LocalApplication {
     }
 
     fn hook(&mut self, action: HookAction) -> AppResult<HookResult> {
+        self.require_global()?;
         let root = self.verified_root()?;
         let git_directory = root.join(".git");
         let metadata = fs::symlink_metadata(&git_directory).map_err(|_| {
@@ -1307,6 +1363,7 @@ impl ApplicationPort for LocalApplication {
     }
 
     fn git_show(&mut self, reference: &str, stat: bool) -> AppResult<ProcessOutput> {
+        self.require_global()?;
         let root = self.verified_root()?;
         let mut command = Command::new("git");
         command.arg("-C").arg(root).arg("show");
@@ -1330,6 +1387,7 @@ impl ApplicationPort for LocalApplication {
     }
 
     fn capability_call(&mut self, tool: &str, arguments: &str) -> AppResult<Vec<u8>> {
+        self.require_global()?;
         let endpoint = self.project()?;
         let environment = self.capability_environment()?;
         let client = client_for_project(&self.bindings.global_home, &endpoint.root)?;
@@ -1363,6 +1421,7 @@ impl ApplicationPort for LocalApplication {
         output: &mut dyn Write,
         cancellation: &CapabilityCancellation,
     ) -> AppResult<CapabilityMcpOutcome> {
+        self.require_global()?;
         let endpoint = self.project()?;
         let environment = self.capability_environment()?;
         let client = client_for_project(&self.bindings.global_home, &endpoint.root)?;

@@ -107,6 +107,7 @@ export function refreshedRecentProjectForOpen(
 
 export type RecentProjectsEvent =
   | { type: "loadStarted" }
+  | { type: "loadCancelled" }
   | { type: "loaded"; projects: RecentProjectEntry[]; announcement?: string }
   | { type: "loadFailed"; message: string }
   | { type: "alert"; message: string }
@@ -138,6 +139,12 @@ export function reduceRecentProjects(
           : state.phase,
         listLoading: true,
         listError: "",
+      };
+    case "loadCancelled":
+      return {
+        ...state,
+        phase: state.phase === "loading" ? "idle" : state.phase,
+        listLoading: false,
       };
     case "loaded":
       if (!state.listLoading) return state;

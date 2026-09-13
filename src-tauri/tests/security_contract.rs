@@ -48,7 +48,7 @@ fn shell_has_only_the_bounded_adapter_commands() {
     assert!(source.contains("pick_project_directory"));
     assert!(source.contains("open_external_url"));
     assert!(source.contains("tauri::generate_handler!["));
-    assert!(source.contains("production_desktop_runtime("));
+    assert!(source.contains("production_desktop_runtime_for_startup("));
     assert!(source.contains("app.manage(runtime)"));
     assert!(!source.contains("ProductionDesktopAuthority::load("));
     assert!(!source.contains("DesktopRuntimeConfig::unavailable("));
@@ -268,7 +268,7 @@ fn tauri_uses_the_existing_frontend_and_exact_window_contract() {
         .find("let _ = window.show();")
         .expect("setup must show the hidden window");
     let runtime = source
-        .find("production_desktop_runtime(")
+        .find("production_desktop_runtime_for_startup(")
         .expect("setup must build the desktop runtime");
     // The show is unconditional: it precedes every fallible step of setup, so no
     // `?` can leave a permanently invisible window.

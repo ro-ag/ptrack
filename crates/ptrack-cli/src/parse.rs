@@ -6,6 +6,8 @@ use crate::command::{ArgCount, LEAVES};
 use crate::error::CliError;
 
 pub const ROOT_COMMANDS: &[&str] = &[
+    "local",
+    "sync",
     "init",
     "relocate",
     "goal",
@@ -35,6 +37,7 @@ pub const ROOT_COMMANDS: &[&str] = &[
 ];
 
 const GROUPS: &[(&str, &[&str])] = &[
+    ("local", &["enable", "disable", "status"]),
     ("goal", &["show", "set"]),
     ("summary", &["show", "set"]),
     (

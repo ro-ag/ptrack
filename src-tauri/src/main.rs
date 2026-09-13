@@ -16,7 +16,7 @@ use ptrack_app::window_state::{
 };
 use ptrack_app::{
     AppError, DesktopCommandRequest, DesktopEvent, DesktopEventSink, DesktopRuntime,
-    RoutedApplication, StartupProjectV1, production_desktop_runtime, resolve_global_home,
+    RoutedApplication, production_desktop_runtime_for_startup, resolve_global_home,
     resolved_startup_project,
 };
 use ptrack_desktop::{
@@ -396,6 +396,10 @@ fn main() {
     match outcome {
         Ok(ptrack_cli::RunOutcome::ExitSuccess) => {}
         Ok(ptrack_cli::RunOutcome::LaunchGui { path, plan_id }) => {
+            if let Err(error) = application.require_global_mode() {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
             run_desktop(
                 if path.is_empty() {
                     None
@@ -696,24 +700,19 @@ fn run_desktop(initial_path: Option<PathBuf>, initial_plan: u64) {
             // `fail_startup` instead.
             let runtime = (|| -> Result<_, String> {
                 let global_home = resolve_global_home().map_err(|error| error.to_string())?;
-                // An explicit context wins: a named path, then a working
-                // directory that is itself a project. The opt-in only decides
-                // the Finder and Dock launch, where the working directory is
-                // no project.
+                // Preserve Welcome as a startup decision; an inherited working
+                // directory must not override the user's startup preference.
                 let current_dir = std::env::current_dir().map_err(|error| error.to_string())?;
-                let current = match resolved_startup_project(
+                let startup = resolved_startup_project(
                     &global_home,
                     ptrack_cli::version(),
                     initial_path.clone(),
                     &current_dir,
-                ) {
-                    StartupProjectV1::Open(path) => path,
-                    StartupProjectV1::Welcome(_) => current_dir,
-                };
-                production_desktop_runtime(
+                );
+                production_desktop_runtime_for_startup(
                     global_home,
                     ptrack_cli::version(),
-                    &current,
+                    &startup,
                     Some(Arc::clone(&sink)),
                     initial_plan,
                 )

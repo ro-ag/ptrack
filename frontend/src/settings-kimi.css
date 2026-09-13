@@ -1,0 +1,238 @@
+/* Kimi dialog treatment applied to the real preference controls. Keep native
+   select/checkbox semantics, section keyboard navigation and persistence. */
+#settings-modal .modal-backdrop {
+  background: var(--backdrop-bg);
+  backdrop-filter: blur(16px);
+}
+
+#settings-modal .settings-dialog {
+  width: min(800px, calc(100% - 40px));
+  max-height: calc(100dvh - 48px);
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 28px;
+  color: var(--text);
+  background:
+    radial-gradient(ellipse at 18% 0%, rgba(175, 168, 255, 0.12), transparent 42%),
+    var(--dialog-sheen), var(--dialog-bg);
+  box-shadow: 0 32px 100px rgba(0, 0, 0, 0.42);
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+#settings-modal .settings-dialog-heading {
+  align-items: center;
+  padding: 26px 28px 22px;
+  border-bottom: 1px solid var(--line-strong);
+}
+
+#settings-modal .settings-dialog-heading .eyebrow {
+  margin: 0 0 8px;
+  color: var(--todo);
+  font-size: 0.6875rem;
+  font-weight: 750;
+  letter-spacing: 0.16em;
+}
+
+#settings-modal .settings-dialog-heading h2 {
+  margin: 0;
+  font-size: clamp(1.75rem, 3vw, 2.125rem);
+  line-height: 1.08;
+  letter-spacing: -0.055em;
+  font-weight: 750;
+}
+
+#settings-modal .dialog-close {
+  flex-shrink: 0;
+  min-height: 38px;
+  border-radius: 999px;
+  padding-inline: 16px;
+  border-color: var(--control-border);
+  background: var(--fill-hover);
+  color: var(--text-soft);
+}
+
+#settings-modal .settings-dialog-body {
+  gap: 24px;
+  margin: 0;
+  padding: 24px 28px;
+}
+
+#settings-modal .settings-section-list {
+  flex-basis: 166px;
+  padding: 6px;
+  gap: 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 22px;
+  background: var(--fill-subtle);
+}
+
+#settings-modal .settings-section-tab {
+  min-height: 38px;
+  padding: 9px 13px;
+  border-radius: 999px;
+  color: var(--text-soft);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+#settings-modal .settings-section-tab[aria-selected="true"] {
+  color: var(--ink);
+  background: var(--todo);
+  border-color: var(--todo);
+  font-weight: 750;
+}
+
+#settings-modal .settings-panel {
+  gap: 14px;
+}
+
+#settings-modal .settings-panel > .section-label {
+  margin: 0 0 3px;
+  color: var(--text-soft);
+  font-size: 0.6875rem;
+  letter-spacing: 0.13em;
+  line-height: 1.5;
+}
+
+#settings-modal .settings-field,
+#settings-modal .settings-check {
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 17px;
+  background: var(--fill-subtle);
+}
+
+#settings-modal .settings-field {
+  grid-template-columns: minmax(100px, 0.8fr) minmax(0, 1.2fr);
+  align-items: center;
+}
+
+#settings-modal .settings-field > span,
+#settings-modal .settings-check > span {
+  color: var(--text);
+  font-size: 0.8125rem;
+  font-weight: 650;
+  line-height: 1.5;
+}
+
+#settings-modal .settings-check small,
+#settings-modal .dialog-help {
+  color: var(--text-soft);
+  font-size: 0.75rem;
+  line-height: 1.55;
+}
+
+#settings-modal .settings-check small {
+  margin-top: 4px;
+  font-weight: 400;
+}
+
+#settings-modal .settings-field select,
+#settings-modal .settings-field input {
+  min-height: 38px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: var(--control-solid-bg);
+}
+
+#settings-modal .settings-field select {
+  border-radius: 999px;
+}
+
+#settings-modal .settings-panel > .settings-field + .dialog-help {
+  margin: -5px 6px 2px;
+}
+
+#settings-modal .settings-diagnostic {
+  padding: 12px 0;
+  border-bottom-color: var(--line-strong);
+}
+
+#settings-modal .settings-dialog-footer {
+  gap: 12px;
+  margin-top: 0;
+  padding: 18px 28px 24px;
+  border-top: 1px solid var(--line-strong);
+  background: var(--fill-subtle);
+}
+
+#settings-modal .settings-reset-actions button,
+#settings-modal .settings-dialog-footer button {
+  min-height: 38px;
+  border-radius: 999px;
+}
+
+#settings-modal .settings-storage-notice {
+  margin: 18px 28px 0;
+}
+
+/* Focus stays explicit against the translucent cards in both palettes. */
+#settings-modal :is(button, input, select):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+@media (max-width: 600px) {
+  #settings-modal .settings-dialog {
+    width: calc(100% - 20px);
+    max-height: calc(100dvh - 24px);
+    border-radius: 22px;
+  }
+  #settings-modal .settings-dialog-heading,
+  #settings-modal .settings-dialog-body,
+  #settings-modal .settings-dialog-footer {
+    padding: 18px;
+  }
+  #settings-modal .settings-dialog-body {
+    flex-direction: column;
+    gap: 20px;
+  }
+  #settings-modal .settings-section-list {
+    flex: 0 0 auto;
+    width: 100%;
+  }
+  #settings-modal .settings-panels { width: 100%; }
+  #settings-modal .settings-field,
+  #settings-modal .settings-check { padding: 13px; }
+  #settings-modal .settings-field { grid-template-columns: minmax(0, 1fr); }
+  #settings-modal .settings-storage-notice { margin-inline: 18px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-reduced-motion="never"]) #settings-modal *,
+  :root:not([data-reduced-motion="never"]) #settings-modal *::before,
+  :root:not([data-reduced-motion="never"]) #settings-modal *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* Explicit light-theme control colors keep muted navigation and secondary
+   actions legible independently of the landing's dark palette. */
+:root[data-theme="light"] #settings-modal .settings-section-tab:not([aria-selected="true"]),
+:root[data-theme="light"] #settings-modal .dialog-close,
+:root[data-theme="light"] #settings-modal .button-secondary,
+:root[data-theme="light"] #settings-modal .settings-diagnostic-copy {
+  color: #3d4757;
+  -webkit-text-fill-color: currentColor;
+}
+
+:root[data-theme="light"] #settings-modal .settings-section-tab:not([aria-selected="true"]):hover,
+:root[data-theme="light"] #settings-modal .dialog-close:hover,
+:root[data-theme="light"] #settings-modal .button-secondary:hover,
+:root[data-theme="light"] #settings-modal .settings-diagnostic-copy:hover {
+  color: #1a2230;
+}
+
+@media (forced-colors: active) {
+  #settings-modal .settings-dialog { border-color: CanvasText; }
+  #settings-modal .settings-section-tab[aria-selected="true"] {
+    color: HighlightText;
+    background: Highlight;
+    border-color: Highlight;
+    forced-color-adjust: none;
+  }
+  #settings-modal :is(button, input, select):focus-visible { outline-color: Highlight; }
+}

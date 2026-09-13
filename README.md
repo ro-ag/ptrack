@@ -107,8 +107,9 @@ ptrack board --gui          # compatible alias
 ptrack board --gui --plan 4
 ```
 
-Outside a project, the app opens a welcome screen with recent projects. Use the
-native directory picker to open or switch projects, or close a project without
+Without an explicit path, the app follows the saved startup preference, showing
+the landing overview by default. Use the native directory picker to open or
+switch projects, or close a project without
 exiting the app. p-track confirms before a transition stops active terminals or
 registered agent runs.
 
@@ -620,7 +621,7 @@ Put `#<task-id>` in a commit message to link the commit to that task.
 | `ptrack agent list\|show <run-id>\|inbox [--json]` | Inspect bounded live runs, inferred intelligence, and pending handoffs from the active project coordination host. |
 | `ptrack mcp` | Serve `get_context`, `get_next_task`, `complete_task`, and `add_note` over MCP stdio for the project selected by the server working directory. |
 | `ptrack checkpoint [--json]` | Print the whole-picture re-evaluation block (goal, summary, open plans, issues). |
-| `ptrack gui [PATH]` | Open the canonical desktop project workspace; PATH defaults to the current directory. |
+| `ptrack gui [PATH]` | Open PATH, or follow the saved startup preference (landing page by default). |
 | `ptrack board [--plan N] [--json] [--gui]` | Print a kanban board or open it as a Tauri desktop GUI. |
 | `ptrack search <term> [--json]` | Search plan and task titles plus note bodies. |
 | `ptrack status [--json]` | Print a compact project overview. |
@@ -649,6 +650,35 @@ persisted automatic-check opt-in is ordinary configuration in `global.redb`;
 no GitHub credential or asset URL is stored. Runtime commands resolve only
 stores named by the attested active-generation marker. JSON is produced only
 when a command is explicitly asked for `--json` output.
+
+### Project-local operation
+
+For environments that restrict the CLI to the project directory, prepare local
+operation from a normal terminal in the initialized project:
+
+```sh
+ptrack local enable
+```
+
+Project commands then use the existing `.ptrack/ptrack.redb` and separately
+prepared local routing metadata. They do not fall back to the home directory.
+Run `ptrack sync` from a terminal with global access to refresh the project’s
+registration, local settings, and dashboard summary. Sync keeps all project
+records in place; it never empties or replaces the project database.
+Use `ptrack local status` to inspect the mode and `ptrack local disable` from a
+normal terminal to return to global routing. Commands requiring global access
+(such as backups, hooks, Git inspection, integrations, and desktop launch) report
+that requirement while local mode is enabled.
+
+Desktop startup follows the saved restore-last-project preference. With restore
+disabled, it opens the landing page even if the process inherits a tracked project
+as its working directory. Use `ptrack gui <path>` to open a specific project.
+
+The desktop landing overview reports cached current totals and recent record
+updates across tracked projects. Summaries show their sync time and coverage;
+projects without a summary are not counted as having zero work. Use sync in each
+project to populate or rebuild its summary. Existing database layouts and record
+encodings are unchanged. See the [access and compatibility contract](docs/project-local-mode.md).
 
 ## Development
 
