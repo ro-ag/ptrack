@@ -249,3 +249,31 @@ describe("recent project recovery", () => {
     expect(RECENT_RELOCATION_UNCONFIRMED).toContain("without replaying");
   });
 });
+
+
+describe("landing reads interrupted by workspace transitions", () => {
+  it("clears a startup load immediately so returning from an auto-opened project can reload", () => {
+    const pending = reduceRecentProjects(initialRecentProjectsState, { type: "loadStarted" });
+    expect(pending.phase).toBe("loading");
+    const cancelled = reduceRecentProjects(pending, { type: "loadCancelled" });
+    expect(cancelled.phase).toBe("idle");
+    expect(cancelled.listLoading).toBe(false);
+    // A response arriving before the next load cannot revive abandoned rows.
+    expect(reduceRecentProjects(cancelled, { type: "loaded", projects: [entry] })).toBe(cancelled);
+    const reloading = reduceRecentProjects(cancelled, { type: "loadStarted" });
+    const loaded = reduceRecentProjects(reloading, { type: "loaded", projects: [entry] });
+    expect(loaded.projects).toEqual([entry]);
+    expect(loaded.phase).toBe("idle");
+    expect(loaded.listLoading).toBe(false);
+  });
+
+  it("cancels only list loading without resetting an authorized project operation", () => {
+    const opening = reduceRecentProjects({ ...initialRecentProjectsState, projects: [entry], listLoading: true }, { type: "begin", operationId: 7, entry, intent: "open" });
+    const cancelled = reduceRecentProjects(opening, { type: "loadCancelled" });
+    expect(cancelled.phase).toBe("opening");
+    expect(cancelled.operationId).toBe(7);
+    expect(cancelled.activeBase).toBe(entry.base);
+    expect(cancelled.projects).toEqual([entry]);
+    expect(cancelled.listLoading).toBe(false);
+  });
+});

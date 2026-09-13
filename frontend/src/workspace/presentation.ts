@@ -1243,3 +1243,13 @@ export function stackTiles(projects: StackProfileProject[], limit = 4): StackTil
     .sort((left, right) => right.files - left.files || left.language.localeCompare(right.language))
     .slice(0, limit);
 }
+
+
+/** A snapshot belongs to one project activation, including reopen at the same root. */
+export function workspaceProjectChanged(
+  previous: { status: string; generation: number; project?: { root?: string } },
+  next: { status: string; generation: number; project?: { root?: string } },
+): boolean {
+  return next.status === "open" && (previous.status !== "open" ||
+    previous.generation !== next.generation || previous.project?.root !== next.project?.root);
+}

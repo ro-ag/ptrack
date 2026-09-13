@@ -29,6 +29,7 @@ struct FakeApplication {
     lifecycle_requests: Vec<PlanLifecycleRequest>,
     lifecycle_results: Vec<AppResult<PlanLifecycleOutcome>>,
     relocate_requests: Vec<RelocateRequest>,
+    local_actions: Vec<String>,
     fail_notes: bool,
 }
 
@@ -64,12 +65,18 @@ impl Default for FakeApplication {
             lifecycle_requests: Vec::new(),
             lifecycle_results: Vec::new(),
             relocate_requests: Vec::new(),
+            local_actions: Vec::new(),
             fail_notes: false,
         }
     }
 }
 
 impl ApplicationPort for FakeApplication {
+    fn local_mode(&mut self, action: &str) -> AppResult<String> {
+        self.local_actions.push(action.to_owned());
+        Ok(format!("local action: {action}"))
+    }
+
     fn initialize(&mut self, _request: InitRequest) -> AppResult<InitResult> {
         Err(AppError::NotImplemented("test initialize"))
     }
@@ -1684,4 +1691,55 @@ fn checkpoint_renders_the_whole_picture_on_both_formats() {
     let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "checkpoint", "--json"]);
     assert!(stdout.contains("\"goal\": \"ship\""), "{stdout}");
     assert!(stdout.contains("\"open_plans\""), "{stdout}");
+}
+
+#[test]
+fn local_and_sync_commands_reach_the_application_through_cli_parsing() {
+    for (args, expected) in [
+        (vec!["ptrack", "local", "enable"], "enable"),
+        (vec!["ptrack", "local", "status"], "status"),
+        (vec!["ptrack", "local", "disable"], "disable"),
+        (vec!["ptrack", "sync"], "sync"),
+    ] {
+        let mut application = FakeApplication::default();
+        let (result, stdout, stderr) = invoke_with(&mut application, &args);
+        assert_eq!(result.unwrap(), RunOutcome::ExitSuccess);
+        assert_eq!(application.local_actions, [expected]);
+        assert_eq!(stdout, format!("local action: {expected}\n"));
+        assert!(stderr.is_empty());
+    }
+}
+
+#[test]
+fn local_and_sync_extra_arguments_are_rejected_before_dispatch() {
+    for args in [
+        vec!["ptrack", "local", "enable", "extra"],
+        vec!["ptrack", "local", "status", "extra"],
+        vec!["ptrack", "local", "disable", "extra"],
+        vec!["ptrack", "sync", "extra"],
+        vec!["ptrack", "sync", "--unknown"],
+    ] {
+        let mut application = FakeApplication::default();
+        let (result, _, _) = invoke_with(&mut application, &args);
+        assert!(result.is_err(), "arguments unexpectedly accepted: {args:?}");
+        assert!(application.local_actions.is_empty());
+    }
+}
+
+#[test]
+fn local_and_sync_help_does_not_execute_actions() {
+    for args in [
+        vec!["ptrack", "local", "--help"],
+        vec!["ptrack", "local", "enable", "--help"],
+        vec!["ptrack", "local", "status", "--help"],
+        vec!["ptrack", "local", "disable", "--help"],
+        vec!["ptrack", "sync", "--help"],
+    ] {
+        let mut application = FakeApplication::default();
+        let (result, stdout, stderr) = invoke_with(&mut application, &args);
+        assert_eq!(result.unwrap(), RunOutcome::ExitSuccess);
+        assert!(stdout.contains("Usage:"));
+        assert!(stderr.is_empty());
+        assert!(application.local_actions.is_empty());
+    }
 }

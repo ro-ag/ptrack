@@ -491,8 +491,8 @@ fn production_desktop_json_smoke_retries_no_write_then_recovers_durable_bootstra
             .unwrap(),
         serde_json::json!({ "pending": false })
     );
-    assert_eq!(fresh.workspace_state().status, WorkspaceStatus::Open);
-    assert_eq!(fresh.workspace_state().generation, 1);
+    assert_eq!(fresh.workspace_state().status, WorkspaceStatus::Welcome);
+    assert_eq!(fresh.workspace_state().generation, 0);
     fresh.begin_shutdown().unwrap();
 }
 
@@ -2654,8 +2654,8 @@ fn status_and_pending_refresh_completion_from_another_authority() {
             .unwrap(),
         serde_json::json!({ "pending": false })
     );
-    assert_eq!(desktop.workspace_state().status, WorkspaceStatus::Open);
-    assert_eq!(desktop.workspace_state().generation, 1);
+    assert_eq!(desktop.workspace_state().status, WorkspaceStatus::Welcome);
+    assert_eq!(desktop.workspace_state().generation, 0);
     let status_value = desktop
         .invoke(DesktopCommandRequest {
             method: "GetInitializationStatusV1".to_owned(),
@@ -3069,12 +3069,12 @@ fn a_command_line_path_always_wins_over_the_auto_open_opt_in() {
 }
 
 #[test]
-fn a_project_working_directory_wins_over_the_auto_open_opt_in() {
+fn a_project_working_directory_does_not_override_the_auto_open_preference() {
     let ready = Some((
         RecentProjectAvailabilityV1::Available,
         RecentProjectResolutionV1::Ready,
     ));
-    // `cd /cwd && ptrack --gui` opens /cwd, not the recorded last project.
+    // An inherited working directory must not override the startup setting.
     assert_eq!(
         startup_project(
             None,
@@ -3083,9 +3083,19 @@ fn a_project_working_directory_wins_over_the_auto_open_opt_in() {
             Some("/last"),
             ready
         ),
-        StartupProjectV1::Open(PathBuf::from("/cwd"))
+        StartupProjectV1::Open(PathBuf::from("/last"))
     );
-    // A working directory that is no project falls through to the opt-in.
+    assert_eq!(
+        startup_project(
+            None,
+            Some(PathBuf::from("/cwd")),
+            false,
+            Some("/last"),
+            ready
+        ),
+        StartupProjectV1::Welcome(None)
+    );
+    // A working directory that is no project also follows the opt-in.
     assert_eq!(
         startup_project(None, None, true, Some("/last"), ready),
         StartupProjectV1::Open(PathBuf::from("/last"))
@@ -3180,10 +3190,13 @@ fn a_launch_reopens_the_recorded_project_only_once_the_user_has_opted_in() {
         crate::preferences::set_preferences(&store, &patch).unwrap();
     };
 
-    // Nothing recorded, and a recorded root without the opt-in, both leave the
-    // current directory deciding what opens.
+    // No recorded root, or no opt-in, leaves the desktop on Welcome.
     assert_eq!(
         resolved_startup_project(&home, "test", None, &temp.0),
+        StartupProjectV1::Welcome(None)
+    );
+    assert_eq!(
+        resolved_startup_project(&home, "test", None, &project),
         StartupProjectV1::Welcome(None)
     );
     record(serde_json::json!({ "startup": { "lastProjectRoot": root } }));
@@ -3191,6 +3204,17 @@ fn a_launch_reopens_the_recorded_project_only_once_the_user_has_opted_in() {
         resolved_startup_project(&home, "test", None, &temp.0),
         StartupProjectV1::Welcome(None)
     );
+
+    let startup = resolved_startup_project(&home, "test", None, &project);
+    assert_eq!(startup, StartupProjectV1::Welcome(None));
+    let desktop =
+        crate::production_desktop_runtime_for_startup(home.clone(), "test", &startup, None, 0)
+            .unwrap();
+    let state = desktop
+        .invoke(desktop_request("GetWorkspaceState", vec![]))
+        .unwrap();
+    assert_eq!(state["status"], "welcome");
+    drop(desktop);
 
     record(serde_json::json!({ "startup": { "restoreLastProject": true } }));
     assert_eq!(
@@ -3210,10 +3234,9 @@ fn a_launch_reopens_the_recorded_project_only_once_the_user_has_opted_in() {
     );
 }
 
-/// `cd /work/other && ptrack --gui` must open the working directory's project,
-/// not the recorded one, so the opt-in never regresses a terminal launch.
+/// An inherited project directory must not bypass the stored startup choice.
 #[test]
-fn a_launch_from_inside_a_project_opens_it_instead_of_the_recorded_root() {
+fn a_launch_from_inside_a_project_honors_the_recorded_startup_preference() {
     let temp = Temp::new();
     let home = temp.0.join("cwd-home");
     let recorded = temp.0.join("cwd-recorded");
@@ -3250,15 +3273,14 @@ fn a_launch_from_inside_a_project_opens_it_instead_of_the_recorded_root() {
     drop(store);
     drop(runtime);
 
-    // The working directory is a bound project, so it wins over the opt-in,
-    // from the root and from anywhere inside it.
+    // Root and nested inherited working directories both honor the preference.
     assert_eq!(
         resolved_startup_project(&home, "test", None, &working),
-        StartupProjectV1::Open(working.clone())
+        StartupProjectV1::Open(recorded.clone())
     );
     assert_eq!(
         resolved_startup_project(&home, "test", None, &nested),
-        StartupProjectV1::Open(working.clone())
+        StartupProjectV1::Open(recorded.clone())
     );
     // A working directory that is no project falls through to the proven root.
     assert_eq!(
@@ -4018,4 +4040,156 @@ fn routed_relocate_moves_the_recents_row_even_after_the_marker_was_pruned() {
         GlobalStore::open_existing(&bindings.global_database, &bindings.global_binding).unwrap();
     assert!(global.project(&old_root).unwrap().is_none());
     assert!(global.project(&new_root).unwrap().is_some());
+}
+
+#[test]
+fn refresh_global_overview_reads_all_projects_without_changing_records_or_sidecars() {
+    let temp = Temp::new();
+    let (home, first, second) = bootstrap_two_projects(&temp);
+    let mut application = RoutedApplication::new(home.clone(), first.clone(), "test");
+    seed_transfer_plan(&mut application);
+    drop(application);
+    let runtime = ActiveRuntime::load(&home, "test").unwrap().unwrap();
+    let recents = ProductionRecentProjects::new(runtime.clone());
+    let bindings = runtime.global_bindings(&home).unwrap();
+    let registry_before = {
+        let store = GlobalStore::open_existing(&bindings.global_database, &bindings.global_binding)
+            .unwrap();
+        store.projects().unwrap()
+    };
+    let snapshot = |root: &Path| {
+        let binding = runtime
+            .bindings_for_exact_root(root)
+            .unwrap()
+            .project
+            .unwrap();
+        let store =
+            ProjectStore::open_existing(&binding.database, &binding.binding, "test").unwrap();
+        store.snapshot().unwrap()
+    };
+    let records_before = [snapshot(&first), snapshot(&second)];
+    for root in [&first, &second] {
+        fs::write(
+            root.join(".ptrack/local.json"),
+            b"unchanged sidecar sentinel",
+        )
+        .unwrap();
+    }
+    assert_eq!(recents.global_overview_v1().unwrap().summarized_projects, 0);
+    let refreshed = recents.refresh_global_overview_v1().unwrap();
+    assert_eq!(refreshed.refreshed_projects, 2);
+    assert_eq!(refreshed.skipped_projects, 0);
+    assert_eq!(refreshed.overview.summarized_projects, 2);
+    assert_eq!(refreshed.overview.counts.open_tasks, 1);
+    assert_eq!(records_before, [snapshot(&first), snapshot(&second)]);
+    let registry_after = {
+        let store = GlobalStore::open_existing(&bindings.global_database, &bindings.global_binding)
+            .unwrap();
+        store.projects().unwrap()
+    };
+    assert_eq!(registry_before, registry_after);
+    for root in [&first, &second] {
+        assert_eq!(
+            fs::read(root.join(".ptrack/local.json")).unwrap(),
+            b"unchanged sidecar sentinel"
+        );
+    }
+}
+
+#[test]
+fn refresh_global_overview_skips_missing_and_unbound_projects_preserving_cached_summary() {
+    let temp = Temp::new();
+    let (home, first, second) = bootstrap_two_projects(&temp);
+    let runtime = ActiveRuntime::load(&home, "test").unwrap().unwrap();
+    let recents = ProductionRecentProjects::new(runtime.clone());
+    let initial = recents.refresh_global_overview_v1().unwrap();
+    assert_eq!(initial.refreshed_projects, 2);
+    let cached = initial
+        .overview
+        .projects
+        .iter()
+        .find(|entry| entry.root == second.to_str().unwrap())
+        .unwrap()
+        .clone();
+    fs::rename(&second, temp.0.join("unavailable-project")).unwrap();
+    let unbound = temp.0.join("unbound-project");
+    fs::create_dir(&unbound).unwrap();
+    let bindings = runtime.global_bindings(&home).unwrap();
+    {
+        let store = GlobalStore::open_existing(&bindings.global_database, &bindings.global_binding)
+            .unwrap();
+        store.register_project("unbound", &unbound).unwrap();
+    }
+    let refreshed = recents.refresh_global_overview_v1().unwrap();
+    assert_eq!(refreshed.refreshed_projects, 1);
+    assert_eq!(refreshed.skipped_projects, 2);
+    assert_eq!(refreshed.overview.tracked_projects, 3);
+    assert!(refreshed.overview.projects.contains(&cached));
+    assert!(!unbound.join(".ptrack").exists());
+    assert!(!second.exists());
+    assert!(first.join(".ptrack/ptrack.redb").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn refresh_global_overview_refuses_symlinked_project_database() {
+    let temp = Temp::new();
+    let (home, first, second) = bootstrap_two_projects(&temp);
+    let runtime = ActiveRuntime::load(&home, "test").unwrap().unwrap();
+    let recents = ProductionRecentProjects::new(runtime);
+    let database = second.join(".ptrack/ptrack.redb");
+    let moved = temp.0.join("moved.redb");
+    fs::rename(&database, &moved).unwrap();
+    std::os::unix::fs::symlink(&moved, &database).unwrap();
+    let refreshed = recents.refresh_global_overview_v1().unwrap();
+    assert_eq!(refreshed.refreshed_projects, 1);
+    assert_eq!(refreshed.skipped_projects, 1);
+    assert_eq!(refreshed.overview.projects[0].root, first.to_str().unwrap());
+}
+
+#[cfg(unix)]
+#[test]
+fn desktop_landing_loads_with_permission_denied_project_but_selected_open_fails() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = Temp::new();
+    let (home, first, _second) = bootstrap_two_projects(&temp);
+    let path = first.join(".ptrack/ptrack.redb");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o0)).unwrap();
+    if fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .is_ok()
+    {
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        return;
+    }
+    let marker_path = home.join("runtime/active-generation.json");
+    let before = fs::read(&marker_path).unwrap();
+    let desktop = crate::production_desktop_runtime_for_startup(
+        home.clone(),
+        "test",
+        &StartupProjectV1::Welcome(None),
+        None,
+        0,
+    )
+    .unwrap();
+    assert_eq!(desktop.workspace_state().status, WorkspaceStatus::Welcome);
+    let runtime = ActiveRuntime::load(&home, "test").unwrap().unwrap();
+    let recents = ProductionRecentProjects::new(runtime);
+    let recent = recents
+        .recent_projects_v1()
+        .unwrap()
+        .projects
+        .into_iter()
+        .find(|project| project.canonical_path == first.to_str().unwrap())
+        .unwrap();
+    assert!(
+        recents
+            .authorize_recent_project_open(&recent.entry_id, &recent.base, &first, "")
+            .is_err()
+    );
+    assert_eq!(before, fs::read(&marker_path).unwrap());
+    assert_eq!(desktop.workspace_state().status, WorkspaceStatus::Welcome);
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
 }

@@ -10,6 +10,10 @@ mod desktop_runtime;
 mod diagnostics_report;
 mod identity;
 mod layout_state;
+mod local_mode;
+pub mod overview;
+#[cfg(test)]
+mod overview_test;
 mod preferences;
 mod production;
 mod project_mcp;
@@ -51,7 +55,8 @@ pub use identity::{IDENTITY_CONFIG_KEY, load_identity, set_identity_name};
 pub use production::{
     ActiveRuntime, ProductionDesktopAuthority, ProductionDesktopWorkspaceFactory,
     ProductionRecentProjects, RoutedApplication, RuntimeBindingState, StartupProjectV1,
-    production_desktop_runtime, resolve_global_home, resolved_startup_project, startup_project,
+    production_desktop_runtime, production_desktop_runtime_for_startup, resolve_global_home,
+    resolved_startup_project, startup_project,
 };
 pub use project_mcp::serve_project_mcp;
 pub use ptrack_agent::{
@@ -99,6 +104,8 @@ mod diagnostics_report_test;
 mod identity_test;
 #[cfg(test)]
 mod layout_state_test;
+#[cfg(test)]
+mod local_mode_test;
 #[cfg(test)]
 mod preferences_test;
 #[cfg(test)]

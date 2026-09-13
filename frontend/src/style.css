@@ -6011,3 +6011,11 @@ html[data-window-mode="terminal"] #app {
   padding-top: 0;
   padding-bottom: 0;
 }
+
+
+/* Landing presentation lives in landing.css; onboarding retains .state-card. */
+#app[data-workspace-open="false"] { grid-template-columns: 0 0 minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+#app[data-workspace-open="false"] > .canvas { grid-column: 3; }
+#app[data-workspace-open="false"] #sidebar,
+#app[data-workspace-open="false"] #sidebar-resize,
+#app[data-workspace-open="false"] :is(#sidebar-toggle) { display: none; }

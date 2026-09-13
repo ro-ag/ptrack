@@ -104,6 +104,14 @@ fn dispatch(
         .collect::<Vec<_>>()
         .as_slice()
     {
+        ["local", action] => {
+            output::line(io.stdout, application.local_mode(action)?)?;
+            Ok(RunOutcome::ExitSuccess)
+        }
+        ["sync"] => {
+            output::line(io.stdout, application.local_mode("sync")?)?;
+            Ok(RunOutcome::ExitSuccess)
+        }
         ["init"] => init(leaf, application, io),
         ["relocate"] => relocate(leaf, application, io),
         ["goal", "show"] => show_meta(false, application, io),

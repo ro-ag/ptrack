@@ -94,7 +94,7 @@ describe("first-run journey smoke coverage", () => {
     ]);
     expect(indexSource.match(/class="state-card"/g)).toHaveLength(1);
     expect(indexSource).toMatch(
-      /id="state-initialize-project-button"[^>]*>Initialize Project<\/button>[\s\S]*id="state-open-project-button"[\s\S]*>Open Project…<\/button>/,
+      /id="state-open-project-button"[\s\S]*?Open folder…<\/button>[\s\S]*id="state-initialize-project-button"[\s\S]*?Initialize project<\/button>/,
     );
     expect(appSource).toMatch(
       /resolveFirstRunStartupState\([\s\S]*GetWorkspaceState\(\)[\s\S]*GetPendingInitializationV1\(\)[\s\S]*hydratePendingInitialization/,
