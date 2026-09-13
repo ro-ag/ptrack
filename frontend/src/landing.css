@@ -187,3 +187,36 @@
 #welcome-panel .summary-guidance,
 #welcome-panel #overview-refresh-status { grid-column:1 / -1; }
 #welcome-panel #overview-refresh-status:empty { display:none; }
+
+/* Follow the desktop preference; brand accents remain shared across themes. */
+:root[data-theme="light"] #welcome-panel:not([hidden]) {
+  --ink:var(--text); --muted:#526078; --faint:#617089;
+  --home-line:var(--line);
+  color-scheme:light;
+  background:
+    radial-gradient(ellipse at 12% 8%,rgba(175,168,255,.13),transparent 45%),
+    radial-gradient(ellipse at 88% 20%,rgba(95,175,255,.1),transparent 48%),
+    radial-gradient(ellipse at 60% 100%,rgba(61,214,163,.07),transparent 45%),
+    var(--night);
+}
+:root[data-theme="light"] #welcome-panel .orbit-toolbar { background:rgba(255,255,255,.72); }
+:root[data-theme="light"] #welcome-panel .home-summary { background:rgba(255,255,255,.45); }
+:root[data-theme="light"] #welcome-panel :is(.project-preview-panel,.projects-panel) {
+  background:linear-gradient(135deg,rgba(175,168,255,.045),transparent 65%),var(--surface);
+  box-shadow:0 6px 24px rgba(26,34,48,.035);
+}
+:root[data-theme="light"] #welcome-panel :is(.orbit-tool,.search-input,.strip-item,.secondary-button,.summary-refresh) {
+  border-color:var(--line-strong); background:var(--surface); color:var(--text);
+}
+:root[data-theme="light"] #welcome-panel .orbit-tool:hover { background:var(--surface-hover); border-color:var(--info); }
+:root[data-theme="light"] #welcome-panel .selected-metrics > span { border-color:var(--line); background:var(--surface-soft); }
+:root[data-theme="light"] #welcome-panel #orbit-selected-path { color:var(--text-soft); }
+:root[data-theme="light"] #welcome-panel .chip { background:var(--surface); }
+:root[data-theme="light"] #welcome-panel .chip.active { color:var(--accent-strong); border-color:rgba(13,150,104,.35); background:rgba(13,150,104,.08); }
+:root[data-theme="light"] #welcome-panel .status-pill { color:var(--info); }
+:root[data-theme="light"] #welcome-panel .stage-nav button { background:var(--surface); border-color:var(--line-strong); }
+:root[data-theme="light"] #welcome-panel #recent-project-error:not(:empty) { color:var(--blocked); }
+:root[data-theme="light"] #welcome-panel .orbit-activity-panel { background:var(--surface); border-color:var(--line-strong); box-shadow:0 24px 64px rgba(26,34,48,.18); }
+:root[data-theme="light"] #welcome-panel .overview-update-content { background:var(--surface-soft); }
+:root[data-theme="light"] #welcome-panel :is(button,input,select):focus-visible,
+:root[data-theme="light"] #welcome-panel .summary-guidance summary:focus-visible { outline-color:var(--info); }

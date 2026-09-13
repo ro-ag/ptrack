@@ -124,3 +124,46 @@
 
 #welcome-panel .cover-cache-info:empty { display: none; }
 #welcome-panel .project-strip:not(.is-list) .index-empty-state { display: none; }
+
+/* Light cards remain fully opaque; only their accent wash is translucent. */
+:root[data-theme="light"] #welcome-panel .project-card {
+  color: var(--text);
+  background:
+    radial-gradient(ellipse at 0% 0%, color-mix(in srgb, var(--accent) 15%, transparent), transparent 66%),
+    var(--surface);
+  border-color: color-mix(in srgb, var(--accent) 34%, #b7c3d2);
+  box-shadow: 0 18px 30px -18px #23344d4d, inset 0 1px 0 #fff;
+}
+:root[data-theme="light"] #welcome-panel .project-card.pos-center {
+  border-color: color-mix(in srgb, var(--accent) 60%, #77869b);
+  box-shadow: 0 22px 38px -20px #23344d59, 0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+:root[data-theme="light"] #welcome-panel .project-card h3,
+:root[data-theme="light"] #welcome-panel .cover-metric strong,
+:root[data-theme="light"] #welcome-panel .cover-cache-info strong { color: var(--text); }
+:root[data-theme="light"] #welcome-panel .project-card .project-code,
+:root[data-theme="light"] #welcome-panel .cover-context,
+:root[data-theme="light"] #welcome-panel .cover-metric small,
+:root[data-theme="light"] #welcome-panel .cover-cache-info span,
+:root[data-theme="light"] #welcome-panel .cover-freshness,
+:root[data-theme="light"] #welcome-panel .project-card .project-plan { color: var(--text-soft); }
+:root[data-theme="light"] #welcome-panel .project-card .card-top { border-bottom-color: color-mix(in srgb, var(--accent) 22%, #d7dfe9); }
+:root[data-theme="light"] #welcome-panel .project-card .project-code::before { border-color: color-mix(in srgb, var(--accent) 50%, #3d4757); }
+:root[data-theme="light"] #welcome-panel .project-card .status-pill {
+  color: color-mix(in srgb, var(--accent) 40%, #1a2230);
+  background: color-mix(in srgb, var(--accent) 12%, #fff);
+  border-color: color-mix(in srgb, var(--accent) 28%, #d7dfe9);
+}
+:root[data-theme="light"] #welcome-panel .cover-metrics,
+:root[data-theme="light"] #welcome-panel .selected-folder-details { border-top-color: var(--line); }
+:root[data-theme="light"] #welcome-panel .cover-cache-info { background: var(--surface-soft); border-color: var(--line); }
+:root[data-theme="light"] #welcome-panel .strip-item { background: var(--surface); color: var(--text); border-color: var(--line); }
+:root[data-theme="light"] #welcome-panel .strip-item small { color: color-mix(in srgb, var(--accent) 40%, #1a2230); }
+:root[data-theme="light"] #welcome-panel .strip-item.active {
+  background: color-mix(in srgb, var(--accent) 12%, #fff);
+  border-color: color-mix(in srgb, var(--accent) 60%, #77869b);
+}
+:root[data-theme="light"] #welcome-panel .selected-update-meta,
+:root[data-theme="light"] #welcome-panel .selected-last-opened,
+:root[data-theme="light"] #welcome-panel .selected-folder-details h4,
+:root[data-theme="light"] #welcome-panel .selected-language span:last-child { color: var(--text-soft); }

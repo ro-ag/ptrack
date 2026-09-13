@@ -6,6 +6,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.39.0] - 2026-09-13
+
+### Added
+- Project-local CLI storage for restricted agent environments. Enable it from a
+  normal terminal, work against the project's local database, and use
+  `ptrack sync` to exchange changes with global storage. The existing database
+  layout remains unchanged.
+- A desktop home with global work counts, explicit summary coverage and
+  freshness, searchable projects, and a choice of animated 3D carousel or list.
+  Preview cached project work before opening it, initialize a project, or
+  refresh summaries from the same screen.
+- Detached terminal windows with tabs, search, theme and font-size controls,
+  clear scrollback, and a bundled Nerd Font fallback for shell prompt symbols.
+
+### Changed
+- Settings uses a consistent desktop frame with stationary header and footer,
+  scrolling sections, compact controls, and theme-aware navigation.
+- Improved terminal window resizing and sidebar interactions.
+
+### Fixed
+- Opening or switching projects no longer briefly shows another project's
+  board, leaves the home project list loading, or restores an old project from
+  a completed initialization journal.
+- Home and project selection respect theme and reduced-motion preferences,
+  preserve keyboard navigation, and keep project actions reachable in smaller
+  windows.
+
 ## [0.38.3] - 2026-09-10
 
 ### Fixed
