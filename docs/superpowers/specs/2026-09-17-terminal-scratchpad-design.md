@@ -43,17 +43,33 @@ Snippet list rules (pure, tested in the frontend):
 
 ## 2. Persistence
 
-New singleton store collection `ProjectScratchpad`:
+No new store collection. The database validator demands an exact table catalog and
+an exact `STORE_SCHEMA_VERSION`, and no in-place upgrade path exists (see
+`2026-09-07-stack-discovery-design.md` §Records), so a new collection would refuse to
+open every project database written by an earlier build. Instead:
 
-- redb table `ptrack.project.scratchpad`, key kind Singleton, not sequenced.
-- Encoded with the native codec at payload schema 7, body length-framed field by field
-  from the first byte ever written (per MEMENTO: a schema number is immutable once any
-  build writes it; a future layout change takes the next number).
+- The scratchpad is an additive field `Meta.scratchpad: Option<Scratchpad>` on the
+  project's singleton `Meta` record, written only at a new payload schema 8
+  (`NATIVE_PAYLOAD_SCHEMA` 7 → 8). Schema 8 `Meta` is the exact schema 7 layout followed
+  by one trailing length-framed body holding the scratchpad (`None` representable), the
+  same mechanism that introduced `Meta.stack` at schema 5. The schema 7 layout stays
+  byte-identical; decoding `Meta` at any schema ≤ 7 yields `scratchpad: None`; every
+  other record kind encodes identically at 7 and 8.
 - Validation fails closed on: text over 65 536 bytes, more than 50 snippets, any snippet
-  over 4 096 bytes or empty, duplicate snippet ids, invalid UTF-8.
-- Golden byte pin and decode-at-schema tests exactly as the other collections have.
-- A project store without the record reads as the empty scratchpad (`text ""`, no
-  snippets, `revision 0`); the first write creates it.
+  over 4 096 bytes or empty after trimming, duplicate snippet ids. `Meta` validation
+  includes the scratchpad when present. Caps violations surface as the store's
+  validation error class, never as a manifest error.
+- Golden byte pins: the existing schema 7 `Meta` pin unchanged, plus schema 8 pins for
+  `Meta` with and without a scratchpad, and decode-at-schema tests for both.
+- Store API: `scratchpad()` reads `Scratchpad::default()` (`text ""`, no snippets,
+  `revision 0`) when the field is absent; `set_scratchpad(expected_revision, value, now)`
+  fails with a conflict carrying the stored scratchpad when revisions differ, otherwise
+  validates, sets `revision + 1` and `updated_at = now`, and writes `Meta` in one
+  transaction **without** stamping `Meta.updated_at` or `last_write_version` — the
+  scratchpad carries its own clock.
+- A database last written at schema 7 opens unchanged, reads an empty scratchpad, and
+  accepts the first write. An older build cannot read a `Meta` written at schema 8 (the
+  standing fail-closed rule for every payload-schema bump).
 
 ## 3. Commands
 
@@ -68,7 +84,9 @@ Two project-scoped V2-style commands (generation as argument 0, `require_generat
 
 The command names join the sorted allowlist in `desktop_runtime.rs`, the bridge `COMMANDS`
 list, and every frozen-allowlist test. The parity matrix gains one row per command. The
-mutation enum gains `SetScratchpad`.
+application port gains `scratchpad()` and `set_scratchpad(expected_revision, value)`
+(no mutation-enum variant: `MutationResult` cannot carry the stored record the conflict
+path returns).
 
 Out of scope, noted as follow-up: `ptrack scratchpad` CLI read for agents.
 
@@ -123,8 +141,10 @@ loads the new project's scratchpad.
 
 ## 6. Verification
 
-- Rust: store schema set test updated (14 collections); golden byte pin; validate caps;
-  runtime tests for get/set, conflict payload, generation fencing, allowlist and arity.
+- Rust: schema 7 `Meta` pin unchanged and schema 8 pins added; validate caps; schema 7
+  database opens and accepts a scratchpad; `Meta.updated_at` untouched by a scratchpad
+  write; runtime tests for get/set, conflict payload, generation fencing, allowlist and
+  arity.
 - Frontend: `terminal/scratchpad.ts` pure module + `scratchpad.test.ts` (add/dedupe/evict/
   pin/refuse rules, width clamp, preview line); `build.test.js` markup and CSS assertions;
   bridge command list test; screenshot manifest digest refresh.
