@@ -1,6 +1,6 @@
 use super::{
     EnvelopeError, MIN_NATIVE_PAYLOAD_SCHEMA, NATIVE_CODEC, NATIVE_PAYLOAD_SCHEMA,
-    RECORD_ENVELOPE_VERSION, RecordEnvelope,
+    RECORD_ENVELOPE_VERSION, RecordEnvelope, SCRATCHPAD_PAYLOAD_SCHEMA,
 };
 
 #[test]
@@ -10,6 +10,10 @@ fn store_schema_constants_are_pinned_to_ptrack_core() {
     assert_eq!(
         MIN_NATIVE_PAYLOAD_SCHEMA,
         ptrack_core::MIN_NATIVE_PAYLOAD_SCHEMA
+    );
+    assert_eq!(
+        SCRATCHPAD_PAYLOAD_SCHEMA,
+        ptrack_core::SCRATCHPAD_PAYLOAD_SCHEMA
     );
 }
 

@@ -2,8 +2,8 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use ptrack_core::{
     Capability, CapabilityAudit, Commit, Issue, MemoryWritebackRecord, Meta, Milestone,
-    NativeRecord, Note, Plan, ProjectRef, RecordKind, Task, Timestamp, decode_record_at_schema,
-    encode_record,
+    NativeRecord, Note, Plan, ProjectRef, RecordKind, Scratchpad, Task, Timestamp,
+    decode_record_at_schema, encode_record,
 };
 
 use crate::{
@@ -123,6 +123,26 @@ impl StoredRecord for Meta {
     fn from_native(record: NativeRecord) -> Option<Self> {
         match record {
             NativeRecord::Meta(value) => Some(value),
+            _ => None,
+        }
+    }
+}
+
+impl StoredRecord for Scratchpad {
+    const COLLECTION: Collection = Collection::ProjectScratchpad;
+    const KIND: RecordKind = RecordKind::Scratchpad;
+
+    fn key(&self) -> OwnedRecordKey {
+        OwnedRecordKey::Singleton
+    }
+
+    fn into_native(self) -> NativeRecord {
+        NativeRecord::Scratchpad(self)
+    }
+
+    fn from_native(record: NativeRecord) -> Option<Self> {
+        match record {
+            NativeRecord::Scratchpad(value) => Some(value),
             _ => None,
         }
     }

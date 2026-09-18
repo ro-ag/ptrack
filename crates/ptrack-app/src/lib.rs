@@ -77,8 +77,8 @@ pub use service::{
     CapabilitySessionEnvironment, CompletePlanResult, CompleteTaskResult, GuideAction, HookAction,
     HookResult, InitRequest, InitResult, LocalApplication, Mutation, MutationResult,
     PlanLifecycleOutcome, PlanLifecycleRequest, PlanTransferSummary, ProcessOutput,
-    ProjectEndpoint, RelocateRequest, RelocateResult, UnavailableApplication, WorkspaceBindings,
-    complete_plan, complete_task,
+    ProjectEndpoint, RelocateRequest, RelocateResult, SCRATCHPAD_CONFLICT, ScratchpadSnippetV1,
+    ScratchpadV1, UnavailableApplication, WorkspaceBindings, complete_plan, complete_task,
 };
 pub use shell_command::{ShellCommandInstallResult, install_shell_command};
 pub use terminal_runtime::{

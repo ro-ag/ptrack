@@ -7,7 +7,7 @@ use redb::TableDefinition;
 
 use crate::{
     LEGACY_CODEC_GO_GOB, LEGACY_CODEC_RAW, MIN_NATIVE_PAYLOAD_SCHEMA, NATIVE_CODEC,
-    NATIVE_PAYLOAD_SCHEMA, StoreError, StoreResult,
+    NATIVE_PAYLOAD_SCHEMA, SCRATCHPAD_PAYLOAD_SCHEMA, StoreError, StoreResult,
 };
 
 pub(crate) const STORE_FAMILY: &[u8] = b"ptrack-redb";
@@ -63,6 +63,8 @@ const CAPABILITY_AUDITS_TABLE: TableDefinition<&[u8], &[u8]> =
     TableDefinition::new("ptrack.project.capability_audits");
 const MEMORY_WRITEBACKS_TABLE: TableDefinition<&[u8], &[u8]> =
     TableDefinition::new("ptrack.project.memory_writebacks");
+const PROJECT_SCRATCHPAD_TABLE: TableDefinition<&[u8], &[u8]> =
+    TableDefinition::new("ptrack.project.scratchpad");
 const GLOBAL_CONFIG_TABLE: TableDefinition<&[u8], &[u8]> =
     TableDefinition::new("ptrack.global.config");
 const GLOBAL_PROJECTS_TABLE: TableDefinition<&[u8], &[u8]> =
@@ -135,12 +137,13 @@ pub enum Collection {
     Capabilities,
     CapabilityAudits,
     MemoryWritebacks,
+    ProjectScratchpad,
     GlobalConfig,
     GlobalProjects,
     GlobalBackups,
 }
 
-pub(crate) const ALL_COLLECTIONS: [Collection; 13] = [
+pub(crate) const ALL_COLLECTIONS: [Collection; 14] = [
     Collection::ProjectMeta,
     Collection::Plans,
     Collection::Tasks,
@@ -151,6 +154,7 @@ pub(crate) const ALL_COLLECTIONS: [Collection; 13] = [
     Collection::Capabilities,
     Collection::CapabilityAudits,
     Collection::MemoryWritebacks,
+    Collection::ProjectScratchpad,
     Collection::GlobalConfig,
     Collection::GlobalProjects,
     Collection::GlobalBackups,
@@ -192,6 +196,7 @@ impl Collection {
             Self::Capabilities => "capabilities",
             Self::CapabilityAudits => "capability_audits",
             Self::MemoryWritebacks => "memory_writebacks",
+            Self::ProjectScratchpad => "scratchpad",
             Self::GlobalConfig => "config",
             Self::GlobalProjects => "projects",
             Self::GlobalBackups => "backups",
@@ -211,7 +216,8 @@ impl Collection {
             | Self::Commits
             | Self::Capabilities
             | Self::CapabilityAudits
-            | Self::MemoryWritebacks => StoreKind::Project,
+            | Self::MemoryWritebacks
+            | Self::ProjectScratchpad => StoreKind::Project,
             Self::GlobalConfig | Self::GlobalProjects | Self::GlobalBackups => StoreKind::Global,
         }
     }
@@ -231,6 +237,10 @@ impl Collection {
             | Self::Capabilities
             | Self::CapabilityAudits
             | Self::MemoryWritebacks
+            // The scratchpad never had a bbolt bucket, so no legacy value can
+            // exist for it; it names the native family's legacy codec so the
+            // one migration path stays exhaustive without a special case.
+            | Self::ProjectScratchpad
             | Self::GlobalProjects => LEGACY_CODEC_GO_GOB,
         }
     }
@@ -251,6 +261,7 @@ impl Collection {
             | Self::Capabilities
             | Self::CapabilityAudits
             | Self::MemoryWritebacks
+            | Self::ProjectScratchpad
             | Self::GlobalProjects => NATIVE_CODEC,
         }
     }
@@ -273,6 +284,10 @@ impl Collection {
     pub fn accepted_payload_schemas(self) -> RangeInclusive<u32> {
         match self {
             Self::GlobalConfig | Self::GlobalBackups => 0..=0,
+            // The scratchpad record kind was introduced with its own payload
+            // schema, so nothing older can be one and the range starts there
+            // instead of admitting a payload the decoder would refuse anyway.
+            Self::ProjectScratchpad => SCRATCHPAD_PAYLOAD_SCHEMA..=NATIVE_PAYLOAD_SCHEMA,
             Self::ProjectMeta
             | Self::Plans
             | Self::Tasks
@@ -306,7 +321,7 @@ impl Collection {
 
     pub(crate) const fn key_kind(self) -> KeyKind {
         match self {
-            Self::ProjectMeta => KeyKind::Singleton,
+            Self::ProjectMeta | Self::ProjectScratchpad => KeyKind::Singleton,
             Self::Plans
             | Self::Tasks
             | Self::Notes
@@ -347,6 +362,7 @@ impl Collection {
             Self::Capabilities => CAPABILITIES_TABLE,
             Self::CapabilityAudits => CAPABILITY_AUDITS_TABLE,
             Self::MemoryWritebacks => MEMORY_WRITEBACKS_TABLE,
+            Self::ProjectScratchpad => PROJECT_SCRATCHPAD_TABLE,
             Self::GlobalConfig => GLOBAL_CONFIG_TABLE,
             Self::GlobalProjects => GLOBAL_PROJECTS_TABLE,
             Self::GlobalBackups => GLOBAL_BACKUPS_TABLE,

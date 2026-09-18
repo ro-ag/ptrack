@@ -3,6 +3,8 @@ use std::fmt;
 use std::io;
 use std::path::PathBuf;
 
+use ptrack_core::Scratchpad;
+
 use crate::schema::StoreKind;
 
 /// The layer prefix [`StoreError::InvalidHold`] renders before its detail.
@@ -152,6 +154,10 @@ pub enum StoreError {
     TaskStatusChanged(String),
     /// A capability draft or lifecycle mutation observed a stale revision.
     CapabilityRevisionChanged { expected: u64, actual: u64 },
+    /// A scratchpad write stated a revision other than the stored one. The
+    /// refused write carries the stored record so the caller can reload and
+    /// merge without a second round trip.
+    ScratchpadConflict { stored: Box<Scratchpad> },
     /// Approval was attempted against a digest other than the stored preview.
     CapabilityScopeChanged,
     /// Expiry was requested for a capability which is not currently enabled.
@@ -330,6 +336,7 @@ impl fmt::Display for StoreError {
                 formatter,
                 "capability revision changed: expected {expected}, found {actual}"
             ),
+            Self::ScratchpadConflict { .. } => formatter.write_str("scratchpad revision conflict"),
             Self::CapabilityScopeChanged => {
                 formatter.write_str("effective scope changed; preview again before enabling")
             }

@@ -16,24 +16,33 @@ use ptrack_capability::{
 };
 use ptrack_core::{
     CheckpointView, Commit, Issue, IssueStatus, Milestone, MilestoneStatus, Note, NoteTarget, Plan,
-    PlanStatus, ProjectRef, ProjectSnapshot, Severity, Task, TaskStatus, Timestamp, check_summary,
-    checkpoint, id_list, render_guide,
+    PlanStatus, ProjectRef, ProjectSnapshot, Scratchpad, ScratchpadSnippet, Severity, Task,
+    TaskStatus, Timestamp, Validate, check_summary, checkpoint, id_list, render_guide,
 };
 use ptrack_store::{
-    ActiveBinding, ActorIdentity, GlobalStore, PinnedProjectDirectory, PlanDeleteSummary,
-    ProjectStore,
+    ActiveBinding, ActorIdentity, Clock, GlobalStore, PinnedProjectDirectory, PlanDeleteSummary,
+    ProjectStore, SystemClock,
 };
+use serde::{Deserialize, Serialize};
 
 const NO_PROJECT: &str = "no ptrack project found (run 'ptrack init')";
 const HOOK_BEGIN: &str = "# ptrack:begin";
 const HOOK_END: &str = "# ptrack:end";
 const HOOK_BODY: &str = "command -v ptrack >/dev/null 2>&1 && ptrack commit record --sha \"$(git rev-parse HEAD)\" --subject \"$(git log -1 --pretty=%s)\" >/dev/null 2>&1 || true";
 
+/// The exact conflict message every layer renders for a fenced scratchpad
+/// write. Exported so no presentation layer keeps a copy that can drift.
+pub const SCRATCHPAD_CONFLICT: &str = "scratchpad revision conflict";
+
 #[derive(Debug)]
 pub enum AppError {
     NoProject,
     NotImplemented(&'static str),
     Message(String),
+    /// A scratchpad write stated a stale revision. It carries the stored
+    /// record so the caller reloads in the same round trip instead of racing
+    /// the writer that overtook it.
+    ScratchpadConflict(Box<Scratchpad>),
     Io(std::io::Error),
 }
 
@@ -43,8 +52,37 @@ impl fmt::Display for AppError {
             Self::NoProject => formatter.write_str(NO_PROJECT),
             Self::NotImplemented(feature) => write!(formatter, "{feature} is not implemented"),
             Self::Message(message) => formatter.write_str(message),
+            Self::ScratchpadConflict(_) => formatter.write_str(SCRATCHPAD_CONFLICT),
             Self::Io(error) => error.fmt(formatter),
         }
+    }
+}
+
+impl AppError {
+    /// Renders this error the way the desktop bridge sends it.
+    ///
+    /// Almost every error is a bare message string, which is what a caller
+    /// turns into an `Error`. An error that carries state a caller would
+    /// otherwise have to fetch again becomes an object instead: `message` is
+    /// the same text [`fmt::Display`] produces, and the extra fields sit
+    /// beside it.
+    #[must_use]
+    pub fn to_bridge_value(&self) -> serde_json::Value {
+        match self {
+            Self::ScratchpadConflict(stored) => serde_json::json!({
+                "message": self.to_string(),
+                "stored": ScratchpadV1::from(stored.as_ref()),
+            }),
+            _ => serde_json::Value::String(self.to_string()),
+        }
+    }
+}
+
+/// The owned form of [`AppError::to_bridge_value`], so the desktop host can
+/// map a failed call straight into what it sends back.
+impl From<AppError> for serde_json::Value {
+    fn from(error: AppError) -> Self {
+        error.to_bridge_value()
     }
 }
 
@@ -52,8 +90,113 @@ impl std::error::Error for AppError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io(error) => Some(error),
-            Self::NoProject | Self::NotImplemented(_) | Self::Message(_) => None,
+            Self::NoProject
+            | Self::NotImplemented(_)
+            | Self::Message(_)
+            | Self::ScratchpadConflict(_) => None,
         }
+    }
+}
+
+/// One scratchpad snippet on the desktop bridge.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ScratchpadSnippetV1 {
+    pub id: u64,
+    pub text: String,
+    #[serde(default)]
+    pub pinned: bool,
+    /// Unix milliseconds; zero is the unset timestamp.
+    #[serde(default)]
+    pub created_at: i64,
+}
+
+/// The scratchpad on the desktop bridge.
+///
+/// `revision` and `updated_at` are informational on the way in: an accepted
+/// write stamps both, so a caller cannot backdate a record or skip the fence
+/// by claiming a revision inside the payload. The fence is the separate
+/// `revision` argument of `SetScratchpadV1`.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ScratchpadV1 {
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub snippets: Vec<ScratchpadSnippetV1>,
+    #[serde(default)]
+    pub revision: u64,
+    /// Unix milliseconds; zero is the unset timestamp.
+    #[serde(default)]
+    pub updated_at: i64,
+}
+
+impl From<&Scratchpad> for ScratchpadV1 {
+    fn from(value: &Scratchpad) -> Self {
+        Self {
+            text: value.text.clone(),
+            snippets: value
+                .snippets
+                .iter()
+                .map(|snippet| ScratchpadSnippetV1 {
+                    id: snippet.id,
+                    text: snippet.text.clone(),
+                    pinned: snippet.pinned,
+                    created_at: unix_milliseconds(snippet.created_at),
+                })
+                .collect(),
+            revision: value.revision,
+            updated_at: unix_milliseconds(value.updated_at),
+        }
+    }
+}
+
+impl ScratchpadV1 {
+    /// Converts a bridge payload into the persisted record, leaving `revision`
+    /// and `updated_at` at their defaults for the runtime to stamp.
+    #[must_use]
+    pub fn into_model(self) -> Scratchpad {
+        Scratchpad {
+            text: self.text,
+            snippets: self
+                .snippets
+                .into_iter()
+                .map(|snippet| ScratchpadSnippet {
+                    id: snippet.id,
+                    text: snippet.text,
+                    pinned: snippet.pinned,
+                    created_at: from_unix_milliseconds(snippet.created_at),
+                })
+                .collect(),
+            revision: 0,
+            updated_at: Timestamp::Zero,
+        }
+    }
+}
+
+/// Renders a timestamp as unix milliseconds, with the unset timestamp as zero.
+///
+/// The nanosecond form is a 128-bit value, so the millisecond result is
+/// clamped rather than wrapped: an absurd stored instant reads as the extreme
+/// one instead of silently changing sign.
+fn unix_milliseconds(value: Timestamp) -> i64 {
+    value.unix_nanoseconds().map_or(0, |nanoseconds| {
+        let milliseconds =
+            (nanoseconds / 1_000_000).clamp(i128::from(i64::MIN), i128::from(i64::MAX));
+        i64::try_from(milliseconds).unwrap_or_default()
+    })
+}
+
+/// Reads unix milliseconds back, with zero as the unset timestamp. Splitting
+/// with Euclidean division keeps a negative instant's nanoseconds in range.
+fn from_unix_milliseconds(value: i64) -> Timestamp {
+    if value == 0 {
+        return Timestamp::Zero;
+    }
+    Timestamp::Fixed {
+        seconds: value.div_euclid(1_000),
+        nanoseconds: u32::try_from(value.rem_euclid(1_000)).unwrap_or_default() * 1_000_000,
+        offset_seconds: 0,
     }
 }
 
@@ -577,6 +720,20 @@ pub trait ApplicationPort {
         output: &mut dyn Write,
         cancellation: &CapabilityCancellation,
     ) -> AppResult<CapabilityMcpOutcome>;
+    /// Returns the project scratchpad; a project that never wrote one reads as
+    /// the empty scratchpad at revision zero.
+    fn scratchpad(&mut self) -> AppResult<Scratchpad> {
+        Err(unavailable())
+    }
+    /// Replaces the project scratchpad behind its optimistic revision fence,
+    /// stamping `revision` and `updated_at` itself.
+    fn set_scratchpad(
+        &mut self,
+        _expected_revision: u64,
+        _value: Scratchpad,
+    ) -> AppResult<Scratchpad> {
+        Err(unavailable())
+    }
     fn agent_runs(&mut self) -> AppResult<AgentRunsV2> {
         Err(no_coordination_host())
     }
@@ -1034,6 +1191,33 @@ impl ApplicationPort for LocalApplication {
 
     fn snapshot(&mut self) -> AppResult<ProjectSnapshot> {
         self.with_project(|store| Ok(store.snapshot()?))
+    }
+
+    fn scratchpad(&mut self) -> AppResult<Scratchpad> {
+        self.with_project(|store| Ok(store.scratchpad()?))
+    }
+
+    fn set_scratchpad(
+        &mut self,
+        expected_revision: u64,
+        value: Scratchpad,
+    ) -> AppResult<Scratchpad> {
+        // Checked here so an over-limit note is refused by its own field path
+        // before a database file is opened for writing.
+        value
+            .validate()
+            .map_err(|error| AppError::Message(error.to_string()))?;
+        let now = SystemClock.now_local();
+        self.with_project(|store| {
+            store
+                .set_scratchpad(expected_revision, value, now)
+                .map_err(|error| match error {
+                    ptrack_store::StoreError::ScratchpadConflict { stored } => {
+                        AppError::ScratchpadConflict(stored)
+                    }
+                    other => AppError::from(other),
+                })
+        })
     }
 
     fn agent_runs(&mut self) -> AppResult<AgentRunsV2> {

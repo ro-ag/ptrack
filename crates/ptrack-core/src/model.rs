@@ -689,6 +689,51 @@ pub struct StackSummary {
     pub future_fields: Vec<u8>,
 }
 
+/// Maximum accepted UTF-8 bytes in the project scratchpad note.
+///
+/// The note is a markdown scratch surface beside the terminal, not a document
+/// store: 64 KiB holds far more than anyone types between restarts and keeps
+/// one record from dominating a project payload.
+pub const SCRATCHPAD_TEXT_MAX_BYTES: usize = 65_536;
+
+/// Maximum accepted UTF-8 bytes in one scratchpad snippet.
+///
+/// A snippet is text the user copied out of a terminal pane to paste back, so
+/// it is a command or a short block, never a captured scrollback.
+pub const SCRATCHPAD_SNIPPET_MAX_BYTES: usize = 4_096;
+
+/// Maximum accepted scratchpad snippets.
+pub const SCRATCHPAD_MAX_SNIPPETS: usize = 50;
+
+/// One user-copied clipboard entry held beside the scratchpad note.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScratchpadSnippet {
+    /// Unique within the scratchpad and monotonic; never zero.
+    pub id: u64,
+    pub text: String,
+    pub pinned: bool,
+    pub created_at: Timestamp,
+}
+
+/// The singleton per-project scratchpad: a markdown note plus the snippets the
+/// user copied out of terminal panes.
+///
+/// A project store without the record reads as [`Scratchpad::default`], and the
+/// first accepted write creates it. `revision` fences concurrent writers: a
+/// write states the revision it read and is refused when the stored record has
+/// moved on.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Scratchpad {
+    pub text: String,
+    /// Newest first, pinned entries ordered ahead of unpinned ones by the
+    /// surface that edits them; the record itself preserves what it is given.
+    pub snippets: Vec<ScratchpadSnippet>,
+    /// Starts at zero and gains one per accepted write.
+    pub revision: u64,
+    /// Stamped by the runtime on each accepted write, never by the caller.
+    pub updated_at: Timestamp,
+}
+
 persistent_enum!(RecordKind {
     Meta = 1 => "meta",
     Plan = 2 => "plan",
@@ -703,6 +748,7 @@ persistent_enum!(RecordKind {
     ProjectRef = 11 => "project_ref",
     GlobalConfig = 12 => "global_config",
     GlobalBackup = 13 => "global_backup",
+    Scratchpad = 14 => "scratchpad",
 });
 
 /// One typed persistent ptrack value.
@@ -720,6 +766,7 @@ pub enum NativeRecord {
     CapabilityAudit(CapabilityAudit),
     MemoryWriteback(MemoryWritebackRecord),
     ProjectRef(ProjectRef),
+    Scratchpad(Scratchpad),
 }
 
 impl NativeRecord {
@@ -738,6 +785,7 @@ impl NativeRecord {
             Self::CapabilityAudit(_) => RecordKind::CapabilityAudit,
             Self::MemoryWriteback(_) => RecordKind::MemoryWriteback,
             Self::ProjectRef(_) => RecordKind::ProjectRef,
+            Self::Scratchpad(_) => RecordKind::Scratchpad,
         }
     }
 }

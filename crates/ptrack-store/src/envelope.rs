@@ -24,6 +24,11 @@ pub const NATIVE_PAYLOAD_SCHEMA: u32 = 7;
 /// records. All stay readable and upgrade lazily on their next write; nothing
 /// rewrites them on open.
 pub const MIN_NATIVE_PAYLOAD_SCHEMA: u32 = 1;
+/// The payload schema that introduced the project scratchpad record kind.
+///
+/// No older payload can be a scratchpad, so the scratchpad collection accepts
+/// this schema upward rather than the whole native range.
+pub const SCRATCHPAD_PAYLOAD_SCHEMA: u32 = 7;
 
 /// A versioned wrapper around an opaque persisted model payload.
 ///

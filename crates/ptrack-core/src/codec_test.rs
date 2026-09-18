@@ -7,8 +7,9 @@ use crate::{
     Capability, CapabilityAuditPolicy, CapabilityKind, CapabilityLimits, CodecError, Digest32,
     GitScope, HttpScope, IssueStatus, LanguageId, MAX_LIST_ITEMS, MAX_PAYLOAD_BYTES,
     MIN_NATIVE_PAYLOAD_SCHEMA, MemoryKind, Meta, MilestoneStatus, NATIVE_PAYLOAD_SCHEMA,
-    NativeRecord, Note, NoteTarget, Plan, PlanStatus, ProjectRef, RecordKind, Severity, SshScope,
-    StackProfile, StackProject, StackSummary, Task, TaskStatus, Timestamp, decode_record,
+    NativeRecord, Note, NoteTarget, Plan, PlanStatus, ProjectRef, RecordKind,
+    SCRATCHPAD_PAYLOAD_SCHEMA, Scratchpad, ScratchpadSnippet, Severity, SshScope, StackProfile,
+    StackProject, StackSummary, Task, TaskStatus, Timestamp, decode_record,
     decode_record_at_schema, encode_record, encode_record_at_schema,
 };
 
@@ -992,4 +993,117 @@ fn a_schema_six_registry_summary_still_decodes() {
             .expect("decode at 6"),
         record
     );
+}
+
+#[test]
+fn scratchpad_round_trips_its_framed_snippets_at_schema_seven() {
+    let record = NativeRecord::Scratchpad(Scratchpad {
+        text: "## notes\ncheck the fence".to_owned(),
+        snippets: vec![
+            ScratchpadSnippet {
+                id: 2,
+                text: "cargo test -p ptrack-core".to_owned(),
+                pinned: true,
+                created_at: fixed_time(),
+            },
+            ScratchpadSnippet {
+                id: 1,
+                text: "git status".to_owned(),
+                pinned: false,
+                created_at: Timestamp::Zero,
+            },
+        ],
+        revision: 3,
+        updated_at: fixed_time(),
+    });
+    assert_round_trip(&record);
+    assert_eq!(record.kind(), RecordKind::Scratchpad);
+    assert_eq!(RecordKind::Scratchpad.wire_tag(), 14);
+    assert_eq!(RecordKind::Scratchpad.as_str(), "scratchpad");
+}
+
+#[test]
+fn scratchpad_golden_bytes_pin_the_frame_layout() {
+    let record = NativeRecord::Scratchpad(Scratchpad {
+        text: "hi".to_owned(),
+        snippets: vec![ScratchpadSnippet {
+            id: 9,
+            text: "ls".to_owned(),
+            pinned: true,
+            created_at: Timestamp::Zero,
+        }],
+        revision: 1,
+        updated_at: Timestamp::Fixed {
+            seconds: 1,
+            nanoseconds: 2,
+            offset_seconds: -3,
+        },
+    });
+    let expected = [
+        0, 0, 0, 55, // framed scratchpad body length
+        0, 0, 0, 2, b'h', b'i', // text
+        0, 0, 0, 0, 0, 0, 0, 1, // revision
+        1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 2, 0xff, 0xff, 0xff, 0xfd, // updated at
+        0, 0, 0, 1, // one snippet
+        0, 0, 0, 16, // framed snippet body length
+        0, 0, 0, 0, 0, 0, 0, 9, // snippet id
+        0, 0, 0, 2, b'l', b's', // snippet text
+        1,    // pinned
+        0,    // zero created at
+    ];
+    assert_eq!(encode_record(&record).expect("encode"), expected);
+    assert_eq!(
+        decode_record(RecordKind::Scratchpad, &expected).expect("decode"),
+        record
+    );
+}
+
+#[test]
+fn scratchpad_has_no_form_below_its_own_payload_schema() {
+    let record = NativeRecord::Scratchpad(Scratchpad::default());
+    let payload = encode_record(&record).expect("encode at the native schema");
+    for schema in MIN_NATIVE_PAYLOAD_SCHEMA..SCRATCHPAD_PAYLOAD_SCHEMA {
+        assert_eq!(
+            decode_record_at_schema(RecordKind::Scratchpad, schema, &payload),
+            Err(CodecError::UnsupportedPayloadSchema(schema)),
+            "decode at schema {schema}"
+        );
+        assert_eq!(
+            encode_record_at_schema(&record, schema),
+            Err(CodecError::UnsupportedPayloadSchema(schema)),
+            "encode at schema {schema}"
+        );
+    }
+    assert_eq!(SCRATCHPAD_PAYLOAD_SCHEMA, NATIVE_PAYLOAD_SCHEMA);
+}
+
+#[test]
+fn scratchpad_frames_reject_bytes_a_newer_layout_would_append() {
+    let record = NativeRecord::Scratchpad(Scratchpad {
+        text: String::new(),
+        snippets: vec![ScratchpadSnippet {
+            id: 1,
+            text: "x".to_owned(),
+            pinned: false,
+            created_at: Timestamp::Zero,
+        }],
+        revision: 0,
+        updated_at: Timestamp::Zero,
+    });
+    let encoded = encode_record(&record).expect("encode");
+    // Grow the outer frame by one byte so the body carries a trailing byte no
+    // field in this layout claims.
+    let mut grown = encoded.clone();
+    let body_length = u32::from_be_bytes(grown[..4].try_into().unwrap());
+    grown[..4].copy_from_slice(&(body_length + 1).to_be_bytes());
+    grown.push(0);
+    assert_eq!(
+        decode_record(RecordKind::Scratchpad, &grown),
+        Err(CodecError::TrailingBytes(1))
+    );
+    // A truncated outer frame is a structural error, never a silent short read.
+    assert!(matches!(
+        decode_record(RecordKind::Scratchpad, &encoded[..encoded.len() - 1]),
+        Err(CodecError::Truncated { .. })
+    ));
 }

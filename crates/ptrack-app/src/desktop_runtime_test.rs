@@ -936,7 +936,7 @@ fn desktop_update_commands_delegate_exact_arguments_and_return_full_state() {
 }
 
 #[test]
-#[allow(clippy::too_many_lines)] // Full 98-command freeze fixture is intentionally explicit.
+#[allow(clippy::too_many_lines)] // Full 110-command freeze fixture is intentionally explicit.
 fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
     let commands = allowed_desktop_commands();
     assert_eq!(
@@ -991,6 +991,7 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "GetProjectTimelineV1",
             "GetRecentProjects",
             "GetRecentProjectsV1",
+            "GetScratchpadV1",
             "GetStackProfileV1",
             "GetTaskDetailV2",
             "GetTerminalProfiles",
@@ -1043,6 +1044,7 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "SetIssueTaskV1",
             "SetLayoutState",
             "SetPreferences",
+            "SetScratchpadV1",
             "SetTerminalWindowTab",
             "StartFirstTaskV1",
             "TestCapabilityV2",
@@ -4113,4 +4115,123 @@ fn refresh_global_overview_requires_no_arguments_and_keeps_welcome() {
     assert_eq!(response["skippedProjects"], 0);
     assert_eq!(response["overview"]["trackedProjects"], 0);
     assert_eq!(runtime.workspace_state().status, WorkspaceStatus::Welcome);
+}
+
+/// The scratchpad panel needs one read, one fenced write, and a conflict that
+/// hands back the stored record so nothing typed is lost on a reload.
+#[test]
+fn scratchpad_commands_read_write_and_fence_their_revision() {
+    let directory = TestDirectory::new("scratchpad");
+    let workspace = bound_workspace(&directory);
+
+    let empty = workspace.invoke("GetScratchpadV1", &[json!(7)]).unwrap();
+    assert_eq!(empty["generation"], 7);
+    assert_eq!(
+        empty["scratchpad"],
+        json!({ "text": "", "snippets": [], "revision": 0, "updatedAt": 0 })
+    );
+
+    let payload = json!({
+        "text": "release checklist",
+        "snippets": [{
+            "id": 1,
+            "text": "cargo test --workspace",
+            "pinned": true,
+            "createdAt": 1_700_000_000_123_i64,
+        }],
+        "revision": 0,
+        "updatedAt": 0,
+    });
+    assert_eq!(
+        workspace
+            .invoke("SetScratchpadV1", &[json!(7), json!(0), payload.clone()])
+            .unwrap(),
+        json!({ "generation": 7, "revision": 1 })
+    );
+
+    let stored = workspace.invoke("GetScratchpadV1", &[json!(7)]).unwrap();
+    assert_eq!(stored["scratchpad"]["text"], "release checklist");
+    assert_eq!(stored["scratchpad"]["revision"], 1);
+    assert_eq!(stored["scratchpad"]["snippets"][0]["id"], 1);
+    assert_eq!(stored["scratchpad"]["snippets"][0]["pinned"], true);
+    assert_eq!(
+        stored["scratchpad"]["snippets"][0]["createdAt"],
+        1_700_000_000_123_i64
+    );
+    // The runtime stamps the write time; the caller's zero is never trusted.
+    assert!(
+        stored["scratchpad"]["updatedAt"].as_i64().unwrap() > 0,
+        "{stored}"
+    );
+
+    // Spending the same revision twice is refused, and the refusal carries the
+    // stored record as JSON so the panel reloads without a second round trip.
+    let conflict = workspace
+        .invoke("SetScratchpadV1", &[json!(7), json!(0), payload.clone()])
+        .unwrap_err();
+    assert_eq!(conflict.to_string(), "scratchpad revision conflict");
+    let bridged = conflict.to_bridge_value();
+    assert_eq!(bridged["message"], "scratchpad revision conflict");
+    assert_eq!(bridged["stored"]["revision"], 1);
+    assert_eq!(bridged["stored"]["text"], "release checklist");
+    assert_eq!(bridged["stored"]["snippets"][0]["id"], 1);
+
+    // Both commands are generation-fenced exactly like AddTaskNoteV2.
+    assert_eq!(
+        workspace
+            .invoke("GetScratchpadV1", &[json!(8)])
+            .unwrap_err()
+            .to_string(),
+        "stale workspace generation: expected 8, active 7"
+    );
+    assert_eq!(
+        workspace
+            .invoke("SetScratchpadV1", &[json!(8), json!(1), payload])
+            .unwrap_err()
+            .to_string(),
+        "stale workspace generation: expected 8, active 7"
+    );
+
+    // A note past its cap is a validation refusal that never reaches the store.
+    let oversized = json!({
+        "text": "x".repeat(65_537),
+        "snippets": [],
+        "revision": 1,
+        "updatedAt": 0,
+    });
+    let error = workspace
+        .invoke("SetScratchpadV1", &[json!(7), json!(1), oversized])
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("scratchpad.text"), "{error}");
+    assert_eq!(
+        workspace.invoke("GetScratchpadV1", &[json!(7)]).unwrap()["scratchpad"]["revision"],
+        1
+    );
+
+    // A plain error still bridges as a bare string, so only the conflict pays
+    // for the structured shape.
+    assert_eq!(
+        AppError::Message("plain".to_owned()).to_bridge_value(),
+        json!("plain")
+    );
+}
+
+/// Without an active runtime binding both commands fail closed through the
+/// port's own default rather than reaching a store.
+#[test]
+fn scratchpad_commands_are_unavailable_without_a_binding() {
+    let runtime = DesktopRuntime::new(DesktopRuntimeConfig::unavailable("test"));
+    for (method, arguments) in [
+        ("GetScratchpadV1", vec![json!(0)]),
+        ("SetScratchpadV1", vec![json!(0), json!(0), json!({})]),
+    ] {
+        assert_eq!(
+            runtime
+                .invoke(request(method, arguments))
+                .unwrap_err()
+                .to_string(),
+            "no project workspace is open"
+        );
+    }
 }

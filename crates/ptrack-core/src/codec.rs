@@ -6,8 +6,9 @@ use crate::{
     Capability, CapabilityAudit, CapabilityAuditPolicy, CapabilityKind, CapabilityLimits, Commit,
     Digest32, GitScope, HttpScope, Issue, IssueStatus, LanguageId, MemoryKind,
     MemoryWritebackRecord, Meta, Milestone, MilestoneStatus, NativeRecord, Note, NoteTarget, Plan,
-    PlanStatus, ProjectRef, RecordKind, Severity, SshScope, StackProfile, StackProject,
-    StackSummary, Task, TaskStatus, Timestamp, Validate, ValidationError,
+    PlanStatus, ProjectRef, RecordKind, SCRATCHPAD_MAX_SNIPPETS, Scratchpad, ScratchpadSnippet,
+    Severity, SshScope, StackProfile, StackProject, StackSummary, Task, TaskStatus, Timestamp,
+    Validate, ValidationError,
 };
 
 /// Stable envelope codec ID for native ptrack positional records.
@@ -204,6 +205,9 @@ pub fn decode_record_at_schema(
         RecordKind::ProjectRef => {
             NativeRecord::ProjectRef(decode_project_ref(&mut reader, payload_schema)?)
         }
+        RecordKind::Scratchpad => {
+            NativeRecord::Scratchpad(decode_scratchpad(&mut reader, payload_schema)?)
+        }
         RecordKind::GlobalConfig | RecordKind::GlobalBackup => {
             return Err(CodecError::UnsupportedRecordKind(kind));
         }
@@ -232,6 +236,9 @@ fn encode_unchecked(record: &NativeRecord, payload_schema: u32) -> Result<Vec<u8
         NativeRecord::CapabilityAudit(value) => encode_capability_audit(&mut writer, value)?,
         NativeRecord::MemoryWriteback(value) => encode_memory_writeback(&mut writer, value)?,
         NativeRecord::ProjectRef(value) => encode_project_ref(&mut writer, value, payload_schema)?,
+        NativeRecord::Scratchpad(value) => {
+            encode_scratchpad(&mut writer, value, payload_schema)?;
+        }
     }
     Ok(writer.bytes)
 }
@@ -646,6 +653,97 @@ fn encode_stack_profile_body(
         writer.bool(profile.lines_counted)?;
     }
     writer.bool(profile.incomplete)
+}
+
+/// The payload schema that introduced the project scratchpad record.
+///
+/// The kind did not exist before it, so a scratchpad has no canonical form at
+/// any older schema: encoding or decoding one there is refused rather than
+/// guessed at. A later layout change takes the next schema number; the frames
+/// below only make a record written by a newer build fail closed as a whole
+/// instead of being misread field by field.
+pub const SCRATCHPAD_PAYLOAD_SCHEMA: u32 = 7;
+
+/// Writes the scratchpad, whose whole body is length-framed from its first
+/// byte, with every snippet framed in turn.
+fn encode_scratchpad(
+    writer: &mut Writer,
+    value: &Scratchpad,
+    payload_schema: u32,
+) -> Result<(), CodecError> {
+    if payload_schema < SCRATCHPAD_PAYLOAD_SCHEMA {
+        return Err(CodecError::UnsupportedPayloadSchema(payload_schema));
+    }
+    if value.snippets.len() > SCRATCHPAD_MAX_SNIPPETS {
+        return Err(CodecError::ListTooLarge {
+            actual: value.snippets.len(),
+            maximum: SCRATCHPAD_MAX_SNIPPETS,
+        });
+    }
+    let mut body = Writer::default();
+    body.string(&value.text)?;
+    body.u64(value.revision)?;
+    body.timestamp(value.updated_at)?;
+    body.u32(u32::try_from(value.snippets.len()).map_err(|_| CodecError::LengthOverflow)?)?;
+    for snippet in &value.snippets {
+        let mut entry = Writer::default();
+        entry.u64(snippet.id)?;
+        entry.string(&snippet.text)?;
+        entry.bool(snippet.pinned)?;
+        entry.timestamp(snippet.created_at)?;
+        frame(&mut body, &entry.bytes)?;
+    }
+    frame(writer, &body.bytes)
+}
+
+/// Reads the scratchpad. Each frame must be consumed exactly: a trailing byte
+/// inside one is a record this build does not understand, not a field to skip.
+fn decode_scratchpad(
+    reader: &mut Reader<'_>,
+    payload_schema: u32,
+) -> Result<Scratchpad, CodecError> {
+    if payload_schema < SCRATCHPAD_PAYLOAD_SCHEMA {
+        return Err(CodecError::UnsupportedPayloadSchema(payload_schema));
+    }
+    let mut body = unframe(reader)?;
+    let text = body.string()?;
+    let revision = body.u64()?;
+    let updated_at = body.timestamp()?;
+    // Every snippet costs at least its own four-byte frame length, so the
+    // count cannot claim more entries than the remaining bytes could hold.
+    let count = body.entry_count(4)?;
+    if count > SCRATCHPAD_MAX_SNIPPETS {
+        return Err(CodecError::ListTooLarge {
+            actual: count,
+            maximum: SCRATCHPAD_MAX_SNIPPETS,
+        });
+    }
+    let mut snippets = Vec::new();
+    snippets
+        .try_reserve_exact(count)
+        .map_err(|_| CodecError::LengthOverflow)?;
+    for _ in 0..count {
+        let mut entry = unframe(&mut body)?;
+        let snippet = ScratchpadSnippet {
+            id: entry.u64()?,
+            text: entry.string()?,
+            pinned: entry.bool()?,
+            created_at: entry.timestamp()?,
+        };
+        if entry.remaining() != 0 {
+            return Err(CodecError::TrailingBytes(entry.remaining()));
+        }
+        snippets.push(snippet);
+    }
+    if body.remaining() != 0 {
+        return Err(CodecError::TrailingBytes(body.remaining()));
+    }
+    Ok(Scratchpad {
+        text,
+        snippets,
+        revision,
+        updated_at,
+    })
 }
 
 /// Writes a length-framed body: a `u32` byte count, then the bytes.

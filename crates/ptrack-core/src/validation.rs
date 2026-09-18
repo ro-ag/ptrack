@@ -7,7 +7,8 @@ use regex::Regex;
 use crate::model::CAPABILITY_MODEL_VERSION;
 use crate::{
     Capability, CapabilityAudit, CapabilityKind, Commit, Issue, MemoryKind, MemoryWritebackRecord,
-    Meta, Milestone, NativeRecord, Note, NoteTarget, Plan, ProjectRef, Task, Timestamp,
+    Meta, Milestone, NativeRecord, Note, NoteTarget, Plan, ProjectRef, SCRATCHPAD_MAX_SNIPPETS,
+    SCRATCHPAD_SNIPPET_MAX_BYTES, SCRATCHPAD_TEXT_MAX_BYTES, Scratchpad, Task, Timestamp,
 };
 
 const MAX_APPROVAL_SECONDS: i64 = 30 * 24 * 60 * 60;
@@ -384,6 +385,49 @@ impl Validate for Meta {
             ));
         }
         Ok(())
+    }
+}
+
+impl Validate for Scratchpad {
+    fn validate(&self) -> Result<(), ValidationError> {
+        if self.text.len() > SCRATCHPAD_TEXT_MAX_BYTES {
+            return Err(ValidationError::new(
+                "scratchpad.text",
+                "must be at most 65536 UTF-8 bytes",
+            ));
+        }
+        if self.snippets.len() > SCRATCHPAD_MAX_SNIPPETS {
+            return Err(ValidationError::new(
+                "scratchpad.snippets",
+                "must hold at most 50 entries",
+            ));
+        }
+        let mut seen = BTreeSet::new();
+        for snippet in &self.snippets {
+            // A snippet exists only because the user copied something, so
+            // whitespace-only text is never a snippet anyone asked for.
+            if snippet.text.trim().is_empty() {
+                return Err(ValidationError::new(
+                    "scratchpad.snippets[i].text",
+                    "must be nonempty after trimming",
+                ));
+            }
+            if snippet.text.len() > SCRATCHPAD_SNIPPET_MAX_BYTES {
+                return Err(ValidationError::new(
+                    "scratchpad.snippets[i].text",
+                    "must be at most 4096 UTF-8 bytes",
+                ));
+            }
+            require_id(snippet.id, "scratchpad.snippets[i].id")?;
+            if !seen.insert(snippet.id) {
+                return Err(ValidationError::new(
+                    "scratchpad.snippets[i].id",
+                    "must be unique within the scratchpad",
+                ));
+            }
+            snippet.created_at.validate()?;
+        }
+        self.updated_at.validate()
     }
 }
 
@@ -837,6 +881,7 @@ impl Validate for NativeRecord {
             Self::CapabilityAudit(value) => value.validate(),
             Self::MemoryWriteback(value) => value.validate(),
             Self::ProjectRef(value) => value.validate(),
+            Self::Scratchpad(value) => value.validate(),
         }
     }
 }

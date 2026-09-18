@@ -7,8 +7,8 @@ use ptrack_capability_policy::{ApprovalProof, SanitizedAudit, normalize};
 use ptrack_core::{
     CAPABILITY_MODEL_VERSION, Capability, CapabilityAudit, Commit, Counts, Digest32, Issue,
     IssueStatus, MemoryKind, MemoryWritebackRecord, Meta, Milestone, MilestoneStatus, Note,
-    NoteTarget, Plan, PlanStatus, ProjectSnapshot, Severity, StackProfile, Task, TaskStatus,
-    Timestamp, would_create_cycle,
+    NoteTarget, Plan, PlanStatus, ProjectSnapshot, Scratchpad, Severity, StackProfile, Task,
+    TaskStatus, Timestamp, Validate, would_create_cycle,
 };
 
 use crate::typed::{self, StoredRecord};
@@ -367,6 +367,56 @@ impl ProjectStore {
     pub fn meta(&self) -> StoreResult<Meta> {
         self.active.store().read(|transaction| {
             typed::get(transaction, RecordKey::Singleton)?.ok_or(StoreError::NotFound)
+        })
+    }
+
+    /// Returns the project scratchpad.
+    ///
+    /// A project store that has never had one written reads as the empty
+    /// scratchpad at revision zero, so callers never special-case a missing
+    /// record.
+    pub fn scratchpad(&self) -> StoreResult<Scratchpad> {
+        self.active.store().read(|transaction| {
+            Ok(typed::get::<Scratchpad>(transaction, RecordKey::Singleton)?.unwrap_or_default())
+        })
+    }
+
+    /// Replaces the project scratchpad behind an optimistic revision fence.
+    ///
+    /// `expected_revision` is the revision the caller read. When the stored
+    /// record has moved on the write is refused with
+    /// [`StoreError::ScratchpadConflict`], which carries the stored record so
+    /// the caller can reload without a second round trip. The accepted write
+    /// stamps `revision` and `updated_at` itself: neither is trusted from the
+    /// caller, so a client clock or a stale revision can never rewrite them.
+    ///
+    /// # Errors
+    ///
+    /// Returns a conflict for a stale revision, a validation error for a
+    /// scratchpad past its size caps, and any store error from the write.
+    pub fn set_scratchpad(
+        &self,
+        expected_revision: u64,
+        mut value: Scratchpad,
+        now: Timestamp,
+    ) -> StoreResult<Scratchpad> {
+        self.write(|transaction| {
+            let stored = typed::get_write::<Scratchpad>(transaction, RecordKey::Singleton)?
+                .unwrap_or_default();
+            if expected_revision != stored.revision {
+                return Err(StoreError::ScratchpadConflict {
+                    stored: Box::new(stored),
+                });
+            }
+            value.revision = stored.revision.saturating_add(1);
+            value.updated_at = now;
+            // Checked before the write so an oversized scratchpad is refused
+            // by its own field path rather than as an encoder failure.
+            value
+                .validate()
+                .map_err(|error| StoreError::InvalidManifest(error.to_string()))?;
+            typed::put(transaction, RecordKey::Singleton, &value)?;
+            Ok(value)
         })
     }
 
