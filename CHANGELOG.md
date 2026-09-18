@@ -6,6 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-09-18
+
+### Added
+- A per-project scratchpad beside the terminal panes: a markdown note that
+  autosaves and survives restarts, plus a clipboard strip that keeps the text you
+  copy out of terminal panes as snippets you can copy again, paste back into the
+  active pane through the usual paste guard, pin, or delete. Snippets come only
+  from explicit copies or the Add selection control; p-track never scrapes
+  terminal output. The panel is reachable before any session starts.
+
+### Changed
+- The scratchpad persists as an additive field on the project's metadata record
+  at payload schema 8. Databases written by earlier releases open unchanged; a
+  release older than 0.40.0 cannot read a project database once a scratchpad has
+  been saved.
+
 ## [0.39.0] - 2026-09-13
 
 ### Added
