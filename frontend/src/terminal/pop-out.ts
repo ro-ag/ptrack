@@ -201,3 +201,38 @@ export function panesHoldPoppedOutTerminal(
  */
 export const poppedOutCloseRefusedNotice =
   "Close the terminal's own window before closing this pane.";
+
+/**
+ * Closing a tab inside a terminal window. The original tab — the one the
+ * window was opened for — closes like any other once the window holds more
+ * than one tab; refusing it left a shell the user could not stop from the
+ * window that shows it. Alone, it keeps the window's own close as its way out
+ * (the window has no permission to close itself). A shell that has already
+ * ended needs no confirmation.
+ */
+export function detachedTabCloseIntent(input: {
+  tabCount: number;
+  ended: boolean;
+}): { allowed: boolean; confirm: boolean } {
+  const allowed = input.tabCount > 1;
+  return { allowed, confirm: allowed && !input.ended };
+}
+
+/** Title of the close control on the only tab left in a terminal window. */
+export const detachedLastTabCloseTitle =
+  "Close this window to return the tab to p-track.";
+
+/**
+ * Said in the pane a popped-out terminal left behind once its shell ended in
+ * the window — closed there, or exited on its own. The pane stops holding
+ * the terminal's place: nothing is coming back to it.
+ */
+export function poppedOutExitNotice(exit: {
+  exitCode: number;
+  error?: string | null;
+}): string {
+  const error = exit.error?.trim();
+  return error
+    ? `${error} (in its own window)`
+    : `Process exited with code ${exit.exitCode} in its own window`;
+}
