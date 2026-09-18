@@ -34,6 +34,8 @@ import {
   terminalRendererOptions,
 } from "./terminal/profile-settings";
 import {
+  detachedLastTabCloseTitle,
+  detachedTabCloseIntent,
   reclaimStream,
   reclaimingStreamNotice,
   streamReclaimFailedNotice,
@@ -9185,8 +9187,10 @@ async function startTerminalWindow(label) {
         tabs: assignment.shape?.windowTabs || [assignment.shape],
       },
       {
-        allowAction: (action) => ["resize-split", "focus-pane", "select-tab", "create-tab"].includes(action.type) ||
-          (action.type === "close-tab" && action.tabId !== assignment.shape.id),
+        // Every tab closes here, the original included; the reducer keeps the
+        // last one, whose way out is the window's own close.
+        allowAction: (action) =>
+          ["resize-split", "focus-pane", "select-tab", "create-tab", "close-tab"].includes(action.type),
       },
     );
     const tab = controller.workspace.tabs.find((item) => item.id === assignment.shape.id);
@@ -9315,10 +9319,13 @@ async function startTerminalWindow(label) {
     let assignmentWrites = Promise.resolve();
     const saveWindow = () => {
       const workspace = controller.workspace;
-      const source = workspace.tabs.find((item) => item.id === tab.id);
+      // Once the original tab is closed here, the shape keeps its identity but
+      // no tree: pop-in has nothing to hand back to the pane it left behind.
+      const source = workspace.tabs.find((item) => item.id === tab.id) ??
+        { id: tab.id, title: tab.title };
       const ids = workspace.tabs.flatMap((item) => paneIds(item.root));
       const owned = ids.map((id) => panes.get(id)?.sessionId);
-      if (owned.some((id) => !id)) return assignmentWrites;
+      if (owned.length === 0 || owned.some((id) => !id)) return assignmentWrites;
       const shape = { ...source, windowTabs: workspace.tabs, activeWindowTabId: workspace.activeTabId };
       assignmentWrites = assignmentWrites.catch(() => {}).then(() =>
         api().SetTerminalWindowTab(label, owned, shape));
@@ -9596,17 +9603,24 @@ async function startTerminalWindow(label) {
       };
       const reportError = (error) => { setStatus(messageFrom(error)); };
       const closeTab = async (item) => {
-        if (busy || item.id === tab.id) return;
         const members = paneIds(item.root).map((id) => panes.get(id)).filter(Boolean);
+        const intent = detachedTabCloseIntent({
+          tabCount: controller.workspace.tabs.length,
+          ended: members.every((pane) => pane.ended),
+        });
+        if (busy || !intent.allowed) return;
         busy = true;
         try {
-          if (!(await showConfirmation({
+          if (intent.confirm && !(await showConfirmation({
             eyebrow: "Terminal", heading: `Close ${item.title}?`,
             detail: "This stops the shell and any programs running in this tab.",
             cancel: "Keep open", submit: "Close terminal",
           }))) return;
           for (const pane of members) {
-            await api().CloseTerminalV2(generation, pane.sessionId, false);
+            // A shell that already ended has nothing left to stop.
+            await api().CloseTerminalV2(generation, pane.sessionId, false).catch((error) => {
+              if (!pane.ended) throw error;
+            });
             pane.ended = true;
             pane.client?.close();
             pane.resize.dispose();
@@ -9679,7 +9693,12 @@ async function startTerminalWindow(label) {
           button.tabIndex = item.id === controller.workspace.activeTabId ? 0 : -1;
           button.addEventListener("click", () => controller.dispatch({ type: "select-tab", tabId: item.id }));
           wrapper.append(button);
-          if (item.id !== tab.id) wrapper.append(iconButton(`Close ${item.title}`, "close", () => closeTab(item)));
+          const close = iconButton(`Close ${item.title}`, "close", () => closeTab(item));
+          if (controller.workspace.tabs.length === 1) {
+            close.disabled = true;
+            close.title = detachedLastTabCloseTitle;
+          }
+          wrapper.append(close);
           list.append(wrapper);
         }
         host.dataset.singlePane = String(paneIds(currentTab().root).length === 1);
@@ -9708,7 +9727,7 @@ async function startTerminalWindow(label) {
           event.preventDefault();
           event.stopImmediatePropagation();
           void addTab();
-        } else if (modifier && event.key.toLowerCase() === "w" && currentTab().id !== tab.id) {
+        } else if (modifier && event.key.toLowerCase() === "w") {
           event.preventDefault();
           event.stopImmediatePropagation();
           void closeTab(currentTab());

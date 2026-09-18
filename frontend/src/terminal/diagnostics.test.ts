@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  terminalDiagnosticsTop,
   terminalDiagnosticView,
   type TerminalDiagnosticInput,
 } from "./diagnostics";
@@ -73,5 +74,19 @@ describe("terminalDiagnosticView", () => {
       environment: secret,
     } as TerminalDiagnosticInput;
     expect(JSON.stringify(terminalDiagnosticView(input))).not.toContain(secret);
+  });
+});
+
+describe("terminalDiagnosticsTop", () => {
+  it("sits just below the header rows, however tall they wrapped", () => {
+    expect(terminalDiagnosticsTop({ headerBottom: 84, dockHeight: 300 })).toBe(90);
+    expect(terminalDiagnosticsTop({ headerBottom: 127, dockHeight: 300 })).toBe(133);
+  });
+
+  it("never leaves the dock and tolerates unmeasured layout", () => {
+    expect(terminalDiagnosticsTop({ headerBottom: 127, dockHeight: 180 })).toBe(86);
+    expect(terminalDiagnosticsTop({ headerBottom: 127, dockHeight: 60 })).toBe(6);
+    expect(terminalDiagnosticsTop({ headerBottom: Number.NaN, dockHeight: 300 })).toBe(6);
+    expect(terminalDiagnosticsTop({ headerBottom: -20, dockHeight: 300 })).toBe(6);
   });
 });
