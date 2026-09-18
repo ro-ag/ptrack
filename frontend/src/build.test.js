@@ -503,6 +503,13 @@ describe("production asset layout", () => {
     expect(app).toContain("Scratchpad is unavailable; the copy was not added.");
     expect(app).toContain("ptrack-terminal-scratchpad-open");
     expect(app).toContain("ptrack-terminal-scratchpad-width");
+    // The popover carries its own close: it hangs below the dock header, so
+    // the toggle that opened it is never underneath it, and a press anywhere
+    // else dismisses it.
+    expect(index).toMatch(
+      /id="terminal-diagnostics-close"[^>]*aria-label="Hide terminal diagnostics"/,
+    );
+    expect(app).toContain("--terminal-diagnostics-top");
     // Pop out: a real labelled control, absent until a single pane can move.
     expect(index).toMatch(
       /id="terminal-pop-out"[^>]*class="terminal-action-button"[^>]*type="button"[^>]*aria-label="Pop out terminal into its own window"[^>]*title="Pop out terminal"[^>]*hidden/,
@@ -521,7 +528,7 @@ describe("production asset layout", () => {
     // The way back is the window's own close: no in-page control can destroy
     // a window without a capability this feature deliberately does not take.
     expect(index).toMatch(
-      /id="terminal-window-return"[^>]*>\s*Closing this window returns the original tab to p-track\. Tabs opened here close with this window\./,
+      /id="terminal-window-return"[^>]*>\s*Closing this window returns the original tab to p-track\. Tabs opened here close with this window\. Any tab but the last can be closed here\./,
     );
     // The gap notice states the fact in words, is not an alert, and keeps a
     // border under forced colors so it never reads by colour alone.

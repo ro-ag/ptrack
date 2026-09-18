@@ -12,6 +12,7 @@ import { TerminalStreamClient } from "./client";
 import type { StreamState } from "./client";
 import { terminalPaneInputLabel } from "./accessibility";
 import {
+  terminalDiagnosticsTop,
   terminalDiagnosticView,
   type TerminalDiagnosticInput,
   type TerminalDiagnosticLayout,
@@ -91,6 +92,7 @@ import {
   panesHoldPoppedOutTerminal,
   popOutTerminal,
   poppedOutCloseRefusedNotice,
+  poppedOutExitNotice,
   poppedOutPaneNotice,
   reclaimStream,
   reclaimingStreamNotice,
@@ -464,6 +466,10 @@ class TerminalDock {
     "#terminal-diagnostics-toggle",
   );
   readonly #diagnostics = requiredElement<HTMLElement>("#terminal-diagnostics");
+  readonly #diagnosticsClose = requiredElement<HTMLButtonElement>(
+    "#terminal-diagnostics-close",
+  );
+  readonly #toolbar = requiredElement<HTMLElement>("#terminal-dock .terminal-toolbar");
   readonly #diagnosticProcess = requiredElement<HTMLElement>(
     "#terminal-diagnostic-process",
   );
@@ -605,6 +611,9 @@ class TerminalDock {
   #disposed = false;
   #resetPromise: Promise<void> | null = null;
   #diagnosticsOpen = false;
+  // Follows the header while the popover is open: the toolbar wraps with the
+  // dock width, and the popover must stay below it rather than over it.
+  #diagnosticsObserver: ResizeObserver | null = null;
   #layoutDiagnosticState: TerminalDiagnosticLayout = "default";
   #layoutRepairCount = 0;
   #layoutDiagnosticChangedAt = Date.now();
@@ -796,6 +805,20 @@ class TerminalDock {
     this.#listen(this.#scratchpadSplitter, "keydown", (event) =>
       this.#resizeScratchpadFromKeyboard(event as KeyboardEvent),
     );
+    this.#listen(this.#diagnosticsClose, "click", () =>
+      this.#setDiagnosticsOpen(false, true),
+    );
+    // A popover: a press anywhere else dismisses it. The toggle is excluded
+    // so its own click handler decides, rather than closing and reopening.
+    this.#listen(document, "pointerdown", (event) => {
+      if (!this.#diagnosticsOpen) return;
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (
+        this.#diagnostics.contains(target) || this.#diagnosticsToggle.contains(target)
+      ) return;
+      this.#setDiagnosticsOpen(false);
+    }, true);
     this.#listen(this.#resetWorkspace, "click", () =>
       void this.#resetTerminalWorkspace(),
     );
@@ -2260,6 +2283,11 @@ class TerminalDock {
       this.#workspaceGeneration !== 0 &&
       payload.generation !== this.#workspaceGeneration
     ) return;
+    const heldPaneId = this.#poppedOut.get(payload.sessionId);
+    if (heldPaneId !== undefined) {
+      this.#releaseHeldPane(payload, heldPaneId);
+      return;
+    }
     const runtime = this.#runtimes.findBySessionId(payload.sessionId);
     const ticket = runtime ? this.#runtimes.capture(runtime.paneId) : null;
     if (runtime && ticket) {
@@ -2270,6 +2298,32 @@ class TerminalDock {
       this.#earlyExit.set(payload.sessionId, payload);
       this.#pruneEarlyExits();
     }
+  }
+
+  /**
+   * A popped-out shell ended in its window — closed there, or exited on its
+   * own. The pane that held its place stops holding it: nothing is coming
+   * back, so the notice that kept the pane closed gives way to an ordinary
+   * exited pane the user can restart or close. Without this the held pane
+   * kept promising a terminal until the window itself was closed.
+   */
+  #releaseHeldPane(result: TerminalExit, paneId: string): void {
+    this.#poppedOut.delete(result.sessionId);
+    const runtime = this.#runtimes.get(paneId);
+    if (!runtime || runtime.session || runtime.state !== "closed" || runtime.busy) {
+      return;
+    }
+    const failed = result.state === "failed";
+    runtime.activity = recordExit(
+      runtime.activity,
+      runtime.activity.profileKind,
+      failed ? "failed" : "exited",
+      result.exitCode,
+      result.error,
+      Date.now(),
+    );
+    this.#acknowledgeIfForeground(runtime);
+    this.#setState(runtime, failed ? "failed" : "exited", poppedOutExitNotice(result));
   }
 
   #handleExit(
@@ -2995,15 +3049,38 @@ class TerminalDock {
     const label = open ? "Hide terminal diagnostics" : "Show terminal diagnostics";
     this.#diagnosticsToggle.setAttribute("aria-label", label);
     this.#diagnosticsToggle.title = label;
+    this.#diagnosticsObserver?.disconnect();
+    this.#diagnosticsObserver = null;
     if (open) {
       const runtime = this.#activeRuntime();
       this.#renderDiagnostics(
         terminalDiagnosticView(this.#diagnosticInput(runtime, runtime.resources)),
       );
+      this.#placeDiagnostics();
+      if ("ResizeObserver" in window) {
+        this.#diagnosticsObserver = new ResizeObserver(() => this.#placeDiagnostics());
+        this.#diagnosticsObserver.observe(this.#toolbar);
+        this.#diagnosticsObserver.observe(this.#dock);
+      }
       this.#diagnostics.focus();
     } else if (restoreFocus) {
       this.#diagnosticsToggle.focus();
     }
+  }
+
+  /**
+   * The popover hangs just below the dock's header rows, measured rather than
+   * assumed: at a fixed offset it sat over the toolbar's wrapped second row and
+   * the very toggle that dismisses it.
+   */
+  #placeDiagnostics(): void {
+    const dockTop = this.#dock.getBoundingClientRect().top;
+    const headerBottom = this.#toolbar.getBoundingClientRect().bottom - dockTop;
+    const top = terminalDiagnosticsTop({
+      headerBottom,
+      dockHeight: this.#dock.clientHeight,
+    });
+    this.#diagnostics.style.setProperty("--terminal-diagnostics-top", `${top}px`);
   }
 
   #retryActiveRenderer(): void {
@@ -4065,6 +4142,8 @@ class TerminalDock {
     this.#searchOpen.disabled = true;
     this.#clear.disabled = true;
     this.#dragCleanup?.();
+    this.#diagnosticsObserver?.disconnect();
+    this.#diagnosticsObserver = null;
     this.#finishPasteConfirmation(false);
     this.#finishTerminationConfirmation(false);
     this.#hideContextMenu();
