@@ -15,6 +15,8 @@ import {
   scratchpadNotices,
   scratchpadOpenStorageKey,
   scratchpadSnippetMaxBytes,
+  scratchpadSplitterWidth,
+  scratchpadStatus,
   scratchpadTextMaxBytes,
   scratchpadWidthStorageKey,
   snippetPreview,
@@ -22,6 +24,10 @@ import {
   utf8ByteLength,
   writeScratchpadOpen,
   writeScratchpadWidth,
+  isScratchpadConflict,
+  ScratchpadSaver,
+  scratchpadConflictRecord,
+  type Scratchpad,
   type ScratchpadSnippet,
 } from "./scratchpad";
 
@@ -100,7 +106,9 @@ describe("scratchpad limits", () => {
       allPinned: "All 50 snippets are pinned; unpin one to add more.",
       reloaded: "Scratchpad changed elsewhere and was reloaded.",
       saveFailed: "Save failed",
+      unavailable: "Scratchpad is unavailable; the copy was not added.",
     });
+    expect(scratchpadStatus).toEqual({ saving: "Saving\u2026", saved: "Saved" });
   });
 });
 
@@ -221,7 +229,7 @@ describe("togglePinned and removeSnippet", () => {
 });
 
 describe("orderedSnippets", () => {
-  it("puts pinned rows first, then newest first", () => {
+  it("puts pinned rows first and otherwise keeps list order", () => {
     const existing = [
       snippet(1, "alpha", 10),
       snippet(2, "beta", 30, true),
@@ -231,19 +239,41 @@ describe("orderedSnippets", () => {
     expect(orderedSnippets(existing).map((item) => item.text)).toEqual([
       "beta",
       "delta",
-      "gamma",
       "alpha",
+      "gamma",
     ]);
   });
 
-  it("is stable for equal createdAt and does not mutate the input", () => {
+  it("never re-sorts by createdAt, so a re-copied snippet really shows on top", () => {
+    // The composition addSnippet → orderedSnippets is the rule the user sees:
+    // "adding text equal to an existing snippet moves that snippet to the top".
     const existing = [
       snippet(1, "alpha", 10),
-      snippet(2, "beta", 10),
-      snippet(3, "gamma", 10),
+      snippet(2, "beta", 11),
+      snippet(3, "gamma", 12),
     ];
-    expect(orderedSnippets(existing).map((item) => item.id)).toEqual([1, 2, 3]);
-    expect(existing.map((item) => item.id)).toEqual([1, 2, 3]);
+    const result = addSnippet(existing, "beta", 99);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(orderedSnippets(result.snippets).map((item) => item.text)).toEqual([
+      "beta",
+      "alpha",
+      "gamma",
+    ]);
+    // …and the moved snippet still carries its original identity.
+    expect(orderedSnippets(result.snippets)[0]).toEqual(snippet(2, "beta", 11));
+  });
+
+  it("shows last the entry eviction drops, and does not mutate the input", () => {
+    const existing = listOf(scratchpadMaxSnippets);
+    const displayed = orderedSnippets(existing);
+    expect(displayed.at(-1)).toEqual(snippet(1, "snippet-1", 1_001));
+    const evicting = addSnippet(existing, "fresh", 9_999);
+    expect(evicting.ok).toBe(true);
+    if (!evicting.ok) return;
+    // What the panel shows as oldest is exactly what the add evicted.
+    expect(evicting.snippets.some((item) => item.text === "snippet-1")).toBe(false);
+    expect(existing.map((item) => item.id)).toEqual(displayed.map((item) => item.id));
   });
 });
 
@@ -274,6 +304,8 @@ describe("clampScratchpadWidth", () => {
   it("states its bounds", () => {
     expect(minimumScratchpadWidth).toBe(240);
     expect(defaultScratchpadWidth).toBe(320);
+    // The dock adds the splitter to the gutter it reserves for body overlays.
+    expect(scratchpadSplitterWidth).toBe(5);
   });
 
   it("clamps to half the body width, never below 240", () => {
@@ -347,5 +379,350 @@ describe("scratchpad localStorage mirrors", () => {
     expect(readScratchpadWidth(storage)).toBe(320);
     expect(() => writeScratchpadOpen(storage, true)).not.toThrow();
     expect(() => writeScratchpadWidth(storage, 400)).not.toThrow();
+  });
+});
+
+// --- ScratchpadSaver -------------------------------------------------------
+
+class ManualClock {
+  readonly pending = new Map<number, () => void>();
+  #next = 1;
+
+  setTimeout(callback: () => void): unknown {
+    const handle = this.#next++;
+    this.pending.set(handle, callback);
+    return handle;
+  }
+
+  clearTimeout(handle: unknown): void {
+    this.pending.delete(handle as number);
+  }
+
+  runAll(): void {
+    for (const [handle, callback] of [...this.pending]) {
+      this.pending.delete(handle);
+      callback();
+    }
+  }
+}
+
+interface SetCall {
+  generation: number;
+  revision: number;
+  scratchpad: Scratchpad;
+}
+
+function stored(
+  text: string,
+  revision: number,
+  snippets: ScratchpadSnippet[] = [],
+): Scratchpad {
+  return { text, snippets, revision, updatedAt: 1_700 };
+}
+
+function conflict(storedRecord?: Scratchpad): Error & { stored?: Scratchpad } {
+  const error: Error & { stored?: Scratchpad } = new Error(
+    "scratchpad revision conflict",
+  );
+  if (storedRecord) error.stored = storedRecord;
+  return error;
+}
+
+function saverHarness(options: {
+  generation?: number;
+  record?: Scratchpad;
+  getError?: unknown;
+} = {}) {
+  const clock = new ManualClock();
+  const sets: SetCall[] = [];
+  const gets: number[] = [];
+  const statuses: string[] = [];
+  const clipboard: string[] = [];
+  const errors: unknown[] = [];
+  const applied: Array<{ record: Scratchpad; replaceLocalText: boolean }> = [];
+  let getResult = options.record ?? stored("", 0);
+  let getError = options.getError;
+  let setResult: (call: SetCall) => Promise<{ generation: number; revision: number }> =
+    (call) =>
+      Promise.resolve({ generation: call.generation, revision: call.revision + 1 });
+  let localText: string | null = null;
+  let clipboardError: unknown = null;
+
+  const saver = new ScratchpadSaver({
+    generation: options.generation ?? 7,
+    backend: {
+      get: (generation) => {
+        gets.push(generation);
+        return getError === undefined
+          ? Promise.resolve({ generation, scratchpad: getResult })
+          : Promise.reject(getError);
+      },
+      set: (generation, revision, scratchpad) => {
+        const call = { generation, revision, scratchpad };
+        sets.push(call);
+        return setResult(call);
+      },
+    },
+    clock,
+    setText: (text) => {
+      clipboard.push(text);
+      return clipboardError === null
+        ? Promise.resolve()
+        : Promise.reject(clipboardError);
+    },
+    status: (text) => statuses.push(text),
+    applyRecord: (record, replaceLocalText) => {
+      applied.push({ record, replaceLocalText });
+      return localText;
+    },
+    reportError: (error) => errors.push(error),
+    now: () => 4_242,
+  });
+
+  return {
+    saver,
+    clock,
+    sets,
+    gets,
+    statuses,
+    clipboard,
+    errors,
+    applied,
+    setStored: (record: Scratchpad) => {
+      getResult = record;
+      getError = undefined;
+    },
+    failGet: (error: unknown) => {
+      getError = error;
+    },
+    failSet: (error: unknown) => {
+      setResult = () => Promise.reject(error);
+    },
+    succeedSet: () => {
+      setResult = (call) =>
+        Promise.resolve({ generation: call.generation, revision: call.revision + 1 });
+    },
+    keepLocalText: (text: string | null) => {
+      localText = text;
+    },
+    failClipboard: (error: unknown) => {
+      clipboardError = error;
+    },
+  };
+}
+
+const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+describe("ScratchpadSaver", () => {
+  it("reads once before the first write and sends the stored revision", async () => {
+    const h = saverHarness({ record: stored("from the store", 4) });
+    h.saver.markText("typed");
+    await settle();
+    h.clock.runAll();
+    await settle();
+    expect(h.gets).toEqual([7]);
+    expect(h.sets).toHaveLength(1);
+    expect(h.sets[0].revision).toBe(4);
+    expect(h.sets[0].generation).toBe(7);
+    expect(h.saver.record.revision).toBe(5);
+    expect(h.saver.record.updatedAt).toBe(4_242);
+    expect(h.saver.dirty).toBe(false);
+    expect(h.statuses.at(-1)).toBe(scratchpadStatus.saved);
+  });
+
+  it("flushes on dispose and actually issues the write", async () => {
+    // The defect this pins: dispose() used to suspend on the pending read and
+    // bail once the dock marked itself disposed, so the last note never left.
+    const h = saverHarness({ record: stored("stored", 2) });
+    await h.saver.ensureLoaded();
+    h.saver.markText("typed just before quitting");
+    expect(h.sets).toHaveLength(0);
+    h.saver.dispose();
+    // The backend call is issued synchronously, before any await unwinds.
+    expect(h.sets).toHaveLength(1);
+    expect(h.sets[0].scratchpad.text).toBe("typed just before quitting");
+    expect(h.clock.pending.size).toBe(0);
+    await settle();
+  });
+
+  it("flushes a pending note on a project switch, before the read resolves", async () => {
+    const h = saverHarness({ record: stored("stored", 9) });
+    h.saver.markText("half-typed note");
+    h.saver.dispose();
+    await settle();
+    expect(h.sets).toHaveLength(1);
+    expect(h.sets[0].scratchpad.text).toBe("half-typed note");
+  });
+
+  it("does nothing on dispose when nothing was edited", () => {
+    const h = saverHarness();
+    h.saver.dispose();
+    expect(h.sets).toEqual([]);
+  });
+
+  it("flush() writes an edit the debounce has not fired yet", async () => {
+    const h = saverHarness({ record: stored("stored", 1) });
+    await h.saver.ensureLoaded();
+    h.saver.markText("note");
+    expect(h.saver.flush()).toBe(true);
+    expect(h.sets).toHaveLength(1);
+    await settle();
+    expect(h.saver.flush()).toBe(false);
+  });
+
+  it("recovers from a conflict that carries the stored record", async () => {
+    const h = saverHarness({ record: stored("stored", 3) });
+    await h.saver.ensureLoaded();
+    const remote = stored("what the other window wrote", 8, [
+      { id: 1, text: "remote snippet", pinned: false, createdAt: 12 },
+    ]);
+    h.saver.markText("my unsaved note");
+    h.failSet(conflict(remote));
+    h.saver.flush();
+    await settle();
+    // Clipboard first, so nothing typed is lost.
+    expect(h.clipboard).toEqual(["my unsaved note"]);
+    // The stored record arrives with the error: no second read.
+    expect(h.gets).toHaveLength(1);
+    expect(h.saver.record.text).toBe("what the other window wrote");
+    expect(h.saver.record.revision).toBe(8);
+    expect(h.applied.at(-1)?.replaceLocalText).toBe(true);
+    expect(h.statuses.at(-1)).toBe(scratchpadNotices.reloaded);
+  });
+
+  it("re-reads when the conflict payload did not survive the transport", async () => {
+    const h = saverHarness({ record: stored("stored", 3) });
+    await h.saver.ensureLoaded();
+    h.saver.markText("my unsaved note");
+    h.failSet(conflict());
+    h.setStored(stored("reloaded text", 8));
+    h.saver.flush();
+    await settle();
+    expect(h.clipboard).toEqual(["my unsaved note"]);
+    expect(h.gets).toEqual([7, 7]);
+    expect(h.saver.record.text).toBe("reloaded text");
+    expect(h.statuses.at(-1)).toBe(scratchpadNotices.reloaded);
+  });
+
+  it("reloads even when the clipboard is unavailable", async () => {
+    const h = saverHarness({ record: stored("stored", 3) });
+    await h.saver.ensureLoaded();
+    h.saver.markText("note");
+    h.failClipboard(new Error("Native clipboard access is unavailable"));
+    h.failSet(conflict(stored("remote", 4)));
+    h.saver.flush();
+    await settle();
+    expect(h.saver.record.text).toBe("remote");
+    expect(h.errors).toEqual([]);
+  });
+
+  it("keeps the edit dirty when a save fails, and retries on the next edit", async () => {
+    const h = saverHarness({ record: stored("stored", 1) });
+    await h.saver.ensureLoaded();
+    h.saver.markText("first");
+    h.failSet(new Error("runtime is unavailable"));
+    h.saver.flush();
+    await settle();
+    expect(h.sets).toHaveLength(1);
+    expect(h.saver.dirty).toBe(true);
+    expect(h.statuses.at(-1)).toBe(scratchpadNotices.saveFailed);
+    expect(h.errors).toHaveLength(1);
+    // No retry storm while the backend is down: the timer is not re-armed.
+    h.clock.runAll();
+    await settle();
+    expect(h.sets).toHaveLength(1);
+    // The next edit retries.
+    h.succeedSet();
+    h.saver.markText("second");
+    h.saver.flush();
+    await settle();
+    expect(h.sets).toHaveLength(2);
+    expect(h.sets[1].scratchpad.text).toBe("second");
+    expect(h.saver.dirty).toBe(false);
+  });
+
+  it("does not write at revision 0 when the first read failed", async () => {
+    const h = saverHarness();
+    h.failGet(new Error("workspace is unavailable"));
+    h.saver.markText("typed");
+    h.saver.flush();
+    await settle();
+    expect(h.sets).toEqual([]);
+    expect(h.saver.loaded).toBe(false);
+    expect(h.saver.dirty).toBe(true);
+    expect(h.statuses.at(-1)).toBe(scratchpadNotices.saveFailed);
+  });
+
+  it("keeps mid-edit local text when a load lands under the cursor", async () => {
+    const h = saverHarness({ record: stored("from the store", 2) });
+    h.keepLocalText("what the user is typing");
+    await h.saver.ensureLoaded();
+    expect(h.saver.record.text).toBe("what the user is typing");
+    expect(h.saver.dirty).toBe(true);
+    expect(h.statuses.at(-1)).toBe(scratchpadStatus.saving);
+  });
+
+  it("coalesces a save that arrives while one is in flight", async () => {
+    const h = saverHarness({ record: stored("stored", 1) });
+    await h.saver.ensureLoaded();
+    h.saver.markText("first");
+    void h.saver.save();
+    h.saver.markText("second");
+    void h.saver.save();
+    await settle();
+    expect(h.sets).toHaveLength(2);
+    expect(h.sets[1].scratchpad.text).toBe("second");
+  });
+
+  it("does nothing at all without a workspace generation", async () => {
+    const h = saverHarness({ generation: 0 });
+    expect(h.saver.enabled).toBe(false);
+    h.saver.markText("typed");
+    h.saver.flush();
+    await h.saver.ensureLoaded();
+    await settle();
+    expect(h.gets).toEqual([]);
+    expect(h.sets).toEqual([]);
+  });
+
+  it("sends a defensive copy, so a later edit cannot mutate a request", async () => {
+    const h = saverHarness({ record: stored("stored", 1) });
+    await h.saver.ensureLoaded();
+    h.saver.markText("note");
+    h.saver.flush();
+    const sent = h.sets[0].scratchpad;
+    h.saver.markText("changed while the write was in flight");
+    expect(sent.text).toBe("note");
+    await settle();
+  });
+});
+
+describe("scratchpadConflictRecord", () => {
+  it("accepts a well-formed payload", () => {
+    const record = stored("text", 5, [
+      { id: 2, text: "snippet", pinned: true, createdAt: 11 },
+    ]);
+    expect(scratchpadConflictRecord(conflict(record))).toEqual(record);
+  });
+
+  it("rejects anything it cannot trust, so the caller re-reads instead", () => {
+    expect(scratchpadConflictRecord(new Error("boom"))).toBeNull();
+    expect(scratchpadConflictRecord(null)).toBeNull();
+    expect(scratchpadConflictRecord({ stored: "nope" })).toBeNull();
+    expect(scratchpadConflictRecord({ stored: { text: 1, snippets: [], revision: 0 } }))
+      .toBeNull();
+    expect(scratchpadConflictRecord({ stored: { text: "", snippets: {}, revision: 0 } }))
+      .toBeNull();
+    expect(scratchpadConflictRecord({
+      stored: { text: "", snippets: [{ id: "1", text: "x", pinned: false, createdAt: 0 }], revision: 0 },
+    })).toBeNull();
+  });
+
+  it("recognises the runtime's conflict message wherever it is wrapped", () => {
+    expect(isScratchpadConflict(new Error("scratchpad revision conflict"))).toBe(true);
+    expect(isScratchpadConflict("SetScratchpadV1: scratchpad revision conflict"))
+      .toBe(true);
+    expect(isScratchpadConflict(new Error("stale workspace generation"))).toBe(false);
+    expect(isScratchpadConflict(undefined)).toBe(false);
   });
 });

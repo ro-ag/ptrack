@@ -492,12 +492,15 @@ describe("production asset layout", () => {
     expect(styles).toMatch(/\.terminal-body\{[^}]*flex-direction:row/);
     expect(styles).toMatch(/\.terminal-stage\{[^}]*position:relative/);
     expect(styles).toContain(".terminal-scratchpad{");
-    expect(styles).toContain(".terminal-scratchpad-splitter{");
+    // The splitter's width is also `scratchpadSplitterWidth` in scratchpad.ts,
+    // which the dock adds to the gutter it reserves for body-level overlays.
+    expect(styles).toMatch(/\.terminal-scratchpad-splitter\{[^}]*width:5px/);
     expect(app).toContain("GetScratchpadV1");
     expect(app).toContain("SetScratchpadV1");
     expect(app).toContain("Selection is larger than 4 KB; not added to the scratchpad.");
     expect(app).toContain("All 50 snippets are pinned; unpin one to add more.");
     expect(app).toContain("Scratchpad changed elsewhere and was reloaded.");
+    expect(app).toContain("Scratchpad is unavailable; the copy was not added.");
     expect(app).toContain("ptrack-terminal-scratchpad-open");
     expect(app).toContain("ptrack-terminal-scratchpad-width");
     // Pop out: a real labelled control, absent until a single pane can move.

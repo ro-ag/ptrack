@@ -104,15 +104,15 @@ import { terminalControlIcon } from "./control-icon";
 import {
   addSnippet,
   clampScratchpadWidth,
-  cloneScratchpad,
   defaultScratchpadWidth,
-  emptyScratchpad,
   maximumScratchpadWidth,
   orderedSnippets,
   readScratchpadOpen,
   readScratchpadWidth,
   removeSnippet,
+  ScratchpadSaver,
   scratchpadNotices,
+  scratchpadSplitterWidth,
   snippetPreview,
   togglePinned,
   writeScratchpadOpen,
@@ -575,7 +575,7 @@ class TerminalDock {
   readonly #scratchpadEmpty = requiredElement<HTMLElement>(
     "#terminal-scratchpad-empty",
   );
-  readonly #scratchpadScheduler: WorkspacePersistenceScheduler;
+  readonly #scratchpadSaver: ScratchpadSaver;
 
   #dockHeight = defaultDockHeight;
   #dockRatio = defaultDockRatio;
@@ -615,12 +615,7 @@ class TerminalDock {
   #dockDisposers: Array<() => void> = [];
   #scratchpadOpen = false;
   #scratchpadWidth = defaultScratchpadWidth;
-  #scratchpadRecord: Scratchpad = emptyScratchpad();
-  #scratchpadLoaded = false;
-  #scratchpadSaving = false;
-  #scratchpadPendingSave = false;
   #scratchpadDragCleanup: (() => void) | null = null;
-  #scratchpadLoad: Promise<void> | null = null;
 
   constructor(options: MountOptions) {
     this.#backend = options.backend;
@@ -659,13 +654,28 @@ class TerminalDock {
     );
     this.#scratchpadWidth = readScratchpadWidth(localStorage);
     this.#scratchpadOpen = readScratchpadOpen(localStorage);
-    this.#scratchpadScheduler = new WorkspacePersistenceScheduler(
-      {
+    this.#scratchpadSaver = new ScratchpadSaver({
+      // Zero means "no project is open", which the runtime treats as an
+      // unfenced call: the dock is only mounted with an open workspace's
+      // generation (>= 1), so zero disables scratchpad traffic entirely.
+      generation: this.#workspaceGeneration,
+      backend: {
+        get: (generation) => this.#backend.GetScratchpadV1(generation),
+        set: (generation, revision, scratchpad) =>
+          this.#backend.SetScratchpadV1(generation, revision, scratchpad),
+      },
+      clock: {
         setTimeout: (callback, delay) => window.setTimeout(callback, delay),
         clearTimeout: (handle) => window.clearTimeout(handle as number),
       },
-      () => void this.#saveScratchpad(),
-    );
+      setText: (text) => this.#writeClipboard(text),
+      status: (text) => this.#setScratchpadStatus(text),
+      applyRecord: (record, replaceLocalText) =>
+        this.#applyScratchpadRecord(record, replaceLocalText),
+      reportError: (error) => {
+        if (!this.#disposed) this.#showError(error);
+      },
+    });
     this.#lifecycle = new PaneLifecycleCoordinator(this.#runtimes, {
       closeSession: (sessionId, force) =>
         this.#backend.CloseTerminal(sessionId, force),
@@ -771,7 +781,13 @@ class TerminalDock {
       this.#setScratchpadOpen(false);
       this.#scratchpadToggle.focus();
     });
-    this.#listen(this.#scratchpadText, "input", () => this.#scratchpadTextEdited());
+    this.#listen(this.#scratchpadText, "input", () =>
+      this.#scratchpadSaver.markText(this.#scratchpadText.value),
+    );
+    // Leaving the note writes it now. A project switch is reached by clicking
+    // away first, and the runtime fences a write issued after the generation
+    // has already moved, so the earlier the note lands the better.
+    this.#listen(this.#scratchpadText, "blur", () => this.#flushScratchpad());
     this.#listen(this.#scratchpadAdd, "click", () => this.#addSelectionToScratchpad());
     this.#listen(this.#scratchpadSplitter, "pointerdown", (event) =>
       this.#beginScratchpadResize(event as PointerEvent),
@@ -1756,20 +1772,38 @@ class TerminalDock {
     }
   }
 
-  async #requestNativePaste(
+  #requestNativePaste(
     runtime: DockPaneRuntime,
     resources: PaneResources,
+  ): Promise<void> {
+    return this.#pasteText(runtime, resources, async (accepts) => {
+      // Let a copy that is still on its way to the system clipboard land first,
+      // so ⌘C immediately followed by ⌘V pastes what was just copied.
+      await this.#clipboardWrite;
+      return accepts() ? nativeClipboard().getText() : null;
+    });
+  }
+
+  /**
+   * The one paste path. Whatever the text comes from — the system clipboard or
+   * a scratchpad snippet — it crosses the same ticket fence, the same
+   * single-flight latch, and the same alternate-screen and multi-line review
+   * decisions, so the two callers cannot drift apart.
+   */
+  async #pasteText(
+    runtime: DockPaneRuntime,
+    resources: PaneResources,
+    readText: (accepts: () => boolean) => Promise<string | null>,
   ): Promise<void> {
     if (resources.disposed || runtime.state !== "running" || this.#pasteBusy) return;
     const ticket = this.#runtimes.capture(runtime.paneId);
     if (!ticket) return;
     this.#pasteBusy = true;
     const requestID = ++this.#pasteRequest;
+    const accepts = () => this.#canPaste(runtime, resources, ticket, requestID);
     try {
-      await this.#clipboardWrite;
-      if (!this.#canPaste(runtime, resources, ticket, requestID)) return;
-      const text = await nativeClipboard().getText();
-      if (!this.#canPaste(runtime, resources, ticket, requestID)) return;
+      const text = await readText(accepts);
+      if (text === null || !accepts()) return;
       const request = prepareClipboardPaste(
         text,
         resources.terminal.buffer.active.type === "alternate",
@@ -1778,21 +1812,12 @@ class TerminalDock {
         request,
         (pending) => this.#confirmPaste(pending),
         (pending) => {
-          if (this.#canPaste(runtime, resources, ticket, requestID)) {
-            resources.terminal.paste(pending);
-          }
+          if (accepts()) resources.terminal.paste(pending);
         },
       );
-      if (
-        this.#canPaste(runtime, resources, ticket, requestID) &&
-        this.#pasteModal.hidden
-      ) {
-        resources.terminal.focus();
-      }
+      if (accepts() && this.#pasteModal.hidden) resources.terminal.focus();
     } catch (error) {
-      if (this.#canPaste(runtime, resources, ticket, requestID)) {
-        this.#showError(error);
-      }
+      if (accepts()) this.#showError(error);
     } finally {
       if (requestID === this.#pasteRequest) this.#pasteBusy = false;
     }
@@ -2393,9 +2418,15 @@ class TerminalDock {
 
   // ---- Scratchpad -------------------------------------------------------
   //
-  // The panel is dock furniture: it hides with the dock, it refits the panes
-  // whenever its geometry changes, and every rule it obeys (snippet limits,
-  // width clamp, storage keys) lives in ./scratchpad.
+  // The panel is dock furniture: it hides with the dock and refits the panes
+  // whenever its geometry changes. Every rule it obeys lives in ./scratchpad —
+  // snippet limits and ordering, the width clamp, the storage keys, and the
+  // load / dirty / write / conflict state machine (`ScratchpadSaver`). What
+  // follows is DOM wiring only.
+
+  #scratchpadRecord(): Scratchpad {
+    return this.#scratchpadSaver.record;
+  }
 
   #setScratchpadOpen(open: boolean, persist = true): void {
     this.#scratchpadOpen = open;
@@ -2412,27 +2443,11 @@ class TerminalDock {
       if (!this.#disposed) this.#fitPanes(this.#activeTabPaneIds());
     });
     if (!open) {
-      this.#flushScratchpad();
+      this.#scratchpadSaver.flush();
       return;
     }
     this.#renderScratchpadSelection();
-    void this.#ensureScratchpadLoaded();
-  }
-
-  /**
-   * One read per mount, shared by every caller that needs the stored record:
-   * opening the panel and the first capture both wait on the same request.
-   */
-  #ensureScratchpadLoaded(): Promise<void> {
-    if (this.#scratchpadLoaded || this.#workspaceGeneration === 0) {
-      return Promise.resolve();
-    }
-    if (this.#scratchpadLoad === null) {
-      this.#scratchpadLoad = this.#loadScratchpad().finally(() => {
-        this.#scratchpadLoad = null;
-      });
-    }
-    return this.#scratchpadLoad;
+    void this.#scratchpadSaver.ensureLoaded();
   }
 
   /**
@@ -2450,7 +2465,7 @@ class TerminalDock {
     // Body-level overlays (terminal search) step aside for an open panel.
     this.#body.style.setProperty(
       "--terminal-scratchpad-gutter",
-      this.#scratchpadOpen ? `${width + 5}px` : "0px",
+      this.#scratchpadOpen ? `${width + scratchpadSplitterWidth}px` : "0px",
     );
     this.#scratchpadSplitter.setAttribute("aria-valuenow", String(width));
     const maximum = maximumScratchpadWidth(this.#scratchpadBodyWidth());
@@ -2526,120 +2541,34 @@ class TerminalDock {
   }
 
   #flushScratchpad(): void {
-    this.#scratchpadScheduler.flush();
+    this.#scratchpadSaver.flush();
   }
 
-  #scratchpadTextEdited(): void {
-    this.#scratchpadRecord.text = this.#scratchpadText.value;
-    this.#setScratchpadStatus("Saving…");
-    this.#scratchpadScheduler.markDirty();
-  }
-
-  async #loadScratchpad(replaceLocalText = false): Promise<void> {
-    if (this.#disposed || this.#workspaceGeneration === 0) return;
-    const generation = this.#workspaceGeneration;
-    try {
-      const result = await this.#backend.GetScratchpadV1(generation);
-      if (this.#disposed || generation !== this.#workspaceGeneration) return;
-      if (result.generation !== generation) return;
-      this.#scratchpadLoaded = true;
-      this.#adoptScratchpad(result.scratchpad, replaceLocalText);
-    } catch (error) {
-      if (!this.#disposed && generation === this.#workspaceGeneration) {
-        this.#showError(error);
-      }
-    }
-  }
-
-  #adoptScratchpad(scratchpad: Scratchpad, replaceLocalText: boolean): void {
-    this.#scratchpadRecord = cloneScratchpad(scratchpad);
+  /**
+   * Installs a record the saver read from the store. Returns the local text
+   * that must win when the user is typing into the note right now.
+   */
+  #applyScratchpadRecord(record: Scratchpad, replaceLocalText: boolean): string | null {
+    // A conflict reload can land after the dock is gone; there is nothing left
+    // to render, and the record is still the one the final write carries.
+    if (this.#disposed) return null;
     this.#renderSnippets();
     const editing = document.activeElement === this.#scratchpadText;
-    if (replaceLocalText || !editing) {
-      this.#scratchpadText.value = this.#scratchpadRecord.text;
-      this.#setScratchpadStatus("Saved");
-      return;
+    if (!replaceLocalText && editing && this.#scratchpadText.value !== record.text) {
+      return this.#scratchpadText.value;
     }
-    // Mid-edit: what the user typed wins, and the next write carries it.
-    this.#scratchpadRecord.text = this.#scratchpadText.value;
-    this.#setScratchpadStatus("Saving…");
-    this.#scratchpadScheduler.markDirty();
-  }
-
-  async #saveScratchpad(): Promise<void> {
-    if (this.#disposed || this.#workspaceGeneration === 0) return;
-    if (this.#scratchpadSaving) {
-      this.#scratchpadPendingSave = true;
-      return;
-    }
-    this.#scratchpadSaving = true;
-    try {
-      // Never write revision 0 over a record this mount has not read yet.
-      await this.#ensureScratchpadLoaded();
-      if (this.#disposed) return;
-      do {
-        this.#scratchpadPendingSave = false;
-        await this.#sendScratchpad();
-      } while (this.#scratchpadPendingSave && !this.#disposed);
-    } finally {
-      this.#scratchpadSaving = false;
-    }
-  }
-
-  async #sendScratchpad(): Promise<void> {
-    const generation = this.#workspaceGeneration;
-    const record = this.#scratchpadRecord;
-    this.#setScratchpadStatus("Saving…");
-    try {
-      const result = await this.#backend.SetScratchpadV1(
-        generation,
-        record.revision,
-        cloneScratchpad(record),
-      );
-      if (this.#disposed || generation !== this.#workspaceGeneration) return;
-      if (this.#scratchpadRecord === record) record.revision = result.revision;
-      this.#scratchpadLoaded = true;
-      this.#setScratchpadStatus("Saved");
-    } catch (error) {
-      if (this.#disposed || generation !== this.#workspaceGeneration) return;
-      if (messageFrom(error).includes("scratchpad revision conflict")) {
-        await this.#recoverScratchpadConflict(error, generation);
-        return;
-      }
-      // The typed text stays as it is; the next edit retries the write.
-      this.#setScratchpadStatus(scratchpadNotices.saveFailed);
-      this.#showError(error);
-    }
-  }
-
-  async #recoverScratchpadConflict(error: unknown, generation: number): Promise<void> {
-    // Nothing typed is lost: the local note goes to the clipboard before the
-    // stored record replaces it.
-    const local = this.#scratchpadText.value;
-    const write = this.#clipboardWrite.then(() => nativeClipboard().setText(local));
-    this.#clipboardWrite = write.catch(() => {});
-    try {
-      await write;
-    } catch {
-      // A missing native clipboard must not block the reload.
-    }
-    if (this.#disposed || generation !== this.#workspaceGeneration) return;
-    const stored = (error as { stored?: unknown } | null)?.stored;
-    if (stored && typeof stored === "object" && Array.isArray((stored as Scratchpad).snippets)) {
-      this.#adoptScratchpad(stored as Scratchpad, true);
-    } else {
-      await this.#loadScratchpad(true);
-      if (this.#disposed || generation !== this.#workspaceGeneration) return;
-    }
-    this.#setScratchpadStatus(scratchpadNotices.reloaded);
+    this.#scratchpadText.value = record.text;
+    return null;
   }
 
   #captureSnippet(text: string): void {
     // A capture must not race the first read: adding to an unread record would
     // save revision 0 over the stored one and lose it to a conflict.
-    if (!this.#scratchpadLoaded && this.#workspaceGeneration !== 0) {
-      void this.#ensureScratchpadLoaded().then(() => {
-        if (!this.#disposed && this.#scratchpadLoaded) this.#applyCapturedSnippet(text);
+    if (!this.#scratchpadSaver.loaded && this.#scratchpadSaver.enabled) {
+      void this.#scratchpadSaver.ensureLoaded().then(() => {
+        if (this.#disposed) return;
+        if (this.#scratchpadSaver.loaded) this.#applyCapturedSnippet(text);
+        else this.#setScratchpadStatus(scratchpadNotices.unavailable);
       });
       return;
     }
@@ -2647,7 +2576,7 @@ class TerminalDock {
   }
 
   #applyCapturedSnippet(text: string): void {
-    const result = addSnippet(this.#scratchpadRecord.snippets, text, Date.now());
+    const result = addSnippet(this.#scratchpadRecord().snippets, text, Date.now());
     if (!result.ok) {
       if (result.reason === "too-large") {
         this.#setScratchpadStatus(scratchpadNotices.tooLarge);
@@ -2660,10 +2589,10 @@ class TerminalDock {
   }
 
   #commitSnippets(snippets: ScratchpadSnippet[]): void {
-    this.#scratchpadRecord.snippets = snippets;
+    const focus = this.#focusedSnippetAction();
+    this.#scratchpadSaver.applySnippets(snippets);
     this.#renderSnippets();
-    this.#setScratchpadStatus("Saving…");
-    this.#scratchpadScheduler.markDirty();
+    this.#restoreSnippetFocus(focus);
   }
 
   #addSelectionToScratchpad(): void {
@@ -2690,17 +2619,54 @@ class TerminalDock {
     const pasteReady = clipboard && runtime.state === "running" &&
       Boolean(resources) && !resources?.disposed;
     for (const button of this.#scratchpadList.querySelectorAll<HTMLButtonElement>(
+      '[data-scratchpad-action="copy"]',
+    )) {
+      button.disabled = !clipboard;
+      // The reason travels on the accessible name too, not only the tooltip.
+      this.#labelScratchpadAction(
+        button,
+        clipboard ? "Copy snippet" : "Copy needs the native clipboard",
+      );
+    }
+    for (const button of this.#scratchpadList.querySelectorAll<HTMLButtonElement>(
       '[data-scratchpad-action="paste"]',
     )) {
       button.disabled = !pasteReady;
-      button.title = clipboard
-        ? "Paste snippet into the active pane"
-        : "Paste needs the native clipboard";
+      this.#labelScratchpadAction(
+        button,
+        !clipboard
+          ? "Paste needs the native clipboard"
+          : pasteReady
+            ? "Paste snippet into the active pane"
+            : "Paste needs a running terminal pane",
+      );
     }
   }
 
+  /** The snippet control that holds focus, so a re-render can give it back. */
+  #focusedSnippetAction(): { id: string; action: string } | null {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLElement)) return null;
+    const action = active.dataset.scratchpadAction;
+    const id = active.closest<HTMLElement>(".terminal-scratchpad-snippet")?.dataset
+      .snippetId;
+    return action && id ? { id, action } : null;
+  }
+
+  #restoreSnippetFocus(focus: { id: string; action: string } | null): void {
+    if (!focus) return;
+    const button = this.#scratchpadList.querySelector<HTMLButtonElement>(
+      `[data-snippet-id="${focus.id}"] [data-scratchpad-action="${focus.action}"]`,
+    );
+    // A deleted row takes its buttons with it; the strip's own control is the
+    // nearest place a keyboard user can carry on from.
+    if (button && !button.disabled) button.focus();
+    else if (!this.#scratchpadAdd.disabled) this.#scratchpadAdd.focus();
+    else this.#scratchpadText.focus();
+  }
+
   #renderSnippets(): void {
-    const snippets = orderedSnippets(this.#scratchpadRecord.snippets);
+    const snippets = orderedSnippets(this.#scratchpadRecord().snippets);
     this.#scratchpadList.replaceChildren(
       ...snippets.map((snippet) => this.#scratchpadRow(snippet)),
     );
@@ -2712,16 +2678,14 @@ class TerminalDock {
     const row = document.createElement("li");
     row.className = "terminal-scratchpad-snippet";
     row.dataset.pinned = String(snippet.pinned);
+    row.dataset.snippetId = String(snippet.id);
     const preview = document.createElement("span");
     preview.className = "terminal-scratchpad-preview";
     const text = snippetPreview(snippet.text);
     preview.textContent = text;
     preview.title = text;
-    const clipboard = this.#nativeClipboardAvailable();
     const copy = this.#scratchpadAction("copy", "Copy snippet");
     copy.append(terminalControlIcon("duplicate"));
-    copy.disabled = !clipboard;
-    if (!clipboard) copy.title = "Copy needs the native clipboard";
     copy.addEventListener("click", () => void this.#copySnippet(snippet.text));
     const paste = this.#scratchpadAction("paste", "Paste snippet into the active pane");
     paste.textContent = "Paste";
@@ -2730,12 +2694,12 @@ class TerminalDock {
     const pin = this.#scratchpadAction("pin", pinLabel);
     pin.textContent = snippet.pinned ? "Unpin" : "Pin";
     pin.addEventListener("click", () =>
-      this.#commitSnippets(togglePinned(this.#scratchpadRecord.snippets, snippet.id)),
+      this.#commitSnippets(togglePinned(this.#scratchpadRecord().snippets, snippet.id)),
     );
     const remove = this.#scratchpadAction("delete", "Delete snippet");
     remove.append(terminalControlIcon("close"));
     remove.addEventListener("click", () =>
-      this.#commitSnippets(removeSnippet(this.#scratchpadRecord.snippets, snippet.id)),
+      this.#commitSnippets(removeSnippet(this.#scratchpadRecord().snippets, snippet.id)),
     );
     row.append(preview, copy, paste, pin, remove);
     return row;
@@ -2746,16 +2710,24 @@ class TerminalDock {
     button.className = "terminal-scratchpad-action";
     button.type = "button";
     button.dataset.scratchpadAction = action;
-    button.setAttribute("aria-label", label);
-    button.title = label;
+    this.#labelScratchpadAction(button, label);
     return button;
   }
 
-  async #copySnippet(text: string): Promise<void> {
+  #labelScratchpadAction(button: HTMLButtonElement, label: string): void {
+    button.setAttribute("aria-label", label);
+    button.title = label;
+  }
+
+  async #writeClipboard(text: string): Promise<void> {
     const write = this.#clipboardWrite.then(() => nativeClipboard().setText(text));
     this.#clipboardWrite = write.catch(() => {});
+    await write;
+  }
+
+  async #copySnippet(text: string): Promise<void> {
     try {
-      await write;
+      await this.#writeClipboard(text);
     } catch (error) {
       if (!this.#disposed) this.#showError(error);
     }
@@ -2768,38 +2740,8 @@ class TerminalDock {
   async #pasteSnippet(text: string): Promise<void> {
     const runtime = this.#activeRuntime();
     const resources = runtime.resources;
-    if (!resources || resources.disposed || runtime.state !== "running") return;
-    if (this.#pasteBusy) return;
-    const ticket = this.#runtimes.capture(runtime.paneId);
-    if (!ticket) return;
-    this.#pasteBusy = true;
-    const requestID = ++this.#pasteRequest;
-    try {
-      if (!this.#canPaste(runtime, resources, ticket, requestID)) return;
-      const request = prepareClipboardPaste(
-        text,
-        resources.terminal.buffer.active.type === "alternate",
-      );
-      await commitClipboardPaste(
-        request,
-        (pending) => this.#confirmPaste(pending),
-        (pending) => {
-          if (this.#canPaste(runtime, resources, ticket, requestID)) {
-            resources.terminal.paste(pending);
-          }
-        },
-      );
-      if (
-        this.#canPaste(runtime, resources, ticket, requestID) &&
-        this.#pasteModal.hidden
-      ) {
-        resources.terminal.focus();
-      }
-    } catch (error) {
-      if (this.#canPaste(runtime, resources, ticket, requestID)) this.#showError(error);
-    } finally {
-      if (requestID === this.#pasteRequest) this.#pasteBusy = false;
-    }
+    if (!resources) return;
+    await this.#pasteText(runtime, resources, () => Promise.resolve(text));
   }
 
   #markPersistenceDirty(): void {
@@ -4089,7 +4031,7 @@ class TerminalDock {
   dispose(): void {
     if (this.#disposed) return;
     this.#persistenceScheduler.dispose();
-    this.#scratchpadScheduler.dispose();
+    this.#scratchpadSaver.dispose();
     this.#scratchpadDragCleanup?.();
     this.#disposed = true;
     this.#pendingSessionCloses.releaseToProjectShutdown();

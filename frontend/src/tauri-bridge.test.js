@@ -37,6 +37,48 @@ describe("Tauri compatibility bridge", () => {
     ]);
   });
 
+  it("keeps a structured error's recovery payload on the normalized Error", async () => {
+    const target = { __TAURI_INTERNALS__: {}, navigator: { clipboard: {} } };
+    const stored = {
+      text: "what the other window wrote",
+      snippets: [{ id: 1, text: "ls -la", pinned: false, createdAt: 12 }],
+      revision: 8,
+      updatedAt: 1_700,
+    };
+    installTauriBridge(target, {
+      invoke: async () => {
+        // Tauri rejects with a plain serialized object, not an Error.
+        throw { message: "scratchpad revision conflict", stored };
+      },
+      listen: vi.fn(),
+      clipboard: { readText: vi.fn(), writeText: vi.fn() },
+    });
+
+    // Without this the conflict caller cannot use the record it was already
+    // handed and has to re-read the scratchpad.
+    await expect(target.go.gui.App.SetScratchpadV1(7, 3, { text: "mine" }))
+      .rejects.toMatchObject({
+        message: "scratchpad revision conflict",
+        stored,
+      });
+  });
+
+  it("leaves an ordinary error alone", async () => {
+    const target = { __TAURI_INTERNALS__: {}, navigator: { clipboard: {} } };
+    installTauriBridge(target, {
+      invoke: async () => {
+        throw { message: "stale workspace generation" };
+      },
+      listen: vi.fn(),
+      clipboard: { readText: vi.fn(), writeText: vi.fn() },
+    });
+
+    const error = await target.go.gui.App.GetScratchpadV1(7).catch((value) => value);
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toBe("stale workspace generation");
+    expect("stored" in error).toBe(false);
+  });
+
   it("preserves call ordering and routes native-only methods", async () => {
     const calls = [];
     const target = { __TAURI_INTERNALS__: {}, navigator: { clipboard: {} } };
