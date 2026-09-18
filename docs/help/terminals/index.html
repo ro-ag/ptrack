@@ -105,6 +105,7 @@
             </table>
           </div>
           <p>The context menu exposes copy, paste, select all, output search, clear buffer, and terminal-state reset. Toolbar controls offer the same search and zoom behaviors without requiring shortcuts.</p>
+          <p><strong>Scratchpad.</strong> The notebook control in the toolbar utilities opens a per-project scratchpad beside the panes. Its note is plain text you type yourself; p-track saves it with the project and brings it back after a restart. Below the note, the clipboard strip keeps what you copy out of a pane—nothing else—as re-usable snippets you can copy again, paste back through the usual paste review, pin, or delete. Snippets are capped at 4 096 bytes each and 50 entries; adding past the cap drops the oldest unpinned snippet. Drag or arrow-key the separator to resize the panel, and use the toolbar control again to hide it.</p>
 
           <h2 id="paste-safety">Review multiline paste</h2>
           <p>In the ordinary terminal screen, pasting text that contains a newline opens a bounded review dialog. Inspect the normalized preview and line count, then confirm or cancel. Cancel sends nothing. Confirm delegates the complete text to xterm's paste behavior, including bracketed paste when the running program enables it.</p>
