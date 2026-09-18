@@ -1332,6 +1332,7 @@ fn heatmap_buckets_instants_in_the_host_local_calendar_day() {
             active_plans: Vec::new(),
             actors: Vec::new(),
             stack: None,
+            scratchpad: None,
         },
         Vec::new(),
         Vec::new(),
@@ -1415,6 +1416,7 @@ fn board_view_carries_dep_edges_and_their_computed_open_subset() {
             active_plans: Vec::new(),
             actors: Vec::new(),
             stack: None,
+            scratchpad: None,
         },
         Vec::new(),
         vec![
@@ -1526,6 +1528,7 @@ fn activity_snapshot() -> ProjectSnapshot {
             active_plans: Vec::new(),
             actors: Vec::new(),
             stack: None,
+            scratchpad: None,
         },
         Vec::new(),
         vec![activity_plan(1), activity_plan(2)],
@@ -4234,4 +4237,54 @@ fn scratchpad_commands_are_unavailable_without_a_binding() {
             "no project workspace is open"
         );
     }
+}
+
+/// The conflict must survive the production dispatch, not just the bound
+/// workspace: `DesktopRuntime::invoke` is what the host actually calls, and a
+/// stringified error there would cost the panel its reload payload.
+#[test]
+fn a_scratchpad_conflict_reaches_the_runtime_boundary_with_its_stored_record() {
+    let directory = TestDirectory::new("scratchpad-runtime");
+    let workspace: Arc<dyn DesktopWorkspace> = Arc::new(bound_workspace(&directory));
+    let runtime = DesktopRuntime::new(DesktopRuntimeConfig {
+        version: "test".to_owned(),
+        factory: Arc::new(FakeFactory::default()),
+        event_sink: None,
+        initial_workspace: Some(workspace),
+        recent_projects: Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+        initialization: Arc::new(super::desktop_runtime::NoDesktopInitializationService),
+        update_service: super::update_runtime::UnavailableUpdateService::new("test"),
+        confirmation_ttl: Duration::from_secs(60),
+    });
+    let payload = json!({
+        "text": "typed beside the terminal",
+        "snippets": [],
+        "revision": 0,
+        "updatedAt": 0,
+    });
+    assert_eq!(
+        runtime
+            .invoke(request(
+                "SetScratchpadV1",
+                vec![json!(7), json!(0), payload.clone()],
+            ))
+            .unwrap(),
+        json!({ "generation": 7, "revision": 1 })
+    );
+    let conflict = runtime
+        .invoke(request(
+            "SetScratchpadV1",
+            vec![json!(7), json!(0), payload],
+        ))
+        .unwrap_err();
+    assert_eq!(conflict.to_string(), "scratchpad revision conflict");
+    let bridged = conflict.to_bridge_value();
+    assert_eq!(bridged["stored"]["revision"], 1);
+    assert_eq!(bridged["stored"]["text"], "typed beside the terminal");
+    assert_eq!(
+        runtime
+            .invoke(request("GetScratchpadV1", vec![json!(7)]))
+            .unwrap()["scratchpad"]["text"],
+        "typed beside the terminal"
+    );
 }

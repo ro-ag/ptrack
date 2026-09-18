@@ -77,7 +77,6 @@ fn record_kind(collection: Collection) -> Option<RecordKind> {
         Collection::Capabilities => Some(RecordKind::Capability),
         Collection::CapabilityAudits => Some(RecordKind::CapabilityAudit),
         Collection::MemoryWritebacks => Some(RecordKind::MemoryWriteback),
-        Collection::ProjectScratchpad => Some(RecordKind::Scratchpad),
         Collection::GlobalProjects => Some(RecordKind::ProjectRef),
         Collection::GlobalConfig | Collection::GlobalBackups => None,
     }
@@ -89,8 +88,7 @@ fn validate_identity(
     record: &NativeRecord,
 ) -> Result<(), String> {
     match (key, record) {
-        (OwnedRecordKey::Singleton, NativeRecord::Meta(_))
-        | (OwnedRecordKey::Singleton, NativeRecord::Scratchpad(_)) => Ok(()),
+        (OwnedRecordKey::Singleton, NativeRecord::Meta(_)) => Ok(()),
         (OwnedRecordKey::Id(key), NativeRecord::Plan(value)) if *key == value.id => Ok(()),
         (OwnedRecordKey::Id(key), NativeRecord::Task(value)) if *key == value.id => Ok(()),
         (OwnedRecordKey::Id(key), NativeRecord::Note(value)) if *key == value.id => Ok(()),

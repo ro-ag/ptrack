@@ -125,6 +125,7 @@ fn legacy_zero_format_meta_is_preserved_but_newer_formats_fail() {
         active_plans: Vec::new(),
         actors: Vec::new(),
         stack: None,
+        scratchpad: None,
     };
     meta.validate().expect("legacy v0 is preserved");
     meta.format_version = 6;
@@ -324,6 +325,7 @@ fn the_rolling_summary_is_bounded_on_write_only() {
         active_plans: Vec::new(),
         actors: Vec::new(),
         stack: None,
+        scratchpad: None,
     };
     assert!(meta.validate().is_ok());
 }
@@ -571,5 +573,37 @@ fn scratchpad_caps_its_note_snippet_count_and_snippet_size() {
     assert_eq!(
         zero_id.validate().expect_err("zero id").field(),
         "scratchpad.snippets[i].id"
+    );
+
+    // The scratchpad rides on `Meta`, so the caps must also hold on the
+    // record that actually persists: nothing can smuggle an oversized note
+    // past them by validating meta instead.
+    let mut meta = super::test_support::meta(1);
+    meta.scratchpad = Some(Scratchpad::default());
+    assert!(meta.validate().is_ok());
+    meta.scratchpad = Some(Scratchpad {
+        text: "x".repeat(SCRATCHPAD_TEXT_MAX_BYTES + 1),
+        ..Scratchpad::default()
+    });
+    assert_eq!(
+        meta.validate().expect_err("oversized note on meta").field(),
+        "scratchpad.text"
+    );
+
+    // Size is reported before the blank rule, so an oversized whitespace
+    // snippet names the cap that actually bounds the record.
+    let oversized_blank = Scratchpad {
+        snippets: vec![scratchpad_snippet(
+            1,
+            &" ".repeat(SCRATCHPAD_SNIPPET_MAX_BYTES + 1),
+        )],
+        ..Scratchpad::default()
+    };
+    assert_eq!(
+        oversized_blank
+            .validate()
+            .expect_err("oversized blank snippet")
+            .reason(),
+        "must be at most 4096 UTF-8 bytes"
     );
 }

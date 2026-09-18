@@ -289,6 +289,15 @@ pub struct Meta {
     /// The most recent deterministic stack scan. `None` for records written
     /// before payload schema 5 and for projects never scanned.
     pub stack: Option<StackProfile>,
+    /// The project scratchpad. `None` for records written before payload
+    /// schema 8 and for projects whose scratchpad was never written.
+    ///
+    /// It rides on `Meta` rather than a collection of its own because the
+    /// database validator demands an exact table catalog and no in-place
+    /// upgrade path exists, so a new collection would refuse to open every
+    /// database an earlier build wrote. Persistence stays additive at the
+    /// payload-schema level, exactly as the stack profile was.
+    pub scratchpad: Option<Scratchpad>,
 }
 
 impl Meta {
@@ -748,7 +757,6 @@ persistent_enum!(RecordKind {
     ProjectRef = 11 => "project_ref",
     GlobalConfig = 12 => "global_config",
     GlobalBackup = 13 => "global_backup",
-    Scratchpad = 14 => "scratchpad",
 });
 
 /// One typed persistent ptrack value.
@@ -766,7 +774,6 @@ pub enum NativeRecord {
     CapabilityAudit(CapabilityAudit),
     MemoryWriteback(MemoryWritebackRecord),
     ProjectRef(ProjectRef),
-    Scratchpad(Scratchpad),
 }
 
 impl NativeRecord {
@@ -785,7 +792,6 @@ impl NativeRecord {
             Self::CapabilityAudit(_) => RecordKind::CapabilityAudit,
             Self::MemoryWriteback(_) => RecordKind::MemoryWriteback,
             Self::ProjectRef(_) => RecordKind::ProjectRef,
-            Self::Scratchpad(_) => RecordKind::Scratchpad,
         }
     }
 }

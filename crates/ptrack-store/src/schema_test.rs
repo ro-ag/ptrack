@@ -1,14 +1,13 @@
 use super::{
     Collection, LEGACY_CODEC_GO_GOB, LEGACY_CODEC_RAW, MIN_NATIVE_PAYLOAD_SCHEMA, NATIVE_CODEC,
-    NATIVE_PAYLOAD_SCHEMA, OwnedRecordKey, RecordKey, SCRATCHPAD_PAYLOAD_SCHEMA, StoreError,
-    StoreKind,
+    NATIVE_PAYLOAD_SCHEMA, OwnedRecordKey, RecordKey, StoreError, StoreKind,
 };
 use crate::schema::{ALL_COLLECTIONS, collections_for, decode_key};
 
 #[test]
 fn schema_contains_the_exact_legacy_collection_set() {
-    assert_eq!(ALL_COLLECTIONS.len(), 14);
-    assert_eq!(collections_for(StoreKind::Project).count(), 11);
+    assert_eq!(ALL_COLLECTIONS.len(), 13);
+    assert_eq!(collections_for(StoreKind::Project).count(), 10);
     assert_eq!(collections_for(StoreKind::Global).count(), 3);
     assert_eq!(
         ALL_COLLECTIONS
@@ -37,18 +36,8 @@ fn schema_contains_the_exact_legacy_collection_set() {
                 assert_eq!(collection.accepted_codec(), LEGACY_CODEC_RAW);
                 assert_eq!(collection.accepted_payload_schemas(), 0..=0);
             }
-            // The scratchpad kind did not exist before its own schema, so no
-            // older payload can be a scratchpad and the range starts there.
-            Collection::ProjectScratchpad => {
-                assert_eq!(collection.accepted_codec(), NATIVE_CODEC);
-                assert_eq!(
-                    collection.accepted_payload_schemas(),
-                    SCRATCHPAD_PAYLOAD_SCHEMA..=NATIVE_PAYLOAD_SCHEMA
-                );
-            }
-            // Every other native collection accepts the whole schema range this
-            // build decodes, so a database written before the last bump still
-            // opens.
+            // Every native collection accepts the whole schema range this build
+            // decodes, so a database written before the last bump still opens.
             _ => {
                 assert_eq!(collection.accepted_codec(), NATIVE_CODEC);
                 assert_eq!(

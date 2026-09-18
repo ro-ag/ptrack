@@ -384,6 +384,11 @@ impl Validate for Meta {
                 "must hold bounded single-line names",
             ));
         }
+        // The scratchpad rides on this record, so its caps are enforced here
+        // too: nothing can persist an oversized note by writing meta instead.
+        if let Some(scratchpad) = &self.scratchpad {
+            scratchpad.validate()?;
+        }
         Ok(())
     }
 }
@@ -404,18 +409,20 @@ impl Validate for Scratchpad {
         }
         let mut seen = BTreeSet::new();
         for snippet in &self.snippets {
+            // Size first: an oversized blank snippet is refused for the
+            // reason that actually bounds the record, not for its whitespace.
+            if snippet.text.len() > SCRATCHPAD_SNIPPET_MAX_BYTES {
+                return Err(ValidationError::new(
+                    "scratchpad.snippets[i].text",
+                    "must be at most 4096 UTF-8 bytes",
+                ));
+            }
             // A snippet exists only because the user copied something, so
             // whitespace-only text is never a snippet anyone asked for.
             if snippet.text.trim().is_empty() {
                 return Err(ValidationError::new(
                     "scratchpad.snippets[i].text",
                     "must be nonempty after trimming",
-                ));
-            }
-            if snippet.text.len() > SCRATCHPAD_SNIPPET_MAX_BYTES {
-                return Err(ValidationError::new(
-                    "scratchpad.snippets[i].text",
-                    "must be at most 4096 UTF-8 bytes",
                 ));
             }
             require_id(snippet.id, "scratchpad.snippets[i].id")?;
@@ -881,7 +888,6 @@ impl Validate for NativeRecord {
             Self::CapabilityAudit(value) => value.validate(),
             Self::MemoryWriteback(value) => value.validate(),
             Self::ProjectRef(value) => value.validate(),
-            Self::Scratchpad(value) => value.validate(),
         }
     }
 }

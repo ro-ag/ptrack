@@ -128,6 +128,7 @@ fn snapshot(status: TaskStatus) -> ProjectSnapshot {
             active_plans: Vec::new(),
             actors: Vec::new(),
             stack: None,
+            scratchpad: None,
         },
         vec![],
         vec![Plan {

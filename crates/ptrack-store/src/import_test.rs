@@ -124,6 +124,7 @@ fn record(collection: Collection, key: OwnedRecordKey, payload: &[u8]) -> Import
             active_plans: Vec::new(),
             actors: Vec::new(),
             stack: None,
+            scratchpad: None,
         }))
         .unwrap(),
         Collection::Tasks => {

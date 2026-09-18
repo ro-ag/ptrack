@@ -158,6 +158,10 @@ pub enum StoreError {
     /// refused write carries the stored record so the caller can reload and
     /// merge without a second round trip.
     ScratchpadConflict { stored: Box<Scratchpad> },
+    /// A scratchpad write exceeded a content limit. This is caller input, not
+    /// a damaged database, so it never borrows [`StoreError::InvalidManifest`]
+    /// and a presentation layer can tell the two apart.
+    InvalidScratchpad(String),
     /// Approval was attempted against a digest other than the stored preview.
     CapabilityScopeChanged,
     /// Expiry was requested for a capability which is not currently enabled.
@@ -337,6 +341,7 @@ impl fmt::Display for StoreError {
                 "capability revision changed: expected {expected}, found {actual}"
             ),
             Self::ScratchpadConflict { .. } => formatter.write_str("scratchpad revision conflict"),
+            Self::InvalidScratchpad(detail) => write!(formatter, "invalid scratchpad: {detail}"),
             Self::CapabilityScopeChanged => {
                 formatter.write_str("effective scope changed; preview again before enabling")
             }

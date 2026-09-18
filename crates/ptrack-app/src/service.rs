@@ -178,11 +178,14 @@ impl ScratchpadV1 {
 ///
 /// The nanosecond form is a 128-bit value, so the millisecond result is
 /// clamped rather than wrapped: an absurd stored instant reads as the extreme
-/// one instead of silently changing sign.
+/// one instead of silently changing sign. The split floors, matching
+/// [`from_unix_milliseconds`], so the pair is an exact inverse on both sides
+/// of the epoch instead of only after it.
 fn unix_milliseconds(value: Timestamp) -> i64 {
     value.unix_nanoseconds().map_or(0, |nanoseconds| {
-        let milliseconds =
-            (nanoseconds / 1_000_000).clamp(i128::from(i64::MIN), i128::from(i64::MAX));
+        let milliseconds = nanoseconds
+            .div_euclid(1_000_000)
+            .clamp(i128::from(i64::MIN), i128::from(i64::MAX));
         i64::try_from(milliseconds).unwrap_or_default()
     })
 }

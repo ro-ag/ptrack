@@ -43,6 +43,7 @@ impl Store {
                 active_plans: Vec::new(),
                 actors: Vec::new(),
                 stack: None,
+                scratchpad: None,
             },
             plans: BTreeMap::new(),
             tasks: BTreeMap::new(),

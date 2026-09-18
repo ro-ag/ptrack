@@ -54,6 +54,7 @@ fn empty_go_nil_slices_encode_as_null_while_derived_rows_can_remain_arrays() {
             active_plans: Vec::new(),
             actors: Vec::new(),
             stack: None,
+            scratchpad: None,
         },
         Vec::new(),
         Vec::new(),
@@ -120,6 +121,7 @@ fn a_scanned_project_encodes_its_stack_as_structured_rows() {
         active_plans: Vec::new(),
         actors: Vec::new(),
         stack: None,
+        scratchpad: None,
     };
     meta.stack = Some(ptrack_core::StackProfile {
         projects: vec![ptrack_core::StackProject {
