@@ -40,6 +40,7 @@ fn fixture() -> (ProjectSnapshot, ProjectRef, ActiveGenerationProject) {
             active_plans: vec![],
             actors: vec![],
             stack: None,
+            scratchpad: None,
         },
         vec![],
         vec![],

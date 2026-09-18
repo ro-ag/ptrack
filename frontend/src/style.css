@@ -4489,7 +4489,7 @@ button.modal-backdrop:active {
   box-shadow: var(--dock-shadow);
 }
 
-.terminal-dock[data-state="closed"][data-layout-interactive="false"] {
+.terminal-dock[data-state="closed"][data-layout-interactive="false"]:not([data-scratchpad-open="true"]) {
   height: 84px;
   box-shadow: none;
 }
@@ -5097,10 +5097,23 @@ button.modal-backdrop:active {
   line-height: 1.4;
 }
 
+/* The dock body is a row: panes, then the scratchpad splitter and panel. The
+   gutter keeps body-level overlays clear of an open panel. */
 .terminal-body {
+  --terminal-scratchpad-gutter: 0px;
   position: relative;
   min-height: 0;
+  display: flex;
+  flex-direction: row;
   flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.terminal-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -5108,8 +5121,8 @@ button.modal-backdrop:active {
   position: absolute;
   z-index: 4;
   top: var(--space-100);
-  right: var(--space-200);
-  width: min(430px, calc(100% - 32px));
+  right: calc(var(--space-200) + var(--terminal-scratchpad-gutter, 0px));
+  width: min(430px, calc(100% - 32px - var(--terminal-scratchpad-gutter, 0px)));
   display: flex;
   align-items: center;
   gap: var(--space-050);
@@ -5334,6 +5347,246 @@ button.modal-backdrop:active {
   padding: var(--space-100) var(--space-150);
   box-shadow: var(--shadow-1);
   font-size: 0.75rem;
+}
+
+/* Scratchpad: a dock-native column beside the panes. It carries the dock's own
+   borders, surfaces, and toolbar type scale so it reads as part of the dock. */
+.terminal-scratchpad-splitter {
+  flex: 0 0 auto;
+  z-index: 2;
+  width: 5px;
+  min-width: 5px;
+  min-height: 0;
+  background: var(--line);
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.terminal-scratchpad-splitter[hidden] {
+  display: none;
+}
+
+.terminal-scratchpad-splitter:hover,
+.terminal-scratchpad-splitter:focus-visible {
+  background: rgba(var(--accent-rgb), 0.72);
+}
+
+.terminal-scratchpad {
+  flex: 0 0 auto;
+  width: 320px;
+  min-width: 240px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-100);
+  border-left: 1px solid var(--line);
+  background: var(--surface-soft);
+  padding: var(--space-100) var(--space-150) var(--space-150);
+  overflow: hidden;
+}
+
+.terminal-scratchpad[hidden] {
+  display: none;
+}
+
+.terminal-scratchpad-header,
+.terminal-scratchpad-strip-header {
+  flex: 0 0 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-100);
+}
+
+.terminal-scratchpad-header .eyebrow,
+.terminal-scratchpad-strip-header .eyebrow {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.terminal-scratchpad-state {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.6875rem;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-scratchpad-close {
+  flex: 0 0 auto;
+  width: 22px;
+  min-height: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--muted);
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+.terminal-scratchpad-close:hover,
+.terminal-scratchpad-close:focus-visible {
+  color: var(--text);
+  background: var(--fill-strong);
+  box-shadow: none;
+}
+
+.terminal-scratchpad-close svg {
+  width: 11px;
+  height: 11px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.35;
+}
+
+.terminal-scratchpad-text {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 96px;
+  resize: none;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--surface);
+  padding: var(--space-100);
+  box-shadow: none;
+  font-family:
+    "SFMono-Regular", "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono",
+    "DejaVu Sans Mono", "p-track Nerd Font", "Apple Color Emoji",
+    "Segoe UI Emoji", monospace;
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.terminal-scratchpad-text:focus-visible {
+  box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.55);
+}
+
+.terminal-scratchpad-add {
+  flex: 0 0 auto;
+  min-height: 22px;
+  height: 22px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--muted);
+  background: transparent;
+  box-shadow: none;
+  padding: 0 var(--space-100);
+  font-size: 0.6875rem;
+}
+
+.terminal-scratchpad-add:hover:not(:disabled),
+.terminal-scratchpad-add:focus-visible {
+  color: var(--text);
+  background: var(--fill-strong);
+  box-shadow: none;
+}
+
+.terminal-scratchpad-add:disabled {
+  cursor: default;
+  color: var(--faint);
+  opacity: 0.5;
+}
+
+.terminal-scratchpad-snippets {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.terminal-scratchpad-snippets:empty {
+  display: none;
+}
+
+.terminal-scratchpad-snippet {
+  min-width: 0;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-050);
+  border-bottom: 1px solid var(--line-subtle);
+  padding: 0 0 0 var(--space-050);
+}
+
+.terminal-scratchpad-snippet:last-child {
+  border-bottom: 0;
+}
+
+.terminal-scratchpad-snippet[data-pinned="true"] {
+  border-left: 2px solid rgba(var(--accent-rgb), 0.72);
+  padding-left: calc(var(--space-050) - 2px);
+}
+
+.terminal-scratchpad-preview {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-soft);
+  font-family:
+    "SFMono-Regular", "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono",
+    "DejaVu Sans Mono", monospace;
+  font-size: 0.6875rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-scratchpad-action {
+  flex: 0 0 auto;
+  min-height: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--muted);
+  background: transparent;
+  box-shadow: none;
+  padding: 0 var(--space-050);
+  font-size: 0.6875rem;
+}
+
+.terminal-scratchpad-action:hover:not(:disabled),
+.terminal-scratchpad-action:focus-visible {
+  color: var(--text);
+  background: var(--fill-strong);
+  box-shadow: none;
+}
+
+.terminal-scratchpad-action:disabled {
+  cursor: default;
+  color: var(--faint);
+  opacity: 0.5;
+}
+
+.terminal-scratchpad-action svg {
+  width: 11px;
+  height: 11px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.35;
+}
+
+.terminal-scratchpad-empty {
+  flex: 0 0 auto;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.6875rem;
+  line-height: 1.4;
+}
+
+.terminal-scratchpad-empty[hidden] {
+  display: none;
 }
 
 .terminal-paste-dialog {

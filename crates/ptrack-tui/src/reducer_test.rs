@@ -25,6 +25,7 @@ fn model() -> Model {
                 active_plans: Vec::new(),
                 actors: Vec::new(),
                 stack: None,
+                scratchpad: None,
             },
             vec![],
             vec![],

@@ -464,6 +464,45 @@ describe("production asset layout", () => {
     expect(index).toMatch(
       /id="terminal-diagnostics"[\s\S]*aria-live="polite"[\s\S]*Content-free state only\. Restart creates a fresh session; a stream lost\s+on its own is claimed back for the same session\./,
     );
+    // Scratchpad: a toolbar toggle beside diagnostics, and a panel that ships
+    // closed so the dock still opens on the terminal itself.
+    expect(index).toMatch(
+      /id="terminal-scratchpad-toggle"[^>]*class="terminal-action-button"[\s\S]*aria-pressed="false"[\s\S]*aria-controls="terminal-scratchpad"/,
+    );
+    expect(index.indexOf('id="terminal-scratchpad-toggle"')).toBeLessThan(
+      index.indexOf('id="terminal-diagnostics-toggle"'),
+    );
+    expect(index).toMatch(
+      /<aside[^>]*id="terminal-scratchpad"[^>]*class="terminal-scratchpad"[^>]*aria-label="Scratchpad"[^>]*hidden/,
+    );
+    expect(index).toMatch(
+      /id="terminal-scratchpad-splitter"[^>]*role="separator"[^>]*tabindex="0"[\s\S]*aria-valuemin="240"[\s\S]*hidden/,
+    );
+    expect(index).toMatch(
+      /<textarea[^>]*id="terminal-scratchpad-text"[^>]*maxlength="65536"[^>]*spellcheck="false"/,
+    );
+    expect(index).toMatch(
+      /<div[^>]*id="terminal-stage"[^>]*class="terminal-stage"[\s\S]*id="terminal-host"[\s\S]*id="terminal-message"[\s\S]*<\/div>/,
+    );
+    expect(index).toContain('id="terminal-scratchpad-add"');
+    expect(index).toContain('id="terminal-scratchpad-snippets"');
+    expect(index).toContain("Copy from a pane, or add a selection.");
+    // The dock body becomes a row so the panel sits beside the panes.
+    expect(styles).toMatch(/\.terminal-body\{[^}]*display:flex/);
+    expect(styles).toMatch(/\.terminal-body\{[^}]*flex-direction:row/);
+    expect(styles).toMatch(/\.terminal-stage\{[^}]*position:relative/);
+    expect(styles).toContain(".terminal-scratchpad{");
+    // The splitter's width is also `scratchpadSplitterWidth` in scratchpad.ts,
+    // which the dock adds to the gutter it reserves for body-level overlays.
+    expect(styles).toMatch(/\.terminal-scratchpad-splitter\{[^}]*width:5px/);
+    expect(app).toContain("GetScratchpadV1");
+    expect(app).toContain("SetScratchpadV1");
+    expect(app).toContain("Selection is larger than 4 KB; not added to the scratchpad.");
+    expect(app).toContain("All 50 snippets are pinned; unpin one to add more.");
+    expect(app).toContain("Scratchpad changed elsewhere and was reloaded.");
+    expect(app).toContain("Scratchpad is unavailable; the copy was not added.");
+    expect(app).toContain("ptrack-terminal-scratchpad-open");
+    expect(app).toContain("ptrack-terminal-scratchpad-width");
     // Pop out: a real labelled control, absent until a single pane can move.
     expect(index).toMatch(
       /id="terminal-pop-out"[^>]*class="terminal-action-button"[^>]*type="button"[^>]*aria-label="Pop out terminal into its own window"[^>]*title="Pop out terminal"[^>]*hidden/,
@@ -553,6 +592,11 @@ describe("production asset layout", () => {
     expect(styles).toContain("touch-action:none");
     expect(styles).toMatch(
       /data-state=(?:"closed"|closed)\]\[data-layout-interactive=(?:"false"|false)\]/,
+    );
+    // The dock's 84px collapse steps aside while the scratchpad is open, so
+    // the panel stays usable with no live terminal session.
+    expect(styles).toMatch(
+      /data-state=(?:"closed"|closed)\]\[data-layout-interactive=(?:"false"|false)\]:not\(\[data-scratchpad-open=(?:"true"|true)\]\)/,
     );
     expect(styles).toMatch(/data-board-hidden=(?:"true"|true)\] \.terminal-dock\{[^}]*height:100%/);
     expect(styles).toMatch(/data-terminal-hidden=(?:"true"|true)\] \.terminal-dock\{display:none/);

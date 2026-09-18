@@ -1,8 +1,9 @@
 use crate::{
     CapabilityAudit, CapabilityKind, Digest32, LEGACY_ACTOR, MAX_HOLD_REASON_BYTES,
     MAX_IDENTITY_NAME_BYTES, MAX_SUMMARY_BYTES, MemoryKind, Meta, NativeRecord, Note, NoteTarget,
-    PlanStatus, TaskStatus, Timestamp, Validate, check_hold_reason, check_identity_name,
-    check_summary, is_identity_id,
+    PlanStatus, SCRATCHPAD_MAX_SNIPPETS, SCRATCHPAD_SNIPPET_MAX_BYTES, SCRATCHPAD_TEXT_MAX_BYTES,
+    Scratchpad, ScratchpadSnippet, TaskStatus, Timestamp, Validate, check_hold_reason,
+    check_identity_name, check_summary, is_identity_id,
 };
 
 use super::codec_test::valid_capability;
@@ -124,6 +125,7 @@ fn legacy_zero_format_meta_is_preserved_but_newer_formats_fail() {
         active_plans: Vec::new(),
         actors: Vec::new(),
         stack: None,
+        scratchpad: None,
     };
     meta.validate().expect("legacy v0 is preserved");
     meta.format_version = 6;
@@ -323,6 +325,7 @@ fn the_rolling_summary_is_bounded_on_write_only() {
         active_plans: Vec::new(),
         actors: Vec::new(),
         stack: None,
+        scratchpad: None,
     };
     assert!(meta.validate().is_ok());
 }
@@ -485,5 +488,122 @@ fn deps_must_be_nonzero_unique_and_never_self_referential() {
     assert_eq!(
         task.validate().expect_err("duplicate dep").reason(),
         "must not repeat an id"
+    );
+}
+
+fn scratchpad_snippet(id: u64, text: &str) -> ScratchpadSnippet {
+    ScratchpadSnippet {
+        id,
+        text: text.to_owned(),
+        pinned: false,
+        created_at: Timestamp::Zero,
+    }
+}
+
+#[test]
+fn scratchpad_caps_its_note_snippet_count_and_snippet_size() {
+    let empty = Scratchpad::default();
+    assert!(empty.validate().is_ok());
+    assert_eq!(empty.revision, 0);
+    assert_eq!(empty.updated_at, Timestamp::Zero);
+    assert!(empty.text.is_empty());
+    assert!(empty.snippets.is_empty());
+
+    let mut scratchpad = Scratchpad {
+        text: "x".repeat(SCRATCHPAD_TEXT_MAX_BYTES),
+        ..Scratchpad::default()
+    };
+    assert!(scratchpad.validate().is_ok());
+    scratchpad.text.push('x');
+    let error = scratchpad.validate().expect_err("oversized note");
+    assert_eq!(error.field(), "scratchpad.text");
+
+    let mut scratchpad = Scratchpad {
+        snippets: (1..=u64::try_from(SCRATCHPAD_MAX_SNIPPETS).unwrap())
+            .map(|id| scratchpad_snippet(id, "keep"))
+            .collect(),
+        ..Scratchpad::default()
+    };
+    assert!(scratchpad.validate().is_ok());
+    scratchpad
+        .snippets
+        .push(scratchpad_snippet(51, "one too many"));
+    assert_eq!(
+        scratchpad
+            .validate()
+            .expect_err("too many snippets")
+            .field(),
+        "scratchpad.snippets"
+    );
+
+    let oversized = Scratchpad {
+        snippets: vec![scratchpad_snippet(
+            1,
+            &"y".repeat(SCRATCHPAD_SNIPPET_MAX_BYTES + 1),
+        )],
+        ..Scratchpad::default()
+    };
+    assert_eq!(
+        oversized.validate().expect_err("oversized snippet").field(),
+        "scratchpad.snippets[i].text"
+    );
+
+    let blank = Scratchpad {
+        snippets: vec![scratchpad_snippet(1, "  ")],
+        ..Scratchpad::default()
+    };
+    assert_eq!(
+        blank.validate().expect_err("blank snippet").field(),
+        "scratchpad.snippets[i].text"
+    );
+
+    let duplicate = Scratchpad {
+        snippets: vec![scratchpad_snippet(4, "a"), scratchpad_snippet(4, "b")],
+        ..Scratchpad::default()
+    };
+    assert_eq!(
+        duplicate.validate().expect_err("duplicate id").field(),
+        "scratchpad.snippets[i].id"
+    );
+
+    let zero_id = Scratchpad {
+        snippets: vec![scratchpad_snippet(0, "a")],
+        ..Scratchpad::default()
+    };
+    assert_eq!(
+        zero_id.validate().expect_err("zero id").field(),
+        "scratchpad.snippets[i].id"
+    );
+
+    // The scratchpad rides on `Meta`, so the caps must also hold on the
+    // record that actually persists: nothing can smuggle an oversized note
+    // past them by validating meta instead.
+    let mut meta = super::test_support::meta(1);
+    meta.scratchpad = Some(Scratchpad::default());
+    assert!(meta.validate().is_ok());
+    meta.scratchpad = Some(Scratchpad {
+        text: "x".repeat(SCRATCHPAD_TEXT_MAX_BYTES + 1),
+        ..Scratchpad::default()
+    });
+    assert_eq!(
+        meta.validate().expect_err("oversized note on meta").field(),
+        "scratchpad.text"
+    );
+
+    // Size is reported before the blank rule, so an oversized whitespace
+    // snippet names the cap that actually bounds the record.
+    let oversized_blank = Scratchpad {
+        snippets: vec![scratchpad_snippet(
+            1,
+            &" ".repeat(SCRATCHPAD_SNIPPET_MAX_BYTES + 1),
+        )],
+        ..Scratchpad::default()
+    };
+    assert_eq!(
+        oversized_blank
+            .validate()
+            .expect_err("oversized blank snippet")
+            .reason(),
+        "must be at most 4096 UTF-8 bytes"
     );
 }

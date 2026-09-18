@@ -60,12 +60,24 @@ impl DesktopEventSink for TauriEventSink {
     }
 }
 
+/// The bare-string form the frontend reads for a failure that carries no
+/// structured state of its own.
+///
+/// An [`AppError`] converts itself instead (`serde_json::Value::from`): almost
+/// every one of those is also a bare message, but one that carries state the
+/// caller would otherwise have to fetch again — a scratchpad revision conflict
+/// carrying the stored record — becomes an object whose `message` is the same
+/// text, so a single error path serves both shapes.
+fn bridge_message(message: &str) -> serde_json::Value {
+    serde_json::Value::String(message.to_owned())
+}
+
 #[tauri::command]
 async fn gui_invoke(
     runtime: tauri::State<'_, Arc<DesktopRuntime>>,
     app: AppHandle,
     request: DesktopCommandRequest,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, serde_json::Value> {
     let runtime = Arc::clone(runtime.inner());
     let notifications = Arc::clone(app.state::<Arc<NativeNotificationController>>().inner());
     let shell_command = request.method == "InstallShellCommand";
@@ -83,7 +95,7 @@ async fn gui_invoke(
             Some(
                 runtime
                     .begin_native_action()
-                    .map_err(|error| error.to_string())?,
+                    .map_err(serde_json::Value::from)?,
             )
         } else {
             None
@@ -91,7 +103,7 @@ async fn gui_invoke(
         let request_permission = request.method == "SetPreferences";
         let result = if appearance {
             notifications.with_configuration(|| {
-                let mut result = runtime.invoke(request).map_err(|error| error.to_string())?;
+                let mut result = runtime.invoke(request).map_err(serde_json::Value::from)?;
                 apply_theme(&app, &result);
                 if notifications.configure(&app, &result, request_permission) {
                     result = runtime
@@ -99,15 +111,15 @@ async fn gui_invoke(
                             method: "SetPreferences".to_owned(),
                             arguments: vec![disabled_notification_patch()],
                         })
-                        .map_err(|error| error.to_string())?;
+                        .map_err(serde_json::Value::from)?;
                     let _ = notifications.configure(&app, &result, false);
                     apply_theme(&app, &result);
                 }
                 notifications.refresh(&app);
-                Ok::<_, String>(result)
+                Ok::<_, serde_json::Value>(result)
             })?
         } else {
-            runtime.invoke(request).map_err(|error| error.to_string())?
+            runtime.invoke(request).map_err(serde_json::Value::from)?
         };
         // Switching or closing a project takes its terminal windows with it:
         // the sessions they showed died with the workspace. The sweep is a
@@ -119,12 +131,12 @@ async fn gui_invoke(
                 // A failed pop-out must never leave a session with no owner:
                 // the assignment is released so the main window keeps it.
                 runtime.close_terminal_window(&label);
-                return Err(error);
+                return Err(bridge_message(&error));
             }
         }
         if shell_command {
             let message = result.as_str().ok_or_else(|| {
-                "shell command installation returned an invalid result".to_owned()
+                bridge_message("shell command installation returned an invalid result")
             })?;
             app.dialog()
                 .message(message)
@@ -136,7 +148,7 @@ async fn gui_invoke(
         }
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(|error| bridge_message(&error.to_string()))?
 }
 
 /// Maps the stored appearance preference onto the native window theme. `None`

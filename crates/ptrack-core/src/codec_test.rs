@@ -1,14 +1,15 @@
 use crate::codec::{
-    ACTOR_PAYLOAD_SCHEMA, HOLD_REASON_PAYLOAD_SCHEMA, STACK_LINES_PAYLOAD_SCHEMA,
-    STACK_PAYLOAD_SCHEMA,
+    ACTOR_PAYLOAD_SCHEMA, HOLD_REASON_PAYLOAD_SCHEMA, STACK_FRAMED_PAYLOAD_SCHEMA,
+    STACK_LINES_PAYLOAD_SCHEMA, STACK_PAYLOAD_SCHEMA,
 };
 use crate::test_support;
 use crate::{
     Capability, CapabilityAuditPolicy, CapabilityKind, CapabilityLimits, CodecError, Digest32,
     GitScope, HttpScope, IssueStatus, LanguageId, MAX_LIST_ITEMS, MAX_PAYLOAD_BYTES,
     MIN_NATIVE_PAYLOAD_SCHEMA, MemoryKind, Meta, MilestoneStatus, NATIVE_PAYLOAD_SCHEMA,
-    NativeRecord, Note, NoteTarget, Plan, PlanStatus, ProjectRef, RecordKind, Severity, SshScope,
-    StackProfile, StackProject, StackSummary, Task, TaskStatus, Timestamp, decode_record,
+    NativeRecord, Note, NoteTarget, Plan, PlanStatus, ProjectRef, RecordKind,
+    SCRATCHPAD_PAYLOAD_SCHEMA, Scratchpad, ScratchpadSnippet, Severity, SshScope, StackProfile,
+    StackProject, StackSummary, Task, TaskStatus, Timestamp, decode_record,
     decode_record_at_schema, encode_record, encode_record_at_schema,
 };
 
@@ -92,22 +93,7 @@ fn assert_round_trip(record: &NativeRecord) {
 
 #[test]
 fn golden_meta_bytes_cover_zero_and_fixed_offset_times() {
-    let record = NativeRecord::Meta(Meta {
-        goal: "g".to_owned(),
-        summary: String::new(),
-        active_plan: 9,
-        created_at: Timestamp::Zero,
-        updated_at: Timestamp::Fixed {
-            seconds: 1,
-            nanoseconds: 2,
-            offset_seconds: -3,
-        },
-        format_version: 5,
-        last_write_version: "v1".to_owned(),
-        active_plans: Vec::new(),
-        actors: Vec::new(),
-        stack: None,
-    });
+    let record = NativeRecord::Meta(meta_with_scratchpad(None));
     let expected = [
         0, 0, 0, 1, b'g', // goal
         0, 0, 0, 0, // summary
@@ -120,9 +106,23 @@ fn golden_meta_bytes_cover_zero_and_fixed_offset_times() {
         0, 0, 0, 0, // empty actor directory
         0, // absent stack profile
     ];
-    assert_eq!(encode_record(&record).expect("encode"), expected);
+    // Schema 7 is what every build through 0.39.0 wrote. Its layout is frozen
+    // by the databases that already hold it, so the vector above never moves.
     assert_eq!(
-        decode_record(RecordKind::Meta, &expected).expect("decode"),
+        encode_record_at_schema(&record, STACK_FRAMED_PAYLOAD_SCHEMA).expect("encode at 7"),
+        expected
+    );
+    assert_eq!(
+        decode_record_at_schema(RecordKind::Meta, STACK_FRAMED_PAYLOAD_SCHEMA, &expected)
+            .expect("decode at 7"),
+        record
+    );
+    // Schema 8 appends exactly one byte to it: the absent-scratchpad flag.
+    let mut eight = expected.to_vec();
+    eight.push(0);
+    assert_eq!(encode_record(&record).expect("encode"), eight);
+    assert_eq!(
+        decode_record(RecordKind::Meta, &eight).expect("decode"),
         record
     );
 }
@@ -972,8 +972,9 @@ fn a_schema_six_profile_keeps_the_unframed_layout_its_writer_used() {
     );
 
     // The framed form is strictly longer: it carries the same body behind a
-    // four-byte length.
-    let seven = encode_record_at_schema(&record, NATIVE_PAYLOAD_SCHEMA).expect("encode at 7");
+    // four-byte length. The comparison names schema 7 outright, because the
+    // native schema has since moved past the bump this test pins.
+    let seven = encode_record_at_schema(&record, STACK_FRAMED_PAYLOAD_SCHEMA).expect("encode at 7");
     assert_eq!(seven.len(), six.len() + 4);
 }
 
@@ -992,4 +993,222 @@ fn a_schema_six_registry_summary_still_decodes() {
             .expect("decode at 6"),
         record
     );
+}
+
+#[test]
+fn meta_scratchpad_round_trips_and_is_absent_below_its_own_schema() {
+    let mut meta = meta_with_scratchpad(Some(Scratchpad {
+        text: "## notes\ncheck the fence".to_owned(),
+        snippets: vec![
+            ScratchpadSnippet {
+                id: 2,
+                text: "cargo test -p ptrack-core".to_owned(),
+                pinned: true,
+                created_at: fixed_time(),
+            },
+            ScratchpadSnippet {
+                id: 1,
+                text: "git status".to_owned(),
+                pinned: false,
+                created_at: Timestamp::Zero,
+            },
+        ],
+        revision: 3,
+        updated_at: fixed_time(),
+    }));
+    assert_round_trip(&NativeRecord::Meta(meta.clone()));
+
+    // A scratchpad has no canonical form before schema 8, so encoding one at
+    // an older schema is refused rather than silently dropped.
+    for schema in MIN_NATIVE_PAYLOAD_SCHEMA..SCRATCHPAD_PAYLOAD_SCHEMA {
+        assert_eq!(
+            encode_record_at_schema(&NativeRecord::Meta(meta.clone()), schema),
+            Err(CodecError::NonCanonical),
+            "encode at schema {schema}"
+        );
+    }
+
+    // The same record without a scratchpad still encodes at every older
+    // schema, and decoding any of those payloads yields no scratchpad.
+    meta.scratchpad = None;
+    let record = NativeRecord::Meta(meta);
+    for schema in MIN_NATIVE_PAYLOAD_SCHEMA..SCRATCHPAD_PAYLOAD_SCHEMA {
+        let payload =
+            encode_record_at_schema(&record, schema).expect("encode without a scratchpad");
+        let NativeRecord::Meta(decoded) =
+            decode_record_at_schema(RecordKind::Meta, schema, &payload).expect("decode")
+        else {
+            panic!("expected meta");
+        };
+        assert_eq!(decoded.scratchpad, None, "schema {schema}");
+    }
+    assert_eq!(SCRATCHPAD_PAYLOAD_SCHEMA, NATIVE_PAYLOAD_SCHEMA);
+}
+
+#[test]
+fn scratchpad_golden_bytes_pin_the_framed_meta_field() {
+    let record = NativeRecord::Meta(meta_with_scratchpad(Some(Scratchpad {
+        text: "hi".to_owned(),
+        snippets: vec![ScratchpadSnippet {
+            id: 9,
+            text: "ls".to_owned(),
+            pinned: true,
+            created_at: Timestamp::Zero,
+        }],
+        revision: 1,
+        updated_at: Timestamp::Fixed {
+            seconds: 1,
+            nanoseconds: 2,
+            offset_seconds: -3,
+        },
+    })));
+    let expected = [
+        0, 0, 0, 1, b'g', // goal
+        0, 0, 0, 0, // summary
+        0, 0, 0, 0, 0, 0, 0, 9, // active plan
+        0, // zero created time
+        1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 2, 0xff, 0xff, 0xff, 0xfd, // updated time
+        0, 0, 0, 0, 0, 0, 0, 5, // format version
+        0, 0, 0, 2, b'v', b'1', // last write version
+        0, 0, 0, 0, // empty per-actor active plans
+        0, 0, 0, 0, // empty actor directory
+        0, // absent stack profile
+        1, // scratchpad present
+        0, 0, 0, 55, // framed scratchpad body length
+        0, 0, 0, 2, b'h', b'i', // note text
+        0, 0, 0, 0, 0, 0, 0, 1, // revision
+        1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 2, 0xff, 0xff, 0xff, 0xfd, // updated at
+        0, 0, 0, 1, // one snippet
+        0, 0, 0, 16, // framed snippet body length
+        0, 0, 0, 0, 0, 0, 0, 9, // snippet id
+        0, 0, 0, 2, b'l', b's', // snippet text
+        1,    // pinned
+        0,    // zero created at
+    ];
+    assert_eq!(encode_record(&record).expect("encode"), expected);
+    assert_eq!(
+        decode_record(RecordKind::Meta, &expected).expect("decode"),
+        record
+    );
+}
+
+#[test]
+fn every_other_record_kind_is_byte_identical_at_schemas_seven_and_eight() {
+    let records = [
+        NativeRecord::Plan(test_support::plan(1, "p", PlanStatus::Active, 2, 3)),
+        NativeRecord::Task(test_support::task(1, 2, "t", TaskStatus::Todo, 3)),
+        NativeRecord::Note(Note {
+            id: 1,
+            target: NoteTarget::Task,
+            target_id: 2,
+            kind: MemoryKind::Decision,
+            body: "body".to_owned(),
+            created_at: fixed_time(),
+            actor: None,
+            ulid: None,
+        }),
+        NativeRecord::Capability(valid_capability(CapabilityKind::Http)),
+        NativeRecord::ProjectRef(ProjectRef {
+            name: "ptrack".to_owned(),
+            path: "/tmp/ptrack".to_owned(),
+            last_seen: fixed_time(),
+            stack: Some(stack_summary()),
+        }),
+    ];
+    for record in &records {
+        let seven = encode_record_at_schema(record, STACK_FRAMED_PAYLOAD_SCHEMA)
+            .expect("encode at schema 7");
+        let eight = encode_record(record).expect("encode at schema 8");
+        assert_eq!(seven, eight, "{:?}", record.kind());
+        assert_eq!(
+            decode_record_at_schema(record.kind(), STACK_FRAMED_PAYLOAD_SCHEMA, &seven)
+                .expect("decode at schema 7"),
+            *record
+        );
+    }
+}
+
+#[test]
+fn scratchpad_frames_reject_bytes_a_newer_layout_would_append() {
+    let record = NativeRecord::Meta(meta_with_scratchpad(Some(Scratchpad {
+        text: String::new(),
+        snippets: vec![ScratchpadSnippet {
+            id: 1,
+            text: "x".to_owned(),
+            pinned: false,
+            created_at: Timestamp::Zero,
+        }],
+        revision: 0,
+        updated_at: Timestamp::Zero,
+    })));
+    let encoded = encode_record(&record).expect("encode");
+    // The framed scratchpad body is the last thing in the payload, so growing
+    // its declared length by one and appending a byte gives the body a
+    // trailing byte no field in this layout claims.
+    let frame_start = encoded.len() - SCRATCHPAD_FRAME_TAIL;
+    let mut grown = encoded.clone();
+    let length = u32::from_be_bytes(grown[frame_start..frame_start + 4].try_into().unwrap());
+    grown[frame_start..frame_start + 4].copy_from_slice(&(length + 1).to_be_bytes());
+    grown.push(0);
+    assert_eq!(
+        decode_record(RecordKind::Meta, &grown),
+        Err(CodecError::TrailingBytes(1))
+    );
+    // A truncated frame is a structural error, never a silent short read.
+    assert!(matches!(
+        decode_record(RecordKind::Meta, &encoded[..encoded.len() - 1]),
+        Err(CodecError::Truncated { .. })
+    ));
+}
+
+#[test]
+fn a_scratchpad_snippet_with_invalid_utf8_is_rejected() {
+    let record = NativeRecord::Meta(meta_with_scratchpad(Some(Scratchpad {
+        text: String::new(),
+        snippets: vec![ScratchpadSnippet {
+            id: 1,
+            text: "x".to_owned(),
+            pinned: false,
+            created_at: Timestamp::Zero,
+        }],
+        revision: 0,
+        updated_at: Timestamp::Zero,
+    })));
+    let mut encoded = encode_record(&record).expect("encode");
+    let index = encoded
+        .iter()
+        .rposition(|byte| *byte == b'x')
+        .expect("snippet text byte");
+    encoded[index] = 0xff;
+    assert_eq!(
+        decode_record(RecordKind::Meta, &encoded),
+        Err(CodecError::InvalidUtf8)
+    );
+}
+
+/// The bytes a one-snippet scratchpad occupies after its frame's `u32` length:
+/// an empty note, a revision, a zero time, the snippet count, and one framed
+/// snippet holding `id`, a one-byte text, `pinned`, and a zero time.
+const SCRATCHPAD_FRAME_TAIL: usize = 4 + (4 + 8 + 1 + 4 + (4 + 8 + 4 + 1 + 1 + 1));
+
+/// A minimal `Meta` carrying the given scratchpad, matching the golden pin
+/// above field for field so the two tests describe one record.
+fn meta_with_scratchpad(scratchpad: Option<Scratchpad>) -> Meta {
+    Meta {
+        goal: "g".to_owned(),
+        summary: String::new(),
+        active_plan: 9,
+        created_at: Timestamp::Zero,
+        updated_at: Timestamp::Fixed {
+            seconds: 1,
+            nanoseconds: 2,
+            offset_seconds: -3,
+        },
+        format_version: 5,
+        last_write_version: "v1".to_owned(),
+        active_plans: Vec::new(),
+        actors: Vec::new(),
+        stack: None,
+        scratchpad,
+    }
 }

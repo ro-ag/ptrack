@@ -6,14 +6,15 @@ use crate::{
     Capability, CapabilityAudit, CapabilityAuditPolicy, CapabilityKind, CapabilityLimits, Commit,
     Digest32, GitScope, HttpScope, Issue, IssueStatus, LanguageId, MemoryKind,
     MemoryWritebackRecord, Meta, Milestone, MilestoneStatus, NativeRecord, Note, NoteTarget, Plan,
-    PlanStatus, ProjectRef, RecordKind, Severity, SshScope, StackProfile, StackProject,
-    StackSummary, Task, TaskStatus, Timestamp, Validate, ValidationError,
+    PlanStatus, ProjectRef, RecordKind, SCRATCHPAD_MAX_SNIPPETS, Scratchpad, ScratchpadSnippet,
+    Severity, SshScope, StackProfile, StackProject, StackSummary, Task, TaskStatus, Timestamp,
+    Validate, ValidationError,
 };
 
 /// Stable envelope codec ID for native ptrack positional records.
 pub const NATIVE_CODEC: u16 = 3;
 /// Current schema of native ptrack positional record payloads.
-pub const NATIVE_PAYLOAD_SCHEMA: u32 = 7;
+pub const NATIVE_PAYLOAD_SCHEMA: u32 = 8;
 /// Oldest native payload schema this build still decodes.
 ///
 /// Schema 1 predates the plan and task hold reason, which schema 2 added.
@@ -21,7 +22,9 @@ pub const NATIVE_PAYLOAD_SCHEMA: u32 = 7;
 /// per-actor `Meta` maps. Schema 4 adds plan and task dependency edges.
 /// Schema 5 adds the deterministic stack profile on `Meta` and its summary on
 /// `ProjectRef`. Schema 6 adds that profile's line counts; schema 7 length-
-/// frames the profile and summary so later fields cost no bump.
+/// frames the profile and summary so later fields cost no bump. Schema 8 adds
+/// the project scratchpad as one more length-framed trailing `Meta` field;
+/// every other record kind is byte-identical at schemas 7 and 8.
 /// Payloads at any older schema decode with all of those fields empty and are
 /// re-encoded at [`NATIVE_PAYLOAD_SCHEMA`] on their next write, so stored
 /// records upgrade lazily and no database is rewritten on open.
@@ -523,7 +526,8 @@ fn encode_meta(writer: &mut Writer, value: &Meta, payload_schema: u32) -> Result
     writer.u64(value.format_version)?;
     writer.string(&value.last_write_version)?;
     encode_meta_maps(writer, value, payload_schema)?;
-    encode_stack_profile(writer, value.stack.as_ref(), payload_schema)
+    encode_stack_profile(writer, value.stack.as_ref(), payload_schema)?;
+    encode_meta_scratchpad(writer, value.scratchpad.as_ref(), payload_schema)
 }
 
 fn decode_meta(reader: &mut Reader<'_>, payload_schema: u32) -> Result<Meta, CodecError> {
@@ -538,9 +542,11 @@ fn decode_meta(reader: &mut Reader<'_>, payload_schema: u32) -> Result<Meta, Cod
         active_plans: Vec::new(),
         actors: Vec::new(),
         stack: None,
+        scratchpad: None,
     };
     decode_meta_maps(reader, &mut meta, payload_schema)?;
     meta.stack = decode_stack_profile(reader, payload_schema)?;
+    meta.scratchpad = decode_meta_scratchpad(reader, payload_schema)?;
     Ok(meta)
 }
 
@@ -549,7 +555,7 @@ fn decode_meta(reader: &mut Reader<'_>, payload_schema: u32) -> Result<Meta, Cod
 /// Schema 6 wrote the line counts positionally. Only pre-release builds ever
 /// wrote that layout, but they wrote it to real databases, so it stays
 /// readable here and upgrades to the framed form on the next write.
-const STACK_FRAMED_PAYLOAD_SCHEMA: u32 = 7;
+pub(crate) const STACK_FRAMED_PAYLOAD_SCHEMA: u32 = 7;
 
 /// The payload schema that introduced the stack profile's line counts.
 ///
@@ -647,6 +653,124 @@ fn encode_stack_profile_body(
     }
     writer.bool(profile.incomplete)
 }
+
+/// The payload schema that introduced the project scratchpad on [`Meta`].
+///
+/// The scratchpad is a trailing `Meta` field rather than a collection of its
+/// own: the database validator demands an exact table catalog and the crate
+/// has no in-place upgrade path, so a new collection would refuse to open
+/// every database an earlier build wrote. Persistence therefore stays additive
+/// at the payload-schema level, exactly as the stack profile at schema 5 is.
+///
+/// Like every other field gate here this is an absolute schema number. A
+/// `Meta` decoded at any schema below it carries no scratchpad, and encoding
+/// one at an older schema has no canonical form, so it is refused rather than
+/// silently dropped.
+pub const SCRATCHPAD_PAYLOAD_SCHEMA: u32 = 8;
+
+/// Writes the trailing scratchpad, which exists only from payload schema 8.
+///
+/// The shape mirrors the stack profile: a presence flag, then a length-framed
+/// body. Framing the body from the first byte ever written means the record
+/// is self-delimiting, so a payload a newer build wrote fails closed as a
+/// whole instead of being misread field by field.
+fn encode_meta_scratchpad(
+    writer: &mut Writer,
+    value: Option<&Scratchpad>,
+    payload_schema: u32,
+) -> Result<(), CodecError> {
+    if payload_schema < SCRATCHPAD_PAYLOAD_SCHEMA {
+        return if value.is_some() {
+            Err(CodecError::NonCanonical)
+        } else {
+            Ok(())
+        };
+    }
+    let Some(scratchpad) = value else {
+        return writer.bool(false);
+    };
+    if scratchpad.snippets.len() > SCRATCHPAD_MAX_SNIPPETS {
+        return Err(CodecError::ListTooLarge {
+            actual: scratchpad.snippets.len(),
+            maximum: SCRATCHPAD_MAX_SNIPPETS,
+        });
+    }
+    writer.bool(true)?;
+    let mut body = Writer::default();
+    body.string(&scratchpad.text)?;
+    body.u64(scratchpad.revision)?;
+    body.timestamp(scratchpad.updated_at)?;
+    body.u32(u32::try_from(scratchpad.snippets.len()).map_err(|_| CodecError::LengthOverflow)?)?;
+    for snippet in &scratchpad.snippets {
+        let mut entry = Writer::default();
+        entry.u64(snippet.id)?;
+        entry.string(&snippet.text)?;
+        entry.bool(snippet.pinned)?;
+        entry.timestamp(snippet.created_at)?;
+        frame(&mut body, &entry.bytes)?;
+    }
+    frame(writer, &body.bytes)
+}
+
+/// Reads the trailing scratchpad, absent before payload schema 8.
+///
+/// Each frame must be consumed exactly: a trailing byte inside one belongs to
+/// a layout this build does not know, and a layout change takes the next
+/// schema number rather than riding on the frame.
+fn decode_meta_scratchpad(
+    reader: &mut Reader<'_>,
+    payload_schema: u32,
+) -> Result<Option<Scratchpad>, CodecError> {
+    if payload_schema < SCRATCHPAD_PAYLOAD_SCHEMA || !reader.bool()? {
+        return Ok(None);
+    }
+    let mut body = unframe(reader)?;
+    let text = body.string()?;
+    let revision = body.u64()?;
+    let updated_at = body.timestamp()?;
+    // A framed snippet costs its own four-byte length plus the fourteen bytes
+    // its smallest body needs (id, empty text length, pinned flag, zero
+    // time), so the count cannot claim more entries than the remaining bytes
+    // could hold.
+    let count = body.entry_count(SCRATCHPAD_SNIPPET_MINIMUM_BYTES)?;
+    if count > SCRATCHPAD_MAX_SNIPPETS {
+        return Err(CodecError::ListTooLarge {
+            actual: count,
+            maximum: SCRATCHPAD_MAX_SNIPPETS,
+        });
+    }
+    let mut snippets = Vec::new();
+    snippets
+        .try_reserve_exact(count)
+        .map_err(|_| CodecError::LengthOverflow)?;
+    for _ in 0..count {
+        let mut entry = unframe(&mut body)?;
+        let snippet = ScratchpadSnippet {
+            id: entry.u64()?,
+            text: entry.string()?,
+            pinned: entry.bool()?,
+            created_at: entry.timestamp()?,
+        };
+        if entry.remaining() != 0 {
+            return Err(CodecError::TrailingBytes(entry.remaining()));
+        }
+        snippets.push(snippet);
+    }
+    if body.remaining() != 0 {
+        return Err(CodecError::TrailingBytes(body.remaining()));
+    }
+    Ok(Some(Scratchpad {
+        text,
+        snippets,
+        revision,
+        updated_at,
+    }))
+}
+
+/// The fewest bytes one framed snippet can occupy: the frame's own `u32`
+/// length, an `id`, an empty string's length prefix, a `pinned` flag, and a
+/// zero timestamp tag.
+const SCRATCHPAD_SNIPPET_MINIMUM_BYTES: usize = 4 + 8 + 4 + 1 + 1;
 
 /// Writes a length-framed body: a `u32` byte count, then the bytes.
 fn frame(writer: &mut Writer, body: &[u8]) -> Result<(), CodecError> {

@@ -7,8 +7,8 @@ use ptrack_capability_policy::{ApprovalProof, SanitizedAudit, normalize};
 use ptrack_core::{
     CAPABILITY_MODEL_VERSION, Capability, CapabilityAudit, Commit, Counts, Digest32, Issue,
     IssueStatus, MemoryKind, MemoryWritebackRecord, Meta, Milestone, MilestoneStatus, Note,
-    NoteTarget, Plan, PlanStatus, ProjectSnapshot, Severity, StackProfile, Task, TaskStatus,
-    Timestamp, would_create_cycle,
+    NoteTarget, Plan, PlanStatus, ProjectSnapshot, Scratchpad, Severity, StackProfile, Task,
+    TaskStatus, Timestamp, Validate, would_create_cycle,
 };
 
 use crate::typed::{self, StoredRecord};
@@ -180,6 +180,7 @@ impl ProjectStore {
                     active_plans: Vec::new(),
                     actors: Vec::new(),
                     stack: None,
+                    scratchpad: None,
                 },
             )?;
             Ok(())
@@ -367,6 +368,69 @@ impl ProjectStore {
     pub fn meta(&self) -> StoreResult<Meta> {
         self.active.store().read(|transaction| {
             typed::get(transaction, RecordKey::Singleton)?.ok_or(StoreError::NotFound)
+        })
+    }
+
+    /// Returns the project scratchpad.
+    ///
+    /// It is an additive field on the `Meta` singleton, not a collection of
+    /// its own: the database validator demands an exact table catalog and
+    /// there is no in-place upgrade path, so a new table would refuse to open
+    /// every database an earlier build wrote. A project whose scratchpad was
+    /// never written — including every database from before payload schema 8
+    /// — reads as the empty scratchpad at revision zero, so callers never
+    /// special-case a missing record.
+    pub fn scratchpad(&self) -> StoreResult<Scratchpad> {
+        Ok(self.meta()?.scratchpad.unwrap_or_default())
+    }
+
+    /// Replaces the project scratchpad behind an optimistic revision fence.
+    ///
+    /// `expected_revision` is the revision the caller read. When the stored
+    /// scratchpad has moved on the write is refused with
+    /// [`StoreError::ScratchpadConflict`], which carries the stored record so
+    /// the caller can reload without a second round trip. The accepted write
+    /// stamps `revision` and `updated_at` itself: neither is trusted from the
+    /// caller, so a client clock or a stale revision can never rewrite them.
+    ///
+    /// The surrounding `Meta` is left alone — no `updated_at`, no
+    /// `last_write_version`. A note typed beside the terminal is not project
+    /// activity, and letting it stamp the project record would make every
+    /// keystroke look like a goal or plan change to everything that reads
+    /// those fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns a conflict for a stale revision,
+    /// [`StoreError::InvalidScratchpad`] for a scratchpad past its size caps,
+    /// and any store error from the write.
+    pub fn set_scratchpad(
+        &self,
+        expected_revision: u64,
+        mut value: Scratchpad,
+        now: Timestamp,
+    ) -> StoreResult<Scratchpad> {
+        self.write(|transaction| {
+            let mut meta = required_write::<Meta>(transaction, RecordKey::Singleton)?;
+            let stored_revision = meta.scratchpad.as_ref().map_or(0, |stored| stored.revision);
+            if expected_revision != stored_revision {
+                return Err(StoreError::ScratchpadConflict {
+                    stored: Box::new(meta.scratchpad.unwrap_or_default()),
+                });
+            }
+            value.revision = stored_revision.saturating_add(1);
+            value.updated_at = now;
+            // Checked before the write so a caps violation is refused as the
+            // user-input error it is, instead of surfacing as the encoder's
+            // "this database is structurally wrong" class.
+            value
+                .validate()
+                .map_err(|error| StoreError::InvalidScratchpad(error.to_string()))?;
+            meta.scratchpad = Some(value.clone());
+            // Deliberately no `stamp_meta`: the scratchpad carries its own
+            // revision and timestamp.
+            typed::put(transaction, RecordKey::Singleton, &meta)?;
+            Ok(value)
         })
     }
 

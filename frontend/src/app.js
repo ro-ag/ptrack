@@ -7987,6 +7987,14 @@ function generationTerminalBackend(generation) {
     CloseTerminal(sessionID, force) {
       return api().CloseTerminalV2(generation, sessionID, force);
     },
+    async GetScratchpadV1() {
+      return assertGeneration(await api().GetScratchpadV1(generation));
+    },
+    async SetScratchpadV1(_generation, revision, scratchpad) {
+      return assertGeneration(
+        await api().SetScratchpadV1(generation, revision, scratchpad),
+      );
+    },
   };
 }
 

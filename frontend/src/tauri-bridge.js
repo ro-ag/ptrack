@@ -53,6 +53,7 @@ const COMMANDS = Object.freeze([
   "GetProjectTimelineV1",
   "GetRecentProjects",
   "GetRecentProjectsV1",
+  "GetScratchpadV1",
   "GetStackProfileV1",
   "GetTaskDetailV2",
   "GetTerminalProfiles",
@@ -105,6 +106,7 @@ const COMMANDS = Object.freeze([
   "SetIssueTaskV1",
   "SetLayoutState",
   "SetPreferences",
+  "SetScratchpadV1",
   "SetTerminalWindowTab",
   "StartFirstTaskV1",
   "TestCapabilityV2",
@@ -119,11 +121,23 @@ function installTauriBridge(target = globalThis, dependencies = {}) {
   const invokeCommand = dependencies.invoke || invoke;
   const listenEvent = dependencies.listen || listen;
   const clipboard = dependencies.clipboard || target.navigator?.clipboard;
+  // A structured runtime error may carry a recovery payload beside its message
+  // (SetScratchpadV1 sends the stored record with `scratchpad revision
+  // conflict`). Rebuilding the Error must not drop it, or the caller is forced
+  // into a second round trip to learn what it was already told.
+  const withStored = (error, value) => {
+    if (value && typeof value === "object" && "stored" in value) {
+      error.stored = value.stored;
+    }
+    return error;
+  };
   const normalizeError = (value) => {
     if (value instanceof Error) return value;
     if (typeof value === "string") return new Error(value);
-    if (value && typeof value.message === "string") return new Error(value.message);
-    return new Error(String(value));
+    if (value && typeof value.message === "string") {
+      return withStored(new Error(value.message), value);
+    }
+    return withStored(new Error(String(value)), value);
   };
   const normalized = async (operation) => {
     try {

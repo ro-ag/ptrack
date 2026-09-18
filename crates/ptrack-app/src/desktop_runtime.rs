@@ -42,7 +42,7 @@ use crate::terminal_windows::{TerminalWindowTab, TerminalWindows};
 use crate::{
     ActiveRuntime, AgentRuntimeService, AppError, AppResult, ApplicationPort,
     LaunchedEventAuthority, LinkedAgentRuntimeHooks, Mutation, MutationResult,
-    PlanLifecycleOutcome, PlanLifecycleRequest, ProjectEndpoint, TerminalRuntime,
+    PlanLifecycleOutcome, PlanLifecycleRequest, ProjectEndpoint, ScratchpadV1, TerminalRuntime,
     WorkspaceBindings, complete_plan,
 };
 
@@ -71,7 +71,7 @@ const WORKSPACE_OPERATION_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub const FIRST_RUN_GOAL_MAX_BYTES: usize = 4_096;
 
-const COMMANDS: [&str; 108] = [
+const COMMANDS: [&str; 110] = [
     "AcknowledgeAgentHandoffV2",
     "AddIssueV1",
     "AddPlanV1",
@@ -121,6 +121,7 @@ const COMMANDS: [&str; 108] = [
     "GetProjectTimelineV1",
     "GetRecentProjects",
     "GetRecentProjectsV1",
+    "GetScratchpadV1",
     "GetStackProfileV1",
     "GetTaskDetailV2",
     "GetTerminalProfiles",
@@ -173,6 +174,7 @@ const COMMANDS: [&str; 108] = [
     "SetIssueTaskV1",
     "SetLayoutState",
     "SetPreferences",
+    "SetScratchpadV1",
     "SetTerminalWindowTab",
     "StartFirstTaskV1",
     "TestCapabilityV2",
@@ -4027,6 +4029,28 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
                     Ok(Value::Null)
                 }
             }
+            "GetScratchpadV1" => {
+                self.require_generation(u64_arg(arguments, 0)?)?;
+                let scratchpad = ScratchpadV1::from(&lock(&self.application).scratchpad()?);
+                Ok(json!({
+                    "generation": self.generation,
+                    "scratchpad": value(scratchpad)?,
+                }))
+            }
+            "SetScratchpadV1" => {
+                self.require_generation(u64_arg(arguments, 0)?)?;
+                // The fence is this argument, never the revision inside the
+                // payload: the caller states the revision it read, and the
+                // runtime stamps the next one.
+                let revision = u64_arg(arguments, 1)?;
+                let scratchpad: ScratchpadV1 = typed_arg(arguments, 2)?;
+                let stored =
+                    lock(&self.application).set_scratchpad(revision, scratchpad.into_model())?;
+                Ok(json!({
+                    "generation": self.generation,
+                    "revision": stored.revision,
+                }))
+            }
             "MoveTask" | "MoveTaskV2" | "MoveTaskV3" => {
                 let (generation, offset) = if method == "MoveTask" {
                     (0, 0)
@@ -6715,6 +6739,7 @@ fn sanitize_recent_open_error(error: AppError) -> AppError {
         AppError::NoProject
         | AppError::NotImplemented(_)
         | AppError::Io(_)
+        | AppError::ScratchpadConflict(_)
         | AppError::Message(_) => AppError::Message("recent-project-open-failed".to_owned()),
     }
 }

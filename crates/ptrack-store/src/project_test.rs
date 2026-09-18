@@ -9,7 +9,8 @@ use ptrack_capability_policy::{AuditEvent, confirm_approval, normalize, sanitize
 use ptrack_core::{
     Capability, CapabilityAudit, CapabilityAuditPolicy, CapabilityKind, CapabilityLimits, Digest32,
     GitScope, LanguageId, MIN_NATIVE_PAYLOAD_SCHEMA, MemoryKind, NativeRecord, NoteTarget, Plan,
-    PlanStatus, RecordKind, StackProfile, StackProject, StackSummary, TaskStatus, Timestamp,
+    PlanStatus, RecordKind, SCRATCHPAD_PAYLOAD_SCHEMA, SCRATCHPAD_TEXT_MAX_BYTES, Scratchpad,
+    ScratchpadSnippet, StackProfile, StackProject, StackSummary, TaskStatus, Timestamp,
     decode_record, encode_record_at_schema,
 };
 
@@ -3284,4 +3285,195 @@ fn a_project_database_written_at_the_first_stack_schema_opens_and_gains_line_cou
     let rescanned = reopened.stack_profile().unwrap().expect("profile");
     assert!(rescanned.lines_counted);
     assert_eq!(rescanned.lines, sample_stack_profile().lines);
+}
+
+#[test]
+fn scratchpad_reads_empty_writes_once_and_fences_a_stale_revision() {
+    let temp = Temp::new();
+    let path = temp.path("scratchpad.redb");
+    let store = ProjectStore::create_new_with_clock(
+        &path,
+        binding(&path, StoreKind::Project, "scratchpad"),
+        "test",
+        clock(),
+    )
+    .unwrap();
+
+    // A project store without the record reads as the empty scratchpad.
+    assert_eq!(store.scratchpad().unwrap(), Scratchpad::default());
+
+    let written = store
+        .set_scratchpad(
+            0,
+            Scratchpad {
+                text: "release checklist".to_owned(),
+                snippets: vec![ScratchpadSnippet {
+                    id: 1,
+                    text: "cargo test --workspace".to_owned(),
+                    pinned: true,
+                    created_at: timestamp(1_700_000_100),
+                }],
+                // Both fields are runtime-stamped, so whatever a caller puts
+                // here must be replaced rather than trusted.
+                revision: 99,
+                updated_at: timestamp(1),
+            },
+            timestamp(1_700_000_200),
+        )
+        .unwrap();
+    assert_eq!(written.revision, 1);
+    assert_eq!(written.updated_at, timestamp(1_700_000_200));
+    assert_eq!(store.scratchpad().unwrap(), written);
+
+    // The same expected revision cannot be spent twice; the refusal carries
+    // the stored record so the caller reloads without a second round trip.
+    let error = store
+        .set_scratchpad(0, Scratchpad::default(), timestamp(1_700_000_300))
+        .expect_err("stale revision");
+    let StoreError::ScratchpadConflict { stored } = &error else {
+        panic!("expected a scratchpad conflict, got {error:?}");
+    };
+    assert_eq!(stored.revision, 1);
+    assert_eq!(stored.text, "release checklist");
+    assert_eq!(error.to_string(), "scratchpad revision conflict");
+    assert_eq!(store.scratchpad().unwrap(), written);
+
+    // A record that cannot be validated never reaches the table.
+    let oversized = store
+        .set_scratchpad(
+            1,
+            Scratchpad {
+                text: "x".repeat(SCRATCHPAD_TEXT_MAX_BYTES + 1),
+                ..Scratchpad::default()
+            },
+            timestamp(1_700_000_400),
+        )
+        .expect_err("oversized note");
+    // Caller input, never the "this database is damaged" class.
+    assert!(
+        matches!(oversized, StoreError::InvalidScratchpad(_)),
+        "{oversized:?}"
+    );
+    assert_eq!(
+        oversized.to_string(),
+        "invalid scratchpad: scratchpad.text must be at most 65536 UTF-8 bytes"
+    );
+    assert_eq!(store.scratchpad().unwrap(), written);
+
+    // The accepted write moves the fence forward by exactly one.
+    let second = store
+        .set_scratchpad(
+            1,
+            Scratchpad {
+                text: "second".to_owned(),
+                ..Scratchpad::default()
+            },
+            timestamp(1_700_000_500),
+        )
+        .unwrap();
+    assert_eq!(second.revision, 2);
+    assert_eq!(store.scratchpad().unwrap(), second);
+}
+#[test]
+fn scratchpad_rides_on_meta_without_stamping_it_and_survives_an_older_database() {
+    let temp = Temp::new();
+    let path = temp.path("scratchpad-meta.redb");
+    let store = ProjectStore::create_new_with_clock(
+        &path,
+        binding(&path, StoreKind::Project, "scratchpad-meta"),
+        "test",
+        clock(),
+    )
+    .unwrap();
+
+    // Rewrite the meta singleton in the exact shape a build before payload
+    // schema 8 wrote: a schema-7 envelope with no scratchpad field at all.
+    let before = store.meta().unwrap();
+    assert_eq!(before.scratchpad, None);
+    let legacy_payload = encode_record_at_schema(
+        &NativeRecord::Meta(before.clone()),
+        SCRATCHPAD_PAYLOAD_SCHEMA - 1,
+    )
+    .unwrap();
+    store
+        .write(|transaction| {
+            transaction.put(
+                Collection::ProjectMeta,
+                RecordKey::Singleton,
+                &RecordEnvelope::new(
+                    NATIVE_CODEC,
+                    SCRATCHPAD_PAYLOAD_SCHEMA - 1,
+                    legacy_payload.clone(),
+                ),
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        store
+            .read(|transaction| transaction.get(Collection::ProjectMeta, RecordKey::Singleton))
+            .unwrap()
+            .expect("stored meta")
+            .payload_schema(),
+        SCRATCHPAD_PAYLOAD_SCHEMA - 1
+    );
+
+    // Reopening that database is the real test: the table catalog never
+    // changed, so nothing refuses to open, and the older record simply reads
+    // as the empty scratchpad.
+    let reopened = ProjectStore::open_existing(
+        &path,
+        &binding(&path, StoreKind::Project, "scratchpad-meta"),
+        "test",
+    )
+    .unwrap();
+    assert_eq!(reopened.scratchpad().unwrap(), Scratchpad::default());
+
+    // A scratchpad write is not project activity: `Meta.updated_at` and
+    // `last_write_version` must be exactly what the older record carried.
+    let written = reopened
+        .set_scratchpad(
+            0,
+            Scratchpad {
+                text: "upgraded in place".to_owned(),
+                ..Scratchpad::default()
+            },
+            timestamp(1_700_000_700),
+        )
+        .unwrap();
+    assert_eq!(written.revision, 1);
+    assert_eq!(reopened.scratchpad().unwrap(), written);
+    let after = reopened.meta().unwrap();
+    assert_eq!(after.updated_at, before.updated_at);
+    assert_eq!(after.last_write_version, before.last_write_version);
+    assert_eq!(after.goal, before.goal);
+    // The record upgraded lazily to the native schema on that write.
+    assert_eq!(
+        reopened
+            .read(|transaction| transaction.get(Collection::ProjectMeta, RecordKey::Singleton))
+            .unwrap()
+            .expect("stored meta")
+            .payload_schema(),
+        NATIVE_PAYLOAD_SCHEMA
+    );
+
+    // A goal write still stamps meta, so the exemption is scoped to the
+    // scratchpad rather than disabling stamping altogether.
+    reopened.set_goal("moved on").unwrap();
+    let stamped = reopened.meta().unwrap();
+    assert_ne!(stamped.updated_at, before.updated_at);
+    assert_eq!(stamped.goal, "moved on");
+    assert_eq!(stamped.scratchpad, Some(written));
+}
+
+#[test]
+fn scratchpad_is_not_a_collection_of_its_own() {
+    // The table catalog is frozen: adding one would make every database an
+    // earlier build wrote refuse to open, because the validator demands an
+    // exact match and no in-place upgrade path exists.
+    assert_eq!(Collection::from_legacy_name(b"scratchpad"), None);
+    assert!(
+        Collection::for_store(StoreKind::Project)
+            .all(|collection| collection.name() != "scratchpad")
+    );
 }

@@ -289,6 +289,15 @@ pub struct Meta {
     /// The most recent deterministic stack scan. `None` for records written
     /// before payload schema 5 and for projects never scanned.
     pub stack: Option<StackProfile>,
+    /// The project scratchpad. `None` for records written before payload
+    /// schema 8 and for projects whose scratchpad was never written.
+    ///
+    /// It rides on `Meta` rather than a collection of its own because the
+    /// database validator demands an exact table catalog and no in-place
+    /// upgrade path exists, so a new collection would refuse to open every
+    /// database an earlier build wrote. Persistence stays additive at the
+    /// payload-schema level, exactly as the stack profile was.
+    pub scratchpad: Option<Scratchpad>,
 }
 
 impl Meta {
@@ -687,6 +696,51 @@ pub struct StackSummary {
     /// Trailing summary bytes written by a newer build, preserved verbatim.
     /// See [`StackProfile::future_fields`].
     pub future_fields: Vec<u8>,
+}
+
+/// Maximum accepted UTF-8 bytes in the project scratchpad note.
+///
+/// The note is a markdown scratch surface beside the terminal, not a document
+/// store: 64 KiB holds far more than anyone types between restarts and keeps
+/// one record from dominating a project payload.
+pub const SCRATCHPAD_TEXT_MAX_BYTES: usize = 65_536;
+
+/// Maximum accepted UTF-8 bytes in one scratchpad snippet.
+///
+/// A snippet is text the user copied out of a terminal pane to paste back, so
+/// it is a command or a short block, never a captured scrollback.
+pub const SCRATCHPAD_SNIPPET_MAX_BYTES: usize = 4_096;
+
+/// Maximum accepted scratchpad snippets.
+pub const SCRATCHPAD_MAX_SNIPPETS: usize = 50;
+
+/// One user-copied clipboard entry held beside the scratchpad note.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScratchpadSnippet {
+    /// Unique within the scratchpad and monotonic; never zero.
+    pub id: u64,
+    pub text: String,
+    pub pinned: bool,
+    pub created_at: Timestamp,
+}
+
+/// The singleton per-project scratchpad: a markdown note plus the snippets the
+/// user copied out of terminal panes.
+///
+/// A project store without the record reads as [`Scratchpad::default`], and the
+/// first accepted write creates it. `revision` fences concurrent writers: a
+/// write states the revision it read and is refused when the stored record has
+/// moved on.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Scratchpad {
+    pub text: String,
+    /// Newest first, pinned entries ordered ahead of unpinned ones by the
+    /// surface that edits them; the record itself preserves what it is given.
+    pub snippets: Vec<ScratchpadSnippet>,
+    /// Starts at zero and gains one per accepted write.
+    pub revision: u64,
+    /// Stamped by the runtime on each accepted write, never by the caller.
+    pub updated_at: Timestamp,
 }
 
 persistent_enum!(RecordKind {

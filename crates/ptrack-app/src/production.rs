@@ -789,6 +789,18 @@ impl ApplicationPort for RoutedApplication {
         self.local()?.snapshot()
     }
 
+    fn scratchpad(&mut self) -> AppResult<ptrack_core::Scratchpad> {
+        self.local()?.scratchpad()
+    }
+
+    fn set_scratchpad(
+        &mut self,
+        expected_revision: u64,
+        value: ptrack_core::Scratchpad,
+    ) -> AppResult<ptrack_core::Scratchpad> {
+        self.local()?.set_scratchpad(expected_revision, value)
+    }
+
     fn agent_runs(&mut self) -> AppResult<ptrack_agent::AgentRunsV2> {
         self.local()?.agent_runs()
     }
@@ -4988,7 +5000,7 @@ fn initialization_error_kind(error: &AppError) -> &'static str {
         {
             "runtime-busy"
         }
-        AppError::Message(_) => "initialization-failed",
+        AppError::Message(_) | AppError::ScratchpadConflict(_) => "initialization-failed",
     }
 }
 
@@ -5105,9 +5117,10 @@ fn sanitize_recent_store_error(error: StoreError) -> AppError {
 fn sanitize_recent_app_error(error: AppError) -> AppError {
     match error {
         AppError::Io(error) => sanitize_recent_io(&error),
-        AppError::NoProject | AppError::NotImplemented(_) | AppError::Message(_) => {
-            recent_project_changed()
-        }
+        AppError::NoProject
+        | AppError::NotImplemented(_)
+        | AppError::Message(_)
+        | AppError::ScratchpadConflict(_) => recent_project_changed(),
     }
 }
 

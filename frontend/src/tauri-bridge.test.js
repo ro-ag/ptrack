@@ -16,7 +16,7 @@ describe("Tauri compatibility bridge", () => {
       "GetAgentRunsV2", "GetBoard", "GetBoardV2", "GetCapabilitiesV2",
       "GetCapabilityAuditsV2", "GetDiagnosticsReport", "GetGlobalOverviewV1", "GetInitializationStatusV1", "GetIssueDetailV1", "GetIssuesV1",
       "GetLayoutState", "GetPendingInitializationV1",
-      "GetPreferences", "GetProjectTimelineV1", "GetRecentProjects", "GetRecentProjectsV1", "GetStackProfileV1", "GetTaskDetailV2",
+      "GetPreferences", "GetProjectTimelineV1", "GetRecentProjects", "GetRecentProjectsV1", "GetScratchpadV1", "GetStackProfileV1", "GetTaskDetailV2",
       "GetTerminalProfiles", "GetTerminalProfilesV2", "GetTerminalWindowTab",
       "GetUpdateState",
       "GetWorkspaceSnapshot", "GetWorkspaceState", "HoldPlanV1", "InitializeProjectV1", "InstallShellCommand",
@@ -29,12 +29,54 @@ describe("Tauri compatibility bridge", () => {
       "ResizeTerminal", "ResizeTerminalV2", "ResolveRecentProjectV1", "ResumePlanV1",
       "RollbackLinkedAgentLaunchV2", "SaveCapabilityV2", "ScheduleIssueV1", "SearchV2",
       "SendAgentHandoffV2", "SetAgentTaskOwnershipV2", "SetAgentWorktreeV2",
-      "SetAutomaticUpdateChecks", "SetIssueTaskV1", "SetLayoutState", "SetPreferences", "SetTerminalWindowTab",
+      "SetAutomaticUpdateChecks", "SetIssueTaskV1", "SetLayoutState", "SetPreferences", "SetScratchpadV1", "SetTerminalWindowTab",
       "StartFirstTaskV1",
       "TestCapabilityV2", "UpdateIssueV1", "ValidateProjectTargetV1",
       "ValidateTerminalCWDsV2",
       "WriteTerminalMemoryV2",
     ]);
+  });
+
+  it("keeps a structured error's recovery payload on the normalized Error", async () => {
+    const target = { __TAURI_INTERNALS__: {}, navigator: { clipboard: {} } };
+    const stored = {
+      text: "what the other window wrote",
+      snippets: [{ id: 1, text: "ls -la", pinned: false, createdAt: 12 }],
+      revision: 8,
+      updatedAt: 1_700,
+    };
+    installTauriBridge(target, {
+      invoke: async () => {
+        // Tauri rejects with a plain serialized object, not an Error.
+        throw { message: "scratchpad revision conflict", stored };
+      },
+      listen: vi.fn(),
+      clipboard: { readText: vi.fn(), writeText: vi.fn() },
+    });
+
+    // Without this the conflict caller cannot use the record it was already
+    // handed and has to re-read the scratchpad.
+    await expect(target.go.gui.App.SetScratchpadV1(7, 3, { text: "mine" }))
+      .rejects.toMatchObject({
+        message: "scratchpad revision conflict",
+        stored,
+      });
+  });
+
+  it("leaves an ordinary error alone", async () => {
+    const target = { __TAURI_INTERNALS__: {}, navigator: { clipboard: {} } };
+    installTauriBridge(target, {
+      invoke: async () => {
+        throw { message: "stale workspace generation" };
+      },
+      listen: vi.fn(),
+      clipboard: { readText: vi.fn(), writeText: vi.fn() },
+    });
+
+    const error = await target.go.gui.App.GetScratchpadV1(7).catch((value) => value);
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toBe("stale workspace generation");
+    expect("stored" in error).toBe(false);
   });
 
   it("preserves call ordering and routes native-only methods", async () => {
