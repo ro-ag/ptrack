@@ -4489,7 +4489,7 @@ button.modal-backdrop:active {
   box-shadow: var(--dock-shadow);
 }
 
-.terminal-dock[data-state="closed"][data-layout-interactive="false"] {
+.terminal-dock[data-state="closed"][data-layout-interactive="false"]:not([data-scratchpad-open="true"]) {
   height: 84px;
   box-shadow: none;
 }

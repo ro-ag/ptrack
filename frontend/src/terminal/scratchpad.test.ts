@@ -20,6 +20,7 @@ import {
   scratchpadTextMaxBytes,
   scratchpadWidthStorageKey,
   snippetPreview,
+  terminalBodyVisible,
   togglePinned,
   utf8ByteLength,
   writeScratchpadOpen,
@@ -334,6 +335,70 @@ describe("clampScratchpadWidth", () => {
     expect(clampScratchpadWidth(420, 0)).toBe(420);
     expect(clampScratchpadWidth(420, Number.NaN)).toBe(420);
     expect(clampScratchpadWidth(100, 0)).toBe(240);
+  });
+});
+
+describe("terminalBodyVisible", () => {
+  it("stays visible while the scratchpad is open, regardless of session state", () => {
+    // The scratchpad note and clipboard strip must be reachable even with no
+    // live terminal session and no popped-out window — the whole point of
+    // this rule is that opening the panel overrides the closed-and-collapsed
+    // case below.
+    expect(
+      terminalBodyVisible({
+        state: "closed",
+        poppedOut: false,
+        singlePane: true,
+        scratchpadOpen: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("hides the body for a closed, non-popped-out, single-pane tab when the scratchpad is shut", () => {
+    // This is the original collapse case: no session, nothing else to show.
+    expect(
+      terminalBodyVisible({
+        state: "closed",
+        poppedOut: false,
+        singlePane: true,
+        scratchpadOpen: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("stays visible for a popped-out pane even when the scratchpad is shut", () => {
+    // An empty pane holding a popped-out session keeps its body so the notice
+    // saying where the terminal went is visible.
+    expect(
+      terminalBodyVisible({
+        state: "closed",
+        poppedOut: true,
+        singlePane: true,
+        scratchpadOpen: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("stays visible for a closed pane in a multi-pane tab when the scratchpad is shut", () => {
+    expect(
+      terminalBodyVisible({
+        state: "closed",
+        poppedOut: false,
+        singlePane: false,
+        scratchpadOpen: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("stays visible whenever the session is not closed, scratchpad shut or not", () => {
+    expect(
+      terminalBodyVisible({
+        state: "running",
+        poppedOut: false,
+        singlePane: true,
+        scratchpadOpen: false,
+      }),
+    ).toBe(true);
   });
 });
 

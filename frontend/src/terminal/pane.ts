@@ -114,6 +114,7 @@ import {
   scratchpadNotices,
   scratchpadSplitterWidth,
   snippetPreview,
+  terminalBodyVisible,
   togglePinned,
   writeScratchpadOpen,
   writeScratchpadWidth,
@@ -2436,12 +2437,19 @@ class TerminalDock {
     const label = open ? "Hide scratchpad" : "Show scratchpad";
     this.#scratchpadToggle.setAttribute("aria-label", label);
     this.#scratchpadToggle.title = label;
+    // The dock's closed-and-collapsed CSS rule steps aside while this is
+    // "true", so the panel stays usable with no live session.
+    this.#dock.dataset.scratchpadOpen = String(open);
     if (persist) writeScratchpadOpen(localStorage, open);
     this.#applyScratchpadWidth();
     if (!open) this.#scratchpadDragCleanup?.();
     requestAnimationFrame(() => {
       if (!this.#disposed) this.#fitPanes(this.#activeTabPaneIds());
     });
+    // Recomputes `#terminal-body`'s visibility now that the dataset flag
+    // changed; harmless to call again since renderState is otherwise called
+    // right after this during mount.
+    this.#renderState();
     if (!open) {
       this.#scratchpadSaver.flush();
       return;
@@ -3040,9 +3048,15 @@ class TerminalDock {
     // for a new terminal: that would leave the returning session nowhere to go.
     const poppedOut = this.#paneIsPoppedOut(runtime.paneId);
     // An empty pane that is waiting for a window keeps its body, so the notice
-    // saying where its terminal went is actually visible.
-    this.#body.hidden = runtime.state === "closed" && !poppedOut &&
-      (!activeTab || paneIds(activeTab.root).length === 1);
+    // saying where its terminal went is actually visible. The scratchpad also
+    // keeps the body up while it is open, even with no session, so its note
+    // and clipboard strip stay reachable before any terminal starts.
+    this.#body.hidden = !terminalBodyVisible({
+      state: runtime.state,
+      poppedOut,
+      singlePane: !activeTab || paneIds(activeTab.root).length === 1,
+      scratchpadOpen: this.#scratchpadOpen,
+    });
     this.#message.textContent = runtime.detail;
     this.#message.hidden = runtime.detail === "";
     const shellLabel = runtime.state === "running" && resources

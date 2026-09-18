@@ -201,6 +201,23 @@ export function clampScratchpadWidth(width: number, bodyWidth: number): number {
   return Math.max(minimumScratchpadWidth, Math.min(requested, maximum));
 }
 
+/**
+ * Whether `#terminal-body` should be visible. Without the scratchpad open, a
+ * closed, non-popped-out, single-pane tab collapses the dock: there is no
+ * session, no popped-out notice to show, and nothing else in the pane. With
+ * the scratchpad open, the note and clipboard strip must stay reachable even
+ * in that same state, so the panel overrides the collapse.
+ */
+export function terminalBodyVisible(input: {
+  state: string;
+  poppedOut: boolean;
+  singlePane: boolean;
+  scratchpadOpen: boolean;
+}): boolean {
+  if (input.scratchpadOpen) return true;
+  return !(input.state === "closed" && !input.poppedOut && input.singlePane);
+}
+
 export function readScratchpadOpen(storage: Pick<Storage, "getItem">): boolean {
   try {
     return storage.getItem(scratchpadOpenStorageKey) === "true";

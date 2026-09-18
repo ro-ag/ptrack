@@ -593,6 +593,11 @@ describe("production asset layout", () => {
     expect(styles).toMatch(
       /data-state=(?:"closed"|closed)\]\[data-layout-interactive=(?:"false"|false)\]/,
     );
+    // The dock's 84px collapse steps aside while the scratchpad is open, so
+    // the panel stays usable with no live terminal session.
+    expect(styles).toMatch(
+      /data-state=(?:"closed"|closed)\]\[data-layout-interactive=(?:"false"|false)\]:not\(\[data-scratchpad-open=(?:"true"|true)\]\)/,
+    );
     expect(styles).toMatch(/data-board-hidden=(?:"true"|true)\] \.terminal-dock\{[^}]*height:100%/);
     expect(styles).toMatch(/data-terminal-hidden=(?:"true"|true)\] \.terminal-dock\{display:none/);
     expect(styles).toMatch(
