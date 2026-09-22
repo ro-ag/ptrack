@@ -6,6 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.40.1] - 2026-09-22
+
+0.40.0 was cut on `main` but never tagged or published. This is the first
+published build of the 0.40 line, so it also delivers the 0.40.0 changes: the
+per-project terminal scratchpad and the payload schema 8 storage change (see
+the 0.40.0 entry in CHANGELOG.md).
+
+### Fixed
+- The terminal diagnostics popover can be closed with the mouse again. It hangs
+  just below the dock header instead of covering the toolbar's second row and
+  its own toggle, carries a close control, and a press anywhere else dismisses
+  it.
+- A detached terminal window closes any tab but the last, including the tab it
+  was opened for; a shell that already ended closes without confirmation. When
+  a popped-out shell ends, the main window releases the pane that held its
+  place instead of keeping it closed until the window goes away.
+
 ## [0.40.0] - 2026-09-18
 
 ### Added
