@@ -126,3 +126,25 @@ export function terminalDiagnosticView(
     canResetLayout: input.layout === "repaired" || input.layout === "discarded",
   };
 }
+
+/** Breathing room between the dock header and the diagnostics popover. */
+export const terminalDiagnosticsGap = 6;
+
+/**
+ * Where the diagnostics popover sits inside the dock: just below whatever the
+ * header rows currently measure. A fixed offset sat over the toolbar's second
+ * row once it wrapped — and over the toggle that closes the popover, so the
+ * popover could only be dismissed with Escape. The popover is never pushed
+ * below the dock: past the end it stops where the dock's own minimum leaves
+ * it, exactly as the old clamp did.
+ */
+export function terminalDiagnosticsTop(input: {
+  headerBottom: number;
+  dockHeight: number;
+}): number {
+  const finite = (value: number): number =>
+    Number.isFinite(value) ? Math.max(0, value) : 0;
+  const preferred = finite(input.headerBottom) + terminalDiagnosticsGap;
+  const limit = Math.max(terminalDiagnosticsGap, finite(input.dockHeight) - 94);
+  return Math.max(terminalDiagnosticsGap, Math.min(preferred, limit));
+}

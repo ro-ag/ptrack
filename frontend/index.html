@@ -873,7 +873,20 @@
                 tabindex="-1"
                 hidden
               >
-                <p class="eyebrow">Diagnostics</p>
+                <div class="terminal-diagnostics-header">
+                  <p class="eyebrow">Diagnostics</p>
+                  <button
+                    id="terminal-diagnostics-close"
+                    class="terminal-diagnostics-close"
+                    type="button"
+                    aria-label="Hide terminal diagnostics"
+                    title="Hide terminal diagnostics"
+                  >
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="m4 4 8 8M12 4l-8 8"></path>
+                    </svg>
+                  </button>
+                </div>
                 <dl>
                   <div><dt>Process</dt><dd id="terminal-diagnostic-process">Stopped</dd></div>
                   <div><dt>Stream</dt><dd id="terminal-diagnostic-stream">Idle</dd></div>
@@ -1227,7 +1240,7 @@
       <p id="terminal-window-status" class="terminal-window-status" role="status" aria-live="polite" aria-atomic="true">Connecting…</p>
       <div class="canvas terminal-window-canvas">
       <p id="terminal-window-return" class="terminal-window-return">
-        Closing this window returns the original tab to p-track. Tabs opened here close with this window.
+        Closing this window returns the original tab to p-track. Tabs opened here close with this window. Any tab but the last can be closed here.
       </p>
       <div
         id="terminal-window-search"

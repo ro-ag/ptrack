@@ -5099,6 +5099,48 @@ button.modal-backdrop:active {
 
 /* The dock body is a row: panes, then the scratchpad splitter and panel. The
    gutter keeps body-level overlays clear of an open panel. */
+.terminal-diagnostics-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-100);
+}
+
+.terminal-diagnostics-header .eyebrow {
+  margin: 0;
+}
+
+.terminal-diagnostics-close {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  min-height: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  box-shadow: none;
+}
+
+.terminal-diagnostics-close svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.terminal-diagnostics-close:hover,
+.terminal-diagnostics-close:focus-visible {
+  color: var(--text);
+  background: var(--fill-strong);
+  box-shadow: none;
+}
+
 .terminal-body {
   --terminal-scratchpad-gutter: 0px;
   position: relative;

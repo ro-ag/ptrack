@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  detachedLastTabCloseTitle,
+  detachedTabCloseIntent,
   panesHoldPoppedOutTerminal,
   popOutTerminal,
   poppedOutCloseRefusedNotice,
+  poppedOutExitNotice,
   reclaimStream,
   streamLossIsRecoverable,
   streamReclaimDelay,
@@ -257,5 +260,41 @@ describe("popOutTerminal", () => {
     });
 
     expect(result).toEqual({ outcome: "unowned", label: "", error: reclaimFailure });
+  });
+});
+
+/// Every tab a terminal window holds closes from that window, the original
+/// included: a shell the user can see but cannot stop is a trap. Only the last
+/// tab keeps the window's own close as its way out, because the window takes
+/// no permission to close itself.
+describe("detachedTabCloseIntent", () => {
+  it("closes the original tab like any other once the window holds more tabs", () => {
+    expect(detachedTabCloseIntent({ tabCount: 2, ended: false }))
+      .toEqual({ allowed: true, confirm: true });
+    expect(detachedTabCloseIntent({ tabCount: 3, ended: false }).allowed).toBe(true);
+  });
+
+  it("skips the confirmation for a shell that already ended", () => {
+    expect(detachedTabCloseIntent({ tabCount: 2, ended: true }))
+      .toEqual({ allowed: true, confirm: false });
+  });
+
+  it("keeps the last tab for the window's own close", () => {
+    expect(detachedTabCloseIntent({ tabCount: 1, ended: false }))
+      .toEqual({ allowed: false, confirm: false });
+    expect(detachedTabCloseIntent({ tabCount: 1, ended: true }).allowed).toBe(false);
+    expect(detachedTabCloseIntent({ tabCount: 0, ended: false }).allowed).toBe(false);
+    expect(detachedLastTabCloseTitle).toContain("Close this window");
+  });
+});
+
+describe("poppedOutExitNotice", () => {
+  it("says the shell ended in its window, with the code or the error", () => {
+    expect(poppedOutExitNotice({ exitCode: 0 }))
+      .toBe("Process exited with code 0 in its own window");
+    expect(poppedOutExitNotice({ exitCode: 1, error: " spawn failed " }))
+      .toBe("spawn failed (in its own window)");
+    expect(poppedOutExitNotice({ exitCode: 130, error: null }))
+      .toBe("Process exited with code 130 in its own window");
   });
 });
