@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.41.2] - 2026-09-23
+
 ### Added
 - A detached terminal window shows the dock's facts for its active tab on one
   line: the shell state (such as *Prompt · last 0*), the profile, the working
