@@ -38,6 +38,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 - Records are now written at payload schema 9, which adds the time the rolling
+- The landing page project view toggle reads Cards and List; the animated
+  project view formerly labelled Carousel is now Cards.
   summary was last written as an additive field on the project's metadata
   record. Databases written by this build cannot be opened by older builds:
   0.40.1 and earlier refuse them fail-closed. Install this build everywhere you
