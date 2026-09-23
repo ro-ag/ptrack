@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  PopOutExitLedger,
+  returnedWindowTabs,
+  streamClaimEnded,
+  streamCloseDisposition,
   detachedLastTabCloseTitle,
   detachedTabCloseIntent,
   panesHoldPoppedOutTerminal,
@@ -285,6 +289,8 @@ describe("detachedTabCloseIntent", () => {
     expect(detachedTabCloseIntent({ tabCount: 1, ended: true }).allowed).toBe(false);
     expect(detachedTabCloseIntent({ tabCount: 0, ended: false }).allowed).toBe(false);
     expect(detachedLastTabCloseTitle).toContain("Close this window");
+    // Closing the window returns every tab, not only the one it opened with.
+    expect(detachedLastTabCloseTitle).toContain("its tabs");
   });
 });
 
@@ -296,5 +302,114 @@ describe("poppedOutExitNotice", () => {
       .toBe("spawn failed (in its own window)");
     expect(poppedOutExitNotice({ exitCode: 130, error: null }))
       .toBe("Process exited with code 130 in its own window");
+  });
+});
+
+describe("stream endings", () => {
+  it("never re-claims a stream whose output ended or whose session already exited", () => {
+    expect(streamCloseDisposition({ outputEnded: true, sessionEnded: false, recoverable: true }))
+      .toBe("ended");
+    expect(streamCloseDisposition({ outputEnded: false, sessionEnded: true, recoverable: true }))
+      .toBe("ended");
+    expect(streamCloseDisposition({ outputEnded: false, sessionEnded: false, recoverable: true }))
+      .toBe("reclaim");
+    expect(streamCloseDisposition({ outputEnded: false, sessionEnded: false, recoverable: false }))
+      .toBe("lost");
+  });
+
+  it("reads the claimed session state", () => {
+    expect(streamClaimEnded({ state: "running" })).toBe(false);
+    expect(streamClaimEnded({})).toBe(false);
+    for (const state of ["exited", "failed", "closed"]) {
+      expect(streamClaimEnded({ state })).toBe(true);
+    }
+  });
+
+  it("stops the re-claim loop once a claim reports the shell exited", async () => {
+    // The loop this pins: replay, normal close, re-claim, replay, forever.
+    let claims = 0;
+    let ended = false;
+    const attach = async () => {
+      const outcome = await reclaimStream({
+        recoverable: () => !ended,
+        sequence: () => 0,
+        wait: async () => {},
+        claim: async () => {
+          claims += 1;
+          return { url: "ws://x", fromSequence: 0, gap: false, state: "exited" };
+        },
+        attach: (claim) => {
+          // What each surface does with an ended claim, then the normal close.
+          const disposition = streamCloseDisposition({
+            outputEnded: true,
+            sessionEnded: streamClaimEnded(claim),
+            recoverable: true,
+          });
+          if (disposition === "ended") ended = true;
+        },
+        reclaiming: () => {},
+        exhausted: () => {},
+      });
+      return outcome;
+    };
+    expect(await attach()).toBe("attached");
+    expect(await attach()).toBe("abandoned");
+    expect(claims).toBe(1);
+  });
+});
+
+describe("PopOutExitLedger", () => {
+  it("keeps an exit that lands while a tab is moving, and only then", () => {
+    const ledger = new PopOutExitLedger<{ sessionId: string; exitCode: number }>();
+    expect(ledger.record({ sessionId: "a", exitCode: 0 })).toBe(false);
+    ledger.begin(["a", "b"]);
+    expect(ledger.record({ sessionId: "a", exitCode: 3 })).toBe(true);
+    expect(ledger.record({ sessionId: "other", exitCode: 1 })).toBe(false);
+    const exits = ledger.finish();
+    expect([...exits.entries()]).toEqual([["a", { sessionId: "a", exitCode: 3 }]]);
+    // The move is over: later exits take the normal route again.
+    expect(ledger.record({ sessionId: "b", exitCode: 0 })).toBe(false);
+    expect(ledger.finish().size).toBe(0);
+  });
+});
+
+describe("returnedWindowTabs", () => {
+  const pane = (paneId: string, profileId: string, cwd: string) =>
+    ({ kind: "terminal", paneId, profileId, cwd });
+  const payload = {
+    sessions: ["held-1", "held-2", "new-1", "new-2"],
+    shape: {
+      id: "tab-original",
+      windowTabs: [
+        {
+          id: "tab-original",
+          title: "Build",
+          root: {
+            kind: "split",
+            first: pane("p1", "shell", "/repo"),
+            second: pane("p2", "shell", "/repo/web"),
+          },
+        },
+        { id: "tab-2", title: "Terminal 2", root: pane("p3", "zsh", "/repo/api") },
+        { id: "tab-3", title: "Logs", root: pane("p4", "", "") },
+      ],
+    },
+  };
+
+  it("hands back every session the window opened itself, in pane order", () => {
+    const held = new Set(["held-1", "held-2"]);
+    expect(returnedWindowTabs(payload, (id) => held.has(id))).toEqual([
+      { sessionId: "new-1", title: "Terminal 2", profileId: "zsh", cwd: "/repo/api" },
+      { sessionId: "new-2", title: "Logs", profileId: "", cwd: "" },
+    ]);
+  });
+
+  it("returns nothing when the window only held the original tab", () => {
+    expect(returnedWindowTabs(payload, () => true)).toEqual([]);
+  });
+
+  it("still returns a session when the shape is missing or malformed", () => {
+    expect(returnedWindowTabs({ sessions: ["x"], shape: { windowTabs: "nope" } }, () => false))
+      .toEqual([{ sessionId: "x", title: "Terminal", profileId: "", cwd: "" }]);
   });
 });

@@ -28,8 +28,13 @@ matrix pinned for Linux beyond the ubuntu-24.04 runner images; no other libc,
 webview engine, or distro is validated.
 
 Every package ships alongside a `checksums.txt` (SHA-256, one line per
-package, written by `tools/release_contract.py checksums`) in the same
-GitHub release.
+package, written by `tools/release_contract.py checksums`) and
+`checksums.txt.sig`, a raw 64-byte Ed25519 signature over the exact
+`checksums.txt` bytes, in the same GitHub release. The `release` job signs the
+manifest with the `PTRACK_RELEASE_SIGNING_KEY` secret, verifies the signature
+against the public key pinned in `crates/ptrack-updater/src/signature.rs`
+(exported by `tools/release_contract.py public-key`), and fails when the
+secret is missing.
 
 ## macOS signing
 
@@ -65,7 +70,9 @@ revision:
    equality is enforced separately in that job by `release-notes`, which
    requires a CHANGELOG `## [X.Y.Z]` section matching the tag-derived
    version — all before `gh release create --verify-tag` runs.
-4. **checksums.txt present** for every package in the published release.
+4. **checksums.txt and checksums.txt.sig present** for every package in the
+   published release, and the signature verifies against the pinned release
+   public key.
 5. **Native acceptance evidence exists**, per `.github/workflows/native-acceptance.yml`:
    - Linux and Windows: the `native` job (always runs on `pull_request` and
      `push` to `main` for the tracked paths) built and smoke-tested the
@@ -94,7 +101,10 @@ combinations:
   binary's own version must parse as a release version).
 - Downgrades are rejected: a candidate is only accepted if its version is
   strictly greater than the current version.
-- Trust: SHA-256 verification against the release's `checksums.txt`, plus
+- Trust: an Ed25519 signature over `checksums.txt` must verify against the
+  public key compiled into the updater on every platform before any digest is
+  trusted; a release without `checksums.txt.sig` is not a candidate. Then
+  SHA-256 verification against the signed `checksums.txt`, plus
   platform-native trust on macOS (`hdiutil verify`, `codesign`, `spctl`
   Gatekeeper assessment) before install.
 - Apply mechanism differs by platform: Linux performs an atomic replace with

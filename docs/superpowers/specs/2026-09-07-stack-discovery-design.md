@@ -26,9 +26,14 @@ that defines the project. This design removes that class of answer entirely.
   never because an extension was common in the tree.
 - Ranking is total and has no ties: shallowest project root first, then marker
   table order, then lexicographic path order.
-- Counts are integers. Bytes and lines are never collected, stored, or
-  displayed. No percentage is persisted; a surface that renders a proportion
-  derives it and must display the underlying count alongside it.
+- Counts are integers. Bytes are never collected, stored, or displayed. No
+  percentage is persisted; a surface that renders a proportion derives it and
+  must display the underlying count alongside it.
+- Amended in 0.38.0: lines are counted per tracked text file at HEAD
+  (`git grep -I` skips binaries) and summed per discovered project beside its
+  file count. Lines never decide which language is reported, and they are
+  never shown as one repository-wide total. A repository whose lines cannot be
+  counted reports files only, and the profile's `lines_counted` flag says so.
 
 ## Discovery model
 
@@ -37,24 +42,33 @@ that defines the project. This design removes that class of answer entirely.
   files are absent by construction, so `.gitignore` is the single source of
   truth for what belongs to the project.
 - **Markers.** Each table entry maps a manifest filename or extension to one
-  language: `Cargo.toml`, `go.mod`, `package.json`, `tsconfig.json`,
+  language, in this order: `Cargo.toml`, `go.mod`, `package.json`,
   `pyproject.toml`, `setup.py`, `Package.swift`, `pom.xml`, `build.gradle`,
   `build.gradle.kts`, `*.csproj`, `Gemfile`, `composer.json`, `mix.exs`,
-  `pubspec.yaml`, `CMakeLists.txt`, `*.tf`, `Dockerfile`.
-- **Subprojects.** Every tracked manifest defines a discovered project rooted
-  at its directory. Workspace membership is not expanded from manifest
-  contents: a Cargo workspace member, an npm workspace package, or a `go.work`
-  module appears because its own manifest is tracked. This keeps the resolver a
-  pure function of the path list and avoids parsing manifest globs.
-- **Refinement.** A JavaScript project is reported as TypeScript when a
+  `pubspec.yaml`, `CMakeLists.txt`, `*.tf`, `Dockerfile`. `tsconfig.json` is
+  not a marker: on its own it discovers nothing and only refines a
+  `package.json` project (see Refinement).
+- **Subprojects.** A directory holding at least one tracked manifest defines
+  one discovered project rooted there. When a directory holds several
+  manifests, the one earliest in the marker table names the language, and
+  every manifest in that directory is kept as evidence. Workspace membership
+  is not expanded from manifest contents: a Cargo workspace member, an npm
+  workspace package, or a `go.work` module appears because its own manifest is
+  tracked. This keeps the resolver a pure function of the path list and avoids
+  parsing manifest globs. A profile carries at most 64 projects and at most 8
+  evidence paths per project, chosen after sorting so the cap is
+  deterministic.
+- **Refinement.** A `package.json` project is reported as TypeScript when a
   `tsconfig.json` is tracked in the same directory, or when any tracked file
   attributed to it is a `.ts`/`.tsx` source. Declaration files (`.d.ts`) do not
   refine: they describe JavaScript rather than prove the project is written in
   TypeScript. Refinement never invents evidence — an untracked `tsconfig.json`
   is not listed as a manifest.
 - **Attribution.** Every tracked file is attributed to the nearest enclosing
-  discovered project and counted by extension. Files under no discovered
-  project are counted once at the repository level as unattributed.
+  discovered project, which counts it (and its lines) in one per-project
+  total. Not implemented from the original design: there are no per-extension
+  counts and no separate unattributed count. A file under no discovered
+  project appears only in the profile's total tracked-file count.
 - **Evidence.** Each discovered project records the manifest paths that
   produced it, so the desktop can answer why a language was reported and a
   wrong answer is falsifiable by inspection.
@@ -71,7 +85,7 @@ defines them, absent and empty when decoded from an older record.
 
 - The project database stores the full profile as an additive `Meta.stack`
   field: the discovered projects, their languages, evidence paths, depth, and
-  per-project file counts, plus the HEAD sha the scan ran against, the scan
+  per-project file and line counts, plus the HEAD sha the scan ran against, the scan
   timestamp, the total tracked file count, and a truncation flag.
 - The global database carries an additive stack summary on `ProjectRef`: the
   ranked language identifiers with their file counts, and the total tracked
@@ -111,7 +125,8 @@ defines them, absent and empty when decoded from an older record.
 - **Overview tiles.** The `Lines of code` tile is removed together with the
   line-counting `repo_stats` path behind it. `Tracked files` remains and is
   served by the scan. A language breakdown replaces the removed tile, showing
-  each discovered language with its tracked-file count.
+  each discovered language with its tracked-file count and, since 0.38.0, its
+  line count.
 - **Repository panel.** Shows `Scanning…` while a scan runs, then the
   discovered projects with language, file count, and evidence paths, above a
   persistent line naming the short sha and time of the scan. A rescan control
@@ -142,7 +157,8 @@ defines them, absent and empty when decoded from an older record.
 
 ## Out of scope
 
-- Line, byte, or token counts in any form.
+- Byte or token counts in any form, and a repository-wide line total.
+  Per-language line counts were added in 0.38.0.
 - Manifest content parsing, including workspace member globs and dependency
   lists.
 - Language detection for untracked or ignored files.

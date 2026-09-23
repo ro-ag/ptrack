@@ -15,11 +15,12 @@ fn labels_are_monotonic_and_an_assignment_reports_the_tab_it_owns() {
     assert_eq!(
         windows
             .open(Some(1), tab(&["session-a", "session-b"]))
-            .unwrap(),
+            .unwrap()
+            .label,
         "terminal-1"
     );
     assert_eq!(
-        windows.open(Some(1), tab(&["session-c"])).unwrap(),
+        windows.open(Some(1), tab(&["session-c"])).unwrap().label,
         "terminal-2"
     );
     let owned = windows.tab("terminal-1").unwrap();
@@ -36,7 +37,7 @@ fn labels_are_monotonic_and_an_assignment_reports_the_tab_it_owns() {
     // A freed label is never reused, so a late message cannot reach a
     // different window.
     assert_eq!(
-        windows.open(Some(1), tab(&["session-a"])).unwrap(),
+        windows.open(Some(1), tab(&["session-a"])).unwrap().label,
         "terminal-3"
     );
 }
@@ -156,7 +157,13 @@ fn a_superseded_fence_expires_every_assignment_exactly_once() {
     assert!(windows.tab("terminal-1").is_none());
 
     // A switched project takes its windows with it on the next open.
-    windows.open(Some(2), tab(&["session-d"])).unwrap();
+    assert!(
+        windows
+            .open(Some(2), tab(&["session-d"]))
+            .unwrap()
+            .expired
+            .is_empty()
+    );
     assert_eq!(windows.expire(Some(3)), ["terminal-3"]);
     assert!(windows.drain().is_empty());
 }
@@ -169,4 +176,26 @@ fn a_drain_reports_every_label_and_leaves_the_fence_alone() {
     assert_eq!(windows.drain(), ["terminal-1", "terminal-2"]);
     // The fence survives, so a drain is not mistaken for a project switch.
     assert!(windows.expire(Some(1)).is_empty());
+}
+
+/// An open that lands before the shell's sweep for a project switch must hand
+/// back the windows it expired: the sweep will find nothing left, and a label
+/// dropped here would leave a window standing with no assignment behind it.
+#[test]
+fn an_open_under_a_new_fence_reports_the_windows_it_expired() {
+    let mut windows = TerminalWindows::default();
+    windows.open(Some(1), tab(&["session-a"])).unwrap();
+    windows.open(Some(1), tab(&["session-b"])).unwrap();
+
+    // The new workspace may reuse nothing of the old one's ownership: the
+    // expiring windows can never block its sessions.
+    let opened = windows.open(Some(2), tab(&["session-a"])).unwrap();
+    assert_eq!(opened.label, "terminal-3");
+    assert_eq!(opened.expired, ["terminal-1", "terminal-2"]);
+    assert!(windows.tab("terminal-1").is_none());
+    assert!(windows.expire(Some(2)).is_empty());
+
+    // A refused open expires nothing.
+    assert!(windows.open(Some(3), tab(&[])).is_err());
+    assert_eq!(windows.tab("terminal-3").unwrap().sessions, ["session-a"]);
 }

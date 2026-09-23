@@ -80,9 +80,13 @@ ptrack init --goal "Ship the widget service"
 ptrack plan add "Build the storage layer"
 ptrack plan use 1
 ptrack task add "Define the storage schema" --plan 1
-ptrack task start 1
-ptrack note add "Chose redb for the storage layer" --task 1
+ptrack task start 2
+ptrack note add "Chose redb for the storage layer" --task 2
 ```
+
+`plan add` creates the plan's final *Integrate and verify against goal* task
+first, so it takes task ID 1 and the first task you add is #2. `ptrack next`
+hands out that integration task only after the plan's other work is done.
 
 Now choose the interface that fits the job:
 
@@ -118,15 +122,20 @@ registered agent runs.
 The project workspace combines a bounded tracking snapshot with repository and
 storage status, read-only Git status/remotes/branches/commits/divergence,
 multi-session terminals, and explicitly registered agent runs. Select a plan
-from the sidebar, drag cards between Todo, Doing, Blocked, and Done, or use the
-status selector on a card. Each sidebar plan shows completed/total tasks. Use
-**+** beside **Plans** to create a plan, or the filter icon to search loaded
-plans by title or ID and narrow them by status. Add tasks from the board header,
-double-click a card to rename it, or record durable task context with **Memory**.
+from the sidebar, drag cards between Todo, Doing, Blocked, and Done, or use a
+card's **⋯** menu (or right-click it) to move it to another column. The plan the
+board shows is the sidebar's current plan; choosing a plan makes it your current
+plan exactly as `ptrack plan use` does, so the CLI and agents follow it. Each
+sidebar plan shows completed/total tasks. When every task in the current plan is
+done, its card offers **Close plan…**, and a done plan can be reopened with
+**Reopen plan** from its menu. Use **+** beside **Plans** to create a plan, or
+the filter icon to search loaded plans by title or ID and narrow them by status.
+Add tasks from the board header, click a card to open its task drawer,
+double-click it to rename it, or record durable task context with **Add note**.
 Cards surface linked notes, commits, and open issues, while the project-memory
-rail keeps the goal, rolling project summary, status, issues, and recent decisions
-in view. The board refreshes automatically while it is open; press `R` to reload
-immediately after another process changes the project.
+rail keeps the goal, rolling project summary, status, issues, and recent
+decisions in view. The board refreshes automatically while it is open; press `R`
+to reload immediately after another process changes the project.
 
 ![p-track task-memory dialog](docs/assets/gui-memory.png)
 
@@ -136,14 +145,14 @@ the database write lock.
 
 ### Issue intake and scheduling
 
-Open **Issues** with `Cmd/Ctrl+3` to inspect the same durable reports agents
-capture through the CLI. Search and filter the inbox, edit full reports and
-severity, close or reopen issues, and follow links between issues and tasks.
-Schedule an issue into a plan to create its task atomically, or link it to an
-existing task. Unscheduled issues remain triage context rather than executable
-work; scheduling is an explicit choice. Linked tasks can move between plans
-without losing their issue history when no live terminal or agent association
-blocks the move.
+Open **Issues** with `⌘3` (`Ctrl+3` on Windows and Linux) to inspect the same
+durable reports agents capture through the CLI. Search and filter the inbox,
+edit full reports and severity, close or reopen issues, and follow links between
+issues and tasks. Schedule an issue into a plan to create its task atomically,
+or link it to an existing task. Unscheduled issues remain triage context rather
+than executable work; scheduling is an explicit choice. Linked tasks can move
+between plans without losing their issue history when no live terminal or agent
+association blocks the move.
 
 Use **Copy context** on a plan or task, or the copy icon beside the project
 name, to copy its references and commands for reading current records. Paste
@@ -157,12 +166,16 @@ Opening a project scans its tracked files once and reports what the project is
 built from. Every language comes from a manifest git actually tracks —
 `Cargo.toml`, `go.mod`, `package.json`, `pyproject.toml`, `Package.swift`, and
 the rest — so each discovered subproject can name the paths that prove it, and
-an ignored or vendored tree never enters the answer. Counts are tracked files,
-never lines or bytes: one generated bundle or vendored directory would
-otherwise outweigh the code that defines the project. The Repository panel
-lists the discovered projects with their evidence, the project cards carry a
-stack label, and `ptrack context` passes the same structure to the next agent.
-A rescan runs when HEAD moves; a repository past the scan's path cap is marked
+an ignored or vendored tree never enters the answer. Each directory holds at
+most one discovered project; when several manifests sit together, the one
+earliest in p-track's fixed marker table names the language. Counts are tracked
+files, plus lines per language for tracked text files at HEAD, attributed to the
+project that owns them and never reported as one repository-wide total; bytes
+are never counted, since one generated bundle or vendored directory would
+otherwise outweigh the code that defines the project. The Repository panel lists
+the discovered projects with their evidence, the project cards carry a stack
+label, and `ptrack context` passes the same structure to the next agent. A
+rescan runs when HEAD moves; a repository past the scan's path cap is marked
 partial and rescans on open or on request.
 
 ### Registered agent runs
@@ -218,13 +231,17 @@ failures or run-scoped drift, and explicit completion. They are delivered only
 while every p-track window is in the background and contain identifiers only;
 retained events are baselined rather than replayed.
 
-### Capabilities (deprecated)
+### Capabilities (retired)
 
-Capability brokering (deny-by-default HTTP, Git, and SSH scopes) is no longer
-supported and is scheduled for removal; scoped capability management is
-delegated to the companion project pam. The Capabilities view remains in the
-current build, but it is undocumented and existing capability records should
-be considered inert.
+Capability brokering (deny-by-default HTTP, Git, and SSH scopes) has been
+removed from p-track; scoped capability management belongs to the companion
+project pam. The Capabilities view was removed in 0.33.0, and the broker, its
+IPC commands, and the `ptrack capability` CLI group are now gone as well.
+`ptrack capability` only prints a pointer to pam and exits with an error.
+Terminals no longer receive capability tokens. Capability records in existing
+databases are kept so those databases still open, but they authorize nothing;
+**Settings → Data & Diagnostics → Reset Application State** revokes any
+leftover grants in the open project.
 
 ### The terminal dock
 
@@ -233,26 +250,35 @@ The tab row holds **+**, per-tab close buttons, and tab organization controls.
 Pane headers hold split and pane-close actions; session setup and output tools
 are grouped below. **Stop session** stops the process while keeping its tab.
 The final tab stays available, and closing a live tab follows the existing
-confirmation flow.
+confirmation flow. A stopped pane shows **Start shell** so you can launch a
+shell in place.
 Create tabs, split a tab horizontally or vertically, and resize panes while
 each PTY-backed shell or detected agent profile remains live independently.
 Only bounded layout descriptors persist; restored panes start stopped and mint
 fresh runtime authority when restarted. Copy, paste, selection-aware `Ctrl+C`,
 platform shortcuts, and the right-click terminal menu use the native clipboard.
 Multiline text is held behind a bounded review dialog and sent through xterm's
-bracketed-paste behavior only after confirmation. Exited sessions show their
-status and can be restarted without reopening the board. Search the 25,000-line
-scrollback with `⌘F` on macOS or `Ctrl+Shift+F` elsewhere, change the persisted
-font size from the toolbar or standard zoom shortcuts, and clear or reset the
-emulator without stopping its shell. WebGL rendering retries after a lost GPU
-context and keeps xterm's built-in renderer as its fallback.
+bracketed-paste behavior only after confirmation; control bytes and
+bracketed-paste markers are stripped from every paste. Text copied out of a pane
+is screened for secrets before the scratchpad keeps it as a snippet. Exited
+sessions show their status and can be restarted without reopening the board.
+Search the 25,000-line scrollback with `⌘F` on macOS or `Ctrl+Shift+F`
+elsewhere, change the persisted font size from the toolbar or standard zoom
+shortcuts, and clear or reset the emulator without stopping its shell. WebGL
+rendering retries after a lost GPU context and keeps xterm's built-in renderer
+as its fallback.
 
 The top-right panel controls can independently hide the project sidebar, board,
 or terminal; hiding the board gives the terminal the full workspace height
-without restarting its session. The sidebar remains pointer- and
-keyboard-resizable. **Modern Unicode** enables Unicode 15 grapheme and emoji
-cell-width handling by default; turn it off from the terminal toolbar to return
-to xterm's built-in compatibility mode.
+without restarting its session. The dock stays in place across Overview, Board,
+and Issues, and `⌘J` (`Ctrl+J` elsewhere) toggles it. The sidebar remains
+pointer- and keyboard-resizable. Unicode 15 grapheme and emoji cell-width
+handling is on by default; set **Settings → Terminal → Unicode mode** to return
+to xterm's built-in compatibility mode. The change applies to open panes.
+
+**Pop out terminal** moves the current tab into its own window. Closing that
+window returns its tabs, including tabs created in it, to the main window's
+dock.
 
 ### Terminal profiles
 
@@ -267,8 +293,8 @@ overrides, `requested`/`project`/`fixed` working-directory policy, and
 profile. Custom configured profiles are shells. An installed agent profile may
 override only its name, renderer settings, scrollback, and exit behavior; its
 executable, arguments, environment, provider, and working-directory policy must
-stay identical so an existing capability approval cannot move to a different
-process identity. For example:
+stay identical so a user-edited profile cannot change what process an agent
+profile launches. For example:
 
 ```json
 {
@@ -303,15 +329,18 @@ because it would silently execute a fresh process with new runtime authority.
 | Action | macOS | Windows and Linux |
 |---|---|---|
 | Open project | `⌘O` | File → Open Project |
-| Settings | `⌘,` | Project → Settings |
-| Board / Overview / Capabilities | `⌘1` / `⌘2` / `⌘3` | `Ctrl+1` / `Ctrl+2` / `Ctrl+3` |
-| Command palette | `⌘K` | `Ctrl+K` |
-| Refresh board / add task | `R` / `/` | `R` / `/` |
-| Toggle terminal panel | View → Toggle Terminal Panel | View → Toggle Terminal Panel |
+| Settings | `⌘,` (p-track → Settings…) | `Ctrl+,` (Project → Settings…) |
+| Check for updates | p-track → Check for Updates… | Help → Check for Updates… |
+| Overview / Board / Issues | `⌘1` / `⌘2` / `⌘3` | `Ctrl+1` / `Ctrl+2` / `Ctrl+3` |
+| Search plans, tasks, and notes | `⌘K` | `Ctrl+K` |
+| Toggle terminal panel | `⌘J` | `Ctrl+J` |
+| Add task | `⌘N` or `/` | `Ctrl+N` or `/` |
+| Refresh board | `R` | `R` |
 | Close project | File → Close Project | File → Close Project |
 
-Board and view shortcuts pause while a dialog is open or focus is in a text
-control or terminal; the command palette shortcut remains global. Native menu
+The view numbers follow the sidebar order. Board and view shortcuts pause
+while a dialog is open or focus is in a text control or terminal; the search,
+Settings, and terminal panel shortcuts remain global. Native menu
 commands remain available when focus is retained, but never claim
 `⌘W`/`Ctrl+W` or terminal control-key combinations.
 
@@ -399,19 +428,23 @@ project root, database location, schema, last writer, and backup destination.
 The desktop app can check the stable releases published on the
 [p-track GitHub repository](https://github.com/ro-ag/ptrack/releases). Open
 **About & Updates** from the version in the sidebar, or choose
-**Settings → Updates…** from the native menu. Manual checks work without an
+**Check for Updates…** from the p-track app menu on macOS (the Help menu on
+Windows and Linux). Manual checks work without an
 open project. Automatic checks are off by default and contact GitHub only after
 you opt in; they never download or install anything. Every download and
 installation step requires a separate action.
 
 The updater selects only the exact packaged asset for the running OS and CPU,
-plus `checksums.txt`: a DMG on macOS, a ZIP on Windows, or a tarball on Linux.
-GitHub's generated source archives, prereleases, development builds,
-downgrades, arbitrary URLs, and ambiguous assets are rejected. Downloads are
-size-bounded, staged privately, checked with SHA-256, and revalidated before
-handoff. The release checksum detects corruption, but because it is published
-by the same GitHub Release it is not an independent signature against a
-compromised release account.
+plus `checksums.txt` and its signature `checksums.txt.sig`: a DMG on macOS, a
+ZIP on Windows, or a tarball on Linux. GitHub's generated source archives,
+prereleases, development builds, downgrades, arbitrary URLs, and ambiguous
+assets are rejected. The tag-only release job signs `checksums.txt` with the
+p-track Ed25519 release key, and on every platform the updater trusts a digest
+only after that signature verifies against the public key built into p-track.
+A release without a valid signature is refused before its package is
+downloaded, so a leaked release token or a tampered release run cannot get a
+binary installed. Downloads are size-bounded, staged privately, checked with
+SHA-256, and revalidated before handoff.
 
 - **macOS:** p-track verifies the whole DMG, its Developer ID signature from the
   pinned p-track team, and Gatekeeper acceptance before opening it. Complete the
@@ -459,13 +492,16 @@ ptrack task hold 12 waiting on the upstream schema decision
 ptrack task resume 12
 ```
 
-`ptrack plan hold|resume` does the same for a whole plan. A hold is orthogonal
+`ptrack plan hold|resume` does the same for a whole plan. A held task does not
+count against the one-task-in-progress gate, so `task hold` is the way to park
+started work and pick up something else. A hold is orthogonal
 to status: the item keeps its `todo`/`doing`/`blocked` status and its board
 column, and simply gains a hold marker in the CLI, dashboard, and Desktop.
 `ptrack next` skips held work, and `ptrack context` lists it separately so an
 agent does not pick it up. `resume` clears the hold, and so does completing the
 item: a task marked `done`, or a plan marked done or archived, drops its hold
-automatically. Holds are set from the CLI; the interfaces display them.
+automatically. Task holds are set from the CLI; plans can also be put on hold
+and resumed from the Desktop plan menu, and every interface displays holds.
 
 Order between items is recorded as dependency edges:
 
@@ -488,7 +524,11 @@ and Desktop.
 A fresh agent—including a replacement using another supported agent tool—starts
 with `ptrack context`. The digest is intentionally bounded: it restores the
 goal, rolling summary, active plan, blockers, open issues, recent notes, and
-inventory without dumping the whole project.
+inventory without dumping the whole project. Every field and the digest as a
+whole are capped, likely credentials are redacted, truncation is marked, and
+the output opens with a notice that its contents are untrusted project data,
+not instructions. `--json` and MCP `get_context` carry the same notice and
+truncation markers.
 
 ```sh
 ptrack context                # restore the bounded resume digest
@@ -527,17 +567,26 @@ with guide prose:
   commit message, or `ptrack commit record`); otherwise it errors.
 - One task in progress at a time: while a started task is unfinished,
   `task start`, `task add`, and `plan add` are refused—finish it properly or
-  park it with `task hold`/`task block`. With an identity configured the gate
-  only considers your own started tasks.
-- `ptrack plan add` appends a final *"Integrate and verify against goal"*
-  task (skip with `--no-verify-task`), and `ptrack plan done` errors while
-  any task in the plan is open.
+  park it with `task hold <id> <reason>` or `task block <id> [reason]`. A held
+  task no longer counts as in progress. With an identity configured the gate
+  counts a started task against the owner of its plan's claim (or, in an
+  unclaimed plan, whoever last changed the task), so it only considers your
+  own work.
+- `ptrack plan add` adds a final *"Integrate and verify against goal"* task
+  (skip with `--no-verify-task`); `ptrack next` defers it until the plan's
+  other work is done, and `ptrack plan done` errors while any task in the plan
+  is open.
 - After every `plan done`, p-track prints a CHECKPOINT block—goal, rolling
   summary, remaining open plans, open issues, milestone progress—prompting a
   roadmap re-evaluation. `ptrack checkpoint` re-prints it on demand.
 
-Each gate accepts `--force` for genuine exceptions; every use is recorded as
-an override note on the record, so the audit trail shows the bypass.
+In the CLI and over MCP each gate accepts `--force` for genuine exceptions;
+every use is recorded as an override note on the record, so the audit trail
+shows the bypass. The terminal dashboard and Desktop are human surfaces: they
+let you close a task without a summary or linked commit, and the dashboard
+lets you complete a plan with open tasks, but each such close records an
+override note naming the surface and what was missing, in the same write as
+the status change.
 
 ### Transfer work to another agent
 
@@ -610,11 +659,11 @@ Put `#<task-id>` in a commit message to link the commit to that task.
 | `ptrack summary show\|set S` | Show or update the rolling project summary. |
 | `ptrack config set user <name>\|show` | Set or show the per-machine identity used to claim plans. |
 | `ptrack milestone add\|list\|show\|done\|open\|due\|rename` | Manage checkpoints that group plans. |
-| `ptrack plan add\|list\|show\|done\|use\|release\|rename\|delete\|move\|copy\|dep\|hold\|resume` | Manage plans; `add` appends an "Integrate and verify" task (`--no-verify-task` skips it); `done` errors while tasks are open and prints the checkpoint block; `delete <id> --force` cascades to tasks and notes (issues detach, commit records survive unlinked); `move <id> --to <project>` relocates a plan subtree (copy-first, never lossy; `--as` renames on arrival); `copy` duplicates one (needs `--as` without `--to`); `dep add\|remove\|list` makes one plan wait on another. |
-| `ptrack task add\|list\|show\|start\|done\|block\|rename\|move\|convert\|dep\|hold\|resume` | Manage tasks; `done <id> --summary "..."` requires the summary and a linked commit; `add`/`start` are refused while another started task is unfinished (`--force` overrides, recorded); move them between plans, convert them into plans, put one on hold with a reason, or make one wait on another with `dep add\|remove\|list`. |
+| `ptrack plan add\|list\|show\|done\|use\|release\|rename\|delete\|move\|copy\|dep\|hold\|resume` | Manage plans; `list` shows each plan's open and done task counts; `add` appends an "Integrate and verify" task (`--no-verify-task` skips it); `done` errors while tasks are open and prints the checkpoint block; `delete <id> --force` cascades to tasks and notes (issues detach, commit records survive unlinked); `move <id> --to <project>` relocates a plan subtree (copy-first, never lossy; `--as` renames on arrival; dependency edges to plans or tasks outside the subtree are dropped); `copy` duplicates one (needs `--as` without `--to`); `dep add\|remove\|list` makes one plan wait on another. |
+| `ptrack task add\|list\|show\|start\|done\|block\|rename\|move\|convert\|dep\|hold\|resume` | Manage tasks; `done <id> --summary "..."` requires the summary and a linked commit; `add`/`start` are refused while another started, unheld task is unfinished (`--force` overrides, recorded); `block <id> [reason]` records the optional reason as a task note; move them between plans, convert them into plans, put one on hold with a reason, or make one wait on another with `dep add\|remove\|list`. |
 | `ptrack issue add\|list\|show\|edit\|close\|open\|severity\|rename\|schedule\|link\|unlink` | Capture detailed reports; `edit <id> --body --title --severity --status` maintains evidence; `schedule <id> --plan <id>` creates and links one task atomically; `link <id> --task <id>` relinks, and `unlink <id>` returns it to triage without deleting work. |
 | `ptrack note add\|list` | Attach or list project, plan, and task notes. |
-| `ptrack commit add\|list\|show\|record` | Browse the recorded git audit trail; `show` prints the diff. |
+| `ptrack commit add\|list\|show\|record` | Browse the recorded git audit trail; `show` prints the diff. Commit SHAs must be 4 to 64 hex digits. |
 | `ptrack hook install` | Install the post-commit hook that records commits. |
 | `ptrack context [--json]` | Print the bounded resume digest. |
 | `ptrack next [--json]` | Print the most-actionable task in the active plan, led by the goal. |
@@ -623,7 +672,7 @@ Put `#<task-id>` in a commit message to link the commit to that task.
 | `ptrack checkpoint [--json]` | Print the whole-picture re-evaluation block (goal, summary, open plans, issues). |
 | `ptrack gui [PATH]` | Open PATH, or follow the saved startup preference (landing page by default). |
 | `ptrack board [--plan N] [--json] [--gui]` | Print a kanban board or open it as a Tauri desktop GUI. |
-| `ptrack search <term> [--json]` | Search plan and task titles plus note bodies. |
+| `ptrack search <term> [--json]` | Search plan and task titles plus note bodies; note matches show a one-line snippet of at most 120 characters, and a search with no matches prints nothing. |
 | `ptrack status [--json]` | Print a compact project overview. |
 | `ptrack projects [--json]` | List projects in the global registry. |
 | `ptrack backup` | Copy the current project database into global backups. |
@@ -635,11 +684,11 @@ Run `ptrack <command> --help` for flags and examples specific to a command.
 
 p-track is local-first and requires no hosted service or long-lived daemon.
 While Desktop is running, it exposes private loopback services for registered
-agent integrations and explicitly approved broker capabilities.
+agent integrations.
 
 | Store | Location | Contents |
 |---|---|---|
-| Project | `.ptrack/ptrack.redb` | Goal, summary, milestones, plans, tasks, issues, notes, capabilities, and commit records. |
+| Project | `.ptrack/ptrack.redb` | Goal, summary, milestones, plans, tasks, issues, notes, and commit records (plus inert capability records kept from older releases). |
 | Global | `~/.ptrack/global.redb` | Configuration, the project registry, and backup metadata. |
 | Runtime routing | `~/.ptrack/runtime/active-generation.json` | The attested generation and exact global/project store bindings. |
 | Backups | `~/.ptrack/backups/` | Timestamped copies created by `ptrack backup` or `B` in the TUI. |
@@ -716,7 +765,8 @@ make release-dmg # full pipeline: sign, DMG, sign, notarize, staple — needs a
                  # one-time `xcrun notarytool store-credentials ptrack-notarize`
 ```
 
-The tag-only release workflow runs the same steps for six native targets.
+The tag-only release workflow runs the same steps for five native targets
+(six packages) and signs the release `checksums.txt` as `checksums.txt.sig`.
 macOS release jobs fail closed unless the complete Developer ID and Apple
 notary credential sets are present; unsigned macOS assets are never published.
 

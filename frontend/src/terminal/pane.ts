@@ -1,11 +1,9 @@
-import { FitAddon } from "@xterm/addon-fit";
-import { SearchAddon } from "@xterm/addon-search";
+import type { FitAddon } from "@xterm/addon-fit";
+import type { SearchAddon } from "@xterm/addon-search";
 import type { ISearchResultChangeEvent } from "@xterm/addon-search";
 import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
-import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { Terminal } from "@xterm/xterm";
-import type { IDisposable } from "@xterm/xterm";
+import type { IDisposable, Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 
 import { TerminalStreamClient } from "./client";
@@ -47,16 +45,18 @@ import {
   binaryStringToBytes,
   commitClipboardPaste,
   isTerminalCompositionEvent,
+  pasteReviewSummary,
   prepareClipboardPaste,
   splitTerminalInput,
+  terminalKeyShortcut,
   terminalTextToBytes,
-  terminalShortcutAction,
 } from "./paste";
 import type {
   ClipboardPasteRequest,
-  TerminalPlatform,
   TerminalShortcutAction,
 } from "./paste";
+import { terminalPlatform } from "./platform";
+import { applyTerminalTheme, createTerminalRenderer, paintTerminalBackground } from "./renderer";
 import {
   clampTerminalFontSize,
   defaultTerminalFontSize,
@@ -64,16 +64,18 @@ import {
   maximumTerminalFontSize,
   readTerminalFontSize,
   readTerminalProfileFontSize,
+  terminalZoomFontSize,
   terminalZoomLabel,
   writeTerminalProfileFontSize,
 } from "./preferences";
 import {
   loadTerminalFont,
   normalizeTerminalProfileSettings,
-  terminalRendererOptions,
   terminalProfileClosesAfterExit,
+  terminalProfileTheme,
   type NormalizedTerminalProfileSettings,
 } from "./profile-settings";
+import { terminalThemeName } from "../theme";
 import {
   maximumWebglRecoveryAttempts,
   webglAttachAllowed,
@@ -89,6 +91,7 @@ import {
   retryTerminalRendererRecovery,
 } from "./recovery-actions";
 import {
+  PopOutExitLedger,
   panesHoldPoppedOutTerminal,
   popOutTerminal,
   poppedOutCloseRefusedNotice,
@@ -96,10 +99,15 @@ import {
   poppedOutPaneNotice,
   reclaimStream,
   reclaimingStreamNotice,
+  returnedWindowTabs,
+  streamClaimEnded,
+  streamCloseDisposition,
   streamLossIsRecoverable,
+  streamOutputEndedNotice,
   streamReclaimFailedNotice,
   terminalGapNotice,
   terminalPopOutControl,
+  type ReturnedWindowTab,
 } from "./pop-out";
 import { TerminalResizeDispatcher } from "./resize-dispatch";
 import { terminalControlIcon } from "./control-icon";
@@ -123,7 +131,8 @@ import {
   type Scratchpad,
   type ScratchpadSnippet,
 } from "./scratchpad";
-import { terminalSearchResultLabel } from "./search";
+import { terminalSearchOptions, terminalSearchResultLabel } from "./search";
+import { looksLikeSecret, secretCaptureNotice } from "./secrets";
 import {
   applyShellSignal,
   initialShellState,
@@ -148,7 +157,6 @@ import { readModernUnicodeSetting } from "./unicode";
 import {
   readTerminalPreferenceOverrides,
   webglPreferredByPreference,
-  type UnicodeModePreference,
 } from "../settings/preferences";
 import {
   activeTerminalDescriptor,
@@ -231,6 +239,8 @@ interface TerminalStreamClaim {
   url: string;
   fromSequence: number;
   gap: boolean;
+  /** The session state at mint time; an ended session only replays. */
+  state?: string;
 }
 
 /** Payload of the event a closing terminal window frees its tab with. */
@@ -249,7 +259,7 @@ interface TerminalExit {
   error?: string;
 }
 
-interface TerminalBackend {
+export interface TerminalBackend {
   GetTerminalProfiles(): Promise<TerminalProfile[]>;
   ValidateTerminalCWDs(cwds: string[]): Promise<TerminalCWDValidation[]>;
   CreateTerminal(
@@ -310,9 +320,6 @@ interface MountOptions {
   projectRoot: string;
   workspaceGeneration?: number;
   showError(error: unknown): void;
-  // The stored preferences record is the authority for the Unicode mode, so
-  // the dock toggle writes through it instead of the localStorage mirror.
-  saveUnicodeMode(mode: UnicodeModePreference): void;
 }
 
 export interface TerminalDockHandle {
@@ -341,7 +348,24 @@ export interface TerminalDockHandle {
   ): Promise<TerminalWritebackResult>;
   setVisible(visible: boolean): void;
   setLayoutLocked(locked: boolean): void;
+  /**
+   * Applies the stored Unicode mode to every open pane. Settings owns the
+   * preference and has already saved it; the dock only follows it.
+   */
+  setModernUnicode(enabled: boolean): void;
+  /**
+   * Starts the active tab's shell, exactly as the Open control would, and does
+   * nothing while that control is unavailable.
+   */
+  startSession(): void;
   setApplicationOverlayOpen(open: boolean, focusTerminal: false): void;
+  /**
+   * Writes pending project-scoped edits (the scratchpad note) and resolves once
+   * they settled, bounded so a stalled write cannot hold a project switch.
+   * Awaited before a workspace transition, while the runtime still accepts
+   * this dock's generation.
+   */
+  flushPending(): Promise<void>;
   dispose(): void;
 }
 
@@ -361,6 +385,8 @@ interface PaneResources {
   client: TerminalStreamClient | null;
   /** Bytes rendered so far: the sequence a re-claim resumes from. */
   sequence: number;
+  /** The last claim found the session already ended: its stream only replays. */
+  sessionEnded: boolean;
   reclaiming: boolean;
   reclaimAttempts: number;
   observer: ResizeObserver | null;
@@ -383,6 +409,8 @@ interface LinkedTabStage {
 }
 
 const minimumDockHeight = 180;
+/** How long a workspace transition waits for the dock's last writes. */
+const pendingFlushLimitMs = 2_000;
 const defaultDockHeight = 300;
 const terminalFontSizeStep = 1;
 
@@ -399,37 +427,25 @@ function messageFrom(error: unknown): string {
 }
 
 function eventsOn(name: string, callback: (payload: any) => void): () => void {
-  const runtime = (window as any).runtime;
+  const runtime = window.runtime;
   if (typeof runtime?.EventsOnMultiple !== "function") return () => {};
   return runtime.EventsOnMultiple(name, callback, -1);
 }
 
-function openExternalURL(uri: string): void {
-  const runtime = (window as any).runtime;
-  if (typeof runtime?.BrowserOpenURL === "function") runtime.BrowserOpenURL(uri);
-}
-
-function platform(): TerminalPlatform {
-  if (/Mac|iPhone|iPad/.test(navigator.platform)) return "mac";
-  if (/Win/.test(navigator.platform)) return "windows";
-  return "linux";
-}
 
 function nativeClipboard(): {
   getText(): Promise<string>;
   setText(text: string): Promise<void>;
 } {
-  const runtime = (window as any).runtime;
-  if (
-    typeof runtime?.ClipboardGetText !== "function" ||
-    typeof runtime?.ClipboardSetText !== "function"
-  ) {
+  const readText = window.runtime?.ClipboardGetText;
+  const writeText = window.runtime?.ClipboardSetText;
+  if (typeof readText !== "function" || typeof writeText !== "function") {
     throw new Error("Native clipboard access is unavailable");
   }
   return {
-    getText: () => runtime.ClipboardGetText(),
+    getText: () => readText(),
     setText: async (text) => {
-      if ((await runtime.ClipboardSetText(text)) !== true) {
+      if ((await writeText(text)) !== true) {
         throw new Error("Native clipboard copy failed");
       }
     },
@@ -439,7 +455,6 @@ function nativeClipboard(): {
 class TerminalDock {
   readonly #backend: TerminalBackend;
   readonly #showError: (error: unknown) => void;
-  readonly #saveUnicodeMode: (mode: UnicodeModePreference) => void;
   readonly #workspaceGeneration: number;
   readonly #dock = requiredElement<HTMLElement>("#terminal-dock");
   readonly #workArea = requiredElement<HTMLElement>(".work-area");
@@ -450,10 +465,15 @@ class TerminalDock {
   readonly #title = requiredElement<HTMLElement>("#terminal-title");
   readonly #profile = requiredElement<HTMLSelectElement>("#terminal-profile");
   readonly #cwd = requiredElement<HTMLInputElement>("#terminal-cwd");
-  readonly #modernUnicode = requiredElement<HTMLInputElement>(
-    "#terminal-modern-unicode",
-  );
   readonly #open = requiredElement<HTMLButtonElement>("#terminal-open");
+  // The stopped pane's labelled start control: the Open control's twin, so it
+  // shares its availability.
+  readonly #startShell = requiredElement<HTMLButtonElement>("#terminal-start-shell");
+  // The stopped-pane notice. It sits above the body while the body is hidden
+  // and moves into the stopped pane itself when the body stays up (an open
+  // scratchpad keeps it visible), so the start action is always reachable.
+  readonly #empty = requiredElement<HTMLElement>("#terminal-empty");
+  readonly #emptyHome = this.#empty.parentElement;
   readonly #start = requiredElement<HTMLButtonElement>("#terminal-start");
   readonly #popOut = requiredElement<HTMLButtonElement>("#terminal-pop-out");
   readonly #restart = requiredElement<HTMLButtonElement>("#terminal-restart");
@@ -621,6 +641,13 @@ class TerminalDock {
   #linkedLaunchPaneIds = new Set<string>();
   /** Session id → the pane holding its place while it lives in a window. */
   #poppedOut = new Map<string, string>();
+  /** Exits that arrive while a tab is moving into its window. */
+  readonly #popOutExits = new PopOutExitLedger<TerminalExit>();
+  /**
+   * Popped-out sessions whose shell already ended in the window. Their held
+   * pane shows the exit; pop-in only closes them, it never reopens a tab.
+   */
+  readonly #endedPoppedOut = new Set<string>();
   #authorizedRuntimeRemoval = new Set<string>();
   #dockDisposers: Array<() => void> = [];
   #scratchpadOpen = false;
@@ -630,7 +657,6 @@ class TerminalDock {
   constructor(options: MountOptions) {
     this.#backend = options.backend;
     this.#showError = options.showError;
-    this.#saveUnicodeMode = options.saveUnicodeMode;
     this.#projectRoot = options.projectRoot;
     this.#workspaceGeneration = options.workspaceGeneration ?? 0;
     const restored = loadTerminalWorkspace(
@@ -737,7 +763,14 @@ class TerminalDock {
         this.#runtimes.get(paneId)?.session?.linkedLaunch === true,
       fitPanes: (paneIdList) => this.#fitPanes(paneIdList),
     });
+    // Open panes repaint in the new palette when the app theme changes.
+    const themeObserver = new MutationObserver(() => this.#applyAppTheme());
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
+    });
     this.#dockDisposers.push(
+      () => themeObserver.disconnect(),
       this.#tabController.subscribe((workspace, previous) => {
         this.#reconcileWorkspace(workspace, previous);
         this.#markPersistenceDirty();
@@ -830,10 +863,7 @@ class TerminalDock {
     });
     this.#terminalToggle.disabled = this.#layoutLocked;
     this.#modernUnicodeEnabled = readModernUnicodeSetting(localStorage);
-    this.#modernUnicode.checked = this.#modernUnicodeEnabled;
-    this.#listen(this.#modernUnicode, "change", () =>
-      this.#setModernUnicode(this.#modernUnicode.checked),
-    );
+    this.#listen(this.#startShell, "click", () => this.startSession());
     this.#listen(this.#profile, "change", () => {
       this.#updateEditableDescriptor({ profileId: this.#profile.value });
       this.#syncActiveProfileFontSize();
@@ -1214,6 +1244,9 @@ class TerminalDock {
     }
     if (panes.length === 0) return;
     const shape = structuredClone(tab);
+    // From the teardown on, the pane no longer owns the session and the
+    // window does not yet listen: an exit in between is kept, not dropped.
+    this.#popOutExits.begin(panes.map((pane) => pane.sessionId));
     const result = await popOutTerminal({
       release: () => {
         for (const pane of panes) this.#teardownRuntime(pane.runtime);
@@ -1234,16 +1267,25 @@ class TerminalDock {
         if (failure !== null) throw failure;
       },
     });
+    const exits = this.#popOutExits.finish();
     if (this.#disposed) return;
     if (result.outcome === "popped-out") {
       for (const pane of panes) {
         this.#poppedOut.set(pane.sessionId, pane.paneId);
         this.#setState(pane.runtime, "closed", poppedOutPaneNotice);
+        const exit = exits.get(pane.sessionId);
+        if (exit) this.#releaseHeldPane(exit, pane.paneId);
       }
       // The control that was just pressed is now hidden, so focus lands on the
       // pane's tab rather than falling back to the document.
       this.#focusWorkspaceSurvivor();
       return;
+    }
+    // Claimed back here: an exit that arrived mid-move ends the pane now.
+    for (const pane of panes) {
+      const exit = exits.get(pane.sessionId);
+      const ticket = this.#runtimes.capture(pane.paneId);
+      if (exit && ticket) this.#handleExit(exit, pane.runtime, ticket);
     }
     this.#showError(result.error);
   }
@@ -1307,8 +1349,9 @@ class TerminalDock {
     claim?: TerminalStreamClaim,
   ): void {
     resources.sequence = claim?.fromSequence ?? 0;
+    let gapShown = claim?.gap === true;
     const client: TerminalStreamClient = new TerminalStreamClient({
-      createWebSocket: (streamUrl) => new WebSocket(streamUrl) as any,
+      createWebSocket: (streamUrl) => new WebSocket(streamUrl),
       // The rendered byte count is the sequence: a re-claim resumes exactly
       // where the renderer stopped drawing, never where the socket stopped.
       writeOutput: (output, done) => resources.terminal.write(output, () => {
@@ -1327,8 +1370,20 @@ class TerminalDock {
           this.#recordPaneOutput(runtime, ticket, sessionId, byteLength);
         }
       },
+      // The buffer wrapped again between the mint and the connect: the replay
+      // starts later than the claim said, so the count restarts where it
+      // actually does, or every later re-claim would ask for the wrong bytes.
+      onGap: (sequence) => {
+        if (resources.client !== client) return;
+        if (sequence !== null) resources.sequence = sequence;
+        if (!gapShown) {
+          gapShown = true;
+          resources.terminal.writeln(`\r\n[p-track] ${terminalGapNotice}\r\n`);
+        }
+      },
     });
     resources.client = client;
+    resources.sessionEnded = claim !== undefined && streamClaimEnded(claim);
     client.connect(url);
     if (claim?.gap) resources.terminal.writeln(`\r\n[p-track] ${terminalGapNotice}\r\n`);
   }
@@ -1442,13 +1497,22 @@ class TerminalDock {
       payload.generation !== this.#workspaceGeneration
     ) return;
     this.#applyReturnedShape(payload);
+    const ended = (sessionId: string) => this.#endedPoppedOut.delete(sessionId);
+    // Tabs the window opened itself come back as new tabs: closing the window
+    // returns everything it holds, and a running shell is never stopped
+    // without being asked.
+    const returned = returnedWindowTabs(
+      payload ?? {},
+      (sessionId) => this.#poppedOut.has(sessionId) || this.#endedPoppedOut.has(sessionId),
+    );
     for (const sessionId of payload?.sessions ?? []) {
       if (!sessionId) continue;
       const paneId = this.#poppedOut.get(sessionId);
       if (paneId === undefined) {
-        // A session the window minted itself has no pane holding its place;
-        // it ends with the window rather than leaking without a renderer.
-        void this.#backend.CloseTerminal(sessionId, false).catch(() => {});
+        // A shell that ended in the window already told its held pane so.
+        if (ended(sessionId)) {
+          void this.#backend.CloseTerminal(sessionId, false).catch(() => {});
+        }
         continue;
       }
       this.#poppedOut.delete(sessionId);
@@ -1461,6 +1525,32 @@ class TerminalDock {
         if (!this.#disposed) this.#showError(error);
       });
     }
+    for (const tab of returned) this.#returnWindowTab(tab);
+  }
+
+  /**
+   * A tab the terminal window opened comes back as a new tab here. Only when
+   * no tab can be added does the session end, and then it says so.
+   */
+  #returnWindowTab(returned: ReturnedWindowTab): void {
+    const workspace = this.#tabController.dispatch({
+      type: "create-tab",
+      title: returned.title,
+      ...(returned.profileId ? { profileId: returned.profileId } : {}),
+      cwd: returned.cwd,
+    });
+    const tab = workspace?.tabs.find((candidate) => candidate.id === workspace.activeTabId);
+    const runtime = tab ? this.#runtimes.ensure(tab.activePaneId) : null;
+    if (!tab || !runtime || runtime.session || runtime.busy) {
+      void this.#backend.CloseTerminal(returned.sessionId, false).catch(() => {});
+      this.#showError(new Error(
+        `${returned.title} could not be brought back from its window and was closed.`,
+      ));
+      return;
+    }
+    void this.#claimSessionIntoPane(runtime, returned.sessionId).catch((error) => {
+      if (!this.#disposed) this.#showError(error);
+    });
   }
 
   async #closeTerminal(runtime: DockPaneRuntime): Promise<void> {
@@ -1543,20 +1633,6 @@ class TerminalDock {
     if (focusTerminal) resources.terminal.focus();
   }
 
-  #searchOptions(incremental: boolean) {
-    return {
-      incremental,
-      decorations: {
-        matchBackground: "#26483e",
-        matchBorder: "#3dd6a3",
-        matchOverviewRuler: "#3dd6a3",
-        activeMatchBackground: "#7a5f1f",
-        activeMatchBorder: "#ffd75f",
-        activeMatchColorOverviewRuler: "#ffd75f",
-      },
-    };
-  }
-
   #updateSearch(incremental: boolean): void {
     const resources = this.#activeRuntime().resources;
     if (!resources || resources.disposed) return;
@@ -1568,7 +1644,7 @@ class TerminalDock {
     }
     const found = resources.search.findNext(
       query,
-      this.#searchOptions(incremental),
+      terminalSearchOptions(incremental),
     );
     if (!found) this.#searchResults.textContent = "No results";
   }
@@ -1582,7 +1658,7 @@ class TerminalDock {
     const resources = this.#activeRuntime().resources;
     const query = this.#searchInput.value;
     if (!resources || resources.disposed || !query) return;
-    const found = resources.search.findPrevious(query, this.#searchOptions(false));
+    const found = resources.search.findPrevious(query, terminalSearchOptions(false));
     if (!found) this.#searchResults.textContent = "No results";
     this.#searchInput.focus();
   }
@@ -1653,7 +1729,7 @@ class TerminalDock {
       if (isTerminalCompositionEvent(event)) return true;
       const paneShortcut = paneFocusShortcutIntent(
         event,
-        platform() === "mac",
+        terminalPlatform() === "mac",
       );
       if (paneShortcut) {
         event.preventDefault();
@@ -1663,9 +1739,9 @@ class TerminalDock {
         }
         return false;
       }
-      const action = terminalShortcutAction(
+      const action = terminalKeyShortcut(
         event,
-        platform(),
+        terminalPlatform(),
         resources.terminal.hasSelection(),
       );
       if (!action) return true;
@@ -1757,12 +1833,14 @@ class TerminalDock {
       this.#showContextMenu(bounds.left + 24, bounds.top + 24, runtime, resources);
     } else if (action === "search") {
       this.#openSearch();
-    } else if (action === "zoom-out") {
-      this.#setFontSize(this.#fontSize - terminalFontSizeStep);
-    } else if (action === "zoom-reset") {
-      this.#setFontSize(this.#activeProfileDefaultFontSize());
-    } else if (action === "zoom-in") {
-      this.#setFontSize(this.#fontSize + terminalFontSizeStep);
+    } else if (
+      action === "zoom-out" || action === "zoom-reset" || action === "zoom-in"
+    ) {
+      this.#setFontSize(terminalZoomFontSize(
+        action,
+        this.#fontSize,
+        this.#activeProfileDefaultFontSize(),
+      ));
     } else if (action === "clear") {
       this.#clearBuffer();
     }
@@ -1828,10 +1906,10 @@ class TerminalDock {
     try {
       const text = await readText(accepts);
       if (text === null || !accepts()) return;
-      const request = prepareClipboardPaste(
-        text,
-        resources.terminal.buffer.active.type === "alternate",
-      );
+      const request = prepareClipboardPaste(text, {
+        alternateScreen: resources.terminal.buffer.active.type === "alternate",
+        shell: resources.shellState,
+      });
       await commitClipboardPaste(
         request,
         (pending) => this.#confirmPaste(pending),
@@ -1874,9 +1952,8 @@ class TerminalDock {
     this.#hideContextMenu();
     this.#finishPasteConfirmation(false);
     this.#pastePreview.textContent = request.preview;
-    this.#pasteDetail.textContent = `${request.lineCount} lines${
-      request.previewTruncated ? " · preview truncated" : ""
-    }. Review the text before sending it to the terminal.`;
+    this.#pasteDetail.textContent =
+      `${pasteReviewSummary(request)}. Review the text before sending it to the terminal.`;
     this.#pasteModal.hidden = false;
     this.#pasteCancel.focus();
     return new Promise<boolean>((resolve) => {
@@ -2014,7 +2091,7 @@ class TerminalDock {
 
   #setShortcutLabels(): void {
     const labels =
-      platform() === "mac"
+      terminalPlatform() === "mac"
         ? {
             copy: "⌘C",
             paste: "⌘V",
@@ -2054,30 +2131,19 @@ class TerminalDock {
     host.className = "terminal-pane-host";
     host.hidden = !this.#isPaneVisible(runtime.paneId);
     (this.#splitView.mountForPane(runtime.paneId) ?? this.#host).append(host);
-    const terminal = new Terminal({
-      allowProposedApi: true,
-      cursorBlink: true,
-      rescaleOverlappingGlyphs: true,
-      ...terminalRendererOptions(settings, fontSize),
+    const { terminal, fit, search, unicode } = createTerminalRenderer({
+      settings: {
+        ...settings,
+        theme: terminalThemeName(settings.theme, document.documentElement.dataset.theme),
+      },
+      fontSize,
+      modernUnicode: this.#modernUnicodeEnabled,
+      onLinkError: (error) => {
+        if (!this.#disposed) this.#showError(error);
+      },
     });
-    const fit = new FitAddon();
-    terminal.loadAddon(fit);
-    let unicode: UnicodeGraphemesAddon | null = null;
-    if (this.#modernUnicodeEnabled) {
-      unicode = new UnicodeGraphemesAddon();
-      terminal.loadAddon(unicode);
-    }
-    const search = new SearchAddon();
-    terminal.loadAddon(search);
-    terminal.loadAddon(
-      new WebLinksAddon((event, uri) => {
-        const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
-        if ((isMac && !event.metaKey) || (!isMac && !event.ctrlKey)) return;
-        event.preventDefault();
-        openExternalURL(uri);
-      }),
-    );
     terminal.open(host);
+    paintTerminalBackground(terminal);
     const tab = this.#tabController.workspace.tabs.find((candidate) =>
       paneIds(candidate.root).includes(runtime.paneId)
     );
@@ -2102,6 +2168,7 @@ class TerminalDock {
       webglContextLoss: null,
       client: null,
       sequence: 0,
+      sessionEnded: false,
       reclaiming: false,
       reclaimAttempts: 0,
       observer: null,
@@ -2224,13 +2291,14 @@ class TerminalDock {
       resources.webglRecoveryAttempts = 0;
       resources.webglRecoveryPaused = false;
       resources.diagnosticChangedAt = Date.now();
-      const contextLoss = webgl.onContextLoss(() => {
+      const attached = webgl;
+      const contextLoss = attached.onContextLoss(() => {
         contextLoss.dispose();
-        if (resources.webgl === webgl) {
+        if (resources.webgl === attached) {
           resources.webgl = null;
           resources.webglContextLoss = null;
         }
-        webgl.dispose();
+        attached.dispose();
         if (resources.disposed || !this.#accepts(runtime, ticket)) return;
         resources.diagnosticChangedAt = Date.now();
         resources.terminal.refresh(0, resources.terminal.rows - 1);
@@ -2283,6 +2351,7 @@ class TerminalDock {
       this.#workspaceGeneration !== 0 &&
       payload.generation !== this.#workspaceGeneration
     ) return;
+    if (this.#popOutExits.record(payload)) return;
     const heldPaneId = this.#poppedOut.get(payload.sessionId);
     if (heldPaneId !== undefined) {
       this.#releaseHeldPane(payload, heldPaneId);
@@ -2309,6 +2378,7 @@ class TerminalDock {
    */
   #releaseHeldPane(result: TerminalExit, paneId: string): void {
     this.#poppedOut.delete(result.sessionId);
+    this.#endedPoppedOut.add(result.sessionId);
     const runtime = this.#runtimes.get(paneId);
     if (!runtime || runtime.session || runtime.state !== "closed" || runtime.busy) {
       return;
@@ -2606,6 +2676,14 @@ class TerminalDock {
     this.#scratchpadSaver.flush();
   }
 
+  flushPending(): Promise<void> {
+    if (this.#disposed) return Promise.resolve();
+    return Promise.race([
+      this.#scratchpadSaver.flushPending(),
+      new Promise<void>((resolve) => window.setTimeout(resolve, pendingFlushLimitMs)),
+    ]);
+  }
+
   /**
    * Installs a record the saver read from the store. Returns the local text
    * that must win when the user is typing into the note right now.
@@ -2624,6 +2702,12 @@ class TerminalDock {
   }
 
   #captureSnippet(text: string): void {
+    // The scratchpad is stored in the project database: a copy that looks
+    // like a credential stays on the clipboard only.
+    if (looksLikeSecret(text)) {
+      this.#setScratchpadStatus(secretCaptureNotice);
+      return;
+    }
     // A capture must not race the first read: adding to an unread record would
     // save revision 0 over the stored one and lose it to a conflict.
     if (!this.#scratchpadSaver.loaded && this.#scratchpadSaver.enabled) {
@@ -2853,20 +2937,30 @@ class TerminalDock {
     }
     // A stream that ended without anyone asking for it is not the end of the
     // session: the PTY is still running and the lease can be claimed back.
+    // One the server closed normally is: the output ended with the shell, so
+    // the pane waits for the exit instead of replaying the same scrollback.
     const resources = runtime.resources;
-    if (
-      state !== "open" &&
-      resources &&
-      !resources.disposed &&
-      streamLossIsRecoverable({
-        state: runtime.state,
-        closing: runtime.closing,
-        hasSession: runtime.session !== null,
-        hasRenderer: true,
-      })
-    ) {
-      this.#scheduleStreamReclaim(runtime, ticket, resources, sessionId);
-      return;
+    if (state !== "open" && resources && !resources.disposed) {
+      const disposition = streamCloseDisposition({
+        outputEnded: state === "closed" && resources.client?.outputEnded === true,
+        sessionEnded: resources.sessionEnded,
+        recoverable: streamLossIsRecoverable({
+          state: runtime.state,
+          closing: runtime.closing,
+          hasSession: runtime.session !== null,
+          hasRenderer: true,
+        }),
+      });
+      if (disposition === "reclaim") {
+        this.#scheduleStreamReclaim(runtime, ticket, resources, sessionId);
+        return;
+      }
+      if (disposition === "ended") {
+        if (runtime.state === "running" || runtime.state === "opening") {
+          this.#setState(runtime, "exited", streamOutputEndedNotice);
+        }
+        return;
+      }
     }
     const transition = paneRuntimeTransition(runtime.state, {
       kind: state === "open"
@@ -2975,22 +3069,22 @@ class TerminalDock {
   ): TerminalDiagnosticInput {
     const process: TerminalDiagnosticProcess = runtime.closing
       ? "stopping"
-      : {
+      : ({
         closed: "stopped",
         opening: "starting",
         running: "running",
         exited: "exited",
         failed: "failed",
-      }[runtime.state];
+      } satisfies Record<DockState, TerminalDiagnosticProcess>)[runtime.state];
     const clientState = resources?.client?.state;
     const stream: TerminalDiagnosticStream = !runtime.session || !clientState
       ? "idle"
-      : {
+      : ({
         closed: "disconnected",
         connecting: "connecting",
         open: "connected",
         error: "failed",
-      }[clientState];
+      } satisfies Record<StreamState, TerminalDiagnosticStream>)[clientState];
     const visible = Boolean(
       resources &&
       !resources.disposed &&
@@ -3106,6 +3200,15 @@ class TerminalDock {
     });
   }
 
+  #placeEmptyNotice(stopped: boolean, paneId: string): void {
+    this.#empty.hidden = !stopped;
+    if (!stopped) return;
+    const mount = this.#body.hidden
+      ? this.#emptyHome
+      : this.#splitView.mountForPane(paneId) ?? this.#host;
+    if (mount && this.#empty.parentElement !== mount) mount.append(this.#empty);
+  }
+
   #renderState(): void {
     this.#syncTerminalInputLabels();
     const runtime = this.#activeRuntime();
@@ -3134,6 +3237,12 @@ class TerminalDock {
       singlePane: !activeTab || paneIds(activeTab.root).length === 1,
       scratchpadOpen: this.#scratchpadOpen,
     });
+    // Whenever the dock is expanded around a stopped pane, it says so and offers
+    // Start shell; the collapsed bar keeps only its compact Open control.
+    this.#placeEmptyNotice(
+      runtime.state === "closed" && !poppedOut && (dockInteractionEligible || this.#scratchpadOpen),
+      runtime.paneId,
+    );
     this.#message.textContent = runtime.detail;
     this.#message.hidden = runtime.detail === "";
     const shellLabel = runtime.state === "running" && resources
@@ -3199,6 +3308,7 @@ class TerminalDock {
     this.#popOut.disabled = popOut.disabled;
     this.#open.disabled = runtime.busy || runtime.closing || linked || poppedOut ||
       !descriptor?.pane.profileId;
+    this.#startShell.disabled = this.#open.disabled || this.#open.hidden;
     this.#restart.disabled = !diagnosticView.canRestart;
     this.#start.disabled = runtime.state === "closed"
       ? this.#open.disabled
@@ -3735,6 +3845,23 @@ class TerminalDock {
     });
   }
 
+  // A pane's palette is its profile's, mapped through the app theme.
+  #applyAppTheme(): void {
+    if (this.#disposed) return;
+    const appTheme = document.documentElement.dataset.theme;
+    for (const runtime of this.#runtimes.values()) {
+      const resources = runtime.resources;
+      if (!resources || resources.disposed) continue;
+      const profileId = this.#descriptorFor(runtime.paneId)?.pane.profileId ||
+        this.#defaultProfileId;
+      const profileTheme = this.#profileSettings.get(profileId)?.theme ?? "default";
+      applyTerminalTheme(
+        resources.terminal,
+        terminalProfileTheme(terminalThemeName(profileTheme, appTheme)),
+      );
+    }
+  }
+
   #setModernUnicode(enabled: boolean): void {
     try {
       for (const runtime of this.#runtimes.values()) {
@@ -3749,14 +3876,11 @@ class TerminalDock {
         }
       }
     } catch (error) {
-      this.#modernUnicode.checked = this.#modernUnicodeEnabled;
       this.#showError(error);
       return;
     }
 
     this.#modernUnicodeEnabled = enabled;
-    this.#modernUnicode.checked = enabled;
-    this.#saveUnicodeMode(enabled ? "modern" : "legacy");
     for (const runtime of this.#runtimes.values()) {
       const resources = runtime.resources;
       if (resources && !resources.disposed) {
@@ -3885,7 +4009,9 @@ class TerminalDock {
     const rows = activeResources?.terminal.rows ?? 24;
     const columns = activeResources?.terminal.cols ?? 80;
 
-    let releasePersistenceStage: (() => void) | null = null;
+    // Set from inside the stage callback, so it lives on an object the
+    // compiler does not narrow back to its initial null.
+    const persistenceStage: { release: (() => void) | null } = { release: null };
     try {
       await completeLinkedLaunchTransaction<TerminalSession, LinkedTabStage>({
         launch: () => this.#backend.LaunchLinkedAgent(
@@ -3900,7 +4026,7 @@ class TerminalDock {
           // Persist the last committed workspace before staging. While the
           // backend session is unattached, neither timers nor project teardown
           // may serialize the tentative linked descriptor.
-          releasePersistenceStage = this.#linkedPersistenceStage.begin(
+          persistenceStage.release = this.#linkedPersistenceStage.begin(
             () => this.#flushPersistence(),
           );
           const priorTabIDs = new Set(
@@ -3993,6 +4119,7 @@ class TerminalDock {
         },
       });
     } finally {
+      const releasePersistenceStage = persistenceStage.release;
       if (releasePersistenceStage !== null) {
         releasePersistenceStage();
         if (!this.#disposed) this.#markPersistenceDirty();
@@ -4157,6 +4284,16 @@ class TerminalDock {
     this.#renderPanelVisibility();
   }
 
+  setModernUnicode(enabled: boolean): void {
+    if (this.#disposed || this.#modernUnicodeEnabled === enabled) return;
+    this.#setModernUnicode(enabled);
+  }
+
+  startSession(): void {
+    if (this.#disposed || this.#open.disabled || this.#open.hidden) return;
+    void this.#runOperation((runtime) => this.#openTerminal(runtime));
+  }
+
   setLayoutLocked(locked: boolean): void {
     if (this.#disposed) return;
     this.#layoutLocked = locked;
@@ -4203,8 +4340,11 @@ export function mountTerminalDock(
     },
     setVisible: (visible) => dock.setVisible(visible),
     setLayoutLocked: (locked) => dock.setLayoutLocked(locked),
+    setModernUnicode: (enabled) => dock.setModernUnicode(enabled),
+    startSession: () => dock.startSession(),
     setApplicationOverlayOpen: (open, focusTerminal) =>
       dock.setApplicationOverlayOpen(open, focusTerminal),
+    flushPending: () => dock.flushPending(),
     dispose: () => dock.dispose(),
   };
 }

@@ -114,10 +114,6 @@ const ROOT_CHILDREN: &[Child] = &[
         "board",
         "Kanban board of a plan's tasks (todo/doing/blocked/done)",
     ),
-    child(
-        "capability",
-        "Manage and invoke explicit project host capabilities",
-    ),
     child("commit", "Track git commits in the project audit trail"),
     child(
         "completion",
@@ -299,13 +295,6 @@ const HOOK_CHILDREN: &[Child] = &[
         "Remove the ptrack block from the post-commit hook",
     ),
 ];
-const CAPABILITY_CHILDREN: &[Child] = &[
-    child(
-        "call",
-        "Call a capability tool through the active host broker",
-    ),
-    child("mcp", "Serve provider-compatible MCP tools over stdio"),
-];
 const AGENT_CHILDREN: &[Child] = &[
     child("inbox", "List pending memory-only handoff proposals"),
     child("list", "List live registered agent runs"),
@@ -479,7 +468,7 @@ fn specification(path: &[String]) -> Spec {
         ),
         [
             group @ ("goal" | "summary" | "milestone" | "plan" | "task" | "issue" | "note"
-            | "commit" | "config" | "hook" | "agent" | "capability"),
+            | "commit" | "config" | "hook" | "agent"),
         ] => {
             let (text, children) = match *group {
                 "goal" => ("Show or set the project's north-star goal", GOAL_CHILDREN),
@@ -504,13 +493,9 @@ fn specification(path: &[String]) -> Spec {
                     "Manage the git post-commit hook that auto-records commits",
                     HOOK_CHILDREN,
                 ),
-                "agent" => (
+                _ => (
                     "Inspect the active project's live agent coordination host",
                     AGENT_CHILDREN,
-                ),
-                _ => (
-                    "Manage and invoke explicit project host capabilities",
-                    CAPABILITY_CHILDREN,
                 ),
             };
             let aliases = if *group == "milestone" {
@@ -570,7 +555,6 @@ fn specification(path: &[String]) -> Spec {
         ["config", leaf] => config_leaf(leaf),
         ["hook", leaf] => hook_leaf(leaf),
         ["agent", leaf] => agent_leaf(leaf),
-        ["capability", leaf] => capability_leaf(leaf),
         [leaf] => root_leaf(leaf),
         _ => group_spec("ptrack", ROOT_LONG, ROOT_CHILDREN),
     }
@@ -788,7 +772,11 @@ fn task_leaf(name: &str) -> Spec {
                 ),
             ],
         ),
-        "block" => leaf_spec("task block <id>", "Mark a task blocked", HELP_ONLY),
+        "block" => leaf_spec(
+            "task block <id> [reason...]",
+            "Mark a task blocked, recording the optional reason as a task note",
+            HELP_ONLY,
+        ),
         "hold" => leaf_spec(
             "task hold <id> <reason...>",
             "Put a task on hold with a reason (keeps its status)",
@@ -1002,27 +990,6 @@ fn hook_leaf(name: &str) -> Spec {
     }
 }
 
-fn capability_leaf(name: &str) -> Spec {
-    match name {
-        "call" => leaf_spec(
-            "capability call <tool>",
-            "Call a capability tool through the active host broker",
-            &[
-                flag(
-                    "    --arguments string",
-                    "JSON object matching the tool input schema (default \"{}\")",
-                ),
-                HELP_FLAG,
-            ],
-        ),
-        _ => leaf_spec(
-            "capability mcp",
-            "Serve provider-compatible MCP tools over stdio",
-            HELP_ONLY,
-        ),
-    }
-}
-
 fn agent_leaf(name: &str) -> Spec {
     match name {
         "list" => leaf_spec(
@@ -1183,7 +1150,6 @@ fn group_children(name: &str) -> Option<&'static [&'static str]> {
         "commit" => Some(&["add", "list", "record", "show"]),
         "hook" => Some(&["install", "status", "uninstall"]),
         "agent" => Some(&["inbox", "list", "show"]),
-        "capability" => Some(&["call", "mcp"]),
         "completion" => Some(&["bash", "fish", "powershell", "zsh"]),
         _ => None,
     }

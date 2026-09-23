@@ -35,7 +35,8 @@ unannounced default test side effect.
 Exercise the native Tauri app with no project open and with an open project.
 
 - Default startup makes no update request. About & Updates opens from both the
-  version trigger and native Settings menu on the Welcome screen.
+  version trigger and the native Check for Updates… item (the p-track app menu
+  on macOS, the Help menu elsewhere) on the Projects screen.
 - A manual check contacts only the p-track GitHub Release endpoint. An opt-in
   survives restart; opting out during an admitted automatic check cancels it.
 - Check, download and install are separate actions. Cancel leaves the UI in an
@@ -43,8 +44,10 @@ Exercise the native Tauri app with no project open and with an open project.
 - Progress stays bounded and does not repeatedly announce the whole dialog.
   Release notes are plain text and the release-page action opens only the
   validated p-track GitHub URL.
-- Unknown, stale, malformed, tampered, unsupported, development, downgrade, and
-  recovery-required states expose no new update authority.
+- Unknown, stale, malformed, tampered, unsigned, unsupported, development,
+  downgrade, and recovery-required states expose no new update authority. A
+  release whose `checksums.txt.sig` is missing or does not verify against the
+  pinned release key is refused before its package downloads.
 - Tab and Shift+Tab remain inside the dialog without focusing the backdrop;
   Escape and the backdrop close it; focus returns to the invoker. VoiceOver,
   NVDA, or Orca announces phase changes without reading asset paths or URLs.
@@ -53,7 +56,7 @@ Exercise the native Tauri app with no project open and with an open project.
 
 | Platform | Acceptance |
 |---|---|
-| macOS | A current signed/notarized release DMG passes checksum, `hdiutil`, pinned-team `codesign`, and Gatekeeper checks before opening. The app bundle is not modified in place. |
+| macOS | A current signed/notarized release DMG passes the signed-manifest check, checksum, `hdiutil`, pinned-team `codesign`, and Gatekeeper checks before opening. The app bundle is not modified in place. |
 | Windows | The verified architecture-matched ZIP is selected in the real Windows Explorer. The running executable is unchanged until the user closes p-track and replaces it. |
 | Linux | A current-user standalone executable replaces atomically, reports the exact new version, retains its safe mode, and requests restart. Unsafe ownership/modes refuse. Forced probe failure rolls back; a crash journal recovers only the bound original or verified replacement. |
 

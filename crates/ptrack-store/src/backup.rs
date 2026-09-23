@@ -79,20 +79,17 @@ fn copy_private(source: &fs::File, destination: &Path) -> StoreResult<FileIdenti
     #[cfg(windows)]
     crate::protect_private_file(destination)?;
     let identity = FileIdentity::from_file(&output)?;
-    #[cfg(not(windows))]
-    {
-        let mut input = source.try_clone()?;
-        io::copy(&mut input, &mut output)?;
-    }
-    #[cfg(windows)]
+    // Positioned reads from offset 0: the source handle is the live database
+    // backend, and a cloned descriptor shares its file cursor, so a streamed
+    // copy would leave the cursor at EOF and a second backup through the same
+    // handle would copy nothing.
     {
         use std::io::Write as _;
-        use std::os::windows::fs::FileExt as _;
 
         let mut offset = 0_u64;
-        let mut buffer = [0_u8; 64 * 1024];
+        let mut buffer = vec![0_u8; 64 * 1024];
         loop {
-            let read = source.seek_read(&mut buffer, offset)?;
+            let read = read_at(source, &mut buffer, offset)?;
             if read == 0 {
                 break;
             }
@@ -103,6 +100,26 @@ fn copy_private(source: &fs::File, destination: &Path) -> StoreResult<FileIdenti
     output.sync_all()?;
     ensure_path_identity(destination, identity)?;
     Ok(identity)
+}
+
+#[cfg(unix)]
+fn read_at(file: &fs::File, buffer: &mut [u8], offset: u64) -> io::Result<usize> {
+    use std::os::unix::fs::FileExt as _;
+    file.read_at(buffer, offset)
+}
+
+#[cfg(windows)]
+fn read_at(file: &fs::File, buffer: &mut [u8], offset: u64) -> io::Result<usize> {
+    use std::os::windows::fs::FileExt as _;
+    file.seek_read(buffer, offset)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn read_at(_: &fs::File, _: &mut [u8], _: u64) -> io::Result<usize> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "positioned backup reads are unsupported on this platform",
+    ))
 }
 
 struct BackupParent {

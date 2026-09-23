@@ -14,7 +14,7 @@
   border-bottom:1px solid var(--line-strong);
 }
 #settings-modal .settings-dialog-heading .eyebrow {
-  margin:0 0 6px; color:var(--text-soft); font-size:11px; letter-spacing:.1em;
+  margin:0 0 6px; color:var(--text-soft); letter-spacing:.1em;
 }
 #settings-modal .settings-dialog-heading h2 {
   margin:0; font-size:26px; line-height:1.15; letter-spacing:-.035em; font-weight:650;
@@ -46,7 +46,7 @@
 }
 #settings-modal .settings-panel { gap:12px; }
 #settings-modal .settings-panel > .section-label {
-  margin:0 0 4px; color:var(--text-soft); font-size:11px; letter-spacing:.08em; line-height:1.5;
+  margin:0 0 4px; color:var(--text-soft); letter-spacing:.08em; line-height:1.5;
 }
 #settings-modal .settings-field,
 #settings-modal .settings-check {

@@ -606,6 +606,95 @@ fn runtime_json_publish_compare_remove_liveness_and_concurrency_are_private() {
     );
 }
 
+fn tool_event(sequence: u64) -> EventObservation {
+    EventObservation {
+        model_version: EVENT_MODEL_VERSION,
+        source_id: format!("source-{sequence}"),
+        source_sequence: sequence,
+        kind: EventKind::Tool,
+        phase: EventPhase::Progress,
+        ..EventObservation::default()
+    }
+}
+
+#[test]
+fn a_burst_of_events_is_one_debounced_write_and_shutdown_flushes_it() {
+    let root = TempDirectory::new("ptrack-agent-history-burst-root");
+    let history = TempDirectory::new("ptrack-agent-history-burst-file");
+    let state_path = history.path().join("agent-runs.json");
+    let now = Arc::new(AtomicI64::new(100));
+    let mut config = persisted_config(root.path(), state_path.clone(), Arc::clone(&now));
+    // Long enough that no background flush can land inside the burst.
+    config.persist_debounce = std::time::Duration::from_secs(60);
+    let registry = Registry::new(config);
+    let lease = registry.register_external(external_registration()).unwrap();
+    let after_register = registry.history_write_count();
+    assert_eq!(after_register, 1, "registration persists synchronously");
+    let before = fs::read(&state_path).unwrap();
+    for sequence in 1..=100 {
+        registry
+            .record_event(&lease.run.id, &lease.lease_token, tool_event(sequence))
+            .unwrap();
+    }
+    assert_eq!(registry.history_write_count(), after_register);
+    assert_eq!(fs::read(&state_path).unwrap(), before);
+
+    registry.shutdown().unwrap();
+    assert!(registry.history_write_count() <= after_register + 2);
+    let restored = Registry::new(persisted_config(root.path(), state_path, now));
+    let (events, total) = restored.event_snapshot(&lease.run.id, 0).unwrap();
+    assert_eq!(total, 100);
+    assert_eq!(events.last().unwrap().source_sequence, 100);
+}
+
+#[test]
+fn the_background_flush_persists_events_without_shutdown_and_atomically() {
+    let root = TempDirectory::new("ptrack-agent-history-flush-root");
+    let history = TempDirectory::new("ptrack-agent-history-flush-file");
+    let state_path = history.path().join("agent-runs.json");
+    let now = Arc::new(AtomicI64::new(100));
+    let mut config = persisted_config(root.path(), state_path.clone(), Arc::clone(&now));
+    config.persist_debounce = std::time::Duration::from_millis(20);
+    let registry = Registry::new(config);
+    let lease = registry.register_external(external_registration()).unwrap();
+    for sequence in 1..=20 {
+        registry
+            .record_event(&lease.run.id, &lease.lease_token, tool_event(sequence))
+            .unwrap();
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let contents = fs::read_to_string(&state_path).unwrap();
+        if contents.contains("source-20") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "debounced flush never landed"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    // One registration write plus a handful of debounced flushes, never one
+    // write per event.
+    assert!(registry.history_write_count() < 1 + 20);
+    // The flush goes through the atomic replace: the file always parses and
+    // no temporary sibling is left behind.
+    let persisted = read_history(&state_path).unwrap().expect("history exists");
+    assert_eq!(persisted.runs[0].events.len(), 20);
+    let leftovers: Vec<_> = fs::read_dir(history.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| {
+            name != "agent-runs.json"
+                && std::path::Path::new(name)
+                    .extension()
+                    .is_none_or(|extension| extension != "lock")
+        })
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+    registry.shutdown().unwrap();
+}
+
 #[test]
 fn shutdown_timeout_surfaces_final_history_save_failure() {
     let root = TempDirectory::new("ptrack-agent-history-error-root");

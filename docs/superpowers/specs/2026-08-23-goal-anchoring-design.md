@@ -50,7 +50,9 @@ If no goal is set, the line is omitted. Touches `next()` and `show_task()` in
   links come from the post-commit hook via `#<task-id>` or `ptrack commit
   record`). The error explains both linking paths.
 
-On success the command prints `Linked commits: N`.
+On success the command prints `Linked commits: N`. The closeout note, any
+override note, and the status change commit in one transaction, so a refused
+close leaves no orphan notes and a retry does not duplicate them.
 
 `--force` closes the task anyway and records an override note on the task
 ("closed without summary/commit via --force"), so the audit trail shows the
@@ -71,6 +73,11 @@ Integrate and verify against goal: <goal text>
 - The task is created through the same path as `task add` (system-created, so
   the WIP gate in piece 5 does not apply to it); dependency, hold, and note
   behavior are unchanged.
+- As implemented, the integration task is created together with the plan, so
+  it is the plan's first-born task and takes the lowest task ID in it (task #1
+  in a fresh project). `ptrack next` and MCP `get_next_task` defer it: it is
+  handed out only once the plan has no other open work. A task merely titled
+  like it is not deferred.
 
 ### 4. Plan close gate + checkpoint
 
@@ -98,7 +105,8 @@ CHECKPOINT — before continuing, re-evaluate:
 
 - Milestone line appears only when the plan belongs to a milestone.
 - The same block is available on demand as `ptrack checkpoint [--json]` so a
-  handoff agent (or the guide) can request the whole picture at any time.
+  handoff agent (or the guide) can request the whole picture at any time. On
+  demand, the milestone line reports the active plan's milestone.
 - `--json` output carries the structured fields (goal, summary, open plans,
   open issue counts, milestone progress); the CHECKPOINT prose is
   markdown-only.
@@ -118,10 +126,18 @@ item. Explicit parking stays free — `task hold`, `task block`, `note add`,
 `issue add`, and all read commands are never gated, so recording problems and
 re-planning are always possible.
 
-Scope: when a per-machine identity is configured, the gate considers only
-started tasks in plans claimed by that identity (another agent's in-progress
-work never blocks you). Without identity, the gate is project-wide, matching
-the existing single-active-plan behavior.
+Parking releases the gate. A task counts as in progress only while its status
+is `doing` and it carries no hold, so `task hold <id> <reason>` (which keeps the
+`doing` status and adds a hold) and `task block <id> [reason]` (which moves it
+to `blocked` and records the optional reason as a `blocked: <reason>` note in
+the same write) both let the next task start without `--force`.
+
+Scope: when a per-machine identity is configured, the gate counts a started
+task against the owner of its plan's claim, so it considers only started tasks
+in plans claimed by that identity (another agent's in-progress work never
+blocks you). In an unclaimed plan the task's own actor stamp (whoever last
+changed it) stands in for the owner. Without identity, the gate is
+project-wide, matching the existing single-active-plan behavior.
 
 ### 6. Playbook (agent guide) update
 
@@ -153,10 +169,16 @@ All pieces read the existing `ProjectSnapshot` (goal, summary, plans, tasks,
 issues, milestones, notes, commits). Writes: ordinary notes whose bodies are
 prefixed `closeout:` / `override:` (reusing the plain note kind avoids a wire
 enum change that would break older readers) and one auto-created task per
-plan. Gate checks live in the CLI dispatch layer — the agent surface. The
-desktop GUI and TUI are human surfaces and keep their direct mutation paths;
-the capability MCP exposes no task mutations. Both GUIs render
-closeout/override notes and the auto task like any other note/task.
+plan. Gate checks live in the CLI dispatch layer and the shared application
+service behind it, so `ptrack mcp` `complete_task` enforces the same evidence
+gate as `task done`. The desktop GUI and TUI are human surfaces: they may close
+a task without a summary or linked commit, and the TUI may complete a plan with
+open tasks, but each such close writes an override note naming the surface and
+what was missing (for example "override: closed from desktop without evidence
+(no closeout summary; no linked commit)") in the same transaction as the
+status. Desktop plan completion still refuses a plan with open tasks. Both
+GUIs render closeout/override notes and the auto task like any other
+note/task. (The capability MCP this section once mentioned has been retired.)
 
 ## Error handling
 

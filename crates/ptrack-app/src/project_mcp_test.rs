@@ -1,13 +1,12 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use ptrack_capability::McpCancellation;
 use ptrack_core::{NoteTarget, TaskStatus};
 use ptrack_store::{ActiveBinding, GlobalStore, ProjectStore, StoreKind};
 use serde_json::{Value, json};
 
 use crate::{
-    ApplicationPort, LocalApplication, Mutation, MutationResult, ProjectEndpoint,
+    ApplicationPort, LocalApplication, McpCancellation, Mutation, MutationResult, ProjectEndpoint,
     WorkspaceBindings, serve_project_mcp,
 };
 
@@ -167,6 +166,10 @@ fn project_mcp_lists_and_executes_the_four_bounded_structured_tools() {
         rows[2]["result"]["structuredContent"]["active_plan"]["id"],
         1
     );
+    let context = &rows[2]["result"]["structuredContent"];
+    assert_eq!(context["notice"], ptrack_core::UNTRUSTED_DATA_NOTICE);
+    assert_eq!(context["truncated"], false);
+    assert_eq!(context["active_plan"]["open_tasks_more"], 0);
     assert_eq!(
         rows[3]["result"]["structuredContent"]["task"]["id"],
         task_id

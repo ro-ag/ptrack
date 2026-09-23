@@ -65,10 +65,6 @@ describe("production asset layout", () => {
       resolve(frontendRoot, "src/terminal/pane.ts"),
       "utf8",
     );
-    const appSource = readFileSync(
-      resolve(frontendRoot, "src/app.js"),
-      "utf8",
-    );
     const firstRunSource = readFileSync(
       resolve(frontendRoot, "src/workspace/first-run.ts"),
       "utf8",
@@ -97,7 +93,9 @@ describe("production asset layout", () => {
     const versionStyles = styles.match(/\.app-version\{([^}]*)\}/)?.[1];
     expect(versionStyles).toMatch(/(?:^|;)position:relative(?:;|$)/);
     expect(versionStyles).toMatch(/(?:^|;)z-index:1(?:;|$)/);
-    expect(versionStyles).toMatch(/(?:^|;)--wails-draggable:\s*no-drag(?:;|$)/);
+    // Tauri never reads the Wails-era drag property; drag regions are
+    // data-tauri-drag-region attributes instead.
+    expect(styles).not.toContain("--wails-draggable");
     expect(styles).toMatch(/\.state-card\{[^}]*box-shadow:/);
     expect(styles).not.toMatch(
       /\.state-card\{[^}]*(?:animation|transform|opacity):/,
@@ -110,7 +108,6 @@ describe("production asset layout", () => {
     expect(landingSource).toMatch(/#welcome-panel \.stat-label \{[^}]*white-space:normal;[^}]*overflow:visible;/);
     expect(landingSource).toContain('data-reduced-motion="always"');
     expect(landingSource).toContain(':root:not([data-reduced-motion="never"]) #welcome-panel');
-    expect(appSource).toContain('elements.welcomePanel.querySelectorAll("[data-recent-focus-key]")');
     expect(index).toMatch(/id="workspace-state-heading"[^>]*>Projects<\/h2>/);
     expect(index).toMatch(/id="state-open-project-button"[\s\S]*?Open folder…<\/button>/);
     expect(index).toMatch(/id="state-initialize-project-button"[\s\S]*?Initialize project<\/button>/);
@@ -171,16 +168,8 @@ describe("production asset layout", () => {
     expect(index).toMatch(
       /id="setup-uncertain-actions"[\s\S]*id="setup-check-status"[^>]*>Check Status Again<\/button>/,
     );
-    expect(appSource).not.toContain(".ptrack/ptrack.redb");
     expect(firstRunJourneySource).toContain("api.ValidateProjectTargetV1(root)");
     expect(firstRunJourneySource).toContain("api.InitializeProjectV1(request)");
-    expect(appSource).toContain("validateInitializationTarget(api(), path)");
-    expect(appSource).toContain("commitInitialization(api(), request)");
-    expect(appSource).toContain("runExactProjectOpen(");
-    expect(appSource).toMatch(
-      /resumeInitialization\(\s*api\(\),\s*operationId,\s*canonicalRoot,?\s*\)/,
-    );
-    expect(appSource).toContain("PreviewProjectGuideV1({ operationId, root: canonicalRoot })");
     expect(firstRunJourneySource).toContain("guideChoice: guide.guideChoice");
     expect(firstRunJourneySource).toContain(
       "guidePreviewToken: guide.guidePreviewToken",
@@ -190,13 +179,6 @@ describe("production asset layout", () => {
       'const resumeFields = ["initialization", "goal", "guideChoice"]',
     );
     expect(firstRunSource).toContain('state.checkpoint === "guide-applied"');
-    expect(appSource).toContain("if (validation.resume)");
-    expect(appSource).toContain("goal: validation.resume.goal");
-    expect(appSource).toContain("firstRunState.storageAlreadyCreated");
-    expect(appSource).toContain("firstRunState.resumeLocked");
-    expect(appSource).toContain(
-      "No project files were written. You can try again safely.",
-    );
     expect(firstRunSource).toContain('event.initialization.outcome === "in-progress"');
     expect(firstPlanSource).toContain("parseCreateFirstPlanResult");
     expect(firstPlanSource).toContain('task.status === "todo" || task.status === "doing"');
@@ -207,132 +189,23 @@ describe("production asset layout", () => {
     expect(firstPlanSource).toContain(
       "api.StartFirstTaskV1(generation, taskId, expectedUpdatedAt)",
     );
-    expect(appSource).toContain("await createFirstPlan(");
-    expect(appSource).toContain("await createFirstTask(");
-    expect(appSource).toContain("await runStartFirstTask(");
-    expect(appSource).toContain("workspaceController.accepts(ticket, generation)");
-    expect(appSource).toContain('firstPlanState.phase !== "idle"');
-    expect(appSource).toMatch(
-      /function selectPlan\(planId\) \{\s*if \(firstPlanState\.phase !== "idle"\) return;/,
-    );
-    expect(appSource).toMatch(
-      /function openPalette\(\) \{\s*if \([\s\S]*workspaceController\.state\.status !== "open" \|\|[\s\S]*firstPlanState\.phase !== "idle"[\s\S]*\) return;/,
-    );
-    expect(appSource).toContain("elements.planList.inert = active");
-    expect(appSource).toContain("elements.sidebarToggle.disabled = active");
-    expect(appSource).toContain("elements.sidebarResize.inert = active");
-    expect(appSource).toContain("terminalHandle.setLayoutLocked(active)");
-    expect(appSource).toContain(
-      'handle.setLayoutLocked(firstPlanState.phase !== "idle")',
-    );
-    expect(appSource).toContain(
-      "firstPlanState = { ...initialFirstPlanState };\n  renderFirstPlanOnboarding(false);",
-    );
     expect(paneSource).toContain("setLayoutLocked(locked: boolean)");
     expect(paneSource).toContain(
       "this.#boardToggle.disabled = this.#layoutLocked || !dockInteractionEligible",
     );
-    expect(appSource).toContain(
-      "firstPlanExitFocusTarget(planId, sidebarHeadingUnavailableForFocus())",
-    );
-    expect(appSource).toContain("await loadSnapshot(planId > 0 ? planId : 0)");
-    expect(appSource).toMatch(
-      /applyView\(\);\s*document\.getElementById\(\s*firstPlanExitFocusTarget\(planId, sidebarHeadingUnavailableForFocus\(\)\),\s*\)\?\.focus\(\);\s*await loadSnapshot\(planId > 0 \? planId : 0\);/,
-    );
-    expect(appSource).toContain("Saving or reconciling the first plan…");
-    expect(appSource).toContain("Saving or reconciling the first task…");
-    expect(appSource).toContain("p-track is reconciling the requested start.");
-    expect(appSource).not.toContain("Creating the first task in Todo…");
-    expect(appSource).not.toContain("safely stored in Todo while p-track starts it");
     expect(recentProjectsSource).toMatch(
       /export type RecentProjectAvailability\s*=\s*\| "available"\s*\| "missing"\s*\| "permission-required"\s*\| "changed"/,
     );
     expect(recentProjectsSource).toContain("Recent projects exceeded the 20-entry limit.");
     expect(recentProjectsSource).toContain("Recent projects were not newest first.");
-    expect(appSource).toContain("GetRecentProjectsV1");
-    expect(appSource).toMatch(/function renderWorkspaceState[\s\S]*?epoch !== recentWorkspaceEpoch[\s\S]*?recentListRequest \+= 1[\s\S]*?overviewRequest \+= 1[\s\S]*?type: "loadCancelled"/);
-    expect(appSource).toContain("ResolveRecentProjectV1");
-    expect(appSource).toContain("OpenRecentProjectV1");
-    expect(appSource).toContain("ForgetRecentProjectV1");
-    expect(appSource).toContain("recentProjectOperationIsCurrent(ticket)");
-    expect(appSource).toContain("function recentProjectOperationActive()");
-    expect(appSource).toContain("elements.stateInitialize.disabled = operationActive");
-    expect(appSource).toContain("elements.stateOpen.disabled = operationActive");
-    expect(appSource).toMatch(
-      /async function requestOpenProject\([^)]*\) \{\s*if \(recentProjectOperationActive\(\)\) return;/,
-    );
-    expect(appSource).toMatch(
-      /async function requestInitializeProject\([^)]*\) \{\s*if \(recentProjectOperationActive\(\)\) return;/,
-    );
-    expect(appSource).toMatch(
-      /function nativeCommandAllowed\(command\) \{[\s\S]*recentProjectOperationActive\(\)/,
-    );
-    expect(appSource).toContain(
-      "button.disabled = recentProjectsState.listLoading ||",
-    );
-    expect(appSource).toMatch(
-      /function beginRecentProjectOperation\(entry, intent\) \{[\s\S]*recentProjectsState\.listLoading \|\|[\s\S]*!\["idle", "error"\]\.includes\(recentProjectsState\.phase\)[\s\S]*return null;/,
-    );
-    expect(appSource).toContain(
-      "operationSequence !== recentOperationSequence",
-    );
-    expect(appSource).toContain('warnings.join(" ")');
-    expect(appSource).toContain("Folder not found");
-    expect(appSource).toContain("Permission required");
-    expect(appSource).toContain("Project changed");
-    expect(appSource).toContain("Project files will not be changed.");
-    expect(appSource).toContain("registryStatus === \"stale\"");
-    expect(appSource).toContain("await refreshRecentProjectsAfterOpen()");
-    expect(appSource).toContain("RECENT_RELOCATION_UNCONFIRMED");
-    expect(appSource).toMatch(
-      /async function openAvailableRecentProject[\s\S]*?GetRecentProjectsV1\(\)[\s\S]*?refreshedRecentProjectForOpen\(projects, entry\)[\s\S]*?openResolvedRecentProject\(ticket, refreshed/,
-    );
-    expect(appSource).toContain(
-      "p-track refreshed it without replaying Open. Review the row and choose again.",
-    );
     expect(recentProjectsSource).toContain("bounded registry list");
-    expect(appSource).toMatch(
-      /CancelWorkspaceChange\(result\.open\.confirmationToken\)[\s\S]*setRecentProjectsState\(\{[\s\S]*type: "settled"[\s\S]*renderWorkspaceState\(result\.open\.state, false\)[\s\S]*restoreRecentProjectFocus/,
-    );
-    expect(appSource).not.toContain("projects.filter((project) => project.available)");
-    expect(appSource).not.toContain("The first plan was not created");
-    expect(appSource).not.toContain("The first task was not created");
-    expect(appSource).not.toContain("The task remains in Todo");
-    expect(appSource).toContain(
-      "elements.setupGuideStaleSkip.hidden = !firstRunState.guideSkipAllowed",
-    );
-    expect(appSource).toContain("skipAllowed: false");
-    expect(appSource).toContain("code.textContent = file.diff");
-    expect(appSource).not.toContain("code.innerHTML = file.diff");
-    expect(appSource).toContain("element.inert = !visible");
-    expect(appSource).not.toMatch(/toggleAttribute\(\s*["']aria-/);
-    expect(appSource).toMatch(
-      /setAriaBoolean\(\s*elements\.setupOperation,\s*"aria-busy"/,
-    );
-    expect(appSource).toMatch(
-      /setAriaBoolean\(\s*elements\.onboardingOperation,\s*"aria-busy"/,
-    );
-    expect(appSource).toContain('nativeCommandAllowed("checkForUpdates")');
-    expect(appSource).toMatch(
-      /function openAboutUpdates[\s\S]*?firstRunState\.phase !== "idle"[\s\S]*?firstPlanState\.phase !== "idle"[\s\S]*?recentProjectOperationActive\(\)/,
-    );
-    expect(appSource).toMatch(
-      /function updateAboutUpdatesAvailability\(\) \{[\s\S]*?elements\.appVersion\.disabled = firstRunState\.phase !== "idle" \|\|[\s\S]*?firstPlanState\.phase !== "idle" \|\|[\s\S]*?recentProjectOperationActive\(\)/,
-    );
-    expect(appSource.match(/updateAboutUpdatesAvailability\(\);/g)?.length)
-      .toBeGreaterThanOrEqual(3);
+    // A partial guide apply is never skippable; the status mapping lives in
+    // first-run.ts and both the status and reconcile paths go through it.
+    expect(firstRunSource).toContain("skipAllowed: false");
     const landingRenderer = readFileSync(resolve(frontendRoot, "src/workspace/landing.ts"), "utf8");
     expect(landingRenderer).toContain('element.dateTime = date.toISOString()');
     expect(landingRenderer).toContain('thumbnail.setAttribute("aria-current", String(project === selected))');
     expect(recentProjectsSource).toContain("export function preselectedRecentProject(");
-    expect(appSource).toContain("preselectedRecentProject(projects, preferences.startup)");
-    expect(appSource).toContain("if (startupChanged) renderRecentProjects();");
-    expect(appSource).toMatch(
-      /elements\.recentStatus\.textContent = recentProjectsState\.announcement \|\|\n {4}\(preselected\n {6}\? `“\$\{preselected\.name\}” is preselected as the last project/,
-    );
-    expect(appSource).not.toMatch(
-      /preselect[^\n]*\.focus\(\)/,
-    );
     expect(styles).toMatch(
       /\.recent-project\[aria-current=(?:"true"|true)\]\{[^}]*border-color:var\(--accent\)/,
     );
@@ -340,64 +213,15 @@ describe("production asset layout", () => {
     expect(styles).toMatch(
       /\.recent-project\[aria-current=(?:"true"|true)\]\{[^}]*border-color:highlight/i,
     );
-    expect(appSource).toContain('button.setAttribute("aria-describedby", describedBy)');
-    expect(appSource).toContain('status.checkpoint !== "desktop-bound"');
     expect(firstRunJourneySource).toContain(
       "api.GetInitializationStatusV1(operationId)",
     );
-    expect(appSource).toContain("GetPendingInitializationV1()");
     expect(firstRunSource).toContain("parsePendingInitialization");
-    expect(appSource).toContain("resolveFirstRunStartupState");
-    expect(appSource).toContain("hydratePendingInitialization(pending)");
-    expect(appSource).toContain("elements.openProject.disabled = !idle");
-    expect(appSource).toContain("elements.closeProject.disabled = !idle");
-    expect(appSource).toContain('firstRunState.phase === "idle"');
-    expect(appSource).toContain('elements.setupRetry.addEventListener("click", retryFirstRunValidation)');
-    expect(appSource).toContain("retryInitializationStatus");
-    expect(appSource).toContain('openHelpDestination("project-recovery")');
-    expect(appSource).toContain("resumeFirstRunSetup");
-    expect(appSource).toContain("openProjectFromRecovery");
-    expect(appSource).toContain("rebindCompletedInitializationWorkspace");
-    expect(appSource).toContain(
-      "completedInitializationWorkspaceMatches(workspace, canonicalRoot)",
-    );
-    expect(appSource).toContain(
-      "Initialization is complete, but this window could not open the project:",
-    );
-    expect(appSource).toContain('firstRunState.recoveryMode === "durable"');
     expect(firstRunSource).toContain(
       '["project-committed", "guide-applied", "desktop-bound"]',
     );
-    expect(appSource).toContain("showCommittedGuideRecoveryActions");
-    expect(appSource).toMatch(
-      /case "review":[\s\S]*setFirstRunSectionVisible\(elements\.setupReview, true\);\s*showCommittedGuideRecoveryActions\(\);/,
-    );
-    expect(appSource).toMatch(
-      /async function openProjectFromRecovery\(\) \{[\s\S]*canOpenPreservedFirstRunProject\(firstRunState\)/,
-    );
     expect(firstRunSource).toContain(
       '["recovery", "guide", "guide-stale", "review"]',
-    );
-    expect(appSource).toContain("resumable: false");
-    expect(appSource).toContain(
-      "Could not load the desktop startup state:",
-    );
-    expect(appSource).toMatch(
-      /function cancelFirstRunSetup\(\) \{[\s\S]*firstRunState\.resumeLocked[\s\S]*firstRunState\.recoveryMode === "durable"[\s\S]*"committing", "reconciling", "uncertain"/,
-    );
-    expect(appSource).toContain(
-      'elements.setupGoalBack.addEventListener("click", returnToSelectedFirstRunFolder)',
-    );
-    expect(appSource).toContain(
-      'elements.setupGoal.addEventListener("input", preserveFirstRunGoalDraft)',
-    );
-    expect(appSource).toContain('type: "goalDrafted"');
-    expect(appSource).toContain('type: "continueToGoal"');
-    expect(appSource).toContain("pickerCancelState = { ...firstRunState }");
-    expect(appSource).toContain('type: pickerCancelState ? "repick" : "pick"');
-    expect(appSource).toContain("elements.setupNewTargetChoose");
-    expect(appSource).toMatch(
-      /type: "pickerCancelled", restore: pickerCancelState[\s\S]*requestAnimationFrame\(\(\) => returnFocus\?\.focus\(\)\)/,
     );
     expect(index).toMatch(
       /id="updates-modal"[\s\S]*role="dialog"[\s\S]*aria-modal="true"[\s\S]*id="updates-automatic"[\s\S]*aria-label="Update download progress"[\s\S]*id="updates-primary"/,
@@ -447,8 +271,6 @@ describe("production asset layout", () => {
       /id="terminal-help"[\s\S]*aria-label="Open terminal guide"/,
     );
     expect(app).toContain("OpenHelpDestination");
-    expect(appSource).toContain('openHelpDestination("terminals")');
-    expect(appSource).not.toContain("ro-ag.github.io/ptrack/help");
     expect(index).toMatch(
       /id="terminal-close"[\s\S]*class="terminal-action-button terminal-action-stop"[\s\S]*aria-label="Stop terminal session"/,
     );
@@ -479,8 +301,12 @@ describe("production asset layout", () => {
       /id="terminal-scratchpad-splitter"[^>]*role="separator"[^>]*tabindex="0"[\s\S]*aria-valuemin="240"[\s\S]*hidden/,
     );
     expect(index).toMatch(
-      /<textarea[^>]*id="terminal-scratchpad-text"[^>]*maxlength="65536"[^>]*spellcheck="false"/,
+      /<textarea[^>]*id="terminal-scratchpad-text"[^>]*aria-describedby="terminal-scratchpad-state"[^>]*spellcheck="false"/,
     );
+    // The cap is 65 536 UTF-8 bytes, which a UTF-16 maxlength cannot express
+    // and would enforce by silently dropping pasted text; the saver counts
+    // bytes and says when the note is over.
+    expect(index).not.toMatch(/<textarea[^>]*id="terminal-scratchpad-text"[^>]*maxlength=/);
     expect(index).toMatch(
       /<div[^>]*id="terminal-stage"[^>]*class="terminal-stage"[\s\S]*id="terminal-host"[\s\S]*id="terminal-message"[\s\S]*<\/div>/,
     );
@@ -545,9 +371,6 @@ describe("production asset layout", () => {
     // tab shapes, and the window offers the dock's own per-session surfaces.
     expect(app).toContain("GetTerminalWindowTab");
     expect(app).toContain("SetTerminalWindowTab");
-    // The dock adapter forwards both tab arguments; a one-argument forward
-    // was a live acceptance failure ("requires exactly 2 arguments").
-    expect(appSource).toContain("api().OpenTerminalWindow(sessions, shape)");
     expect(index).toMatch(
       /id="terminal-window-search"[^>]*class="terminal-window-search"[^>]*role="search"/,
     );
@@ -574,7 +397,6 @@ describe("production asset layout", () => {
       /id="task-transition-modal"[\s\S]*role="alertdialog"[\s\S]*aria-modal="true"[\s\S]*id="task-transition-detail"[\s\S]*id="task-transition-cancel"[\s\S]*id="task-transition-submit"/,
     );
     expect(app).toContain("MoveTaskV3");
-    expect(appSource).not.toContain("api().MoveTaskV2");
     expect(app).toContain("linked sessions, processes, and capabilities stay unchanged");
     expect(app).toContain("Finish the current task status change before starting another.");
     expect(app).toContain("Stale task transition response ignored");
@@ -587,7 +409,6 @@ describe("production asset layout", () => {
     expect(index).toMatch(/id="agent-activity-heading"[^>]*tabindex="-1"/);
     expect(index).toMatch(/id="agent-handoff-form"[^>]*hidden/);
     expect(index).toMatch(/id="agent-workflow-form"[^>]*hidden/);
-    expect(appSource).toContain("hideAgentActionForms()");
     expect(app).toContain("mutationFocusKey");
     expect(styles).toContain(".terminal-tab-indicator");
     expect(styles).toMatch(/\[data-indicator=(?:"failed"|failed)\]/);
@@ -626,7 +447,8 @@ describe("production asset layout", () => {
       /\.panel-toggle:focus-visible,[^{]*\.terminal-context-menu button:focus-visible\{[^}]*outline:2px solid var\(--accent\)[^}]*outline-offset:-2px/,
     );
     expect(paneSource).toMatch(
-      /action === "zoom-reset"\) \{\s*this\.#setFontSize\(this\.#activeProfileDefaultFontSize\(\)\)/,
+      // Zoom reset lands on the profile's default size (terminalZoomFontSize).
+      /this\.#setFontSize\(terminalZoomFontSize\(\s*action,\s*this\.#fontSize,\s*this\.#activeProfileDefaultFontSize\(\),?\s*\)\)/,
     );
     expect(paneSource).toMatch(
       /setApplicationOverlayOpen\(open: boolean, focusTerminal: false\): void \{[\s\S]*?#renderPanelVisibility\(focusTerminal\)/,
@@ -643,17 +465,6 @@ describe("production asset layout", () => {
     expect(applicationOverlaySource).toContain("get activeOverlay()");
     expect(applicationOverlaySource).toContain('"data-application-overlay-layer", "active"');
     expect(applicationOverlaySource).toContain('"data-application-overlay-layer", "underlay"');
-    expect(appSource).toContain("attributeOldValue: true");
-    expect(appSource).toContain(
-      "const modal = applicationOverlayCoordinator.activeOverlay",
-    );
-    expect(appSource).toContain("applicationOverlayKeyboardPolicy(");
-    expect(appSource).toContain("if (!policy.trapTab) return");
-    expect(appSource).toContain("closeActiveApplicationOverlay(event)");
-    expect(appSource).toContain("event.stopImmediatePropagation()");
-    expect(appSource).not.toMatch(
-      /event\.key === "Escape" && !elements\.[A-Za-z]+\.hidden/,
-    );
     expect(paneSource).toMatch(
       /!this\.#pasteModal\.hidden && event\.key === "Tab"[\s\S]*this\.#trapPasteFocus\(event\)/,
     );
@@ -677,9 +488,6 @@ describe("production asset layout", () => {
     expect(index).toMatch(
       /class="section-label">Rolling project summary<\/p>[\s\S]*id="summary"[^>]*>No rolling summary yet\.<\/p>/,
     );
-    expect(appSource).toContain(
-      "No rolling summary yet. Agents can update it with ptrack summary set.",
-    );
     expect(index).not.toContain("No rolling handoff yet.");
     expect(styles).toMatch(
       /\.canvas-main\s*\{[^}]*(?=[^}]*min-width:0)(?=[^}]*min-height:0)(?=[^}]*flex:(?:1 1 auto|auto))(?=[^}]*display:flex)(?=[^}]*flex-direction:column)/s,
@@ -688,9 +496,7 @@ describe("production asset layout", () => {
     // delegated to the companion project pam.
     expect(index).not.toContain('id="capabilities-page"');
     expect(index).not.toContain('id="nav-capabilities"');
-    expect(appSource).not.toContain('setView("capabilities"');
     expect(landingRenderer).toContain('empty.setAttribute("role", "listitem")');
-    expect(appSource).not.toContain('setView("settings"');
     expect(index).toMatch(
       /id="settings-open"[^>]*aria-label="Open Settings"[\s\S]*aria-haspopup="dialog"[\s\S]*aria-controls="settings-modal"/,
     );
@@ -758,34 +564,7 @@ describe("production asset layout", () => {
     expect(styles).toMatch(
       /\.settings-dialog-footer\{[^}]*justify-content:space-between/,
     );
-    // The status text is transient: it announces, then clears, while the live
-    // region element itself stays in the DOM because removing it is what
-    // breaks announcements. Nothing animates, so reduced motion has no say.
-    expect(appSource).toMatch(/const settingsStatusClearDelay = \d+;/);
-    expect(appSource).toMatch(/clearTimeout\(settingsStatusTimer\);/);
-    expect(appSource).toMatch(
-      /settingsStatusTimer = setTimeout\(\(\) => \{\s*elements\.settingsSaveStatus\.textContent = "";/,
-    );
-    expect(appSource).not.toMatch(/settingsSaveStatus\.remove\(\)/);
-    // Both reset outcomes are sticky. They report an explicit destructive
-    // action, and the application-state message runs to three clauses that
-    // wrap to about four lines — clearing it collapses the footer and jumps
-    // "Reset to defaults" upward six seconds after the last interaction.
-    expect(appSource).toMatch(
-      /setSettingsStatus\("Window layout reset to defaults\.", false, true\)/,
-    );
-    expect(appSource).toMatch(
-      /setSettingsStatus\(resetApplicationStateMessage\(result\), false, true\)/,
-    );
 
-    // The diagnostics copy control is an icon, because a "Copy" label is what
-    // broke to "Cop y" when the path beside it grew. An unlabelled icon button
-    // is a dead end for a screen reader, so the accessible name says what is
-    // copied and the title repeats it for pointer users.
-    expect(appSource).toContain('copy.setAttribute("aria-label", row.copy)');
-    expect(appSource).toContain("copy.title = row.copy;");
-    expect(appSource).not.toMatch(/copy\.textContent = "Copy"/);
-    expect(appSource).toMatch(/setSettingsStatus\(`\$\{row\.label\} copied\.`\)/);
     expect(styles).toMatch(
       /\.settings-diagnostic-copy\{[^}]*(?=[^}]*width:26px)(?=[^}]*min-height:26px)(?=[^}]*height:26px)/,
     );
@@ -814,71 +593,14 @@ describe("production asset layout", () => {
     expect(app).toContain("SetPreferences");
     expect(app).toContain("ResetPreferences");
     expect(app).toContain("GetDiagnosticsReport");
-    expect(appSource).toContain("preferencesResponse(await api().GetPreferences())");
-    expect(appSource).toContain("preferencesResponse(await api().SetPreferences(patch))");
-    expect(appSource).toContain("preferencesResponse(await api().ResetPreferences())");
-    expect(appSource).toContain("await api().GetDiagnosticsReport()");
-    expect(appSource).toContain("applyPreferenceMirrors(localStorage, next)");
     expect(app).toContain("GetLayoutState");
     expect(app).toContain("SetLayoutState");
     expect(app).toContain("ResetWindowLayout");
     expect(app).toContain("ResetApplicationState");
-    expect(appSource).toContain("normalizeLayoutState(await api().GetLayoutState())");
-    expect(appSource).toContain(
-      'layoutStatePatch(layoutState, workspaceState.project?.root || "")',
-    );
-    expect(appSource).toContain(
-      "applyLayoutState(normalizeLayoutState(await api().ResetWindowLayout()))",
-    );
-    expect(appSource).toContain("await api().ResetApplicationState()");
-    expect(appSource).toContain("resetApplicationStateMessage(result)");
-    // Panel changes are recorded from the user's click, never from the
-    // attribute the dock also writes on its own.
-    expect(appSource).toContain(
-      'elements.panelControls.addEventListener("click", recordPanelLayout)',
-    );
-    expect(appSource).not.toMatch(/MutationObserver\(recordPanelLayout\)/);
-    // The guard covers the synthetic restore clicks and nothing else: it is
-    // cleared once the restore attempt ends, so a dock that refused the
-    // restore still records the user's own later gestures.
-    expect(appSource).toMatch(
-      /if \(\(toggle\.getAttribute\("aria-pressed"\) === "true"\) !== hidden\) toggle\.click\(\);\n  \}\n(?:  \/\/[^\n]*\n)*  panelLayoutRestored = true;/,
-    );
-    expect(appSource).not.toMatch(/panelLayoutRestored = Boolean\(/);
-    // The eviction counter is backend-owned, so no patch can carry it.
-    expect(appSource).not.toContain("usedAt");
-    // Layout writes share the existing scheduler rather than adding a second.
-    expect(appSource).toContain("new WorkspacePersistenceScheduler(");
-    expect(appSource).toContain("layoutStateScheduler.markDirty()");
-    expect(appSource).toContain("layoutStateScheduler.flush()");
-    expect(appSource).toMatch(
-      /savePreferences\(\{\s*startup: \{ restoreLastProject: event\.currentTarget\.checked \}/,
-    );
-    // The window is Rust-owned: the frontend never asks for its geometry.
-    expect(appSource).not.toContain("WindowState");
-    // A runtime that never answered is stated plainly instead of looking healthy.
-    expect(appSource).toContain('renderSettingsStorageNotice("unavailable")');
-    // The terminal dock toggle writes through the stored record, never the mirror.
-    expect(appSource).toContain(
-      "saveUnicodeMode: (unicodeMode) => void savePreferences({ terminal: { unicodeMode } })",
-    );
-    expect(paneSource).toContain(
-      'this.#saveUnicodeMode(enabled ? "modern" : "legacy")',
-    );
+    // Settings owns the Unicode mode; the dock only follows it.
+    expect(paneSource).toContain("setModernUnicode(enabled: boolean): void");
+    expect(paneSource).not.toContain("saveUnicodeMode");
     expect(paneSource).not.toContain("writeModernUnicodeSetting");
-    expect(appSource).toContain("themeController.setTheme(next.appearance.theme)");
-    expect(appSource).toContain("root.dataset.density = next.appearance.density");
-    expect(appSource).toContain(
-      "void savePreferences({ appearance: { theme: themeController.toggle() } })",
-    );
-    // Updates stay a single source of truth on the existing command.
-    expect(appSource.match(/api\(\)\.SetAutomaticUpdateChecks\(/g)).toHaveLength(1);
-    expect(appSource).toContain("await loadPreferences();");
-    expect(appSource).toContain('escapeAction === "settings"');
-    expect(appSource).toContain("nextSettingsSectionIndex(");
-    expect(appSource).toContain('openSettings(elements.settingsOpen)');
-    expect(appSource).toContain('openHelpDestination("help-center")');
-    expect(appSource).toContain('openHelpDestination("report-issue")');
     expect(paneSource).toContain("readTerminalPreferenceOverrides(localStorage)");
     expect(paneSource).toContain("webglPreferredByPreference(");
     expect(styles).toMatch(
@@ -893,5 +615,139 @@ describe("production asset layout", () => {
     expect(styles).toMatch(
       /\.settings-section-tab\[aria-selected=(?:"true"|true)\]\{[^}]*border-color:var\(--control-border\)/,
     );
+  });
+});
+
+describe("type scale", () => {
+  const sheets = ["style.css", "landing.css", "cover-flow.css", "settings-kimi.css"];
+  // SVG text sized in viewBox units, not CSS pixels on screen.
+  const svgUnits = new Set([".heatmap-label", ".history-marker-label", ".plan-ring-caption"]);
+  const labelSelector = /eyebrow|section-label|kicker|kbd|badge|project-code|summary|palette-kind|h4/;
+
+  function fontRules() {
+    const rules = [];
+    for (const sheet of sheets) {
+      const css = readFileSync(resolve(frontendRoot, "src", sheet), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+      for (const match of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+        const size = match[2].match(/font-size:\s*([\d.]+)(rem|px)\s*;/);
+        if (!size) continue;
+        const px = size[2] === "rem" ? Number(size[1]) * 16 : Number(size[1]);
+        rules.push({
+          sheet,
+          selector: match[1].trim().replace(/\s+/g, " "),
+          body: match[2],
+          value: `${size[1]}${size[2]}`,
+          px,
+        });
+      }
+    }
+    return rules;
+  }
+
+  it("has no 10px text and keeps 11px for a few uppercase labels only", () => {
+    const rules = fontRules();
+    expect(rules.filter((rule) => rule.value === "0.625rem" || rule.px === 10)).toEqual([]);
+    const small = rules.filter((rule) => rule.px === 11);
+    const selectors = small.flatMap((rule) => rule.selector.split(","));
+    expect(selectors.length).toBeLessThanOrEqual(12);
+    for (const rule of small) {
+      const uppercase = /text-transform:\s*uppercase/.test(rule.body) || /eyebrow|section-label/.test(rule.selector);
+      expect({ selector: rule.selector, label: uppercase || /kbd/.test(rule.selector) }).toEqual({
+        selector: rule.selector,
+        label: true,
+      });
+      expect(rule.selector).toMatch(labelSelector);
+    }
+  });
+
+  it("keeps body, meta, and description text at 12px or larger", () => {
+    const tooSmall = fontRules()
+      .filter((rule) => rule.px < 12 && rule.px !== 11 && !svgUnits.has(rule.selector))
+      .map((rule) => `${rule.sheet}: ${rule.selector} ${rule.value}`);
+    expect(tooSmall).toEqual([]);
+    const style = fontRules().filter((rule) => rule.sheet === "style.css");
+    for (const selector of [".intelligence-detail", ".intelligence-path", ".card-meta", ".activity-detail"]) {
+      const rule = style.find((candidate) => candidate.selector === selector);
+      expect(rule?.px, selector).toBeGreaterThanOrEqual(12);
+    }
+  });
+});
+
+// Markup and stylesheet facts from UI review. The behavior each one backs is
+// driven through the window in the controller tests: board-interactions,
+// workspace-shell, shortcuts, and overview-view.
+describe("UI review guards", () => {
+  const index = readFileSync(resolve(frontendRoot, "index.html"), "utf8");
+  const style = readFileSync(resolve(frontendRoot, "src/style.css"), "utf8");
+  const rule = (selector) => {
+    const start = style.indexOf(`${selector} {`);
+    expect(start, selector).toBeGreaterThanOrEqual(0);
+    return style.slice(start, style.indexOf("}", start));
+  };
+
+  it("keeps the board visible behind the task drawer", () => {
+    const scrim = rule("#task-drawer > .modal-backdrop,\n#issue-drawer > .modal-backdrop");
+    expect(scrim).toContain("backdrop-filter: none");
+    for (const theme of [":root {", '[data-theme="light"] {']) {
+      const block = style.slice(style.indexOf(theme), style.indexOf("\n}\n", style.indexOf(theme)));
+      const alpha = Number(block.match(/--drawer-scrim: rgba\([^)]*,\s*([\d.]+)\)/)?.[1]);
+      expect(alpha, theme).toBeLessThanOrEqual(0.45);
+    }
+  });
+
+  it("styles no status control on the card and a full-height one in the drawer", () => {
+    expect(style).not.toContain(".card-actions");
+    expect(rule(".drawer-actions select")).toMatch(/min-height: (2[89]|3\d)px/);
+  });
+
+  it("places the terminal dock beside every page, with Settings as its only Unicode control", () => {
+    const pages = index.indexOf('<div class="work-area">');
+    expect(index.indexOf('id="overview-page"')).toBeGreaterThan(pages);
+    expect(index.indexOf('id="issues-page"')).toBeLessThan(index.indexOf('id="terminal-dock"'));
+    expect(index).not.toContain("terminal-unicode-setting");
+    expect(index).not.toContain('id="terminal-modern-unicode"');
+    expect(index).toMatch(/id="settings-terminal-unicode"/);
+    expect(index).toMatch(/id="terminal-start-shell" type="button">Start shell<\/button>/);
+    expect(style).not.toContain(".terminal-unicode-setting");
+    expect(style).toContain('.terminal-dock[data-state="closed"] .terminal-status {\n  display: none;');
+  });
+
+  it("names every icon-only button with an aria-label and a tooltip", () => {
+    for (const match of index.matchAll(/<button([\s\S]*?)>([\s\S]*?)<\/button>/g)) {
+      const attributes = match[1];
+      if (/modal-backdrop|terminal-paste-backdrop|terminal-termination-backdrop|id="(theme-toggle|terminal-window-theme-toggle)"/.test(attributes)) continue;
+      const text = match[2].replace(/<svg[\s\S]*?<\/svg>/g, "").replace(/<!--[\s\S]*?-->/g, "").replace(/<[^>]+>/g, "").trim();
+      // Short words such as "OK" are visible labels, not icons.
+      if (text.length > 2 || /^[A-Za-z]{2}$/.test(text)) continue;
+      expect({ button: attributes.trim().slice(0, 60), labelled: /aria-label=/.test(attributes) && /title=/.test(attributes) })
+        .toEqual({ button: attributes.trim().slice(0, 60), labelled: true });
+    }
+  });
+
+  it("starts with the panel toggles hidden and a search field labelled like its placeholder", () => {
+    expect(index).toMatch(/id="board-panel-toggle"[\s\S]*?hidden\s*>/);
+    expect(index).toMatch(/id="terminal-panel-toggle"[\s\S]*?hidden\s*>/);
+    const search = index.match(/<span class="orbit-sr-only">([^<]+)<\/span><input[^>]*id="recent-project-search"[^>]*placeholder="([^"]+)"/);
+    expect(search?.[2]).toBe(`${search?.[1]}…`);
+    expect(index).not.toContain("summary-guidance");
+    expect(index.match(/Refresh summaries/g)).toHaveLength(1);
+  });
+
+  it("says Projects, not Welcome, in the markup", () => {
+    const visibleText = index.replace(/<!--[\s\S]*?-->/g, "").replace(/<[^>]+>/g, " ");
+    expect(visibleText).not.toMatch(/\bWelcome\b/);
+  });
+
+  it("gives the version button a 24px hit target", () => {
+    const version = rule(".app-version");
+    expect(version).toContain("min-width: 24px");
+    expect(version).toContain("min-height: 24px");
+  });
+
+  it("styles the closeout reminder as a neutral notice stacked with the toast", () => {
+    expect(index).toMatch(/id="notice-stack"[\s\S]*?id="toast"/);
+    const banner = rule(".plan-closeout-banner");
+    expect(banner).toContain("border-left: 3px solid var(--info)");
+    expect(banner).not.toContain("blocked");
   });
 });

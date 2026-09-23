@@ -16,6 +16,7 @@ pub(crate) fn meta(active_plan: u64) -> Meta {
         actors: Vec::new(),
         stack: None,
         scratchpad: None,
+        summary_updated_at: None,
     }
 }
 

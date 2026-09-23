@@ -6,56 +6,56 @@
       "title": "Start Here",
       "summary": "Create a durable project record, plan, and task, then leave context another agent can resume.",
       "headings": ["First project", "First plan", "First task", "Resume and orient"],
-      "keywords": ["init", "context", "next", "onboarding", "agent", "resume"],
+      "keywords": ["init", "context", "next", "onboarding", "agent", "resume", "task done", "summary", "linked commit", "integration task", "task hold", "task block", "one task in progress"],
       "url": "start-here/"
     },
     {
       "title": "Desktop",
       "summary": "See durable plan status beside registered agent activity, repository evidence, and terminals.",
       "headings": ["Board", "Task drawer", "Overview", "Project switching", "Settings", "Startup and restore", "Reset actions"],
-      "keywords": ["gui", "workspace", "kanban", "sidebar", "agent activity", "plan status", "repository", "settings", "preferences", "appearance", "density", "startup", "restore last project", "window position", "layout", "reset window layout", "reset application state", "plan context menu", "rename plan", "delete plan", "move plan", "copy plan", "dependency badge", "waiting badge"],
+      "keywords": ["gui", "workspace", "kanban", "sidebar", "agent activity", "plan status", "repository", "settings", "preferences", "appearance", "density", "startup", "restore last project", "window position", "layout", "reset window layout", "reset application state", "plan context menu", "rename plan", "delete plan", "move plan", "copy plan", "dependency badge", "waiting badge", "current plan", "close plan", "reopen plan", "closeout", "add note", "task drawer", "card menu", "override note", "projects screen", "reset all settings", "summary age"],
       "url": "desktop/"
     },
     {
       "title": "Terminals",
       "summary": "Manage terminal sessions, tabs, splits, search, paste safety, profiles, and recovery.",
-      "headings": ["Sessions", "Tabs and splits", "Paste safety", "Profiles", "Recovery"],
-      "keywords": ["shell", "pane", "search", "renderer", "scrollback"],
+      "headings": ["Sessions", "Tabs and splits", "Paste safety", "Profiles", "Scratchpad", "Recovery"],
+      "keywords": ["shell", "pane", "search", "renderer", "scrollback", "start shell", "pop out", "detached window", "scratchpad", "clipboard", "secret", "control characters", "bracketed paste", "unicode mode", "toggle terminal panel"],
       "url": "terminals/"
     },
     {
       "title": "Agents",
       "summary": "Pass bounded context across supported agent tools while keeping associations, worktrees, drift, and handoffs explicit.",
-      "headings": ["Agent runs", "Associations", "Plan transfer", "Handoffs", "Worktrees"],
-      "keywords": ["ownership", "workflow", "handoff", "drift", "provider", "multi-agent", "Claude", "Codex", "Cursor Agent", "Gemini", "Kimi Code", "Agy", "OpenCode"],
+      "headings": ["Agent runs", "Associations", "Plan transfer", "Handoffs", "Worktrees", "Capability brokering"],
+      "keywords": ["ownership", "workflow", "handoff", "drift", "provider", "multi-agent", "Claude", "Codex", "Cursor Agent", "Gemini", "Kimi Code", "Agy", "OpenCode", "capability", "pam", "untrusted data", "context digest"],
       "url": "agents-and-capabilities/"
     },
     {
       "title": "Reference",
       "summary": "Look up CLI commands, TUI keys, desktop shortcuts, and project search behavior.",
-      "headings": ["CLI", "TUI", "Desktop shortcuts", "Project search"],
-      "keywords": ["command", "keyboard", "palette", "shortcut", "config", "claims", "identity", "steal", "release", "plan delete", "plan move", "plan copy", "cascade", "milestone drop", "dependency", "dep add", "dep list", "waiting on", "skipped"],
+      "headings": ["CLI", "TUI", "Desktop shortcuts", "Desktop search"],
+      "keywords": ["command", "keyboard", "palette", "shortcut", "config", "claims", "identity", "steal", "release", "plan delete", "plan move", "plan copy", "cascade", "milestone drop", "dependency", "dep add", "dep list", "waiting on", "skipped", "search", "plan list", "task block", "task hold", "commit sha", "hook", "capability", "override"],
       "url": "reference/"
     },
     {
       "title": "Keyboard shortcuts",
       "summary": "Use p-track's TUI and desktop keyboard shortcuts.",
       "headings": ["Desktop", "Terminal", "TUI"],
-      "keywords": ["keyboard", "shortcut", "accelerator", "hotkey"],
+      "keywords": ["keyboard", "shortcut", "accelerator", "hotkey", "command palette", "search plans tasks and notes", "toggle terminal panel", "settings", "check for updates"],
       "url": "reference/shortcuts/"
     },
     {
       "title": "Install & Safety",
       "summary": "Install and update p-track, locate local data, and plan backups or migration.",
       "headings": ["Install", "Updates", "Security", "Privacy", "Data paths", "Backup", "Migration"],
-      "keywords": ["download", "release", "storage", "database", "restore", "about", "license", "version", "window state", "layout state"],
+      "keywords": ["download", "release", "storage", "database", "restore", "about", "license", "version", "window state", "layout state", "checksums", "signature", "checksums.txt.sig", "ed25519", "content security policy"],
       "url": "install-and-safety/"
     },
     {
       "title": "Troubleshooting",
       "summary": "Diagnose project, terminal, agent, and updater problems.",
       "headings": ["Diagnostics", "Recovery", "FAQ"],
-      "keywords": ["error", "stopped", "stale", "failed", "recovery"],
+      "keywords": ["error", "stopped", "stale", "failed", "recovery", "schema 9", "newer database", "unavailable project", "capability", "close refused"],
       "url": "troubleshooting/"
     }
   ]

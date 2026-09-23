@@ -11,6 +11,7 @@ mod diagnostics_report;
 mod identity;
 mod layout_state;
 mod local_mode;
+mod mcp_transport;
 pub mod overview;
 #[cfg(test)]
 mod overview_test;
@@ -47,11 +48,13 @@ pub use desktop_runtime::{
     RecentProjectAvailabilityV1, RecentProjectLanguageV1, RecentProjectOpenAuthorizationV1,
     RecentProjectRegistryCommitV1, RecentProjectRegistryStatusV1, RecentProjectResolutionV1,
     RecentProjectStackV1, RecentProjectV1, RecentProjectsProvider, RecentProjectsV1,
-    ResetApplicationStateResultV1, ResolvedRecentProjectV1, WorkspaceChangeResult,
+    ResetApplicationStateResultV1, ResolvedRecentProjectV1, ShutdownOutcome, WorkspaceChangeResult,
     WorkspaceProject, WorkspaceState, WorkspaceStatus, allowed_desktop_commands,
+    allowed_terminal_window_commands, scope_request_to_window,
 };
 
 pub use identity::{IDENTITY_CONFIG_KEY, load_identity, set_identity_name};
+pub use mcp_transport::{McpCancellation, McpOutcome};
 pub use production::{
     ActiveRuntime, ProductionDesktopAuthority, ProductionDesktopWorkspaceFactory,
     ProductionRecentProjects, RoutedApplication, RuntimeBindingState, StartupProjectV1,
@@ -73,12 +76,13 @@ pub use ptrack_store::ActorIdentity;
 pub use ptrack_store::{INVALID_CLAIM_PREFIX, INVALID_HOLD_PREFIX};
 pub use ptrack_store::{PlanDeleteSummary, PlanSubtree};
 pub use service::{
-    AppError, AppResult, ApplicationPort, CapabilityCancellation, CapabilityMcpOutcome,
-    CapabilitySessionEnvironment, CompletePlanResult, CompleteTaskResult, GuideAction, HookAction,
-    HookResult, InitRequest, InitResult, LocalApplication, Mutation, MutationResult,
+    AppError, AppResult, ApplicationPort, CompletePlanResult, CompleteTaskResult, GuideAction,
+    HookAction, HookResult, InitRequest, InitResult, LocalApplication, Mutation, MutationResult,
     PlanLifecycleOutcome, PlanLifecycleRequest, PlanTransferSummary, ProcessOutput,
     ProjectEndpoint, RelocateRequest, RelocateResult, SCRATCHPAD_CONFLICT, ScratchpadSnippetV1,
-    ScratchpadV1, UnavailableApplication, WorkspaceBindings, complete_plan, complete_task,
+    ScratchpadV1, UiSurface, UnavailableApplication, WorkspaceBindings, check_commit_sha,
+    close_task_from_ui, complete_plan, complete_plan_from_ui, complete_task, integration_task_id,
+    integration_task_title, next_task, set_plan_status_with_notes, set_task_status_with_notes,
 };
 pub use shell_command::{ShellCommandInstallResult, install_shell_command};
 pub use terminal_runtime::{
@@ -87,7 +91,7 @@ pub use terminal_runtime::{
     TerminalIdentityAuthority, TerminalProfileView, TerminalProfilesV2, TerminalRuntime,
     TerminalRuntimeConfig, TerminalSessionV2, TerminalStatusV2,
 };
-pub use terminal_windows::{TERMINAL_WINDOW_PREFIX, TerminalWindows};
+pub use terminal_windows::{OpenedTerminalWindow, TERMINAL_WINDOW_PREFIX, TerminalWindows};
 pub use update_runtime::{
     DesktopUpdateService, GlobalStoreUpdatePreferences, NoUpdatePreferences,
     UnavailableUpdateService, UpdateEventSink, UpdatePhase, UpdatePreferences, UpdateRelease,
@@ -106,6 +110,8 @@ mod identity_test;
 mod layout_state_test;
 #[cfg(test)]
 mod local_mode_test;
+#[cfg(test)]
+mod mcp_transport_test;
 #[cfg(test)]
 mod preferences_test;
 #[cfg(test)]

@@ -23,6 +23,16 @@ pub const DEFAULT_OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_millis(250);
 pub const MAX_TERMINAL_ROWS: u16 = 1_000;
 pub const MAX_TERMINAL_COLUMNS: u16 = 1_000;
 const OUTPUT_READ_BYTES: usize = 64 * 1024;
+/// How long a force-close lets the tree handle SIGTERM before SIGKILL.
+const FORCE_TERMINATE_GRACE: Duration = Duration::from_millis(150);
+/// How often a close re-checks whether background jobs are still running.
+const TREE_POLL_INTERVAL: Duration = Duration::from_millis(25);
+/// Upper bound on waiting for the exit to be recorded after the tree was
+/// killed; past it the close reports the stuck process instead of hanging.
+const CLOSE_EXIT_WAIT: Duration = Duration::from_secs(5);
+/// Upper bound on joining one worker thread. A reader stuck in a platform
+/// read that cannot be cancelled is detached rather than joined forever.
+const WORKER_JOIN_WAIT: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -224,6 +234,9 @@ struct SessionInner {
     output_done: bool,
     association: Option<TerminalAssociation>,
     stream_error: Option<String>,
+    /// The leader was waited for. Set by the wait worker under this lock, so a
+    /// close deciding whether to signal it can never race the reap.
+    reaped: bool,
     exit_done: bool,
     close_started: bool,
     close_done: bool,
@@ -310,6 +323,7 @@ impl Session {
                 output_done: false,
                 association: None,
                 stream_error: None,
+                reaped: false,
                 exit_done: false,
                 close_started: false,
                 close_done: false,
@@ -618,6 +632,7 @@ impl Session {
         Ok(StreamAttachment {
             lease,
             gap: resumed != from_sequence,
+            resumed,
             replay,
             live: receiver,
         })
@@ -864,11 +879,15 @@ impl Session {
 
     /// Close once, gracefully or forcibly, and join all owned workers.
     ///
+    /// Both paths signal the whole tree, background jobs included: graceful
+    /// gives SIGTERM the full graceful timeout, force only a short grace, and
+    /// anything still running after it is killed. Every wait is bounded.
+    ///
     /// # Errors
     ///
     /// Returns joined process signalling/close errors.
     pub fn close(&self, force: bool) -> Result<(), SessionError> {
-        let (process, was_exited) = {
+        let (process, process_closed) = {
             let mut inner = self
                 .inner
                 .lock()
@@ -891,69 +910,29 @@ impl Session {
                 self.changed.notify_all();
                 return Ok(());
             }
-            let was_exited = inner.state == SessionState::Exited;
-            if !was_exited {
+            if inner.state != SessionState::Exited {
                 inner.state = SessionState::Closing;
             }
             self.closing.store(true, Ordering::Release);
             self.changed.notify_all();
-            (inner.process.as_ref().map(Arc::clone), was_exited)
+            (inner.process.as_ref().map(Arc::clone), inner.process_closed)
         };
 
         let mut errors = Vec::new();
         if let Some(process) = process.as_ref() {
-            if force {
-                if let Err(error) = process.kill() {
-                    errors.push(format!("kill terminal process: {error}"));
-                }
-            } else if !was_exited {
-                if let Err(error) = process.terminate() {
-                    errors.push(format!("terminate terminal process: {error}"));
-                }
-                let inner = self
-                    .inner
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let (inner, timed_out) = self
-                    .changed
-                    .wait_timeout_while(inner, self.options.graceful_timeout, |value| {
-                        !value.exit_done
-                    })
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if timed_out.timed_out() && !inner.exit_done {
-                    drop(inner);
-                    if let Err(error) = process.kill() {
-                        errors.push(format!("kill terminal process after timeout: {error}"));
-                    }
-                }
+            // A closed PTY already swept its tree when the exit was recorded.
+            if !process_closed {
+                self.stop_process_tree(&**process, force, &mut errors);
             }
-            let mut inner = self
-                .inner
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            while !inner.exit_done {
-                inner = self
-                    .changed
-                    .wait(inner)
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !self.wait_for(CLOSE_EXIT_WAIT, |inner| inner.exit_done) {
+                errors.push("terminal process did not exit after kill".to_owned());
             }
-            drop(inner);
             if let Err(error) = self.close_process(&**process) {
                 errors.push(format!("close terminal PTY: {error}"));
             }
         }
         self.changed.notify_all();
-        let workers = std::mem::take(
-            &mut *self
-                .workers
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        );
-        for worker in workers {
-            if worker.join().is_err() {
-                errors.push("terminal worker panicked".to_owned());
-            }
-        }
+        self.join_workers(&mut errors);
         let error = (!errors.is_empty()).then(|| SessionError::new(errors.join("; ")));
         let mut inner = self
             .inner
@@ -965,6 +944,75 @@ impl Session {
         inner.live_sender.take();
         self.changed.notify_all();
         error.map_or(Ok(()), Err)
+    }
+
+    /// SIGTERM the tree, give it a grace period, then SIGKILL what is left.
+    /// Force always ends with the kill sweep; graceful kills only when the
+    /// leader or a background job outlived the timeout.
+    fn stop_process_tree(&self, process: &dyn PtyProcess, force: bool, errors: &mut Vec<String>) {
+        let grace = if force {
+            self.options.graceful_timeout.min(FORCE_TERMINATE_GRACE)
+        } else {
+            self.options.graceful_timeout
+        };
+        let deadline = Instant::now() + grace;
+        if let Err(error) = process.terminate() {
+            errors.push(format!("terminate terminal process: {error}"));
+        }
+        let leader_exited = self.wait_for(grace, |inner| inner.reaped);
+        let mut tree_alive = !leader_exited || process.live_processes();
+        while tree_alive && leader_exited && Instant::now() < deadline {
+            thread::sleep(
+                TREE_POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())),
+            );
+            tree_alive = process.live_processes();
+        }
+        if (force || tree_alive)
+            && let Err(error) = process.kill()
+        {
+            let context = if force {
+                "kill terminal process"
+            } else {
+                "kill terminal process after timeout"
+            };
+            errors.push(format!("{context}: {error}"));
+        }
+    }
+
+    /// Wait until `done` holds, at most `limit`. Returns whether it holds.
+    fn wait_for(&self, limit: Duration, done: impl Fn(&SessionInner) -> bool) -> bool {
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (inner, _) = self
+            .changed
+            .wait_timeout_while(inner, limit, |value| !done(value))
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        done(&inner)
+    }
+
+    fn join_workers(&self, errors: &mut Vec<String>) {
+        let workers = std::mem::take(
+            &mut *self
+                .workers
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        let deadline = Instant::now() + WORKER_JOIN_WAIT;
+        for worker in workers {
+            while !worker.is_finished() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(5));
+            }
+            if !worker.is_finished() {
+                // Dropping the handle detaches it; its owned references end
+                // with it whenever the platform read finally returns.
+                continue;
+            }
+            if worker.join().is_err() {
+                errors.push("terminal worker panicked".to_owned());
+            }
+        }
     }
 
     fn read_output(&self, process: &dyn PtyProcess) {
@@ -1030,6 +1078,18 @@ impl Session {
 
     fn wait_for_exit(&self, process: &dyn PtyProcess, reader_done: &mpsc::Receiver<()>) {
         let wait = process.wait();
+        {
+            let mut inner = self
+                .inner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            inner.reaped = true;
+            self.changed.notify_all();
+        }
+        // The exit is recorded whether or not output reaches end of file: a
+        // background job can hold the slave open indefinitely. Once the drain
+        // window passes the PTY is closed, which cancels the reader, and the
+        // reader gets one more bounded window to finish.
         if reader_done
             .recv_timeout(self.options.output_drain_timeout)
             .is_err()
@@ -1037,7 +1097,7 @@ impl Session {
             self.closing.store(true, Ordering::Release);
             self.changed.notify_all();
             let _ = self.close_process(process);
-            let _ = reader_done.recv();
+            let _ = reader_done.recv_timeout(self.options.output_drain_timeout);
         }
         let (exit_code, mut error) = match wait {
             Ok(code) => (code, None),

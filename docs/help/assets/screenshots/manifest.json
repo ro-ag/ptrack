@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "productVersion": "0.40.1",
-  "capturedAt": "2026-09-03",
+  "capturedAt": "2026-09-22",
   "capture": {
-    "app": "Desktop frontend in Chromium for board, overview, and terminal; retained packaged macOS captures for unchanged dialog workflows",
+    "app": "Packaged macOS app for board, overview, search, task drawer, and terminal; retained packaged macOS captures for the unchanged Open Project dialog",
     "fixture": "isolated Northstar project with sanitized paths, tasks, notes, issues, and terminal text",
     "width": 1552,
     "height": 1012
@@ -11,24 +11,96 @@
   "uiSources": [
     "frontend/index.html",
     "frontend/src/app.js",
-    "frontend/src/style.css",
-    "frontend/src/theme.js",
-    "frontend/src/workspace/model.ts",
-    "frontend/src/workspace/presentation.ts",
-    "frontend/src/workspace/tab-bar.ts",
-    "frontend/src/workspace/split-view.ts",
-    "frontend/src/terminal/control-icon.ts",
-    "frontend/src/workspace/plan-list.ts",
-    "frontend/src/workspace/copy-context.ts",
-    "frontend/src/workspace/overview.ts",
-    "frontend/src/landing.css",
-    "frontend/src/workspace/landing.ts",
-    "frontend/src/settings-kimi.css",
+    "frontend/src/backend.ts",
     "frontend/src/cover-flow.css",
-    "frontend/src/workspace/project-view.ts"
+    "frontend/src/landing.css",
+    "frontend/src/main.js",
+    "frontend/src/settings-kimi.css",
+    "frontend/src/settings/controller.ts",
+    "frontend/src/settings/preferences.ts",
+    "frontend/src/settings/sections.ts",
+    "frontend/src/style.css",
+    "frontend/src/tauri-bridge.js",
+    "frontend/src/terminal/accessibility.ts",
+    "frontend/src/terminal/activity.ts",
+    "frontend/src/terminal/agent-launch-controller.ts",
+    "frontend/src/terminal/association-controller.ts",
+    "frontend/src/terminal/association-editor.ts",
+    "frontend/src/terminal/backend.ts",
+    "frontend/src/terminal/client.ts",
+    "frontend/src/terminal/control-icon.ts",
+    "frontend/src/terminal/diagnostics.ts",
+    "frontend/src/terminal/lifecycle.ts",
+    "frontend/src/terminal/linked-launch.ts",
+    "frontend/src/terminal/pane.ts",
+    "frontend/src/terminal/paste.ts",
+    "frontend/src/terminal/platform.ts",
+    "frontend/src/terminal/pop-out.ts",
+    "frontend/src/terminal/preferences.ts",
+    "frontend/src/terminal/profile-settings.ts",
+    "frontend/src/terminal/recovery-actions.ts",
+    "frontend/src/terminal/renderer-recovery.ts",
+    "frontend/src/terminal/renderer.ts",
+    "frontend/src/terminal/resize-dispatch.ts",
+    "frontend/src/terminal/runtime.ts",
+    "frontend/src/terminal/scratchpad.ts",
+    "frontend/src/terminal/search.ts",
+    "frontend/src/terminal/secrets.ts",
+    "frontend/src/terminal/shell-integration.ts",
+    "frontend/src/terminal/unicode.ts",
+    "frontend/src/terminal/window.ts",
+    "frontend/src/terminal/writeback-controller.ts",
+    "frontend/src/terminal/writeback.ts",
+    "frontend/src/theme.js",
+    "frontend/src/updates/controller.ts",
+    "frontend/src/updates/presentation.js",
+    "frontend/src/workspace/agent-activity-view.ts",
+    "frontend/src/workspace/app-context.ts",
+    "frontend/src/workspace/application-overlay.ts",
+    "frontend/src/workspace/board-view.ts",
+    "frontend/src/workspace/controller.ts",
+    "frontend/src/workspace/copy-context.ts",
+    "frontend/src/workspace/dom.ts",
+    "frontend/src/workspace/first-plan-view.ts",
+    "frontend/src/workspace/first-plan.ts",
+    "frontend/src/workspace/first-run-journey.ts",
+    "frontend/src/workspace/first-run-view.ts",
+    "frontend/src/workspace/first-run.ts",
+    "frontend/src/workspace/format.ts",
+    "frontend/src/workspace/issues-view.ts",
+    "frontend/src/workspace/landing.ts",
+    "frontend/src/workspace/layout-controller.ts",
+    "frontend/src/workspace/layout.ts",
+    "frontend/src/workspace/model.ts",
+    "frontend/src/workspace/native-menu.ts",
+    "frontend/src/workspace/overview-view.ts",
+    "frontend/src/workspace/overview.ts",
+    "frontend/src/workspace/palette.ts",
+    "frontend/src/workspace/persistence.ts",
+    "frontend/src/workspace/plan-dialogs.ts",
+    "frontend/src/workspace/plan-lifecycle.ts",
+    "frontend/src/workspace/plan-list.ts",
+    "frontend/src/workspace/plan-motion.js",
+    "frontend/src/workspace/presentation.ts",
+    "frontend/src/workspace/project-lifecycle.ts",
+    "frontend/src/workspace/project-timeline.ts",
+    "frontend/src/workspace/project-view.ts",
+    "frontend/src/workspace/recent-projects-controller.ts",
+    "frontend/src/workspace/recent-projects.ts",
+    "frontend/src/workspace/reducer.ts",
+    "frontend/src/workspace/shortcuts.ts",
+    "frontend/src/workspace/snapshot-controller.ts",
+    "frontend/src/workspace/snapshot-types.ts",
+    "frontend/src/workspace/split-view.ts",
+    "frontend/src/workspace/tab-bar.ts",
+    "frontend/src/workspace/tab-controller.ts",
+    "frontend/src/workspace/task-drawer.ts",
+    "frontend/src/workspace/task-status.ts",
+    "frontend/src/workspace/task-transition.ts",
+    "frontend/src/workspace/workspace-shell.ts"
   ],
-  "uiSourceSha256": "6d6160a17c4ceb85b4eacf710c747721028ba5dff43d7367db614dae39c17e91",
-  "sourceReview": "2026-09-03: Board, Overview, and Terminal recaptured in both themes from the current frontend using isolated Northstar fixture data. Verified plan counters and filters, plan creation and error recovery, project/plan/task context copying, tab close intent, last-tab guard, and pane split/close behavior in the browser. Existing project-search, project-switch, and task-drawer captures retain their unchanged primary dialog content; the new task-drawer Copy context action is described in the desktop and terminal guides. 2026-09-12: Reviewed this change against the retained embedded-terminal and board captures. Sidebar changes affect pointer/hover motion, and the bundled fallback adds prompt glyphs; the captured embedded workflows remain applicable. The new detached-window header and extra-tab lifecycle are described in the terminal guide; no detached-window screenshot is claimed. Detached layout verified separately at wide and compact sizes. 2026-09-13: Adapted landing to desktop project selection: compact header, global counts with coverage, selected-project preview and a Motion-driven Cover Flow chooser. Browser fixture checks covered empty/single/multiple projects, direct and keyboard selection, long names and compact chooser-first layout. Existing in-project captures remain applicable; no new published screenshot is claimed. 2026-09-17: Terminal scratchpad panel (note plus clipboard strip) added beside the panes; existing embedded-terminal captures show the dock at rest and remain applicable; no new screenshot is claimed. 2026-09-17: Terminal diagnostics popover now hangs below the measured dock header with its own close control and outside-press dismissal; detached windows close any tab but the last, and a shell ending in a detached window releases its held pane in the main window. Embedded-terminal captures show the dock at rest and remain applicable; no new screenshot is claimed.",
+  "uiSourceSha256": "b8f91c528cd33a6b720db14a78aa42bef39752c3352d372956a601146b089082",
+  "sourceReview": "2026-09-03: Board, Overview, and Terminal recaptured in both themes from the current frontend using isolated Northstar fixture data. Verified plan counters and filters, plan creation and error recovery, project/plan/task context copying, tab close intent, last-tab guard, and pane split/close behavior in the browser. Existing project-search, project-switch, and task-drawer captures retain their unchanged primary dialog content; the new task-drawer Copy context action is described in the desktop and terminal guides. 2026-09-12: Reviewed this change against the retained embedded-terminal and board captures. Sidebar changes affect pointer/hover motion, and the bundled fallback adds prompt glyphs; the captured embedded workflows remain applicable. The new detached-window header and extra-tab lifecycle are described in the terminal guide; no detached-window screenshot is claimed. Detached layout verified separately at wide and compact sizes. 2026-09-13: Adapted landing to desktop project selection: compact header, global counts with coverage, selected-project preview and a Motion-driven Cover Flow chooser. Browser fixture checks covered empty/single/multiple projects, direct and keyboard selection, long names and compact chooser-first layout. Existing in-project captures remain applicable; no new published screenshot is claimed. 2026-09-17: Terminal scratchpad panel (note plus clipboard strip) added beside the panes; existing embedded-terminal captures show the dock at rest and remain applicable; no new screenshot is claimed. 2026-09-17: Terminal diagnostics popover now hangs below the measured dock header with its own close control and outside-press dismissal; detached windows close any tab but the last, and a shell ending in a detached window releases its held pane in the main window. Embedded-terminal captures show the dock at rest and remain applicable; no new screenshot is claimed. 2026-09-22: Board, Overview, search, task drawer, and terminal recaptured in both themes from the packaged app with the sanitized Northstar fixture after the UI review pass (one current plan, card click opens the drawer, no per-card status selects, Start shell in a stopped pane, light terminal palette, Cards/List landing toggle). The Open Project captures keep the native macOS panel, whose workflow is unchanged. uiSources now lists every UI module split out of app.js.",
   "requiredWorkflows": [
     "board",
     "overview",
@@ -45,8 +117,8 @@
       "route": "start-here/",
       "width": 1552,
       "height": 1012,
-      "sha256": "145597416dda670138d336760197027dcde494317f3e8dded31c304d08c1f1b9",
-      "capture": "Chromium desktop frontend with sanitized Northstar fixtures"
+      "sha256": "67718910223da1da6106885978cfc90d9b09172d8c91e4bdaae49177abb693b3",
+      "capture": "Packaged macOS app with the sanitized Northstar fixture"
     },
     {
       "file": "board-light.png",
@@ -55,8 +127,8 @@
       "route": "start-here/",
       "width": 1552,
       "height": 1012,
-      "sha256": "db2359487f2c4c51cdcdf0a1051ca28e75ccb1b92d790127b6703fe4efca6211",
-      "capture": "Chromium desktop frontend with sanitized Northstar fixtures"
+      "sha256": "fc66a08066ca4469c028db4592ecc2e12b25ef002e478260bd423c07d56a4199",
+      "capture": "Packaged macOS app with the sanitized Northstar fixture"
     },
     {
       "file": "overview-dark.png",
@@ -65,8 +137,8 @@
       "route": "desktop/#overview",
       "width": 1552,
       "height": 1012,
-      "sha256": "d6dc60bd629740eb19b4ac6f98e9fb5998128a27df259708ffd75a2d9f8fbe01",
-      "capture": "Chromium desktop frontend with sanitized Northstar fixtures"
+      "sha256": "50d8e8f3f88f657afe276f5f0e3be21a3c08c85fa43e1e22bd7dcc0967586430",
+      "capture": "Packaged macOS app with the sanitized Northstar fixture"
     },
     {
       "file": "overview-light.png",
@@ -75,8 +147,8 @@
       "route": "desktop/#overview",
       "width": 1552,
       "height": 1012,
-      "sha256": "e3821238c014d165e463bd7b0bbe4be43b72793ca9bd4d8836344359e2031cc8",
-      "capture": "Chromium desktop frontend with sanitized Northstar fixtures"
+      "sha256": "8c9b57042e1d3465e2d95b1d7fab4d7fadeb7cfa82833c58e9b38a1b1c35f1b4",
+      "capture": "Packaged macOS app with the sanitized Northstar fixture"
     },
     {
       "file": "project-search-dark.png",
@@ -85,7 +157,8 @@
       "route": "reference/#command-palette",
       "width": 1552,
       "height": 1012,
-      "sha256": "ae85f0447c1a43a5cb7b5e1947e08a6a83cfe9fb9147a939fc82932c7319fea4"
+      "sha256": "6830c5d8e61e4923bcaf4901a2fcfd2f8858a9bfe2e5af7d4864ae1b66050135",
+      "capture": "Packaged macOS app with the sanitized Northstar fixture"
     },
     {
       "file": "project-search-light.png",
@@ -94,7 +167,8 @@
       "route": "reference/#command-palette",
       "width": 1552,
       "height": 1012,
-      "sha256": "57bcce63a0d093cfdfce4aec1865d1cb9a8774674053e28d3231b0190c89880e"
+      "sha256": "a86ef77218b351cde10964869d43cd690ec13647d4c894a7eb8ab4dfa5bd8eb8",
+      "capture": "Packaged macOS app with the sanitized Northstar fixture"
     },
     {
       "file": "project-switch-dark.png",
@@ -121,7 +195,8 @@
       "route": "desktop/#task-drawer",
       "width": 1552,
       "height": 1012,
-      "sha256": "729d3a7450b62ad06441f5464ff3a5fd064717b518e4441eed7e4a5077735303"
+      "sha256": "eb227c8a1717c6cda102aae6a273bf7c0d53cc2ea598e0b8e8083c98694a2140",
+      "capture": "Packaged macOS app with the sanitized Northstar fixture"
     },
     {
       "file": "task-drawer-light.png",
@@ -130,7 +205,8 @@
       "route": "desktop/#task-drawer",
       "width": 1552,
       "height": 1012,
-      "sha256": "929e8051203b5c6e8b2d659f4af644c1c1a0443ffa8bde50793fd3445f043c17"
+      "sha256": "7af73f617ce2ce38c2a37e6c9abe360730e272d1f076b1e8a26b30da6244e440",
+      "capture": "Packaged macOS app with the sanitized Northstar fixture"
     },
     {
       "file": "terminal-dark.png",
@@ -139,8 +215,8 @@
       "route": "terminals/",
       "width": 1552,
       "height": 1012,
-      "sha256": "145597416dda670138d336760197027dcde494317f3e8dded31c304d08c1f1b9",
-      "capture": "Chromium desktop frontend with sanitized Northstar fixtures"
+      "sha256": "4a9930a6351e9565d408ce092b268b0325796f55a8b311fc288a052f1af2d885",
+      "capture": "Packaged macOS app with the sanitized Northstar fixture"
     },
     {
       "file": "terminal-light.png",
@@ -149,8 +225,8 @@
       "route": "terminals/",
       "width": 1552,
       "height": 1012,
-      "sha256": "db2359487f2c4c51cdcdf0a1051ca28e75ccb1b92d790127b6703fe4efca6211",
-      "capture": "Chromium desktop frontend with sanitized Northstar fixtures"
+      "sha256": "99df19998ba2727947fc343c2bc9568541d4038e1c3e9b3c4ccd89639c1a71c5",
+      "capture": "Packaged macOS app with the sanitized Northstar fixture"
     }
   ]
 }

@@ -44,6 +44,7 @@ impl Store {
                 actors: Vec::new(),
                 stack: None,
                 scratchpad: None,
+                summary_updated_at: None,
             },
             plans: BTreeMap::new(),
             tasks: BTreeMap::new(),
@@ -307,6 +308,61 @@ fn a_held_plan_or_task_states_its_hold_in_the_launch_document() {
     assert_eq!(document["task"]["hold"], "on hold: waiting on review");
     // A hold leaves the status alone, so the status alone cannot carry it.
     assert_eq!(document["task"]["status"], "doing");
+}
+
+#[test]
+fn a_value_ending_in_a_bare_scheme_separator_never_panics() {
+    for value in [
+        "moved to https://",
+        "://",
+        "a://@",
+        "例え://",
+        "x://a@b://c",
+    ] {
+        assert!(!contains_potential_credential(value), "{value:?}");
+    }
+    let root = TempDirectory::new("ptrack-agent-launch-scheme");
+    let canonical = fs::canonicalize(root.path()).unwrap();
+    let mut store = Store::new(canonical.clone());
+    store.meta.goal = "moved to https://".to_owned();
+    let host = AssociationHost::new(&canonical, 1, None).unwrap();
+    let context = build_launch_context(
+        Some(&store),
+        Some(&host),
+        AssociationPointer {
+            version: 1,
+            ..AssociationPointer::default()
+        },
+    )
+    .unwrap();
+    let document: Value = serde_json::from_str(&context.text).unwrap();
+    assert_eq!(document["goal"], "moved to https://");
+}
+
+#[test]
+fn launch_context_uses_the_shared_detector_for_json_header_and_token_shapes() {
+    for value in [
+        r#"{"password": "hunter2"}"#,
+        "x-api-key: abc123",
+        "Authorization: Basic dXNlcjpwYXNz",
+        "Authorization: Token abc123",
+        "glpat-abcdefghijklmnopqrst",
+        "xoxb-1234567890-abcdefghijkl",
+        "sk_live_abcdefghijklmnop",
+        "AIzaSyA1234567890abcdefghijklmnopqrstu",
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+        "aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        "DB_PASSWORD=hunter2",
+    ] {
+        assert!(contains_potential_credential(value), "{value:?}");
+    }
+    for value in [
+        "Implement the password reset flow",
+        "see https://example.com/docs?page=2",
+        "the token expires after 5 minutes",
+    ] {
+        assert!(!contains_potential_credential(value), "{value:?}");
+    }
 }
 
 #[test]

@@ -166,82 +166,109 @@ pub fn validate_active_generation(
     marker: &ActiveGeneration,
     writer_version: &str,
 ) -> StoreResult<()> {
-    validate_generation_stores(global_home, marker, writer_version, false)
+    validate_generation_stores(global_home, marker, writer_version)
 }
 
-/// Validates a published runtime for use without requiring access to every project.
-/// Permission-denied project paths remain unavailable until individually opened.
-/// Publication and recovery must use the strict `validate_active_generation` instead.
+/// Validates a published runtime for use without touching any project database.
+///
+/// Runtime load happens on every command, so it attests only what routing
+/// needs: the marker shape, the global store, and each project's fixed,
+/// symlink-free layout. Each project database is attested by the
+/// `ProjectStore::open_existing` of the command that resolves it, which checks
+/// the recorded binding and heals leaked permission bits. That keeps one
+/// project's writer lock, slow disk, corruption, or deleted database from
+/// failing commands in every other project. A project whose root exists but
+/// whose `.ptrack` directory or database is gone is simply unavailable, so
+/// forget and relocate keep working. Permission-denied project paths are
+/// likewise deferred. Publication and recovery must use the strict
+/// `validate_active_generation` instead.
 ///
 /// # Errors
-/// Returns all marker, global-store, path and project validation errors except
-/// permission denial while resolving or opening an individual project.
+/// Returns marker, global-store, and fixed-layout errors, and an I/O error
+/// when a listed project root is missing (so a caller can prune it).
 pub fn validate_active_generation_for_load(
     global_home: &Path,
     marker: &ActiveGeneration,
-    writer_version: &str,
+    _writer_version: &str,
 ) -> StoreResult<()> {
-    validate_generation_stores(global_home, marker, writer_version, true)
+    validate_marker_global(global_home, marker)?;
+    for project in &marker.projects {
+        validate_fixed_project_path(project)?;
+        validate_accessible_project_namespace(project)?;
+        let root = match fs::canonicalize(&project.root) {
+            Ok(root) => root,
+            Err(error) if error.kind() == ErrorKind::PermissionDenied => continue,
+            Err(error) => return Err(error.into()),
+        };
+        if root != Path::new(&project.root) {
+            return marker_error("project root is not canonical");
+        }
+        heal_project_database_permissions(Path::new(&project.path));
+    }
+    Ok(())
 }
 
 fn validate_generation_stores(
     global_home: &Path,
     marker: &ActiveGeneration,
     writer_version: &str,
-    defer_project_permission: bool,
 ) -> StoreResult<()> {
+    validate_marker_global(global_home, marker)?;
+    for project in &marker.projects {
+        validate_fixed_project_path(project)?;
+        let root = fs::canonicalize(&project.root)?;
+        if root != Path::new(&project.root) {
+            return marker_error("project root is not canonical");
+        }
+        drop(ProjectStore::open_existing(
+            &project.path,
+            &marker.project_binding(project)?,
+            writer_version,
+        )?);
+    }
+    Ok(())
+}
+
+fn validate_marker_global(global_home: &Path, marker: &ActiveGeneration) -> StoreResult<()> {
     marker.validate_shape()?;
     let expected_global = fs::canonicalize(global_home)?.join("global.redb");
     if Path::new(&marker.global.path) != expected_global {
         return marker_error("global database is outside the fixed runtime path");
     }
-    let global = GlobalStore::open_existing(&marker.global.path, &marker.global_binding()?)?;
-    drop(global);
-    for project in &marker.projects {
-        // Check the fixed layout even when filesystem access cannot attest the root.
-        let expected = Path::new(&project.root).join(".ptrack/ptrack.redb");
-        if Path::new(&project.path) != expected {
-            return marker_error("project database is outside the fixed runtime path");
-        }
-        if defer_project_permission {
-            validate_accessible_project_namespace(project)?;
-        }
-        let root = match fs::canonicalize(&project.root) {
-            Ok(root) => root,
-            Err(error)
-                if defer_project_permission && error.kind() == ErrorKind::PermissionDenied =>
-            {
-                continue;
-            }
-            Err(error) => return Err(error.into()),
-        };
-        if root != Path::new(&project.root) {
-            return marker_error("project root is not canonical");
-        }
-        // The store's writer retry maps persistent permission denial to Busy.
-        // A no-follow probe preserves that distinction without adopting linked paths.
-        if defer_project_permission {
-            match crate::open_private_path(Path::new(&project.path), false, true) {
-                Ok(file) => drop(file),
-                Err(StoreError::Io(error)) if error.kind() == ErrorKind::PermissionDenied => {
-                    continue;
-                }
-                Err(error) => return Err(error),
-            }
-        }
-        match ProjectStore::open_existing(
-            &project.path,
-            &marker.project_binding(project)?,
-            writer_version,
-        ) {
-            Ok(store) => drop(store),
-            Err(StoreError::Io(error))
-                if defer_project_permission && error.kind() == ErrorKind::PermissionDenied => {}
-            Err(error) => return Err(error),
-        }
+    drop(GlobalStore::open_existing(
+        &marker.global.path,
+        &marker.global_binding()?,
+    )?);
+    Ok(())
+}
+
+/// Checks the fixed layout even when filesystem access cannot attest the root.
+fn validate_fixed_project_path(project: &ActiveGenerationProject) -> StoreResult<()> {
+    let expected = Path::new(&project.root).join(".ptrack/ptrack.redb");
+    if Path::new(&project.path) != expected {
+        return marker_error("project database is outside the fixed runtime path");
     }
     Ok(())
 }
+
+/// Tightens leaked group/other bits on a project database without opening it,
+/// the same healing `ProjectStore::open_existing` applies (a git checkout or a
+/// copy under a default umask). A file that cannot be healed here is left for
+/// that open to report.
+#[cfg(unix)]
+fn heal_project_database_permissions(path: &Path) {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    if let Ok(metadata) = fs::symlink_metadata(path)
+        && metadata.is_file()
+        && metadata.mode() & 0o077 != 0
+    {
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+    }
+}
+
+#[cfg(not(unix))]
+fn heal_project_database_permissions(_: &Path) {}
 
 fn validate_accessible_project_namespace(project: &ActiveGenerationProject) -> StoreResult<()> {
     let root = Path::new(&project.root);
@@ -254,6 +281,12 @@ fn validate_accessible_project_namespace(project: &ActiveGenerationProject) -> S
         let metadata = match fs::symlink_metadata(path) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == ErrorKind::PermissionDenied => continue,
+            // A vanished root is reported so the caller can prune it; a
+            // vanished `.ptrack` or database under a live root only makes
+            // that one project unavailable.
+            Err(error) if error.kind() == ErrorKind::NotFound && path != root => {
+                return Ok(());
+            }
             Err(error) => return Err(error.into()),
         };
         if metadata.file_type().is_symlink() {
@@ -537,19 +570,37 @@ fn publish_marker(global_home: &Path, marker: &ActiveGeneration) -> StoreResult<
         .to_path_buf();
     let path = runtime.join(ACTIVE_GENERATION_MARKER);
     let temporary = runtime.join(".active-generation.json.tmp");
-    if temporary.exists() {
-        return marker_error("active-generation temporary file requires recovery");
-    }
     let mut bytes = serde_json::to_vec(marker)
         .map_err(|error| StoreError::ActivationBinding(error.to_string()))?;
     bytes.push(b'\n');
-    let mut file = create_private_new(&temporary)?;
-    file.write_all(&bytes)?;
-    file.sync_all()?;
-    drop(file);
-    replace_private_file(&temporary, &path)?;
+    // Every caller holds the publication lease (the exclusive cutover lease,
+    // or the shared cutover lease plus the exclusive bootstrap lease), so no
+    // other publisher can own a temporary file right now: one left behind is
+    // a crashed or failed publication and never holds the live marker.
+    remove_stale_temporary(&temporary)?;
+    let published = (|| {
+        let mut file = create_private_new(&temporary)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        drop(file);
+        replace_private_file(&temporary, &path)
+    })();
+    if let Err(error) = published {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
     sync_private_directory(&runtime)?;
     Ok(())
+}
+
+fn remove_stale_temporary(temporary: &Path) -> StoreResult<()> {
+    match fs::symlink_metadata(temporary) {
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+        // Unlinking a symlink or file removes only the directory entry.
+        Ok(metadata) if !metadata.is_dir() => Ok(fs::remove_file(temporary)?),
+        Ok(_) => marker_error("active-generation temporary path is a directory"),
+    }
 }
 
 fn require_matching_lease(global_home: &Path, lease: &CutoverLease) -> StoreResult<()> {

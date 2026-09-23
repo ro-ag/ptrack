@@ -97,6 +97,10 @@ pub enum StoreError {
     ImportCommittedVerificationFailed { path: PathBuf, detail: String },
     /// The engine could not prove whether the final ready transaction committed.
     ImportCommitOutcomeUnknown { path: PathBuf, detail: String },
+    /// An application write committed, but the database path no longer names
+    /// the handle it committed through. The write is durable: retrying it would
+    /// apply it twice, so callers must reopen and inspect instead.
+    WriteCommittedPathChanged { path: PathBuf, detail: String },
     /// A Rust destination was pointed at a reserved legacy bbolt filename.
     LegacyPathForbidden { path: PathBuf },
     /// A database file exposes project data to group or other users.
@@ -152,8 +156,6 @@ pub enum StoreError {
     NotFound,
     /// A compare-and-set task fence observed different state.
     TaskStatusChanged(String),
-    /// A capability draft or lifecycle mutation observed a stale revision.
-    CapabilityRevisionChanged { expected: u64, actual: u64 },
     /// A scratchpad write stated a revision other than the stored one. The
     /// refused write carries the stored record so the caller can reload and
     /// merge without a second round trip.
@@ -162,10 +164,6 @@ pub enum StoreError {
     /// a damaged database, so it never borrows [`StoreError::InvalidManifest`]
     /// and a presentation layer can tell the two apart.
     InvalidScratchpad(String),
-    /// Approval was attempted against a digest other than the stored preview.
-    CapabilityScopeChanged,
-    /// Expiry was requested for a capability which is not currently enabled.
-    CapabilityNotEnabled,
     /// A bounded read used an unsafe resource limit.
     InvalidBoundedLimit,
     /// A bounded aggregate would traverse more rows than its hard ceiling.
@@ -194,6 +192,10 @@ pub enum StoreError {
     /// A dependency-edge mutation named a missing record, a self-dependency,
     /// a duplicate or absent edge, or an edge that would close a cycle.
     InvalidDependency(String),
+    /// A plan mutation conflicts with the plan's lifecycle state: open work
+    /// added to a finished plan, a plan closed over open tasks, or a plan that
+    /// changed between the two phases of a move.
+    InvalidPlanState(String),
     /// A stored record envelope was invalid.
     Envelope(EnvelopeError),
     /// A filesystem operation failed.
@@ -259,6 +261,11 @@ impl fmt::Display for StoreError {
             Self::ImportCommitOutcomeUnknown { path, detail } => write!(
                 formatter,
                 "database import commit outcome is unknown for {}: {detail}",
+                path.display()
+            ),
+            Self::WriteCommittedPathChanged { path, detail } => write!(
+                formatter,
+                "database write committed, but its path changed afterward (do not retry; reopen and inspect): {}: {detail}",
                 path.display()
             ),
             Self::LegacyPathForbidden { path } => write!(
@@ -336,18 +343,8 @@ impl fmt::Display for StoreError {
             Self::TaskStatusChanged(detail) => {
                 write!(formatter, "task status changed: {detail}")
             }
-            Self::CapabilityRevisionChanged { expected, actual } => write!(
-                formatter,
-                "capability revision changed: expected {expected}, found {actual}"
-            ),
             Self::ScratchpadConflict { .. } => formatter.write_str("scratchpad revision conflict"),
             Self::InvalidScratchpad(detail) => write!(formatter, "invalid scratchpad: {detail}"),
-            Self::CapabilityScopeChanged => {
-                formatter.write_str("effective scope changed; preview again before enabling")
-            }
-            Self::CapabilityNotEnabled => {
-                formatter.write_str("only an enabled capability can be expired")
-            }
             Self::InvalidBoundedLimit => {
                 formatter.write_str("bounded read limit must be between 1 and 1000")
             }
@@ -383,6 +380,9 @@ impl fmt::Display for StoreError {
             }
             Self::InvalidDependency(detail) => {
                 write!(formatter, "invalid dependency mutation: {detail}")
+            }
+            Self::InvalidPlanState(detail) => {
+                write!(formatter, "invalid plan state: {detail}")
             }
             Self::Envelope(error) => error.fmt(formatter),
             Self::Io(error) => error.fmt(formatter),

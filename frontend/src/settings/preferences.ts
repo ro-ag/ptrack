@@ -327,3 +327,25 @@ export function preferenceSaveMessage(phase: PreferenceSavePhase): string {
   if (phase === "reset") return "Settings reset to defaults.";
   return "Settings could not be saved. The stored record is unchanged.";
 }
+
+/** A partial preferences document: SetPreferences merges it into the record. */
+export interface PreferencesPatch {
+  appearance?: Partial<AppearancePreferences>;
+  terminal?: Partial<TerminalPreferences>;
+  startup?: Partial<Pick<StartupPreferences, "restoreLastProject">>;
+  notifications?: Partial<NotificationPreferences>;
+}
+
+export const themePreferences: readonly ThemePreference[] = ["system", "dark", "light"];
+export const densityPreferences: readonly DensityPreference[] = ["comfortable", "compact"];
+export const reducedMotionPreferences: readonly ReducedMotionPreference[] = ["system", "always", "never"];
+export const unicodeModePreferences: readonly UnicodeModePreference[] = ["modern", "legacy"];
+export const rendererPreferences: readonly RendererPreference[] = ["auto", "webgl", "canvas", "dom"];
+
+/** `value` when it is one of the choices a Settings control offers. */
+export function preferenceChoice<T extends string>(
+  value: string,
+  choices: readonly T[],
+): T | null {
+  return choices.find((choice) => choice === value) ?? null;
+}

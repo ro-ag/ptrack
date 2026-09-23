@@ -10,7 +10,6 @@ import {
   tabIndicatorPresentation,
   tabMoveIndex,
   tabRenameKeyIntent,
-  restoreConnectedFocus,
   structuralCloseFocusTarget,
   workspaceTabElementIds,
 } from "./tab-bar";
@@ -40,16 +39,6 @@ describe("tab-bar keyboard and focus policy", () => {
     expect(() => workspaceTabElementIds("bad-\ud800-id")).not.toThrow();
     expect(workspaceTabElementIds("bad-\ud800-id").panelId).toContain("d800");
     expect(workspaceTabElementIds("\ud800")).not.toEqual(workspaceTabElementIds("\ud801"));
-  });
-
-  it("restores focus only while the invoker remains connected", () => {
-    let calls = 0;
-    expect(restoreConnectedFocus({ isConnected: true, focus: () => { calls += 1; } }))
-      .toBe(true);
-    expect(restoreConnectedFocus({ isConnected: false, focus: () => { calls += 1; } }))
-      .toBe(false);
-    expect(restoreConnectedFocus(null)).toBe(false);
-    expect(calls).toBe(1);
   });
 
   it("focuses the surviving tab after tab close and pane content after pane close", () => {

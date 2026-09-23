@@ -303,3 +303,52 @@ fn kind_scoped_fields_and_notifications_are_closed() {
             .is_err()
     );
 }
+
+#[test]
+fn prefixed_and_quoted_keys_are_redacted_in_summaries() {
+    let now = Timestamp::from_unix_nanoseconds(1_800_000_000_000_000_000);
+    let mut policy = default_event_privacy_policy();
+    policy.allow_summaries = true;
+    for (summary, expected) in [
+        (
+            "set DB_PASSWORD=hunter2 AWS_SECRET_ACCESS_KEY=wJalr/XUtn OPENAI_API_KEY=abc123",
+            "set DB_PASSWORD=[redacted] AWS_SECRET_ACCESS_KEY=[redacted] OPENAI_API_KEY=[redacted]",
+        ),
+        (
+            r#"sent {"api_key": "abc123"} with x-api-key: abc123"#,
+            "sent {api_key=[redacted]} with x-api-key=[redacted]",
+        ),
+        (
+            "Authorization: Basic dXNlcjpwYXNz then postgres://app:hunter2@db/app",
+            "Authorization=[redacted] then postgres://[redacted]@db/app",
+        ),
+        (
+            "fixed the password reset flow",
+            "fixed the password reset flow",
+        ),
+    ] {
+        let mut value = observation();
+        value.kind = EventKind::Summary;
+        value.phase = EventPhase::Completed;
+        value.paths.clear();
+        value.summary = summary.to_owned();
+        let normalized = normalize_event_observation("/project", now, policy, value).unwrap();
+        assert_eq!(normalized.summary, expected, "{summary:?}");
+    }
+    for rejected in [
+        "leaked glpat-abcdefghijklmnopqrst",
+        "leaked xoxb-1234567890-abcdefghijkl",
+        "leaked sk_live_abcdefghijklmnop",
+        "leaked AIzaSyA1234567890abcdefghijklmnopqrstu",
+    ] {
+        let mut value = observation();
+        value.kind = EventKind::Summary;
+        value.phase = EventPhase::Completed;
+        value.paths.clear();
+        value.summary = rejected.to_owned();
+        assert!(normalize_event_observation("/project", now, policy, value).is_err());
+    }
+    let mut subject = observation();
+    subject.subject = "DB_PASSWORD=hunter2".to_owned();
+    assert!(normalize_event_observation("/project", now, policy, subject).is_err());
+}

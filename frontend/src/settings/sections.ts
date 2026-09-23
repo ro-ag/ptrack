@@ -72,6 +72,17 @@ export const resetWindowLayoutConfirmation: ResetConfirmationCopy = {
   submit: "Reset Layout",
 };
 
+// The footer reset covers every section of Settings, not just the one on
+// screen, so it says so before it runs.
+export const resetSettingsConfirmation: ResetConfirmationCopy = {
+  eyebrow: "Settings",
+  heading: "Reset all settings?",
+  detail:
+    "Every section of Settings returns to its default: startup, appearance, terminal, notifications, and updates. Plans, tasks, notes, window layout, and Recent projects are not touched.",
+  cancel: "Keep Settings",
+  submit: "Reset All Settings",
+};
+
 export const resetApplicationStateConfirmation: ResetConfirmationCopy = {
   eyebrow: "Application state",
   heading: "Reset all application state?",
@@ -95,7 +106,11 @@ export function resetApplicationStateMessage(result: unknown): string {
   return `${cleared}. Plans, tasks, notes, and Recent projects were not touched.`;
 }
 
+export type DiagnosticsGroup = "Global" | "This project";
+
 export interface DiagnosticsRow {
+  /** Where the row is shown: app-wide storage first, then the open project. */
+  group: DiagnosticsGroup;
   label: string;
   value: string;
   /** Secondary text under the value: when and where, never the value again. */
@@ -158,16 +173,17 @@ function readableTime(value: string): string {
 function backupRows(value: unknown): DiagnosticsRow[] {
   const ledger = fields(value);
   if (ledger.status === "unavailable") {
-    return [{ label: "Backups", value: "Not available", copy: null }];
+    return [{ group: "Global", label: "Backups", value: "Not available", copy: null }];
   }
   const entries = Array.isArray(ledger.entries) ? ledger.entries : [];
   if (entries.length === 0) {
-    return [{ label: "Backups", value: "None recorded", copy: null }];
+    return [{ group: "Global", label: "Backups", value: "None recorded", copy: null }];
   }
   return entries.slice(0, 25).map((entry) => {
     const backup = fields(entry);
     const path = text(backup.path);
     return {
+      group: "Global",
       label: "Backup",
       value: path === "" ? "Not available" : path,
       detail: [
@@ -183,12 +199,14 @@ function backupRows(value: unknown): DiagnosticsRow[] {
 // One row per database reporting its count, not one row per field of it. A
 // store that could not be read has no count, which is not the same as zero.
 function quarantineRows(value: unknown): DiagnosticsRow[] {
-  return (Array.isArray(value) ? value : []).map((entry) => {
+  return (Array.isArray(value) ? value : []).map((entry): DiagnosticsRow => {
     const row = fields(entry);
     const count = row.count;
     const counted = row.status !== "unavailable" && typeof count === "number";
+    const database = text(row.database) === "project" ? "project" : "global";
     return {
-      label: `Quarantine · ${humanize(text(row.database) || "unknown")}`,
+      group: "Global",
+      label: `Quarantined records (${database} database)`,
       value: counted
         ? `${count} record${count === 1 ? "" : "s"}`
         : "Not available",
@@ -201,7 +219,7 @@ function receiptRows(value: unknown): DiagnosticsRow[] {
   const receipts = (Array.isArray(value) ? value : []).map(text)
     .filter((path) => path !== "");
   if (receipts.length === 0) {
-    return [{ label: "Migration receipts", value: "None recorded", copy: null }];
+    return [{ group: "Global", label: "Migration receipts", value: "None recorded", copy: null }];
   }
   // Every receipt is `<migrations>/<id>/receipt.json`, so the file name names
   // all 25 of them the same thing. The migration id — the parent directory —
@@ -210,6 +228,7 @@ function receiptRows(value: unknown): DiagnosticsRow[] {
   return receipts.slice(0, 25).map((path) => {
     const id = segment(path, 1);
     return {
+      group: "Global",
       label: `Migration receipt ${id}`,
       value: path,
       copy: `Copy migration receipt path ${id}`,
@@ -220,43 +239,79 @@ function receiptRows(value: unknown): DiagnosticsRow[] {
 // flatten handles the sections that really are scalars — paths and runtime —
 // without assuming a field list, so a runtime that reports more detail still
 // renders. A list it has no shape for is summarized, never dropped.
-function flatten(report: unknown, prefix = "", depth = 0): DiagnosticsRow[] {
+function flatten(
+  report: unknown,
+  prefix = "",
+  depth = 0,
+  group: DiagnosticsGroup = "Global",
+): DiagnosticsRow[] {
   const rows: DiagnosticsRow[] = [];
   for (const [key, value] of Object.entries(fields(report))) {
     const label = prefix ? `${prefix} · ${humanize(key)}` : humanize(key);
     if (value === null) {
-      rows.push({ label, value: absentValue(key), copy: null });
+      rows.push({ group, label, value: absentValue(key), copy: null });
       continue;
     }
     const leaf = leafValue(value);
     if (leaf !== null) {
       rows.push({
+        group,
         label,
         value: leaf,
-        copy: looksLikePath(leaf) ? `Copy ${label}` : null,
+        copy: looksLikePath(leaf) ? copyLabel(group, label) : null,
       });
       continue;
     }
     if (Array.isArray(value)) {
-      rows.push({ label, value: `${value.length} recorded`, copy: null });
+      rows.push({ group, label, value: `${value.length} recorded`, copy: null });
       continue;
     }
     if (typeof value === "object" && depth < 2) {
-      rows.push(...flatten(value, label, depth + 1));
+      rows.push(...flatten(value, label, depth + 1, group));
     }
   }
   return rows;
 }
 
-// The report is read top to bottom, so where things are is a decision rather
-// than whatever order the serializer happened to emit. A section the runtime
-// adds later still renders, after the ones this dialog was designed around.
-//
-// The bounded sections come first and the two ledgers last, because the cap
-// below cuts from the end: the only thing it may ever drop is the 26th backup,
-// never a whole section nobody will notice is missing.
-const reportOrder = ["paths", "runtime", "backups", "migration"];
+function copyLabel(group: DiagnosticsGroup, label: string): string {
+  return `Copy ${group === "Global" ? "global" : "project"} ${label.toLowerCase()} path`;
+}
 
+// One named field: its human label, in the group it belongs to. A null field
+// is reported as absent rather than dropped.
+function fieldRow(
+  group: DiagnosticsGroup,
+  label: string,
+  source: Record<string, unknown>,
+  key: string,
+): DiagnosticsRow[] {
+  if (!(key in source)) return [];
+  const value = source[key];
+  if (value === null) return [{ group, label, value: absentValue(key), copy: null }];
+  const leaf = leafValue(value);
+  if (leaf === null) return [];
+  return [{ group, label, value: leaf, copy: looksLikePath(leaf) ? copyLabel(group, label) : null }];
+}
+
+// The paths and runtime fields this dialog was designed around, with the
+// label a person reads. Anything else the runtime adds still renders, after
+// these, under a humanized key.
+const globalPathLabels: Record<string, string> = {
+  globalHome: "Home folder",
+  globalDatabase: "Database",
+  backupsDirectory: "Backups folder",
+  migrationsDirectory: "Migrations folder",
+  runtimeDirectory: "Runtime folder",
+  updatesDirectory: "Updates folder",
+};
+const runtimeLabels: Record<string, string> = { status: "Runtime status", detail: "Runtime detail" };
+
+// The report is read top to bottom, so where things are is a decision rather
+// than whatever order the serializer happened to emit: Global (home, database,
+// backups, migrations, runtime), then This project (root, database). A section
+// the runtime adds later still renders, after the ones this dialog was
+// designed around.
+//
 // The realistic worst case is 61 rows — 8 paths, 1 runtime, 25 backups,
 // 2 quarantine stores, 25 receipts — which left the old cap of 64 a few
 // backend fields of headroom. The cap is a runaway guard, not a budget.
@@ -265,23 +320,50 @@ const maxDiagnosticsRows = 128;
 export function diagnosticsRows(report: unknown): DiagnosticsRow[] {
   if (!report || typeof report !== "object") return [];
   const sections = report as Record<string, unknown>;
-  const keys = [
-    ...reportOrder.filter((key) => key in sections),
-    ...Object.keys(sections).filter((key) => !reportOrder.includes(key)),
+  const paths = fields(sections.paths);
+  const runtime = fields(sections.runtime);
+  const migration = fields(sections.migration);
+  const rows: DiagnosticsRow[] = [
+    ...fieldRow("Global", globalPathLabels.globalHome, paths, "globalHome"),
+    ...fieldRow("Global", globalPathLabels.globalDatabase, paths, "globalDatabase"),
+    ...fieldRow("Global", globalPathLabels.backupsDirectory, paths, "backupsDirectory"),
+    ...("backups" in sections ? backupRows(sections.backups) : []),
+    ...fieldRow("Global", globalPathLabels.migrationsDirectory, paths, "migrationsDirectory"),
+    ...("migration" in sections
+      ? [...quarantineRows(migration.quarantine), ...receiptRows(migration.receipts)]
+      : []),
+    ...fieldRow("Global", globalPathLabels.runtimeDirectory, paths, "runtimeDirectory"),
+    ...fieldRow("Global", runtimeLabels.status, runtime, "status"),
+    ...fieldRow("Global", runtimeLabels.detail, runtime, "detail"),
+    ...fieldRow("Global", globalPathLabels.updatesDirectory, paths, "updatesDirectory"),
   ];
+  const extraPaths = Object.fromEntries(
+    Object.entries(paths).filter(([key]) => !(key in globalPathLabels) && key !== "project"),
+  );
+  rows.push(...flatten(extraPaths));
+  rows.push(...flatten(Object.fromEntries(
+    Object.entries(runtime).filter(([key]) => !(key in runtimeLabels)),
+  ), "Runtime"));
   // The runtime still reports the deprecated capability broker; the dialog no
   // longer displays it.
-  const skipped = ["capabilities"];
-  const rows: DiagnosticsRow[] = [];
-  for (const key of keys) {
-    if (skipped.includes(key)) continue;
-    const value = sections[key];
-    if (key === "backups") rows.push(...backupRows(value));
-    else if (key === "migration") {
-      const migration = fields(value);
-      rows.push(...quarantineRows(migration.quarantine));
-      rows.push(...receiptRows(migration.receipts));
-    } else rows.push(...flatten({ [key]: value }));
+  const known = ["paths", "runtime", "backups", "migration", "capabilities"];
+  for (const key of Object.keys(sections)) {
+    if (!known.includes(key)) rows.push(...flatten({ [key]: sections[key] }));
+  }
+  if ("project" in paths) {
+    const project = paths.project;
+    if (project === null || typeof project !== "object") {
+      rows.push({ group: "This project", label: "Project", value: absentValue("project"), copy: null });
+    } else {
+      const fieldsOf = fields(project);
+      rows.push(
+        ...fieldRow("This project", "Root folder", fieldsOf, "root"),
+        ...fieldRow("This project", "Database", fieldsOf, "database"),
+        ...flatten(Object.fromEntries(
+          Object.entries(fieldsOf).filter(([key]) => key !== "root" && key !== "database"),
+        ), "", 0, "This project"),
+      );
+    }
   }
   return rows.slice(0, maxDiagnosticsRows);
 }

@@ -1342,6 +1342,26 @@ fn drift_is_sorted_bounded_and_does_not_reveal_unstructured_run_content() {
 }
 
 #[test]
+fn drift_never_flags_the_projects_own_ptrack_state_as_untracked() {
+    let harness = Harness::new();
+    {
+        let mut git = lock_test(&harness.git.snapshot);
+        git.untracked_paths = vec![
+            ".ptrack/".to_owned(),
+            ".ptrack/ptrack.redb".to_owned(),
+            "notes.tmp".to_owned(),
+        ];
+    }
+    let drift = harness.coordinator.drift(GENERATION).unwrap();
+    let untracked = drift
+        .findings
+        .iter()
+        .filter(|item| item.kind == "untrackedFile")
+        .count();
+    assert_eq!(untracked, 1);
+}
+
+#[test]
 fn drift_uses_unpushed_recent_cutoff_and_only_unique_commit_prefixes() {
     let harness = Harness::new();
     harness.store.tracking.store(1_000, Ordering::SeqCst);

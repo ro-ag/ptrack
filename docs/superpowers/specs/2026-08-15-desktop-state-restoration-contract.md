@@ -152,6 +152,10 @@ frozen 11-event menu list and its exact-match security test.
   its broker lease, while leaving the user's capability definitions authored and intact, so the user
   re-grants rather than re-authors. With no project open, nothing is revoked and the result says so.
   The confirmation must state this plainly rather than claim project databases are untouched.
+  Amended 2026-09-22: capability brokering has been retired (it moved to pam), so no broker lease
+  exists and leftover grants authorize nothing. Reset Application State still revokes them through
+  the project store and removes any stale broker descriptor, and its result reports how many grants
+  it revoked.
 - After Reset Application State the app returns to its default state without a restart; any window
   the reset invalidates is re-laid-out in place.
 

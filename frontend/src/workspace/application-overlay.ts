@@ -1,5 +1,5 @@
 export interface ApplicationOverlay {
-  readonly hidden: boolean;
+  readonly hidden: boolean | string;
   inert: boolean;
   getAttribute(name: "aria-hidden" | "data-application-overlay-layer"): string | null;
   setAttribute(

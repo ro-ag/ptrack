@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   clampMenuPosition,
+  completionPromptMode,
+  isTextEntryElement,
   deleteConfirmationText,
   planMenuItems,
   planReadyForCompletion,
@@ -17,12 +19,17 @@ describe("plan lifecycle menu", () => {
     expect(items.filter((item) => item.destructive).map((item) => item.action)).toEqual(["delete"]);
   });
 
-  it("offers resume for a held plan and no open-only actions for a done plan", () => {
+  it("offers resume for a held plan and only reopen for a done plan", () => {
     expect(planMenuItems({ status: "active", holdReason: "Later" })
       .map((item) => item.action)).toContain("resume");
     expect(planMenuItems({ status: "done" }).map((item) => item.action)).toEqual([
-      "copy-context", "rename", "move", "copy", "delete",
+      "copy-context", "rename", "reopen", "move", "copy", "delete",
     ]);
+    expect(planMenuItems({ status: "done" }).find((item) => item.action === "reopen"))
+      .toEqual({ action: "reopen", label: "Reopen plan", destructive: false });
+    for (const status of ["active", "archived"]) {
+      expect(planMenuItems({ status }).map((item) => item.action)).not.toContain("reopen");
+    }
   });
 });
 
@@ -92,5 +99,35 @@ describe("transfer submit gating", () => {
     expect(transferSubmitDisabled({ mode: "copy", projects, targetPath: "/a", title: " " })).toBe(true);
     expect(transferSubmitDisabled({ mode: "copy", projects, targetPath: "", title: "Second" })).toBe(false);
     expect(transferSubmitDisabled({ mode: "copy", projects, targetPath: "/b", title: "" })).toBe(false);
+  });
+});
+
+describe("automatic completion prompt focus", () => {
+  const quiet = { automatic: true, windowFocused: true, focusInTerminal: false, focusInTextEntry: false };
+
+  it("opens the dialog only when nobody is typing", () => {
+    expect(completionPromptMode(quiet)).toBe("modal");
+    expect(completionPromptMode({ ...quiet, focusInTerminal: true })).toBe("banner");
+    expect(completionPromptMode({ ...quiet, focusInTextEntry: true })).toBe("banner");
+    expect(completionPromptMode({ ...quiet, windowFocused: false })).toBe("banner");
+  });
+
+  it("always opens the dialog the user asked for", () => {
+    expect(completionPromptMode({
+      automatic: false,
+      windowFocused: false,
+      focusInTerminal: true,
+      focusInTextEntry: true,
+    })).toBe("modal");
+  });
+
+  it("recognizes fields that take typed text", () => {
+    expect(isTextEntryElement({ tagName: "TEXTAREA" })).toBe(true);
+    expect(isTextEntryElement({ tagName: "input" })).toBe(true);
+    expect(isTextEntryElement({ tagName: "INPUT", type: "search" })).toBe(true);
+    expect(isTextEntryElement({ tagName: "INPUT", type: "checkbox" })).toBe(false);
+    expect(isTextEntryElement({ tagName: "DIV", isContentEditable: true })).toBe(true);
+    expect(isTextEntryElement({ tagName: "BUTTON" })).toBe(false);
+    expect(isTextEntryElement(null)).toBe(false);
   });
 });

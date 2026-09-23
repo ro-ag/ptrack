@@ -5,13 +5,12 @@ use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Barrier};
 use std::time::Instant;
 
-use ptrack_capability_policy::{AuditEvent, confirm_approval, normalize, sanitize_audit};
 use ptrack_core::{
-    Capability, CapabilityAudit, CapabilityAuditPolicy, CapabilityKind, CapabilityLimits, Digest32,
-    GitScope, LanguageId, MIN_NATIVE_PAYLOAD_SCHEMA, MemoryKind, NativeRecord, NoteTarget, Plan,
-    PlanStatus, RecordKind, SCRATCHPAD_PAYLOAD_SCHEMA, SCRATCHPAD_TEXT_MAX_BYTES, Scratchpad,
-    ScratchpadSnippet, StackProfile, StackProject, StackSummary, TaskStatus, Timestamp,
-    decode_record, encode_record_at_schema,
+    Capability, CapabilityAuditPolicy, CapabilityKind, CapabilityLimits, Digest32, GitScope,
+    LanguageId, MIN_NATIVE_PAYLOAD_SCHEMA, MemoryKind, NativeRecord, NoteTarget, Plan, PlanStatus,
+    RecordKind, SCRATCHPAD_PAYLOAD_SCHEMA, SCRATCHPAD_TEXT_MAX_BYTES,
+    SUMMARY_UPDATED_PAYLOAD_SCHEMA, Scratchpad, ScratchpadSnippet, StackProfile, StackProject,
+    StackSummary, TaskStatus, Timestamp, decode_record, encode_record_at_schema,
 };
 
 use crate::typed;
@@ -670,68 +669,32 @@ fn memory_writeback_is_idempotent_validated_and_bounded_reads_are_exact() {
     ));
 }
 
-#[test]
-fn capability_audit_limits_match_unlimited_and_pruning_contracts() {
-    let temp = Temp::new();
-    let path = temp.path("audits.redb");
-    let store = ProjectStore::create_new_with_clock(
-        &path,
-        binding(&path, StoreKind::Project, "project-audits"),
-        "test",
-        clock(),
-    )
-    .unwrap();
-    let audit = |capability_id| CapabilityAudit {
-        id: 0,
-        capability_id,
-        agent_profile: "agent".to_owned(),
-        kind: CapabilityKind::Git,
-        operation: "fetch".to_owned(),
-        target: "origin".to_owned(),
-        success: true,
-        error_class: "none".to_owned(),
-        duration_millis: 1,
-        request_bytes: 0,
-        response_bytes: 0,
-        redirects: 0,
-        created_at: Timestamp::Zero,
+/// A grant as the retired broker left it: enabled, approved, and unexpired.
+fn leftover_grant(id: u64, enabled: bool) -> Capability {
+    let approved = Timestamp::Fixed {
+        seconds: 1_700_000_000,
+        nanoseconds: 0,
+        offset_seconds: 0,
     };
-    for capability_id in [1, 1, 1, 2] {
-        store
-            .add_capability_audit_bounded(audit(capability_id), 0, 0)
-            .unwrap();
-    }
-    assert_eq!(store.capability_audits(0, 0).unwrap().len(), 4);
-    store.add_capability_audit_bounded(audit(1), 2, 3).unwrap();
-    assert_eq!(store.capability_audits(0, 0).unwrap().len(), 3);
-    assert_eq!(store.capability_audits(1, 0).unwrap().len(), 2);
-    store.prune_capability_audits(1, -1).unwrap();
-    assert!(store.capability_audits(1, 0).unwrap().is_empty());
-    assert_eq!(store.capability_audits(2, 0).unwrap().len(), 1);
-}
-
-#[test]
-fn public_audit_api_prunes_to_fixed_global_ceiling() {
-    let temp = Temp::new();
-    let path = temp.path("public-audits.redb");
-    let store = ProjectStore::create_new_with_clock(
-        &path,
-        binding(&path, StoreKind::Project, "project-public-audits"),
-        "test",
-        clock(),
-    )
-    .unwrap();
-    let mut capability = Capability {
-        id: 42,
+    Capability {
+        id,
         model_version: 1,
-        revision: 1,
-        name: "audit".to_owned(),
+        revision: 3,
+        name: format!("grant-{id}"),
         kind: CapabilityKind::Git,
         agent_profile: "agent".to_owned(),
-        enabled: false,
+        enabled,
         approval_duration_seconds: 3_600,
-        approved_at: Timestamp::Zero,
-        expires_at: Timestamp::Zero,
+        approved_at: if enabled { approved } else { Timestamp::Zero },
+        expires_at: if enabled {
+            Timestamp::Fixed {
+                seconds: 1_700_003_600,
+                nanoseconds: 0,
+                offset_seconds: 0,
+            }
+        } else {
+            Timestamp::Zero
+        },
         scope_digest: Digest32([1; 32]),
         limits: CapabilityLimits {
             timeout_seconds: 30,
@@ -743,35 +706,23 @@ fn public_audit_api_prunes_to_fixed_global_ceiling() {
         },
         audit: CapabilityAuditPolicy {
             enabled: true,
-            retain_last: 1_000,
+            retain_last: 10,
         },
         http: None,
-        git: None,
+        git: Some(GitScope {
+            remote_name: "origin".to_owned(),
+            remote_url: "https://example.test/repo.git".to_owned(),
+            operations: vec!["fetch".to_owned()],
+            branches: vec!["main".to_owned()],
+            refspecs: Vec::new(),
+            allow_tags: false,
+            allow_force_push: false,
+            allow_delete_refs: false,
+        }),
         ssh: None,
-        created_at: Timestamp::Zero,
-        updated_at: Timestamp::Zero,
-    };
-    let event = AuditEvent {
-        operation: "fetch".to_owned(),
-        target: "origin".to_owned(),
-        success: true,
-        error_class: String::new(),
-        duration_millis: 0,
-        request_bytes: 0,
-        response_bytes: 0,
-        redirects: 0,
-    };
-    store.seed_capability_audits(5_000).unwrap();
-    capability.id = 10_000;
-    let appended = store
-        .record_capability_audit(sanitize_audit(&capability, &event).unwrap())
-        .unwrap();
-    assert_eq!(appended.id, 5_001);
-    let audits = store.capability_audits(0, 0).unwrap();
-    assert_eq!(audits.len(), 5_000);
-    assert_eq!(audits.first().unwrap().id, 5_001);
-    assert_eq!(audits.last().unwrap().id, 2);
-    assert!(!audits.iter().any(|audit| audit.id == 1));
+        created_at: approved,
+        updated_at: approved,
+    }
 }
 
 #[test]
@@ -781,385 +732,75 @@ fn raw_redb_secret_canary_is_rejected_on_reopen() {
     let expected = binding(&path, StoreKind::Project, "project-raw-secret");
     let store =
         ProjectStore::create_new_with_clock(&path, expected.clone(), "test", clock()).unwrap();
-    let mut capability = Capability {
-        id: 1,
-        model_version: 1,
-        revision: 1,
-        name: "audit".to_owned(),
-        kind: CapabilityKind::Git,
-        agent_profile: "agent".to_owned(),
-        enabled: false,
-        approval_duration_seconds: 3_600,
-        approved_at: Timestamp::Zero,
-        expires_at: Timestamp::Zero,
-        scope_digest: Digest32([1; 32]),
-        limits: CapabilityLimits {
-            timeout_seconds: 30,
-            max_request_bytes: 1_024,
-            max_response_bytes: 1_024,
-            max_output_bytes: 1_024,
-            max_redirects: 0,
-            max_concurrent: 1,
-        },
-        audit: CapabilityAuditPolicy {
-            enabled: true,
-            retain_last: 1,
-        },
-        http: None,
-        git: None,
-        ssh: None,
-        created_at: Timestamp::Zero,
-        updated_at: Timestamp::Zero,
-    };
-    let event = AuditEvent {
-        operation: "fetch".to_owned(),
-        target: "origin".to_owned(),
-        success: true,
-        error_class: String::new(),
-        duration_millis: 0,
-        request_bytes: 0,
-        response_bytes: 0,
-        redirects: 0,
-    };
-    store
-        .record_capability_audit(sanitize_audit(&capability, &event).unwrap())
-        .unwrap();
     drop(store);
     crate::project_test_support::inject_raw_audit_secret(&path);
     assert!(matches!(
         ProjectStore::open_existing(&path, &expected, "test"),
         Err(StoreError::InvalidManifest(_))
     ));
-    capability.audit.enabled = false;
-    assert!(sanitize_audit(&capability, &event).is_none());
 }
 
 #[test]
-fn public_audit_path_never_persists_secret_bearing_event_fields() {
-    const SECRET: &str = "super-secret-audit-canary-7c94";
+fn a_database_with_capability_grants_and_audits_still_opens_with_its_data_intact() {
     let temp = Temp::new();
-    let path = temp.path("sanitized-audit.redb");
-    let expected = binding(&path, StoreKind::Project, "project-sanitized-audit");
+    let path = temp.path("retired-capabilities.redb");
+    let expected = binding(&path, StoreKind::Project, "project-retired-capabilities");
     let store =
         ProjectStore::create_new_with_clock(&path, expected.clone(), "test", clock()).unwrap();
-    let capability = Capability {
-        id: 7,
-        model_version: 1,
-        revision: 1,
-        name: "audit".to_owned(),
-        kind: CapabilityKind::Http,
-        agent_profile: "agent".to_owned(),
-        enabled: false,
-        approval_duration_seconds: 3_600,
-        approved_at: Timestamp::Zero,
-        expires_at: Timestamp::Zero,
-        scope_digest: Digest32([1; 32]),
-        limits: CapabilityLimits {
-            timeout_seconds: 30,
-            max_request_bytes: 1_024,
-            max_response_bytes: 1_024,
-            max_output_bytes: 1_024,
-            max_redirects: 0,
-            max_concurrent: 1,
-        },
-        audit: CapabilityAuditPolicy {
-            enabled: true,
-            retain_last: 10,
-        },
-        http: None,
-        git: None,
-        ssh: None,
-        created_at: Timestamp::Zero,
-        updated_at: Timestamp::Zero,
-    };
-    let event = AuditEvent {
-        operation: "GET".to_owned(),
-        target: format!("https://example.com/private?token={SECRET}"),
-        success: false,
-        error_class: format!("raw stderr {SECRET}"),
-        duration_millis: 1,
-        request_bytes: 2,
-        response_bytes: 3,
-        redirects: 0,
-    };
-    let persisted = store
-        .record_capability_audit(sanitize_audit(&capability, &event).unwrap())
+    let plan = store.add_plan("keeps working", 0).unwrap();
+    let task = store.add_task(plan.id, "still here").unwrap();
+    store
+        .seed_capability_records(&[leftover_grant(1, true), leftover_grant(2, false)])
         .unwrap();
-    assert_eq!(persisted.target, "https://example.com");
-    assert_eq!(persisted.error_class, "internal");
-    let decoded = store.capability_audits(capability.id, 1).unwrap();
-    assert_eq!(decoded, [persisted]);
+    store.seed_capability_audits(3).unwrap();
     drop(store);
-    let raw = fs::read(&path).unwrap();
-    assert!(
-        !raw.windows(SECRET.len())
-            .any(|window| window == SECRET.as_bytes())
-    );
+
     let reopened = ProjectStore::open_existing(&path, &expected, "test").unwrap();
     assert_eq!(
-        reopened.capability_audits(capability.id, 1).unwrap(),
-        decoded
+        reopened.capabilities().unwrap(),
+        [leftover_grant(1, true), leftover_grant(2, false)]
     );
+    assert_eq!(reopened.capability_audits(0, 0).unwrap().len(), 3);
+    assert_eq!(reopened.plans().unwrap(), [plan]);
+    assert_eq!(reopened.tasks().unwrap(), [task]);
 }
 
 #[test]
-fn capability_crud_cannot_mint_or_edit_approval_state() {
+fn revoking_leftover_grants_disables_them_and_keeps_definitions_and_audits() {
     let temp = Temp::new();
-    let path = temp.path("capabilities.redb");
-    let store = ProjectStore::create_new_with_clock(
-        &path,
-        binding(&path, StoreKind::Project, "project-capabilities"),
-        "test",
-        clock(),
-    )
-    .unwrap();
-    let approval = clock().0;
-    let mut value = Capability {
-        id: 99,
-        model_version: 1,
-        revision: 99,
-        name: "git".to_owned(),
-        kind: CapabilityKind::Git,
-        agent_profile: "agent".to_owned(),
-        enabled: true,
-        approval_duration_seconds: 3600,
-        approved_at: approval,
-        expires_at: Timestamp::Fixed {
-            seconds: 1_700_003_600,
-            nanoseconds: 123,
-            offset_seconds: 0,
-        },
-        scope_digest: Digest32([1; 32]),
-        limits: CapabilityLimits {
-            timeout_seconds: 30,
-            max_request_bytes: 1024,
-            max_response_bytes: 1024,
-            max_output_bytes: 1024,
-            max_redirects: 0,
-            max_concurrent: 1,
-        },
-        audit: CapabilityAuditPolicy {
-            enabled: true,
-            retain_last: 10,
-        },
-        http: None,
-        git: Some(GitScope {
-            remote_name: "origin".to_owned(),
-            remote_url: "https://example.test/repo.git".to_owned(),
-            operations: vec!["fetch".to_owned()],
-            branches: vec!["main".to_owned()],
-            refspecs: Vec::new(),
-            allow_tags: false,
-            allow_force_push: false,
-            allow_delete_refs: false,
-        }),
-        ssh: None,
-        created_at: Timestamp::Zero,
-        updated_at: Timestamp::Zero,
-    };
-    value = store.add_capability(value).unwrap();
-    assert!(!value.enabled);
-    assert!(value.approved_at.is_zero());
-    assert!(value.expires_at.is_zero());
-
-    let illicit_approval = value.expires_at;
-    value.enabled = true;
-    value.approved_at = approval;
-    value.expires_at = illicit_approval;
-    store.update_capability(value.clone()).unwrap();
-    let persisted = store.capability(value.id).unwrap();
-    assert!(!persisted.enabled);
-    assert!(persisted.approved_at.is_zero());
-    assert!(persisted.expires_at.is_zero());
-}
-
-#[test]
-fn capability_revision_and_lifecycle_cas_are_fail_closed() {
-    let temp = Temp::new();
-    let path = temp.path("capability-cas.redb");
-    let store = ProjectStore::create_new_with_clock(
-        &path,
-        binding(&path, StoreKind::Project, "project-capability-cas"),
-        "test",
-        clock(),
-    )
-    .unwrap();
-    let mut capability = Capability {
-        id: 0,
-        model_version: 1,
-        revision: 0,
-        name: "git".to_owned(),
-        kind: CapabilityKind::Git,
-        agent_profile: "agent".to_owned(),
-        enabled: false,
-        approval_duration_seconds: 3_600,
-        approved_at: Timestamp::Zero,
-        expires_at: Timestamp::Zero,
-        scope_digest: Digest32::EMPTY,
-        limits: CapabilityLimits {
-            timeout_seconds: 30,
-            max_request_bytes: 1_024,
-            max_response_bytes: 1_024,
-            max_output_bytes: 1_024,
-            max_redirects: 0,
-            max_concurrent: 1,
-        },
-        audit: CapabilityAuditPolicy {
-            enabled: true,
-            retain_last: 10,
-        },
-        http: None,
-        git: Some(GitScope {
-            remote_name: "origin".to_owned(),
-            remote_url: "https://example.test/repo.git".to_owned(),
-            operations: vec!["fetch".to_owned()],
-            branches: vec!["main".to_owned()],
-            refspecs: Vec::new(),
-            allow_tags: false,
-            allow_force_push: false,
-            allow_delete_refs: false,
-        }),
-        ssh: None,
-        created_at: Timestamp::Zero,
-        updated_at: Timestamp::Zero,
-    };
-    capability = normalize(&capability).unwrap().capability;
-    capability = store.add_capability(capability).unwrap();
-    let stale = capability.clone();
-    capability.name = "renamed".to_owned();
-    capability = store.update_capability(capability).unwrap();
-    assert!(matches!(
-        store.update_capability(stale),
-        Err(StoreError::CapabilityRevisionChanged { .. })
-    ));
-    assert!(confirm_approval(&capability, Digest32([8; 32])).is_err());
-    let proof = confirm_approval(&capability, capability.scope_digest).unwrap();
-    capability = store.approve_capability(proof).unwrap();
-    assert_eq!(
-        capability.expires_at.unix_nanoseconds(),
-        clock()
-            .0
-            .unix_nanoseconds()
-            .map(|value| value + 3_600_000_000_000)
-    );
-    assert!(matches!(
-        store.delete_capability(capability.id, capability.revision - 1),
-        Err(StoreError::CapabilityRevisionChanged { .. })
-    ));
+    let path = temp.path("revoke-grants.redb");
+    let expected = binding(&path, StoreKind::Project, "project-revoke-grants");
+    let store =
+        ProjectStore::create_new_with_clock(&path, expected.clone(), "test", clock()).unwrap();
     store
-        .delete_capability(capability.id, capability.revision)
+        .seed_capability_records(&[
+            leftover_grant(1, true),
+            leftover_grant(2, false),
+            leftover_grant(3, true),
+        ])
         .unwrap();
-    assert!(matches!(
-        store.capability(capability.id),
-        Err(StoreError::NotFound)
-    ));
-}
+    store.seed_capability_audits(2).unwrap();
 
-#[test]
-fn executable_capability_store_contract_coverage() {
-    let checks: [fn(); 1] = [assert_cap_030_approved_security_edit_revokes];
-    for check in checks {
-        check();
+    assert_eq!(store.revoke_capability_grants().unwrap(), 2);
+    let revoked = store.capabilities().unwrap();
+    assert_eq!(revoked.len(), 3, "definitions are kept");
+    for capability in &revoked {
+        assert!(!capability.enabled);
+        assert!(capability.approved_at.is_zero());
+        assert!(capability.expires_at.is_zero());
     }
-}
-
-fn assert_cap_030_approved_security_edit_revokes() {
-    const START: i64 = 1_800_000_000;
-    let temp = Temp::new();
-    let path = temp.path("capability-security-edit.redb");
-    let store = ProjectStore::create_new_with_clock(
-        &path,
-        binding(
-            &path,
-            StoreKind::Project,
-            "project-capability-security-edit",
-        ),
-        "test",
-        SteppingClock::new(START),
-    )
-    .unwrap();
-    let mut draft = Capability {
-        id: 0,
-        model_version: 0,
-        revision: 0,
-        name: "repository".to_owned(),
-        kind: CapabilityKind::Git,
-        agent_profile: "agent".to_owned(),
-        enabled: false,
-        approval_duration_seconds: 0,
-        approved_at: Timestamp::Zero,
-        expires_at: Timestamp::Zero,
-        scope_digest: Digest32::EMPTY,
-        limits: CapabilityLimits {
-            timeout_seconds: 0,
-            max_request_bytes: 0,
-            max_response_bytes: 0,
-            max_output_bytes: 0,
-            max_redirects: 0,
-            max_concurrent: 0,
-        },
-        audit: CapabilityAuditPolicy {
-            enabled: false,
-            retain_last: 0,
-        },
-        http: None,
-        git: Some(GitScope {
-            remote_name: "origin".to_owned(),
-            remote_url: "https://example.com/repo.git".to_owned(),
-            operations: vec!["fetch".to_owned()],
-            branches: vec!["main".to_owned()],
-            refspecs: Vec::new(),
-            allow_tags: false,
-            allow_force_push: false,
-            allow_delete_refs: false,
-        }),
-        ssh: None,
-        created_at: Timestamp::Zero,
-        updated_at: Timestamp::Zero,
-    };
-    draft = normalize(&draft).unwrap().capability;
-    let stored = store.add_capability(draft).unwrap();
-    assert_eq!(stored.created_at, timestamp(START + 1));
-    assert_eq!(stored.updated_at, timestamp(START + 1));
-
-    let initial_proof = confirm_approval(&stored, stored.scope_digest).unwrap();
-    let approved = store.approve_capability(initial_proof).unwrap();
-    assert!(approved.enabled);
-    assert_eq!(approved.revision, stored.revision + 1);
-    assert_eq!(approved.approved_at, timestamp(START + 2));
-    assert_eq!(approved.updated_at, timestamp(START + 2));
-    let stale_proof = confirm_approval(&approved, approved.scope_digest).unwrap();
-
-    let mut edit = approved.clone();
-    edit.git
-        .as_mut()
-        .unwrap()
-        .operations
-        .push("push".to_owned());
-    edit = normalize(&edit).unwrap().capability;
-    assert_ne!(edit.scope_digest, approved.scope_digest);
-    let updated = store.update_capability(edit).unwrap();
-    assert_eq!(updated.id, approved.id);
-    assert_eq!(updated.created_at, approved.created_at);
-    assert_eq!(updated.revision, approved.revision + 1);
-    assert_eq!(updated.updated_at, timestamp(START + 3));
-    assert!(!updated.enabled);
-    assert!(updated.approved_at.is_zero());
-    assert!(updated.expires_at.is_zero());
-    assert_ne!(updated.scope_digest, approved.scope_digest);
-
-    assert!(matches!(
-        store.approve_capability(stale_proof),
-        Err(StoreError::CapabilityRevisionChanged {
-            expected,
-            actual,
-        }) if expected == approved.revision && actual == updated.revision
-    ));
-    let refreshed_proof = confirm_approval(&updated, updated.scope_digest).unwrap();
-    let reapproved = store.approve_capability(refreshed_proof).unwrap();
-    assert!(reapproved.enabled);
-    assert_eq!(reapproved.revision, updated.revision + 1);
-    assert_eq!(reapproved.approved_at, timestamp(START + 5));
+    assert_eq!(revoked[0].revision, 4);
+    assert_eq!(revoked[0].updated_at, clock().0);
+    assert_eq!(
+        revoked[1],
+        leftover_grant(2, false),
+        "a disabled draft is untouched"
+    );
+    assert_eq!(store.capability_audits(0, 0).unwrap().len(), 2);
+    assert_eq!(store.revoke_capability_grants().unwrap(), 0);
+    drop(store);
+    let reopened = ProjectStore::open_existing(&path, &expected, "test").unwrap();
+    assert_eq!(reopened.capabilities().unwrap(), revoked);
 }
 
 #[test]
@@ -2288,7 +1929,8 @@ fn delete_plan_for_move_deletes_linked_issues_instead_of_detaching() {
         .unwrap();
     let unrelated = store.add_issue("stays", "", None, 0).unwrap();
 
-    let summary = store.delete_plan_for_move(plan.id).unwrap();
+    let exported = store.export_plan_subtree(plan.id).unwrap();
+    let summary = store.delete_plan_for_move(&exported).unwrap();
     assert_eq!(
         summary.issues,
         vec![(issue.id, "follows its task".to_owned())]
@@ -3476,4 +3118,582 @@ fn scratchpad_is_not_a_collection_of_its_own() {
         Collection::for_store(StoreKind::Project)
             .all(|collection| collection.name() != "scratchpad")
     );
+}
+
+#[test]
+fn cross_store_import_into_a_nonempty_target_drops_every_external_edge() {
+    let temp = Temp::new();
+    let source = dep_store(&temp, "edges-source.redb");
+    let outside_plan = source.add_plan("Outside", 0).unwrap();
+    let outside_task = source.add_task(outside_plan.id, "outside").unwrap();
+    let plan = source.add_plan("Travelling", 0).unwrap();
+    let t1 = source.add_task(plan.id, "t1").unwrap();
+    let t2 = source.add_task(plan.id, "t2").unwrap();
+    source.add_plan_dep(plan.id, outside_plan.id).unwrap();
+    source.add_task_dep(t1.id, outside_task.id).unwrap();
+    source.add_task_dep(t2.id, t1.id).unwrap();
+    let subtree = source.export_plan_subtree(plan.id).unwrap();
+
+    // The target already holds plans and tasks under the very IDs the
+    // external edges name, so a remap by "exists here" would land on them.
+    let target = dep_store(&temp, "edges-target.redb");
+    for index in 0..3 {
+        let decoy = target.add_plan(format!("decoy {index}"), 0).unwrap();
+        target
+            .add_task(decoy.id, format!("decoy task {index}"))
+            .unwrap();
+    }
+    assert!(target.plan(outside_plan.id).is_ok());
+    assert!(target.task(outside_task.id).is_ok());
+
+    let landed = target.import_plan_subtree(&subtree, None).unwrap();
+    assert!(landed.deps.is_empty());
+    let tasks = target.snapshot().unwrap().tasks;
+    let landed_t1 = tasks
+        .iter()
+        .find(|task| task.plan_id == landed.id && task.title == "t1")
+        .unwrap();
+    let landed_t2 = tasks
+        .iter()
+        .find(|task| task.plan_id == landed.id && task.title == "t2")
+        .unwrap();
+    assert!(landed_t1.deps.is_empty());
+    assert_eq!(landed_t2.deps, vec![landed_t1.id]);
+}
+
+#[test]
+fn move_delete_removes_exactly_the_exported_records_or_nothing() {
+    let temp = Temp::new();
+    let store = dep_store(&temp, "move-exact.redb");
+    let plan = store.add_plan("Moving", 0).unwrap();
+    store.add_task(plan.id, "exported").unwrap();
+    let exported = store.export_plan_subtree(plan.id).unwrap();
+    // Work lands on the plan between the copy and the delete.
+    let late = store.add_task(plan.id, "added after the copy").unwrap();
+    assert!(matches!(
+        store.delete_plan_for_move(&exported),
+        Err(StoreError::InvalidPlanState(_))
+    ));
+    assert!(store.plan(plan.id).is_ok());
+    assert!(store.task(late.id).is_ok());
+
+    // A subtree exported from another store can never delete here.
+    let other = dep_store(&temp, "move-exact-other.redb");
+    let foreign_plan = other.add_plan("Foreign", 0).unwrap();
+    let foreign = other.export_plan_subtree(foreign_plan.id).unwrap();
+    assert!(matches!(
+        store.delete_plan_for_move(&foreign),
+        Err(StoreError::InvalidPlanState(_))
+    ));
+
+    let exported = store.export_plan_subtree(plan.id).unwrap();
+    let summary = store.delete_plan_for_move(&exported).unwrap();
+    assert_eq!(summary.tasks, 2);
+    assert!(store.snapshot().unwrap().tasks.is_empty());
+}
+
+#[test]
+fn new_records_order_after_the_highest_order_not_the_count() {
+    let temp = Temp::new();
+    let store = dep_store(&temp, "order.redb");
+    let first = store.add_plan("first", 0).unwrap();
+    let middle = store.add_plan("middle", 0).unwrap();
+    let last = store.add_plan("last", 0).unwrap();
+    store.delete_plan(middle.id).unwrap();
+    let appended = store.add_plan("appended", 0).unwrap();
+    assert!(appended.order > last.order);
+
+    let a = store.add_task(first.id, "a").unwrap();
+    let b = store.add_task(first.id, "b").unwrap();
+    let c = store.add_task(first.id, "c").unwrap();
+    store.convert_task_to_plan(b.id).unwrap();
+    let d = store.add_task(first.id, "d").unwrap();
+    assert!(d.order > c.order);
+    assert!(c.order > a.order);
+    let titles: Vec<_> = store
+        .tasks()
+        .unwrap()
+        .into_iter()
+        .map(|task| task.title)
+        .collect();
+    assert_eq!(titles, ["a", "c", "d"]);
+}
+
+#[test]
+fn every_summary_write_stamps_its_time_and_a_schema_8_database_accepts_the_first() {
+    let temp = Temp::new();
+    let path = temp.path("summary-time.redb");
+    let store = ProjectStore::create_new_with_clock(
+        &path,
+        binding(&path, StoreKind::Project, "summary-time"),
+        "test",
+        SteppingClock::new(1_700_000_000),
+    )
+    .unwrap();
+
+    // Rewrite the meta singleton exactly as the build before payload schema 9
+    // wrote it: a schema-8 envelope with no summary write time at all.
+    let before = store.meta().unwrap();
+    assert_eq!(before.summary_updated_at, None);
+    let previous = SUMMARY_UPDATED_PAYLOAD_SCHEMA - 1;
+    let legacy_payload =
+        encode_record_at_schema(&NativeRecord::Meta(before.clone()), previous).unwrap();
+    store
+        .write(|transaction| {
+            transaction.put(
+                Collection::ProjectMeta,
+                RecordKey::Singleton,
+                &RecordEnvelope::new(NATIVE_CODEC, previous, legacy_payload.clone()),
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let stored_schema = |store: &ProjectStore| {
+        store
+            .read(|transaction| transaction.get(Collection::ProjectMeta, RecordKey::Singleton))
+            .unwrap()
+            .expect("stored meta")
+            .payload_schema()
+    };
+    assert_eq!(stored_schema(&store), previous);
+    drop(store);
+
+    // The older database opens under this build and reads with no time.
+    let reopened = ProjectStore::open_existing(
+        &path,
+        &binding(&path, StoreKind::Project, "summary-time"),
+        "test",
+    )
+    .unwrap();
+    assert_eq!(reopened.meta().unwrap().summary_updated_at, None);
+    assert_eq!(reopened.meta().unwrap(), before);
+
+    // Its first write is accepted, stamps the time with the meta stamp, and
+    // upgrades the record lazily to the native schema.
+    reopened.set_summary("first").unwrap();
+    let first = reopened.meta().unwrap();
+    assert_eq!(first.summary, "first");
+    assert_eq!(first.summary_updated_at, Some(first.updated_at));
+    assert_eq!(stored_schema(&reopened), NATIVE_PAYLOAD_SCHEMA);
+    drop(reopened);
+
+    let store = ProjectStore::create_new_with_clock(
+        temp.path("summary-time-2.redb"),
+        binding(
+            &temp.path("summary-time-2.redb"),
+            StoreKind::Project,
+            "summary-time-2",
+        ),
+        "test",
+        SteppingClock::new(1_700_000_000),
+    )
+    .unwrap();
+    store.set_summary("cli").unwrap();
+    let cli = store.meta().unwrap().summary_updated_at.expect("cli stamp");
+    // A write that is not a summary write leaves the summary time alone.
+    store.set_goal("elsewhere").unwrap();
+    let after_goal = store.meta().unwrap();
+    assert_ne!(after_goal.updated_at, cli);
+    assert_eq!(after_goal.summary_updated_at, Some(cli));
+    // Memory write-back (the terminal and agent path) stamps it too.
+    store
+        .write_memory(MemoryWriteRequest {
+            request_id: "summary-time".to_owned(),
+            kind: MemoryKind::Summary,
+            body: "from a session".to_owned(),
+            target: NoteTarget::Project,
+            target_id: 0,
+            plan_id: 0,
+            workspace_generation: 7,
+            session_id: "session".to_owned(),
+            association_revision: 1,
+        })
+        .unwrap();
+    let written = store.meta().unwrap();
+    assert_eq!(written.summary, "from a session");
+    assert_eq!(written.summary_updated_at, Some(written.updated_at));
+    assert_ne!(written.summary_updated_at, Some(cli));
+}
+
+#[test]
+fn a_summary_memory_write_respects_the_summary_cap() {
+    let temp = Temp::new();
+    let store = dep_store(&temp, "memory-summary-cap.redb");
+    let request = MemoryWriteRequest {
+        request_id: "summary-1".to_owned(),
+        kind: MemoryKind::Summary,
+        body: "x".repeat(ptrack_core::MAX_SUMMARY_BYTES + 1),
+        target: NoteTarget::Project,
+        target_id: 0,
+        plan_id: 0,
+        workspace_generation: 7,
+        session_id: "session".to_owned(),
+        association_revision: 1,
+    };
+    assert!(matches!(
+        store.write_memory(request.clone()),
+        Err(StoreError::InvalidMemoryWriteback(_))
+    ));
+    assert!(store.meta().unwrap().summary.is_empty());
+    let within = MemoryWriteRequest {
+        body: "x".repeat(ptrack_core::MAX_SUMMARY_BYTES),
+        ..request
+    };
+    assert!(!store.write_memory(within).unwrap().replayed);
+}
+
+#[test]
+fn notes_require_an_existing_target() {
+    let temp = Temp::new();
+    let store = dep_store(&temp, "note-targets.redb");
+    let plan = store.add_plan("P", 0).unwrap();
+    let task = store.add_task(plan.id, "t").unwrap();
+    assert!(matches!(
+        store.add_note(NoteTarget::Task, 999, "orphan"),
+        Err(StoreError::NotFound)
+    ));
+    assert!(matches!(
+        store.add_note(NoteTarget::Plan, 999, "orphan"),
+        Err(StoreError::NotFound)
+    ));
+    assert!(store.notes().unwrap().is_empty());
+    store.add_note(NoteTarget::Task, task.id, "ok").unwrap();
+    store.add_note(NoteTarget::Plan, plan.id, "ok").unwrap();
+    store.add_note(NoteTarget::Project, 0, "ok").unwrap();
+    assert_eq!(store.notes().unwrap().len(), 3);
+}
+
+#[test]
+fn task_closeout_writes_notes_and_status_all_or_nothing() {
+    let temp = Temp::new();
+    let path = temp.path("closeout.redb");
+    let store = ProjectStore::create_new_with_clock(
+        &path,
+        binding(&path, StoreKind::Project, "closeout"),
+        "test",
+        clock(),
+    )
+    .unwrap();
+    let plan = store.add_plan("claimed", 0).unwrap();
+    let task = store.add_task(plan.id, "work").unwrap();
+    store
+        .add_commit("abc123", "work", plan.id, task.id)
+        .unwrap();
+    drop(store);
+    let alice = reopen_as(&path, "closeout", Some(actor_a()));
+    alice.use_plan(plan.id, false).unwrap();
+    drop(alice);
+
+    let notes = vec!["closeout: done".to_owned(), "override: forced".to_owned()];
+    let bob = reopen_as(&path, "closeout", Some(actor_b()));
+    assert!(matches!(
+        bob.complete_task_with_notes(task.id, &notes),
+        Err(StoreError::InvalidClaim(_))
+    ));
+    assert!(matches!(
+        bob.complete_task_with_notes(999, &notes),
+        Err(StoreError::NotFound)
+    ));
+    assert!(bob.notes().unwrap().is_empty());
+    assert_eq!(bob.task(task.id).unwrap().status, TaskStatus::Todo);
+    drop(bob);
+
+    let alice = reopen_as(&path, "closeout", Some(actor_a()));
+    let closed = alice.complete_task_with_notes(task.id, &notes).unwrap();
+    assert_eq!(closed.task.status, TaskStatus::Done);
+    assert_eq!(closed.linked_commits, 1);
+    assert_eq!(closed.notes.len(), 2);
+    assert!(
+        closed
+            .notes
+            .iter()
+            .all(|note| note.target == NoteTarget::Task && note.target_id == task.id)
+    );
+    assert_eq!(alice.task(task.id).unwrap().status, TaskStatus::Done);
+    assert_eq!(alice.notes().unwrap(), closed.notes);
+}
+
+#[test]
+fn plan_closeout_checks_open_tasks_in_its_own_transaction() {
+    let temp = Temp::new();
+    let path = temp.path("plan-closeout.redb");
+    let store = ProjectStore::create_new_with_clock(
+        &path,
+        binding(&path, StoreKind::Project, "plan-closeout"),
+        "test",
+        clock(),
+    )
+    .unwrap();
+    let plan = store.add_plan("P", 0).unwrap();
+    let open = store.add_task(plan.id, "open").unwrap();
+    let done = store.add_task(plan.id, "done").unwrap();
+    store.set_task_status(done.id, TaskStatus::Done).unwrap();
+    drop(store);
+    let alice = reopen_as(&path, "plan-closeout", Some(actor_a()));
+    alice.use_plan(plan.id, false).unwrap();
+
+    assert!(matches!(
+        alice.complete_plan(plan.id, false),
+        Err(StoreError::InvalidPlanState(_))
+    ));
+    assert_eq!(alice.plan(plan.id).unwrap().status, PlanStatus::Active);
+    assert!(alice.notes().unwrap().is_empty());
+    drop(alice);
+    let bob = reopen_as(&path, "plan-closeout", Some(actor_b()));
+    assert!(matches!(
+        bob.complete_plan(plan.id, true),
+        Err(StoreError::InvalidClaim(_))
+    ));
+    drop(bob);
+
+    let alice = reopen_as(&path, "plan-closeout", Some(actor_a()));
+    let closed = alice.complete_plan(plan.id, true).unwrap();
+    assert_eq!(closed.open_tasks, vec![open.id]);
+    assert_eq!(closed.plan.status, PlanStatus::Done);
+    assert_eq!(closed.plan.claim_owner, None);
+    let note = closed.override_note.unwrap();
+    assert_eq!(note.target, NoteTarget::Plan);
+    assert_eq!(note.target_id, plan.id);
+    assert_eq!(
+        note.body,
+        format!("override: closed via --force with open tasks #{}", open.id)
+    );
+    assert_eq!(alice.plan(plan.id).unwrap().status, PlanStatus::Done);
+}
+
+#[test]
+fn finished_plans_refuse_new_open_work() {
+    let temp = Temp::new();
+    let store = dep_store(&temp, "finished-plans.redb");
+    let active = store.add_plan("active", 0).unwrap();
+    let done = store.add_plan("done", 0).unwrap();
+    let archived = store.add_plan("archived", 0).unwrap();
+    let open = store.add_task(active.id, "open").unwrap();
+    let finished = store.add_task(active.id, "finished").unwrap();
+    store
+        .set_task_status(finished.id, TaskStatus::Done)
+        .unwrap();
+    store.set_plan_status(done.id, PlanStatus::Done).unwrap();
+    store
+        .set_plan_status(archived.id, PlanStatus::Archived)
+        .unwrap();
+
+    for plan_id in [done.id, archived.id] {
+        assert!(matches!(
+            store.add_task(plan_id, "late"),
+            Err(StoreError::InvalidPlanState(_))
+        ));
+        assert!(matches!(
+            store.set_task_plan(open.id, plan_id),
+            Err(StoreError::InvalidPlanState(_))
+        ));
+    }
+    assert_eq!(store.task(open.id).unwrap().plan_id, active.id);
+    // Finished work may still be filed under a finished plan.
+    store.set_task_plan(finished.id, done.id).unwrap();
+    assert_eq!(store.task(finished.id).unwrap().plan_id, done.id);
+}
+
+#[test]
+fn convert_leaves_the_new_plan_unclaimed_when_the_parent_was_unclaimed() {
+    let temp = Temp::new();
+    let path = temp.path("convert-unclaimed.redb");
+    let store = ProjectStore::create_new_with_clock(
+        &path,
+        binding(&path, StoreKind::Project, "convert-unclaimed"),
+        "test",
+        clock(),
+    )
+    .unwrap();
+    let plan = store.add_plan("parent", 0).unwrap();
+    let task = store.add_task(plan.id, "promote me").unwrap();
+    drop(store);
+
+    let store = reopen_as(&path, "convert-unclaimed", Some(actor_a()));
+    assert_eq!(store.plan(plan.id).unwrap().claim_owner, None);
+    let born = store.convert_task_to_plan(task.id).unwrap();
+    assert_eq!(born.claim_owner, None);
+    assert_eq!(born.claim_epoch, 0);
+}
+
+/// A clock that registers a stack summary through a second handle the
+/// moment the registry asks for the time on a re-registration — the window a
+/// read outside the write transaction used to lose.
+struct ScanRacingClock {
+    path: PathBuf,
+    binding: ActiveBinding,
+    project: PathBuf,
+    summary: StackSummary,
+    calls: AtomicU64,
+}
+
+impl Clock for ScanRacingClock {
+    fn now_local(&self) -> Timestamp {
+        if self.calls.fetch_add(1, Ordering::Relaxed) == 1 {
+            GlobalStore::open_existing(&self.path, &self.binding)
+                .unwrap()
+                .set_project_stack(&self.project, self.summary.clone())
+                .unwrap();
+        }
+        timestamp(1_700_000_000 + i64::try_from(self.calls.load(Ordering::Relaxed)).unwrap())
+    }
+
+    fn now_utc(&self) -> Timestamp {
+        self.now_local()
+    }
+}
+
+#[test]
+fn re_registration_keeps_a_stack_summary_written_concurrently() {
+    let temp = Temp::new();
+    let global_path = temp.path("registry-race.redb");
+    let global_binding = binding(&global_path, StoreKind::Global, "registry-race");
+    let root = temp.path("race-project");
+    fs::create_dir(&root).unwrap();
+    let summary = StackSummary {
+        languages: vec![(LanguageId::Rust, 3)],
+        tracked_files: 3,
+        scanned_head: "cafebabe".to_owned(),
+        incomplete: false,
+        future_fields: Vec::new(),
+    };
+    let global = GlobalStore::create_new_with_clock(
+        &global_path,
+        global_binding.clone(),
+        ScanRacingClock {
+            path: global_path.clone(),
+            binding: global_binding,
+            project: root.clone(),
+            summary: summary.clone(),
+            calls: AtomicU64::new(0),
+        },
+    )
+    .unwrap();
+    global.register_project("race", &root).unwrap();
+    let registered = global.register_project("race", &root).unwrap();
+    assert_eq!(registered.stack, Some(summary.clone()));
+    assert_eq!(global.project(&root).unwrap().unwrap().stack, Some(summary));
+}
+
+#[test]
+fn repeated_backups_through_one_handle_copy_the_whole_store() {
+    let temp = Temp::new();
+    let store = dep_store(&temp, "repeat-backup.redb");
+    store.add_plan("durable", 0).unwrap();
+    let first = temp.path("backups/first.redb");
+    let second = temp.path("backups/second.redb");
+    store.backup_to(&first).unwrap();
+    store.backup_to(&second).unwrap();
+    let first_bytes = fs::read(&first).unwrap();
+    assert!(!first_bytes.is_empty());
+    assert_eq!(fs::read(&second).unwrap().len(), first_bytes.len());
+    let copy = Store::open_existing(&second, StoreKind::Project).unwrap();
+    assert!(copy.active_binding().unwrap().is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_write_that_committed_before_its_path_changed_reports_a_distinct_error() {
+    let temp = Temp::new();
+    let path = temp.path("committed-path.redb");
+    let store = dep_store(&temp, "committed-path.redb");
+    let moved = temp.path("moved-away.redb");
+    let result = store.write(|transaction| {
+        let id = transaction.next_id(Collection::Plans)?;
+        fs::rename(&path, &moved)?;
+        fs::write(&path, b"replacement")?;
+        Ok(id)
+    });
+    assert!(matches!(
+        result,
+        Err(StoreError::WriteCommittedPathChanged { .. })
+    ));
+    assert!(result.unwrap_err().to_string().contains("do not retry"));
+    // The write is durable in the database that moved.
+    let high_water = store
+        .read(|transaction| transaction.sequence_high_water(Collection::Plans))
+        .unwrap();
+    assert_eq!(high_water, 1);
+}
+
+#[test]
+fn status_changes_with_notes_commit_together_or_not_at_all() {
+    let temp = Temp::new();
+    let path = temp.path("status-notes.redb");
+    let store = ProjectStore::create_new_with_clock(
+        &path,
+        binding(&path, StoreKind::Project, "status-notes"),
+        "test",
+        clock(),
+    )
+    .unwrap();
+    let plan = store.add_plan("claimed", 0).unwrap();
+    let task = store.add_task(plan.id, "work").unwrap();
+    drop(store);
+    let alice = reopen_as(&path, "status-notes", Some(actor_a()));
+    alice.use_plan(plan.id, false).unwrap();
+    drop(alice);
+
+    let notes = vec!["override: started anyway".to_owned()];
+    let bob = reopen_as(&path, "status-notes", Some(actor_b()));
+    assert!(matches!(
+        bob.set_task_status_with_notes(task.id, TaskStatus::Doing, &notes),
+        Err(StoreError::InvalidClaim(_))
+    ));
+    assert!(matches!(
+        bob.set_plan_status_with_notes(plan.id, PlanStatus::Done, &notes),
+        Err(StoreError::InvalidClaim(_))
+    ));
+    assert!(matches!(
+        bob.set_task_status_with_notes(999, TaskStatus::Doing, &notes),
+        Err(StoreError::NotFound)
+    ));
+    assert!(bob.notes().unwrap().is_empty());
+    assert_eq!(bob.task(task.id).unwrap().status, TaskStatus::Todo);
+    drop(bob);
+
+    let alice = reopen_as(&path, "status-notes", Some(actor_a()));
+    let written = alice
+        .set_task_status_with_notes(task.id, TaskStatus::Doing, &notes)
+        .unwrap();
+    assert_eq!(written.len(), 1);
+    assert_eq!(written[0].target, NoteTarget::Task);
+    assert_eq!(written[0].target_id, task.id);
+    assert_eq!(alice.task(task.id).unwrap().status, TaskStatus::Doing);
+
+    // A stale compare-and-set fence writes neither the status nor the notes.
+    let current = alice.task(task.id).unwrap();
+    assert!(matches!(
+        alice.compare_and_set_task_status_with_notes(
+            task.id,
+            plan.id,
+            TaskStatus::Todo,
+            current.updated_at,
+            TaskStatus::Done,
+            &notes,
+        ),
+        Err(StoreError::TaskStatusChanged(_))
+    ));
+    assert_eq!(alice.notes().unwrap().len(), 1);
+    let (moved, cas_notes) = alice
+        .compare_and_set_task_status_with_notes(
+            task.id,
+            plan.id,
+            TaskStatus::Doing,
+            current.updated_at,
+            TaskStatus::Done,
+            &["closeout: done".to_owned()],
+        )
+        .unwrap();
+    assert_eq!(moved.status, TaskStatus::Done);
+    assert_eq!(cas_notes.len(), 1);
+
+    let plan_notes = alice
+        .set_plan_status_with_notes(plan.id, PlanStatus::Done, &notes)
+        .unwrap();
+    assert_eq!(plan_notes[0].target, NoteTarget::Plan);
+    let done = alice.plan(plan.id).unwrap();
+    assert_eq!(done.status, PlanStatus::Done);
+    assert_eq!(done.claim_owner, None);
+    assert_eq!(alice.notes().unwrap().len(), 3);
 }

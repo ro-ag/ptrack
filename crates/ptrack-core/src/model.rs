@@ -298,6 +298,10 @@ pub struct Meta {
     /// database an earlier build wrote. Persistence stays additive at the
     /// payload-schema level, exactly as the stack profile was.
     pub scratchpad: Option<Scratchpad>,
+    /// When [`Meta::summary`] was last written. `None` for records written
+    /// before payload schema 9 and for projects whose summary was never
+    /// written since; every summary write stamps it, whatever surface made it.
+    pub summary_updated_at: Option<Timestamp>,
 }
 
 impl Meta {
@@ -655,9 +659,10 @@ pub struct StackProject {
 
 /// The durable result of one tracked-file scan.
 ///
-/// Sizes and line counts are deliberately absent: a vendored directory or one
-/// generated bundle outweighs the code that defines a project, so discovery
-/// reports manifests and tracked-file counts instead.
+/// Byte sizes are deliberately absent: a vendored directory or one generated
+/// bundle outweighs the code that defines a project, so discovery reports
+/// manifests, tracked-file counts, and per-project line counts (schema 6 and
+/// later) instead of a single repository-wide size.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct StackProfile {
     /// Discovered projects, shallowest first; at most

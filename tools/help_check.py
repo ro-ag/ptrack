@@ -399,7 +399,7 @@ def check_routes(validation: Validation) -> None:
             f"site route is missing a directory index: {route}",
         )
     destinations = site.get("nativeDestinations", {})
-    native_source = (REPO / "crates" / "ptrack-app" / "src" / "desktop_runtime.rs").read_text(encoding="utf-8")
+    native_source = (REPO / "crates" / "ptrack-app" / "src" / "desktop_runtime" / "coordinator.rs").read_text(encoding="utf-8")
     for name, target in destinations.items():
         validation.require(target in native_source, f"native destination {name} differs from Rust allowlist")
         parsed = urlsplit(target)

@@ -7,11 +7,11 @@ readme = "README.md"
 rust-version.workspace = true
 
 [dependencies]
-ptrack-capability-policy = { path = "../ptrack-capability-policy" }
 ptrack-core = { path = "../ptrack-core" }
 redb.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true

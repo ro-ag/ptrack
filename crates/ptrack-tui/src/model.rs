@@ -127,6 +127,20 @@ pub enum Effect {
         mutation: Mutation,
         success: Success,
     },
+    /// Marks work done through the shared human-close use case: the TUI may
+    /// close without the agent evidence gate, but the store records an
+    /// override note naming the TUI in the same write.
+    Close {
+        target: UiClose,
+        success: Success,
+    },
+}
+
+/// What a TUI close marks done.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UiClose {
+    Task(u64),
+    Plan(u64),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

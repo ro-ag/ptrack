@@ -31,8 +31,10 @@
   --text: #e8ecf3;
   --text-soft: #b9c2d4;
   --muted: #8a93a8;
-  --faint: #646c7f;
+  --faint: #808a9e;
   --accent: #3dd6a3;
+  /* Accent used as text; the fill accent already clears 4.5:1 on dark surfaces. */
+  --accent-text: #3dd6a3;
   --accent-strong: #62e8ba;
   --accent-dim: #2aa7a1;
   --accent-rgb: 61, 214, 163;
@@ -72,11 +74,12 @@
   --input-bg-focus: rgba(4, 7, 11, 0.85);
   --control-border: #687386;
   --input-inset: inset 0 1px 3px rgba(0, 0, 0, 0.35);
-  --placeholder: #5d6579;
+  --placeholder: #7d869a;
   --card-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 40%);
   --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
   --card-footer-bg: rgba(0, 0, 0, 0.15);
   --backdrop-bg: rgba(3, 5, 8, 0.68);
+  --drawer-scrim: rgba(3, 5, 8, 0.36);
   --dialog-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 30%);
   --dialog-bg: #131924;
   --drawer-bg: rgba(15, 20, 28, 0.92);
@@ -132,9 +135,11 @@
   --line-strong: rgba(15, 23, 42, 0.2);
   --text: #1a2230;
   --text-soft: #3d4757;
-  --muted: #617089;
-  --faint: #8a94a6;
+  --muted: #4f5b70;
+  --faint: #606c81;
   --accent: #0d9668;
+  /* The fill accent is 3.8:1 on white; text uses the darker step (5.4:1). */
+  --accent-text: #0a7a54;
   --accent-strong: #0a7a54;
   --accent-dim: #0f766e;
   --accent-rgb: 13, 150, 104;
@@ -167,25 +172,28 @@
   --fill-hover: rgba(15, 23, 42, 0.06);
   --fill-strong: rgba(15, 23, 42, 0.08);
   --control-solid-bg: #ffffff;
-  --button-bg: linear-gradient(180deg, #10b981, #0d9668);
-  --button-bg-hover: linear-gradient(180deg, #17c98d, #0ea472);
+  /* White button text needs >= 4.5:1 against every stop of the fill. */
+  --button-bg: linear-gradient(180deg, #0b8259, #0a7350);
+  --button-bg-hover: linear-gradient(180deg, #0c875d, #0b7d56);
   --input-bg: #ffffff;
   --input-bg-focus: #ffffff;
   --control-border: #7a8494;
   --input-inset: inset 0 1px 2px rgba(15, 23, 42, 0.06);
-  --placeholder: #9aa4b5;
+  --placeholder: #626d82;
   --card-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.55), transparent 40%);
   --card-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
   --card-footer-bg: rgba(15, 23, 42, 0.04);
   --backdrop-bg: rgba(15, 23, 42, 0.32);
+  --drawer-scrim: rgba(15, 23, 42, 0.16);
   --dialog-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.6), transparent 30%);
   --dialog-bg: #ffffff;
   --drawer-bg: rgba(255, 255, 255, 0.94);
   --drawer-shadow: -24px 0 64px rgba(15, 23, 42, 0.16);
   --toast-bg: rgba(254, 242, 245, 0.94);
   --toast-text: #a41e44;
-  /* The terminal pane keeps its dark xterm palette in both themes. */
-  --terminal-bg: #090d12;
+  /* Matches the light "platinum" xterm palette the default profile uses in
+     the light theme. */
+  --terminal-bg: #f6f7f9;
   --dock-shadow: 0 -12px 40px rgba(15, 23, 42, 0.12);
   --overlay-bg: rgba(255, 255, 255, 0.94);
   --menu-bg: rgba(255, 255, 255, 0.97);
@@ -375,7 +383,6 @@ button:disabled {
   min-height: 0;
   cursor: ew-resize;
   touch-action: none;
-  --wails-draggable: no-drag;
 }
 
 .sidebar-resize::after {
@@ -404,7 +411,6 @@ button:disabled {
 .sidebar-top {
   height: 44px;
   flex: 0 0 auto;
-  --wails-draggable: drag;
 }
 
 .sidebar-brand {
@@ -412,28 +418,32 @@ button:disabled {
   padding: var(--space-050) var(--space-100) var(--space-200);
 }
 
+/* The version label is also the About and Updates button, so it keeps a
+   24px hit target (WCAG 2.5.8) while the visible text stays small. */
 .app-version {
   position: relative;
   z-index: 1;
-  min-height: 0;
+  display: inline-flex;
+  align-items: center;
+  min-width: 24px;
+  min-height: 24px;
   border: 0;
-  border-radius: 3px;
-  margin: -1px 0 2px;
+  border-radius: 5px;
+  margin: -5px 0 -3px -6px;
+  padding: 0 6px;
   color: var(--faint);
   background: transparent;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.625rem;
+  font-size: 0.75rem;
   font-weight: 700;
   line-height: 1.2;
   box-shadow: none;
-  padding: 0;
-  --wails-draggable: no-drag;
 }
 
 .app-version:hover,
 .app-version:active {
   color: var(--text);
-  background: transparent;
+  background: var(--fill-hover);
   box-shadow: none;
   transform: none;
 }
@@ -442,7 +452,6 @@ button:disabled {
   display: grid;
   flex: 0 0 auto;
   gap: 2px;
-  --wails-draggable: no-drag;
 }
 
 .sidebar-nav-item {
@@ -491,7 +500,6 @@ button:disabled {
   margin-top: var(--space-250);
   border-top: 1px solid var(--line-subtle);
   padding-top: var(--space-150);
-  --wails-draggable: no-drag;
 }
 
 /* Bottom zone of the sidebar: Settings and the project actions live here,
@@ -504,7 +512,6 @@ button:disabled {
   margin-top: var(--space-150);
   padding-top: var(--space-150);
   border-top: 1px solid var(--line-subtle);
-  --wails-draggable: no-drag;
 }
 
 .sidebar-footer-action {
@@ -700,7 +707,7 @@ button:disabled {
   height: 14px;
   border-radius: 50%;
   background: rgba(var(--accent-rgb), 0.16);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .sidebar-plan-tick svg {
@@ -713,10 +720,11 @@ button:disabled {
 
 /* Status markers: small color-coded dots; the details live in tooltips. */
 .sidebar-plan-flag {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
   flex: 0 0 auto;
   border-radius: 50%;
+  cursor: help;
 }
 
 .sidebar-plan-flag.hold {
@@ -808,7 +816,7 @@ button:disabled {
   margin-top: 7px;
   overflow: hidden;
   color: var(--muted);
-  font-size: 0.65rem;
+  font-size: 0.75rem;
   letter-spacing: 0.02em;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -816,8 +824,31 @@ button:disabled {
 }
 
 .sidebar-current-stats-pct {
-  color: var(--accent);
+  color: var(--accent-text);
   font-weight: 700;
+}
+
+/* Inline closeout for a finished plan that is still active. */
+.sidebar-current-closeout {
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  margin-top: var(--space-100);
+  border: 1px solid rgba(var(--accent-rgb), 0.45);
+  border-radius: 7px;
+  color: var(--accent-text);
+  background: rgba(var(--accent-rgb), 0.1);
+  box-shadow: none;
+  padding: 4px var(--space-100);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-align: left;
+}
+
+.sidebar-current-closeout:hover {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.16);
+  box-shadow: none;
 }
 
 /* The card's plan menu stays revealed: it is the one always-visible entry
@@ -902,7 +933,6 @@ button:disabled {
   background: var(--topbar-bg);
   -webkit-backdrop-filter: blur(18px) saturate(1.35);
   backdrop-filter: blur(18px) saturate(1.35);
-  --wails-draggable: drag;
 }
 
 .brand,
@@ -967,7 +997,7 @@ button:disabled {
 .eyebrow,
 .section-label {
   margin: 0 0 var(--space-050);
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: 0.6875rem;
   line-height: 1.2;
   font-weight: 800;
@@ -988,7 +1018,6 @@ h1 {
 .toolbar {
   flex: 0 0 auto;
   gap: var(--space-100);
-  --wails-draggable: no-drag;
 }
 
 .panel-controls {
@@ -998,7 +1027,6 @@ h1 {
   border-radius: 9px;
   background: var(--fill-subtle);
   padding: 2px;
-  --wails-draggable: no-drag;
 }
 
 .panel-toggle {
@@ -1025,7 +1053,7 @@ h1 {
 
 .panel-toggle[aria-pressed="true"],
 .panel-toggle[aria-expanded="false"] {
-  color: var(--accent);
+  color: var(--accent-text);
   background: rgba(var(--accent-rgb), 0.12);
 }
 
@@ -1291,7 +1319,7 @@ select option {
   padding: var(--space-150);
   background: var(--surface);
   color: var(--text);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   line-height: 1.5;
   tab-size: 2;
   white-space: pre;
@@ -1381,14 +1409,14 @@ select option {
   margin-top: 3px;
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
 }
 
 .recent-project-stack {
   overflow: hidden;
   margin: 3px 0 0;
   color: var(--muted);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1396,14 +1424,14 @@ select option {
 .recent-project-state {
   margin: var(--space-050) 0 0;
   color: var(--text-soft);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   font-weight: 700;
 }
 
 .recent-project-preselect {
   margin: var(--space-050) 0 0;
-  color: var(--accent);
-  font-size: 0.6875rem;
+  color: var(--accent-text);
+  font-size: 0.75rem;
   font-weight: 700;
 }
 
@@ -1435,6 +1463,7 @@ select option {
   min-width: 0;
   min-height: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr) auto;
   overflow: hidden;
 }
@@ -1446,6 +1475,40 @@ select option {
 
 .work-area[data-board-hidden="true"] .board-shell {
   display: none;
+}
+
+/* Board, Overview, and Issues share the top row; the dock keeps the bottom
+   row on every view, so switching views never moves it. */
+.work-area > .board-shell,
+.work-area > .overview-page,
+.work-area > .issues-page {
+  grid-row: 1;
+  grid-column: 1;
+}
+
+.work-area > .terminal-dock {
+  grid-row: 2;
+  grid-column: 1;
+}
+
+.work-area[data-board-hidden="true"] > .terminal-dock {
+  grid-row: 1 / -1;
+}
+
+/* A maximized dock (board hidden) is a Board-view layout; Overview and
+   Issues keep their page above a normal-height dock. */
+.work-area:not([data-view="board"])[data-board-hidden="true"] {
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.work-area:not([data-view="board"])[data-board-hidden="true"] > .terminal-dock {
+  grid-row: 2;
+  height: var(--terminal-dock-height);
+  border-top: 1px solid var(--line);
+}
+
+.work-area:not([data-view="board"])[data-board-hidden="true"] .terminal-resize {
+  display: block;
 }
 
 .work-area[data-terminal-hidden="true"] .terminal-dock {
@@ -1486,7 +1549,7 @@ select option {
 }
 
 .north-star .section-label {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .goal {
@@ -1529,8 +1592,13 @@ select option {
   border-left: 2px solid var(--hold);
   padding-left: var(--space-050);
   color: var(--hold);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   line-height: 1.3;
+}
+
+/* The summary's age sits under its heading so the label never wraps. */
+.summary-age {
+  margin: calc(-1 * var(--space-050)) 0 var(--space-050);
 }
 
 /* Measurements, not decoration: the two numbers the guide rule is written in. */
@@ -1541,7 +1609,7 @@ select option {
   gap: var(--space-100);
   margin: var(--space-100) 0 0;
   color: var(--muted);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   line-height: 1.4;
 }
 
@@ -1550,8 +1618,8 @@ select option {
   background: transparent;
   box-shadow: none;
   padding: 0;
-  color: var(--accent);
-  font-size: 0.6875rem;
+  color: var(--accent-text);
+  font-size: 0.75rem;
   cursor: pointer;
 }
 
@@ -1691,7 +1759,7 @@ select option {
 
 .stack-breakdown-scope {
   color: var(--muted);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
@@ -1715,7 +1783,7 @@ select option {
   overflow: hidden;
   max-width: 100%;
   color: var(--muted);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1735,7 +1803,7 @@ select option {
 .section-caption {
   color: var(--faint);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1799,7 +1867,7 @@ select option {
 
 .issue .issue-meta {
   color: var(--muted);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
 }
 
 .issue-marker {
@@ -1822,8 +1890,15 @@ select option {
 .issue-meta,
 .activity-meta {
   color: var(--faint);
-  font-size: 0.625rem;
+  font-size: 0.75rem;
   line-height: 1.35;
+}
+
+.summary-hash {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  cursor: help;
 }
 
 .activity-section {
@@ -1839,7 +1914,7 @@ select option {
 
 .intelligence-section {
   color: var(--text-soft);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
 }
 
 .intelligence-section summary {
@@ -1865,7 +1940,7 @@ select option {
   margin-bottom: 4px;
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.625rem;
+  font-size: 0.75rem;
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
@@ -1889,7 +1964,7 @@ select option {
   background: var(--fill);
   padding: 3px 7px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.625rem;
+  font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1920,7 +1995,7 @@ select option {
 .intelligence-section .drift-group summary {
   color: var(--text-soft);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   letter-spacing: 0;
   text-transform: none;
 }
@@ -1939,12 +2014,18 @@ select option {
   padding-left: var(--space-100);
 }
 
-.intelligence-item[data-state="stale"],
-.intelligence-item[data-state="unknown"],
+/* Red is for errors only. Stale or unknown state and drift signals are
+   advisory, so they take the neutral info colour. */
 .intelligence-item[data-state="blocked"],
 .intelligence-item[data-state="failed"],
 .intelligence-item[data-state="error"] {
   border-left-color: var(--blocked);
+}
+
+.intelligence-item[data-state="stale"],
+.intelligence-item[data-state="unknown"],
+.intelligence-item[data-state="advisory"] {
+  border-left-color: var(--info);
 }
 
 .intelligence-item[data-state="waiting"] {
@@ -1968,7 +2049,7 @@ select option {
   min-height: 26px;
   margin-top: var(--space-050);
   padding: 2px var(--space-100);
-  font-size: 0.625rem;
+  font-size: 0.75rem;
 }
 
 .agent-worktree-controls {
@@ -1994,7 +2075,7 @@ select option {
   display: grid;
   gap: var(--space-050);
   color: var(--faint);
-  font-size: 0.625rem;
+  font-size: 0.75rem;
 }
 
 .agent-handoff-preview {
@@ -2013,7 +2094,7 @@ select option {
 .intelligence-detail {
   color: var(--faint);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.625rem;
+  font-size: 0.75rem;
   overflow-wrap: anywhere;
 }
 
@@ -2056,7 +2137,7 @@ select option {
   max-height: calc(1.35em * 2);
   margin-bottom: 3px;
   color: var(--muted);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   line-height: 1.35;
 }
 
@@ -2066,11 +2147,11 @@ select option {
   align-self: flex-start;
   border: 0;
   border-radius: 0;
-  color: var(--accent);
+  color: var(--accent-text);
   background: transparent;
   box-shadow: none;
   padding: var(--space-100) 0 0;
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   font-weight: 700;
 }
 
@@ -2085,7 +2166,7 @@ select option {
   border-radius: 8px;
   color: var(--faint);
   padding: var(--space-150);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   line-height: 1.5;
   text-align: center;
 }
@@ -2109,6 +2190,11 @@ select option {
   flex: 1 1 auto;
   overflow-y: auto;
   padding: var(--space-250) var(--space-300) var(--space-300);
+}
+
+.issues-show-closed {
+  display: block;
+  margin: var(--space-150) auto 0;
 }
 
 .issues-heading {
@@ -2264,9 +2350,23 @@ select option {
    single column sets them to about forty characters a line. The threshold is
    the width at which a fourth column appears, not a round number. */
 @container (min-width: 1300px) {
-  .north-star,
   .summary-section {
     grid-column: span 2;
+  }
+}
+
+/* The north star is one sentence: it gets the whole first row, so the row is
+   exactly as tall as the goal and no card beside it is left half empty. The
+   remaining cards are ordered so the dense grid fills every row at two,
+   three, and four columns. */
+.overview-grid > .north-star {
+  grid-column: 1 / -1;
+}
+
+/* Below three columns the blockers card would sit alone on its own row. */
+@container (max-width: 983px) {
+  .overview-grid > .overview-blockers {
+    grid-column: span 1;
   }
 }
 
@@ -2389,7 +2489,7 @@ select option {
   display: -webkit-box;
   color: var(--muted);
   font-family: inherit;
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   line-height: 1.45;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -2400,7 +2500,7 @@ select option {
   padding-top: var(--space-150);
   border-top: 1px solid var(--line-subtle);
   color: var(--muted);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
 }
 
 .snapshot-details summary {
@@ -2412,7 +2512,7 @@ select option {
 .intelligence-section .stack-projects > summary {
   margin: var(--space-100) 0 var(--space-050);
   color: var(--muted);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   font-weight: 500;
   letter-spacing: normal;
   line-height: 1.4;
@@ -2522,7 +2622,7 @@ select option {
   gap: var(--space-050);
   margin-top: var(--space-100);
   color: var(--muted);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
 }
 
 .heatmap-legend svg {
@@ -2684,7 +2784,7 @@ select option {
   flex: 0 0 auto;
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
 }
 
@@ -2724,7 +2824,7 @@ select option {
 .board-status {
   max-width: 190px;
   color: var(--faint);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   line-height: 1.3;
   text-align: right;
 }
@@ -2881,7 +2981,7 @@ textarea::placeholder {
   background: transparent;
   box-shadow: none;
   padding: 0;
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   line-height: 1;
   opacity: 0;
   transition:
@@ -2926,7 +3026,7 @@ textarea::placeholder {
   background: var(--fill);
   padding: 1px 7px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.625rem;
+  font-size: 0.75rem;
   line-height: 1.5;
   text-align: center;
   font-variant-numeric: tabular-nums;
@@ -3069,7 +3169,7 @@ textarea::placeholder {
   margin-bottom: var(--space-100);
   color: var(--faint);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.625rem;
+  font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
 }
 
@@ -3090,7 +3190,7 @@ textarea::placeholder {
   border-left: 2px solid var(--accent-dim);
   color: var(--muted);
   padding-left: var(--space-100);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   line-height: 1.45;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -3108,7 +3208,7 @@ textarea::placeholder {
   border: 1px solid var(--border);
   border-radius: 999px;
   color: var(--text-soft);
-  font-size: 0.68rem;
+  font-size: 0.75rem;
   font-weight: 700;
   letter-spacing: 0.02em;
   padding: 3px 7px;
@@ -3129,7 +3229,7 @@ textarea::placeholder {
   color: var(--hold);
   background: rgba(var(--hold-rgb), 0.09);
   padding: 2px 7px;
-  font-size: 0.625rem;
+  font-size: 0.75rem;
   font-weight: 700;
   letter-spacing: 0.02em;
 }
@@ -3144,7 +3244,7 @@ textarea::placeholder {
   color: var(--info);
   background: color-mix(in srgb, var(--info) 9%, transparent);
   padding: 2px 7px;
-  font-size: 0.625rem;
+  font-size: 0.75rem;
   font-weight: 700;
   letter-spacing: 0.02em;
 }
@@ -3152,7 +3252,7 @@ textarea::placeholder {
 .context-chip {
   color: var(--muted);
   padding: 0;
-  font-size: 0.53125rem;
+  font-size: 0.75rem;
   line-height: 1.35;
   font-variant-numeric: tabular-nums;
 }
@@ -3167,37 +3267,6 @@ textarea::placeholder {
   color: var(--issue-chip);
 }
 
-.card-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-050);
-  border-top: 1px solid var(--line-subtle);
-  background: var(--card-footer-bg);
-  padding: var(--space-100);
-}
-
-.card-actions select {
-  flex: 1 1 90px;
-  width: auto;
-  min-width: 0;
-  min-height: 30px;
-  border: 1px solid var(--line-subtle);
-  border-radius: 7px;
-  color: var(--text-soft);
-  background: var(--control-solid-bg);
-  padding: 4px 6px;
-  font-size: 0.625rem;
-  transition:
-    border-color 150ms var(--ease),
-    color 150ms var(--ease);
-}
-
-.card-actions select:hover {
-  border-color: var(--line-strong);
-  color: var(--text);
-}
-
 .empty {
   display: grid;
   min-height: 72px;
@@ -3205,7 +3274,7 @@ textarea::placeholder {
   border: 1px dashed var(--line);
   border-radius: 9px;
   color: var(--faint);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
 }
 
 /* ---------------------------------------------------------------- modals */
@@ -3237,6 +3306,15 @@ body > [data-terminal-overlay][data-application-overlay-layer="active"] {
   -webkit-backdrop-filter: blur(10px) saturate(1.15);
   backdrop-filter: blur(10px) saturate(1.15);
   animation: fade-in 180ms var(--ease);
+}
+
+/* The task and issue drawers keep the board readable behind them: a light
+   scrim with no frosted blur, so the lane you came from stays in view. */
+#task-drawer > .modal-backdrop,
+#issue-drawer > .modal-backdrop {
+  background: var(--drawer-scrim);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 button.modal-backdrop {
@@ -3372,7 +3450,7 @@ button.modal-backdrop:active {
 .updates-automatic-option small {
   margin-top: 3px;
   color: var(--faint);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   font-weight: 500;
   line-height: 1.4;
 }
@@ -3417,7 +3495,7 @@ button.modal-backdrop:active {
   gap: var(--space-100);
   margin-top: var(--space-150);
   color: var(--text-soft);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
 }
 
 .updates-progress progress {
@@ -3431,7 +3509,7 @@ button.modal-backdrop:active {
 
 .updates-release-heading span {
   color: var(--faint);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
 }
 
 .updates-release-notes {
@@ -3477,7 +3555,7 @@ button.modal-backdrop:active {
 
 .about-facts dt {
   color: var(--muted);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   font-weight: 650;
 }
 
@@ -3677,14 +3755,26 @@ button.modal-backdrop:active {
 
 .settings-check small {
   color: var(--muted);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   font-weight: 400;
 }
 
-.settings-diagnostics {
+.settings-diagnostics,
+.settings-diagnostics-list {
   display: grid;
   gap: var(--space-100);
   margin: 0;
+}
+
+.settings-diagnostics-group {
+  margin: var(--space-150) 0 0;
+  color: var(--text-soft);
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+
+.settings-diagnostics-group:first-child {
+  margin-top: 0;
 }
 
 .settings-diagnostic {
@@ -3698,7 +3788,7 @@ button.modal-backdrop:active {
 
 .settings-diagnostic dt {
   color: var(--muted);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   font-weight: 650;
 }
 
@@ -3726,7 +3816,7 @@ button.modal-backdrop:active {
   grid-row: 2;
   margin-top: 2px;
   color: var(--muted);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   line-height: 1.4;
 }
 
@@ -3845,7 +3935,7 @@ button.modal-backdrop:active {
 .dialog-help {
   margin: var(--space-100) 0 0;
   color: var(--muted);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   line-height: 1.5;
 }
 
@@ -4024,7 +4114,7 @@ button.modal-backdrop:active {
 .palette-group-label {
   margin: var(--space-100) var(--space-100) var(--space-050);
   color: var(--faint);
-  font-size: 0.625rem;
+  font-size: 0.75rem;
   font-weight: 800;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -4050,7 +4140,7 @@ button.modal-backdrop:active {
   color: var(--muted);
   background: var(--fill);
   padding: 1px 8px;
-  font-size: 0.5rem;
+  font-size: 0.6875rem;
   font-weight: 800;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -4058,7 +4148,7 @@ button.modal-backdrop:active {
 
 .palette-kind[data-kind="plan"] {
   border-color: rgba(var(--accent-rgb), 0.35);
-  color: var(--accent);
+  color: var(--accent-text);
   background: rgba(var(--accent-rgb), 0.08);
 }
 
@@ -4130,7 +4220,7 @@ button.modal-backdrop:active {
   overflow: hidden;
   margin: 2px 0 0;
   color: var(--faint);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -4284,7 +4374,7 @@ button.modal-backdrop:active {
   color: var(--badge-color, var(--muted));
   background: color-mix(in srgb, var(--badge-color, var(--muted)), transparent 90%);
   padding: 2px 10px;
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   font-weight: 750;
   letter-spacing: 0.04em;
 }
@@ -4308,7 +4398,7 @@ button.modal-backdrop:active {
 .drawer-updated {
   color: var(--faint);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.625rem;
+  font-size: 0.75rem;
 }
 
 .drawer-actions {
@@ -4326,6 +4416,7 @@ button.modal-backdrop:active {
   flex: 1 1 96px;
   width: auto;
   min-width: 96px;
+  min-height: 32px;
   border: 1px solid var(--line);
   border-radius: 8px;
   color: var(--text);
@@ -4415,11 +4506,11 @@ button.modal-backdrop:active {
   flex: 0 0 auto;
   border: 1px solid rgba(var(--accent-rgb), 0.25);
   border-radius: 6px;
-  color: var(--accent);
+  color: var(--accent-text);
   background: rgba(var(--accent-rgb), 0.08);
   padding: 0 6px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   line-height: 1.6;
 }
 
@@ -4448,16 +4539,29 @@ button.modal-backdrop:active {
 .drawer-item-meta {
   color: var(--faint);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.625rem;
+  font-size: 0.75rem;
 }
 
 /* ----------------------------------------------------------------- toast */
 
-.toast {
+.notice-stack {
   position: fixed;
   z-index: 30;
   right: var(--space-300);
   bottom: var(--space-300);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-100);
+  max-width: min(420px, calc(100vw - 2 * var(--space-300)));
+  pointer-events: none;
+}
+
+.notice-stack > * {
+  pointer-events: auto;
+}
+
+.toast {
   max-width: 420px;
   border: 1px solid rgba(var(--blocked-rgb), 0.4);
   border-radius: 11px;
@@ -4470,6 +4574,43 @@ button.modal-backdrop:active {
   font-size: 0.75rem;
   line-height: 1.45;
   animation: toast-in 220ms var(--ease);
+}
+
+/* A notice that is not an error (a refused close) keeps the toast's shape
+   in the caution colour. */
+.toast[data-tone="warning"] {
+  border-color: rgba(var(--doing-rgb), 0.45);
+  color: var(--text);
+  background: var(--overlay-bg);
+}
+
+/* The plan closeout reminder is information, not an error: neutral surface,
+   an info rule, and it never blocks the page. */
+.plan-closeout-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-100);
+  border: 1px solid var(--line-strong);
+  border-left: 3px solid var(--info);
+  border-radius: 11px;
+  color: var(--text);
+  background: var(--overlay-bg);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  padding: var(--space-150) var(--space-200);
+  box-shadow: var(--highlight-inset), var(--shadow-2);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  animation: toast-in 220ms var(--ease);
+}
+
+.plan-closeout-banner > span {
+  flex: 1 1 100%;
+}
+
+.plan-closeout-banner button {
+  min-height: 30px;
 }
 
 /* ---------------------------------------------------------- terminal dock */
@@ -4545,7 +4686,6 @@ button.modal-backdrop:active {
   border-bottom: 1px solid var(--line-subtle);
   background: var(--surface-soft);
   padding: 4px var(--space-100);
-  --wails-draggable: no-drag;
 }
 
 .terminal-tabs {
@@ -4591,7 +4731,7 @@ button.modal-backdrop:active {
   overflow: hidden;
   padding: 0 var(--space-100);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   font-weight: 700;
   text-align: left;
   white-space: nowrap;
@@ -4662,7 +4802,7 @@ button.modal-backdrop:active {
   width: 28px;
   border-left: 1px solid var(--line-subtle);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
 }
 
 .terminal-tab-action svg,
@@ -4721,7 +4861,7 @@ button.modal-backdrop:active {
   outline-offset: -1px;
   padding: 0 var(--space-100);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
 }
 
 .terminal-tab-rename[aria-invalid="true"] {
@@ -4775,7 +4915,6 @@ button.modal-backdrop:active {
   border-bottom: 1px solid var(--line-subtle);
   background: var(--surface);
   scrollbar-width: thin;
-  --wails-draggable: no-drag;
 }
 
 .terminal-setup-row,
@@ -4805,7 +4944,7 @@ button.modal-backdrop:active {
 }
 
 .terminal-mark {
-  color: var(--accent);
+  color: var(--accent-text);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.75rem;
   font-weight: 800;
@@ -4827,7 +4966,7 @@ button.modal-backdrop:active {
   margin-right: auto;
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   font-weight: 700;
 }
 
@@ -4841,13 +4980,14 @@ button.modal-backdrop:active {
   color: var(--muted);
   background: var(--surface-soft);
   padding-left: var(--space-100);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   font-weight: 700;
 }
 
 .terminal-cwd-picker {
   min-width: 180px;
-  max-width: 260px;
+  max-width: 440px;
+  flex: 1 1 320px;
   display: flex;
   align-items: center;
   gap: var(--space-050);
@@ -4856,7 +4996,7 @@ button.modal-backdrop:active {
   color: var(--muted);
   background: var(--surface-soft);
   padding-left: var(--space-100);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   font-weight: 700;
 }
 
@@ -4872,7 +5012,7 @@ button.modal-backdrop:active {
   background: transparent;
   padding: 0 var(--space-100);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
 }
 
 .terminal-profile-picker select {
@@ -4880,29 +5020,6 @@ button.modal-backdrop:active {
   max-width: 240px;
   flex: 1;
   font-size: 0.75rem;
-}
-
-.terminal-unicode-setting {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted);
-  font-size: 0.6875rem;
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.terminal-unicode-setting input {
-  flex: 0 0 auto;
-  width: 15px;
-  min-height: 15px;
-  height: 15px;
-  padding: 0;
-  border: 0;
-  box-shadow: none;
-  margin: 0;
-  accent-color: var(--accent);
 }
 
 .terminal-toolbar button {
@@ -4972,7 +5089,7 @@ button.modal-backdrop:active {
 
 .terminal-toolbar .terminal-zoom-reset {
   width: 45px;
-  font-size: 0.625rem;
+  font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
 }
 
@@ -5057,7 +5174,7 @@ button.modal-backdrop:active {
   backdrop-filter: blur(12px);
   padding: var(--space-150);
   box-shadow: var(--shadow-2);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
 }
 
 .terminal-diagnostics:focus-visible {
@@ -5141,6 +5258,40 @@ button.modal-backdrop:active {
   box-shadow: none;
 }
 
+/* A stopped pane says so and offers the one action that helps. */
+.terminal-empty[hidden] {
+  display: none;
+}
+
+.terminal-empty {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-150);
+  min-height: 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.terminal-empty p {
+  margin: 0;
+}
+
+/* Inside a stopped pane (the body stays up for an open scratchpad), the
+   notice covers the empty renderer area instead of pushing the layout. */
+.terminal-split-leaf-mount > .terminal-empty,
+#terminal-host > .terminal-empty {
+  position: absolute;
+  inset: 0;
+}
+
+/* The title already reads "Stopped"; a second "Closed" label says nothing. */
+.terminal-dock[data-state="closed"] .terminal-status {
+  display: none;
+}
+
 .terminal-body {
   --terminal-scratchpad-gutter: 0px;
   position: relative;
@@ -5197,7 +5348,7 @@ button.modal-backdrop:active {
   min-width: 68px;
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.625rem;
+  font-size: 0.75rem;
   text-align: center;
   white-space: nowrap;
 }
@@ -5320,7 +5471,7 @@ button.modal-backdrop:active {
   color: var(--muted);
   padding: 0 5px;
   box-shadow: none;
-  font-size: 0.5625rem;
+  font-size: 0.75rem;
   white-space: nowrap;
 }
 
@@ -5355,6 +5506,7 @@ button.modal-backdrop:active {
 }
 
 .terminal-split-leaf-mount {
+  position: relative;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -5368,6 +5520,14 @@ button.modal-backdrop:active {
 
 .terminal-host .xterm {
   height: 100%;
+}
+
+/* xterm's stylesheet (loaded after this one, hence the extra class) paints the
+   viewport black; the renderer element carries the active terminal theme's
+   background instead (see applyTerminalTheme). */
+.terminal-host .xterm .xterm-viewport,
+.terminal-window-host .xterm .xterm-viewport {
+  background-color: transparent;
 }
 
 .terminal-host .xterm-viewport {
@@ -5452,7 +5612,7 @@ button.modal-backdrop:active {
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5521,7 +5681,7 @@ button.modal-backdrop:active {
   background: transparent;
   box-shadow: none;
   padding: 0 var(--space-100);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
 }
 
 .terminal-scratchpad-add:hover:not(:disabled),
@@ -5578,7 +5738,7 @@ button.modal-backdrop:active {
   font-family:
     "SFMono-Regular", "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono",
     "DejaVu Sans Mono", monospace;
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -5593,7 +5753,7 @@ button.modal-backdrop:active {
   background: transparent;
   box-shadow: none;
   padding: 0 var(--space-050);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
 }
 
 .terminal-scratchpad-action:hover:not(:disabled),
@@ -5623,7 +5783,7 @@ button.modal-backdrop:active {
   flex: 0 0 auto;
   margin: 0;
   color: var(--muted);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   line-height: 1.4;
 }
 
@@ -5712,7 +5872,7 @@ button.modal-backdrop:active {
 .terminal-context-menu kbd {
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.625rem;
+  font-size: 0.6875rem;
 }
 
 .terminal-context-separator {
@@ -6093,10 +6253,6 @@ html[data-window-mode="terminal"] #app {
 
   .board {
     grid-template-columns: repeat(4, minmax(220px, 1fr));
-  }
-
-  .terminal-unicode-setting span {
-    display: none;
   }
 }
 

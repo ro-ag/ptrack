@@ -14,7 +14,7 @@ import {
   type Workspace,
   type WorkspaceIdKind,
 } from "./model";
-import { reduceWorkspace } from "./reducer";
+import { reduceWorkspace, setWorkspaceActionFailureReporter } from "./reducer";
 
 function sequentialIds(): IdFactory {
   let sequence = 0;
@@ -324,5 +324,32 @@ describe("workspace pane reducer", () => {
     expect(isWorkspace(next)).toBe(true);
     expect(next.tabs).toHaveLength(1);
     expect(paneCount(next.tabs[0].root)).toBe(1);
+  });
+});
+
+describe("failed workspace actions", () => {
+  it("reports a failed tab or split action and leaves the workspace unchanged", () => {
+    const ids = sequentialIds();
+    const workspace = createWorkspace(ids);
+    const failures: string[] = [];
+    const previous = setWorkspaceActionFailureReporter((action) => failures.push(action));
+    try {
+      const failing: IdFactory = { next: () => { throw new Error("id source failed"); } };
+      const tab = workspace.tabs[0];
+      expect(reduceWorkspace(workspace, { type: "create-tab" }, failing)).toBe(workspace);
+      expect(reduceWorkspace(workspace, { type: "duplicate-tab", tabId: tab.id }, failing))
+        .toBe(workspace);
+      expect(reduceWorkspace(workspace, {
+        type: "split-pane",
+        tabId: tab.id,
+        paneId: tab.activePaneId,
+        direction: "vertical",
+      }, failing)).toBe(workspace);
+      expect(failures).toEqual(["create-tab", "duplicate-tab", "split-pane"]);
+      reduce(workspace, { type: "create-tab" }, ids);
+      expect(failures).toHaveLength(3);
+    } finally {
+      setWorkspaceActionFailureReporter(previous);
+    }
   });
 });

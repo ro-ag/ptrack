@@ -16,7 +16,7 @@ pub use model::{
     Branch, ChangedArea, Commit, Divergence, ExistingWorktree, PathBounds, Remote, RepositoryState,
     Snapshot, Status, WorktreeBounds, WorktreeIdentity,
 };
-pub use runner::{CancellationToken, RepositoryError};
+pub use runner::{CancellationToken, NO_EXTERNAL_DIFF_ARGS, RepositoryError, hardened_git_command};
 pub use snapshot::{RepositoryService, capture};
 pub use timeline::{
     MAX_TIMELINE_COMMITS, MAX_TIMELINE_TAGS, Timeline, TimelineTag, capture_timeline,

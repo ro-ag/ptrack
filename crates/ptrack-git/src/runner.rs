@@ -12,6 +12,14 @@ const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(3);
 const DEFAULT_OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
 const MAX_READER_THREADS: usize = 64;
+/// How long a terminated command's pipe readers get to observe end-of-file
+/// before the runner stops waiting for them.
+const READER_JOIN_GRACE: Duration = Duration::from_millis(250);
+
+/// Diff options that keep repository-configured external diff drivers and
+/// text conversion filters from running. Pass them to any command that can
+/// render a diff (`show`, `log -p`, `diff`).
+pub const NO_EXTERNAL_DIFF_ARGS: [&str; 2] = ["--no-ext-diff", "--no-textconv"];
 
 static ACTIVE_READER_THREADS: AtomicUsize = AtomicUsize::new(0);
 
@@ -131,6 +139,21 @@ impl ExecRunner {
         }
     }
 
+    #[cfg(all(test, unix))]
+    pub(crate) fn with_reader_counter_for_test(
+        git_path: impl Into<OsString>,
+        timeout: Duration,
+        reader_counter: &'static AtomicUsize,
+    ) -> Self {
+        Self {
+            git_path: git_path.into(),
+            timeout,
+            max_output_bytes: DEFAULT_OUTPUT_LIMIT,
+            reader_counter,
+            reader_limit: MAX_READER_THREADS,
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn without_reader_capacity_for_test(
         git_path: impl Into<OsString>,
@@ -158,14 +181,8 @@ impl Runner for ExecRunner {
             return Err(RepositoryError::Cancelled);
         }
 
-        let mut command = Command::new(&self.git_path);
-        command
-            .args(git_command_args(root, args))
-            .env_clear()
-            .envs(git_environment(std::env::vars_os()))
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        let mut command = hardened_command(&self.git_path, root, args);
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
 
         let mut child = command
             .spawn()
@@ -186,6 +203,10 @@ impl Runner for ExecRunner {
         };
         let started = Instant::now();
 
+        // The leader is reaped only after both pipes reach end-of-file, or
+        // after its whole process group has been killed. While it is
+        // unreaped its PID cannot be reused, so signalling the group can
+        // never reach an unrelated process.
         let mut status = None;
         let termination = loop {
             if cancellation.is_cancelled() {
@@ -204,9 +225,12 @@ impl Runner for ExecRunner {
                 reap_if_running(&mut child, &mut status);
                 break Some(RepositoryError::CommandTimeout);
             }
-            if status.is_none() {
+            if stdout_reader.is_finished() && stderr_reader.is_finished() {
                 match child.try_wait() {
-                    Ok(Some(exit_status)) => status = Some(Ok(exit_status)),
+                    Ok(Some(exit_status)) => {
+                        status = Some(Ok(exit_status));
+                        break None;
+                    }
                     Ok(None) => {}
                     Err(_) => {
                         reap_if_running(&mut child, &mut status);
@@ -214,14 +238,10 @@ impl Runner for ExecRunner {
                     }
                 }
             }
-            if status.is_some() && stdout_reader.is_finished() && stderr_reader.is_finished() {
-                break None;
-            }
             thread::sleep(POLL_INTERVAL);
         };
 
-        let stdout_ok = join_if_finished(stdout_reader);
-        let stderr_ok = join_if_finished(stderr_reader);
+        let [stdout_ok, stderr_ok] = join_readers([stdout_reader, stderr_reader]);
         let status = status
             .unwrap_or(Err(RepositoryError::CommandFailed))
             .map_err(|_| RepositoryError::CommandFailed)?;
@@ -245,10 +265,36 @@ impl Runner for ExecRunner {
     }
 }
 
+/// Kills the command and every descendant still in its process group, then
+/// reaps the leader. Must run before the leader is reaped.
 fn kill_and_reap(child: &mut Child) -> std::io::Result<ExitStatus> {
+    kill_process_group(child);
     let _ = child.kill();
     child.wait()
 }
+
+#[cfg(unix)]
+fn kill_process_group(child: &Child) {
+    // The runner forbids unsafe code, so the group is signalled through the
+    // system `kill` utility. The leader is unreaped here, which keeps its PID
+    // (and so the group ID) from being reused.
+    let group = format!("-{}", child.id());
+    for program in ["/bin/kill", "/usr/bin/kill"] {
+        let signalled = Command::new(program)
+            .args(["-KILL", "--", &group])
+            .env_clear()
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        if signalled.is_ok() {
+            return;
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_process_group(_child: &Child) {}
 
 fn reap_if_running(child: &mut Child, status: &mut Option<Result<ExitStatus, RepositoryError>>) {
     if status.is_none() {
@@ -263,6 +309,18 @@ fn terminate_spawn_failure(child: &mut Child) -> RepositoryError {
 
 fn join_if_finished(reader: thread::JoinHandle<bool>) -> bool {
     reader.is_finished() && reader.join().unwrap_or(false)
+}
+
+/// Joins both pipe readers once the command is gone. Killing the process
+/// group closes every pipe a descendant inherited, so the readers normally
+/// finish at once; the bounded grace covers only a descendant that left the
+/// group, whose reader then keeps its slot until that pipe closes.
+fn join_readers(readers: [thread::JoinHandle<bool>; 2]) -> [bool; 2] {
+    let deadline = Instant::now() + READER_JOIN_GRACE;
+    while readers.iter().any(|reader| !reader.is_finished()) && Instant::now() < deadline {
+        thread::sleep(POLL_INTERVAL);
+    }
+    readers.map(join_if_finished)
 }
 
 fn spawn_reader<R: Read + Send + 'static>(
@@ -344,6 +402,35 @@ impl CommandOutput {
             self.exceeded = true;
         }
     }
+}
+
+/// Builds a `git` command with the hardening every repository read uses:
+/// `--no-optional-locks`, `-c core.fsmonitor=false`, `-C <root>`, a scrubbed
+/// environment (every inherited `GIT_*` variable removed; fixed locale,
+/// pager, prompt, and lazy-fetch values), a null stdin, and, on Unix, its
+/// own process group so a caller can signal every descendant.
+///
+/// Callers choose stdout and stderr handling. Commands that can render a
+/// diff should also pass [`NO_EXTERNAL_DIFF_ARGS`], and a caller-supplied
+/// revision belongs after `--end-of-options`.
+#[must_use]
+pub fn hardened_git_command(root: &Path, args: &[OsString]) -> Command {
+    hardened_command(OsStr::new("git"), root, args)
+}
+
+fn hardened_command(program: &OsStr, root: &Path, args: &[OsString]) -> Command {
+    let mut command = Command::new(program);
+    command
+        .args(git_command_args(root, args))
+        .env_clear()
+        .envs(git_environment(std::env::vars_os()))
+        .stdin(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        command.process_group(0);
+    }
+    command
 }
 
 pub(crate) fn git_command_args(root: &Path, args: &[OsString]) -> Vec<OsString> {

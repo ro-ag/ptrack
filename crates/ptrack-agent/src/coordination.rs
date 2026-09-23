@@ -2725,6 +2725,11 @@ pub(crate) fn bounded_suggestion_text(value: &str) -> String {
     format!("{}…", collapsed[..end].trim())
 }
 
+fn is_ptrack_state(path: &str) -> bool {
+    let path = path.trim_end_matches('/');
+    path == ".ptrack" || path.starts_with(".ptrack/")
+}
+
 #[allow(clippy::too_many_lines)] // Exact ordered matrix intentionally stays together.
 fn build_drift(
     projection: &Projection,
@@ -2742,7 +2747,13 @@ fn build_drift(
     for path in &git.changed_paths {
         findings.push(drift_path("checkoutChangedPath", "info", path));
     }
-    for path in &git.untracked_paths {
+    // p-track's own project state is expected to be untracked in repositories
+    // that do not ignore it; flagging it would be advice about p-track itself.
+    for path in git
+        .untracked_paths
+        .iter()
+        .filter(|path| !is_ptrack_state(path))
+    {
         findings.push(drift_path("untrackedFile", "warning", path));
     }
     let observed = git

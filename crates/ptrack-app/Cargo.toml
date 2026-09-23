@@ -8,8 +8,6 @@ rust-version.workspace = true
 
 [dependencies]
 ptrack-agent = { path = "../ptrack-agent" }
-ptrack-capability = { path = "../ptrack-capability" }
-ptrack-capability-policy = { path = "../ptrack-capability-policy" }
 ptrack-core = { path = "../ptrack-core" }
 ptrack-git = { path = "../ptrack-git" }
 ptrack-store = { path = "../ptrack-store" }
@@ -31,3 +29,6 @@ unsafe_code = "forbid"
 
 [lints.clippy]
 pedantic = "warn"
+# A lock guard held past its last use turned a network download into a stall
+# of every other desktop command; the lint keeps guard scopes tight.
+significant_drop_tightening = "warn"

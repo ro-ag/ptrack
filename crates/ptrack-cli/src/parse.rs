@@ -32,9 +32,15 @@ pub const ROOT_COMMANDS: &[&str] = &[
     "projects",
     "backup",
     "mcp",
-    "capability",
     "version",
 ];
+
+/// The retired `ptrack capability` group. It stays a known word only so an
+/// old script gets a pointer to its replacement instead of "unknown command".
+const RETIRED_CAPABILITY_GROUP: &str = "capability";
+
+/// Why `ptrack capability …` fails: capability brokering left ptrack.
+pub(crate) const CAPABILITY_MOVED: &str = "capability brokering moved to pam and is no longer part of ptrack; see https://ro-ag.github.io/ptrack/help/agents-and-capabilities/#capability-model";
 
 const GROUPS: &[(&str, &[&str])] = &[
     ("local", &["enable", "disable", "status"]),
@@ -70,7 +76,6 @@ const GROUPS: &[(&str, &[&str])] = &[
     ("config", &["set", "show"]),
     ("hook", &["install", "uninstall", "status"]),
     ("agent", &["list", "show", "inbox"]),
-    ("capability", &["call", "mcp"]),
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -104,6 +109,9 @@ pub fn preflight(mut argv: Vec<String>) -> Result<Preflight, CliError> {
     }
     if matches!(argv[0].as_str(), "-v" | "--version") {
         return Ok(Preflight::GroupDefault(vec!["--version".to_owned()]));
+    }
+    if argv[0] == RETIRED_CAPABILITY_GROUP {
+        return Err(CliError::message(CAPABILITY_MOVED));
     }
     if argv[0] == "help" {
         if argv
@@ -268,7 +276,9 @@ fn validate_leaf(path: &[String], raw: &[String]) -> Result<(), CliError> {
                     )));
                 }
             }
-        } else if !after_separator && value.starts_with('-') {
+        } else if !after_separator && value.starts_with('-') && value != "-" {
+            // A lone `-` is a value (`milestone due <id> -` clears the date),
+            // never a flag.
             let shorthand = value.chars().nth(1).unwrap_or('-');
             return Err(CliError::message(format!(
                 "unknown shorthand flag: {shorthand:?} in {value}"
@@ -362,7 +372,6 @@ fn flag_names(path: &[String]) -> BTreeSet<(&'static str, bool)> {
         }
         ["guide"] => &[("print", false)],
         ["board"] => &[("plan", true), ("gui", false), ("json", false)],
-        ["capability", "call"] => &[("arguments", true)],
         _ => &[],
     };
     names.iter().copied().collect()

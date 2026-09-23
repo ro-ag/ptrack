@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  projectGuideStatusResolution,
+  PROJECT_GUIDE_PARTIALLY_APPLIED_ERROR,
+  PROJECT_GUIDE_STALE_ERROR,
   canOpenPreservedFirstRunProject,
   completedInitializationWorkspaceMatches,
   firstRunFocusTarget,
@@ -877,3 +880,35 @@ function resumeValidation(checkpoint: string) {
     guideChoice: "install",
   };
 }
+
+describe("project guide status resolution", () => {
+  const committed = { outcome: "recovery-required", checkpoint: "project-committed" } as const;
+  const ready = { outcome: "ready", checkpoint: "none" } as const;
+
+  it("maps a partial apply only onto the committed checkpoint", () => {
+    const resolved = projectGuideStatusResolution(PROJECT_GUIDE_PARTIALLY_APPLIED_ERROR, committed);
+    expect(resolved).toMatchObject({
+      kind: "stale",
+      event: { type: "guideStale", postCommit: true, partiallyApplied: true, skipAllowed: false },
+    });
+    expect(projectGuideStatusResolution(PROJECT_GUIDE_PARTIALLY_APPLIED_ERROR, ready).kind)
+      .toBe("unknown-checkpoint");
+  });
+
+  it("maps a stale preview before or after commit and accepts Error values", () => {
+    expect(projectGuideStatusResolution(PROJECT_GUIDE_STALE_ERROR, ready)).toEqual({
+      kind: "stale",
+      event: { type: "guideStale", postCommit: false, checkpoint: "none" },
+    });
+    expect(projectGuideStatusResolution(new Error(PROJECT_GUIDE_STALE_ERROR), committed))
+      .toMatchObject({ kind: "stale", event: { postCommit: true } });
+    expect(projectGuideStatusResolution(PROJECT_GUIDE_STALE_ERROR, {
+      outcome: "in-progress",
+      checkpoint: "project-committed",
+    }).kind).toBe("unknown-checkpoint");
+  });
+
+  it("ignores failures that are not about the guide", () => {
+    expect(projectGuideStatusResolution("storage-busy", committed)).toEqual({ kind: "none" });
+  });
+});

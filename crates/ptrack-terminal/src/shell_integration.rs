@@ -391,8 +391,20 @@ fi
     )
 }
 
+/// The user's `.zshenv` runs with `ZDOTDIR` as zsh itself would have set it:
+/// their own directory, or unset when it only defaulted to `HOME`. Whatever
+/// `ZDOTDIR` it leaves behind (an XDG setup moves it to `~/.config/zsh`) is
+/// where the later startup files are read from, as plain zsh would.
 const ZSH_ENVIRONMENT_INTEGRATION: &str = r#"if [[ -n "${PTRACK_SHELL_ORIGINAL_ZDOTDIR_V1:-}" && "${PTRACK_SHELL_ORIGINAL_ZDOTDIR_V1}" != "${PTRACK_SHELL_INTEGRATION_WRAPPER_V1}" && -r "${PTRACK_SHELL_ORIGINAL_ZDOTDIR_V1}/.zshenv" ]]; then
+  if [[ "${PTRACK_SHELL_ORIGINAL_ZDOTDIR_V1}" == "${HOME:-}" ]]; then
+    unset ZDOTDIR
+  else
+    export ZDOTDIR="${PTRACK_SHELL_ORIGINAL_ZDOTDIR_V1}"
+  fi
   source "${PTRACK_SHELL_ORIGINAL_ZDOTDIR_V1}/.zshenv"
+  if [[ -n "${ZDOTDIR:-}" && "${ZDOTDIR}" != "${PTRACK_SHELL_INTEGRATION_WRAPPER_V1}" ]]; then
+    export PTRACK_SHELL_ORIGINAL_ZDOTDIR_V1="${ZDOTDIR}"
+  fi
 fi
 export ZDOTDIR="${PTRACK_SHELL_INTEGRATION_WRAPPER_V1}"
 "#;

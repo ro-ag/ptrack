@@ -20,6 +20,13 @@ MAX_NOTES_BYTES = 32 << 10
 VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 ARCHES = ("amd64", "arm64")
 DARWIN_ARCHES = ("arm64",)  # Intel macOS retired in v0.32.0
+CHECKSUMS = "checksums.txt"
+CHECKSUMS_SIGNATURE = "checksums.txt.sig"
+# Raw Ed25519 public key of the release signing key. Must match
+# RELEASE_SIGNING_PUBLIC_KEY in crates/ptrack-updater/src/signature.rs.
+RELEASE_SIGNING_PUBLIC_KEY_HEX = "2be49664346475e5a5eb3184db3b46f4a97a725f60ae44d0ddd1e209ab713eb0"
+# DER SubjectPublicKeyInfo prefix for a raw 32-byte Ed25519 key (RFC 8410).
+ED25519_SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")
 
 
 class ContractError(ValueError):
@@ -146,7 +153,10 @@ def validate_archive(path: Path) -> None:
 def validate_dist(directory: Path, version: str) -> tuple[Path, ...]:
     expected = package_names(version)
     actual = tuple(sorted(path.name for path in directory.iterdir() if path.is_file()))
-    allowed = expected if "checksums.txt" not in actual else tuple(sorted((*expected, "checksums.txt")))
+    generated: tuple[str, ...] = ()
+    if CHECKSUMS in actual:
+        generated = (CHECKSUMS, CHECKSUMS_SIGNATURE) if CHECKSUMS_SIGNATURE in actual else (CHECKSUMS,)
+    allowed = tuple(sorted((*expected, *generated)))
     if actual != allowed:
         raise ContractError(f"release assets differ: expected {list(allowed)}, got {list(actual)}")
     packages = tuple(directory / name for name in expected)
@@ -170,9 +180,20 @@ def write_checksums(directory: Path, version: str) -> Path:
             while chunk := source.read(1 << 20):
                 digest.update(chunk)
         lines.append(f"{digest.hexdigest()}  {path.name}\n")
-    destination = directory / "checksums.txt"
+    destination = directory / CHECKSUMS
     destination.write_text("".join(lines), encoding="ascii", newline="\n")
     return destination
+
+
+def release_public_key_der() -> bytes:
+    key = bytes.fromhex(RELEASE_SIGNING_PUBLIC_KEY_HEX)
+    if len(key) != 32:
+        raise ContractError("release signing public key must be 32 bytes")
+    return ED25519_SPKI_PREFIX + key
+
+
+def write_public_key(destination: Path) -> None:
+    destination.write_bytes(release_public_key_der())
 
 
 def extract_release_notes(changelog: Path, version: str, destination: Path) -> None:
@@ -222,6 +243,8 @@ def main(argv: list[str] | None = None) -> int:
     notes.add_argument("changelog", type=Path)
     notes.add_argument("version")
     notes.add_argument("destination", type=Path)
+    public_key = commands.add_parser("public-key")
+    public_key.add_argument("destination", type=Path)
     binary = commands.add_parser("validate-binary")
     binary.add_argument("path", type=Path)
     binary.add_argument("version")
@@ -235,6 +258,8 @@ def main(argv: list[str] | None = None) -> int:
             write_checksums(args.directory, args.version)
         elif args.command == "release-notes":
             extract_release_notes(args.changelog, args.version, args.destination)
+        elif args.command == "public-key":
+            write_public_key(args.destination)
         else:
             validate_binary(args.path, args.version, args.os, args.arch)
     except (ContractError, OSError, subprocess.SubprocessError, tarfile.TarError, zipfile.BadZipFile) as error:

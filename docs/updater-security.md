@@ -2,7 +2,7 @@
 
 p-track updates only from stable GitHub Releases published at
 `ro-ag/ptrack`. The updater is an app-owned facility: it does not use agent
-network capabilities, accept project configuration, store credentials, build
+integrations, accept project configuration, store credentials, build
 from source, elevate privileges, or run unattended installation helpers.
 
 ## Consent and authority
@@ -22,7 +22,9 @@ Discovery uses the fixed GitHub API endpoint for the latest `ro-ag/ptrack`
 release and refuses metadata redirects. The response must describe one
 published, stable SemVer release newer than the running official build. The
 updater selects exactly one expected package name for the running OS and CPU
-and exactly one `checksums.txt` asset.
+exactly one `checksums.txt` asset, and exactly one 64-byte
+`checksums.txt.sig` asset. A release without that signature asset is not a
+candidate at all.
 
 Accepted packages are:
 
@@ -44,19 +46,34 @@ home. Requests start from the exact GitHub download URL and may follow only the
 bounded GitHub release-asset redirect chain. Package, manifest, response,
 archive entry, release-note, and progress sizes are bounded.
 
-`checksums.txt` must contain one exact SHA-256 entry for the selected package.
+`checksums.txt.sig` is a raw Ed25519 signature over the exact bytes of
+`checksums.txt`. After both are staged, the updater verifies the signature
+against the p-track release public key compiled into `ptrack-updater`, on every
+platform, before it reads any digest from the manifest; a missing, wrong-sized,
+or failing signature ends the operation before the package is downloaded.
+`checksums.txt` must then contain one exact SHA-256 entry for the selected
+package.
 The archive must have the expected single-root layout and executable; path
 traversal, links, extra entries, duplicate entries, and the wrong ELF or PE
 machine type are rejected. The durable stage records archive and payload
 digests and sizes. Files are reopened without following links and rehashed
 before use.
 
-The checksum and package are co-hosted in the same GitHub Release. SHA-256
-therefore detects corruption and mismatched assets, but it is not an
-independent publisher signature if the repository's release authority is
-compromised. macOS adds a separate pinned Developer ID identity and Gatekeeper
-check at handoff; the current Windows and Linux archives rely on the release
-account plus the co-hosted checksum.
+## Release signing
+
+The tag-only release job signs `checksums.txt` with the Ed25519 release key
+held in the `PTRACK_RELEASE_SIGNING_KEY` repository secret, verifies the
+signature against the pinned public key, and fails the release when the secret
+is absent, so an unsigned release is never published. The private key never
+leaves that secret, and the public key compiled into the updater is checked
+against it by `tools/release_contract.py public-key`.
+
+Because the signature is checked against a key built into the running binary
+rather than anything the release itself supplies, a leaked release token or a
+tampered release run can publish assets but cannot get them installed. macOS
+adds a separate pinned Developer ID identity and Gatekeeper check at handoff.
+Rotating the release key needs an app release that carries the new public key
+before any release is signed with it.
 
 ## Platform handoff
 
@@ -83,7 +100,10 @@ uses a target-scoped lock, copies the verified staged payload, rechecks its
 digest, creates an inode-verified hard-link backup, persists a target-bound
 recovery journal, and atomically renames the replacement. It probes
 `ptrack version` for the exact candidate and rolls back on any failure. It never
-uses `sudo` or updates a system-owned binary.
+uses `sudo` or updates a system-owned binary. Every helper command runs with
+closed standard input and a per-command deadline, and on Unix its whole process
+group is killed on timeout or cancellation. A canceled version probe rolls the
+replacement back.
 
 ## Recovery and failure behavior
 

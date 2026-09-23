@@ -200,3 +200,20 @@ fn process_exists_windows(pid: u32) -> bool {
         .status()
         .is_ok_and(|status| status.success())
 }
+
+#[cfg(unix)]
+#[test]
+fn proc_stat_session_is_read_after_the_command_name() {
+    use crate::pty::parse_stat_session;
+    // Kernel thread: session 0 must parse, not panic.
+    assert_eq!(
+        parse_stat_session("2 (kthreadd) S 0 0 0 0 -1 69238848"),
+        Some(0)
+    );
+    // A command name with spaces and parentheses.
+    assert_eq!(
+        parse_stat_session("4242 (my (odd) cmd) S 4200 4242 4100 34816 4242"),
+        Some(4100)
+    );
+    assert_eq!(parse_stat_session("garbage"), None);
+}

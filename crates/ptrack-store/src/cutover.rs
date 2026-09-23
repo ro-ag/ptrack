@@ -1,5 +1,6 @@
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crate::{StoreError, StoreResult};
 
@@ -446,17 +447,45 @@ fn require_private_file(_: &File, _: &Path) -> StoreResult<()> {
     ))
 }
 
-#[cfg(unix)]
+/// How long a shared lease waits out an exclusive holder (an activation,
+/// rollback, or missing-project prune) before reporting the lock unavailable.
+/// Exclusive requests never wait: they must not queue behind live readers.
+const SHARED_LEASE_TIMEOUT: Duration = Duration::from_secs(5);
+const LEASE_RETRY_INTERVAL: Duration = Duration::from_millis(20);
+
+/// Acquires `mode`, retrying a shared request for a bounded interval. Both
+/// platforms share this policy; only the single non-blocking attempt differs.
 fn lock(file: &File, mode: CutoverLockMode) -> StoreResult<()> {
+    let start = Instant::now();
+    loop {
+        if try_lock(file, mode)? {
+            return Ok(());
+        }
+        if mode == CutoverLockMode::Exclusive || start.elapsed() >= SHARED_LEASE_TIMEOUT {
+            return Err(StoreError::ActivationBinding(
+                "cutover lock is unavailable".to_owned(),
+            ));
+        }
+        std::thread::sleep(LEASE_RETRY_INTERVAL);
+    }
+}
+
+/// One non-blocking lock attempt: `Ok(false)` when another holder conflicts.
+#[cfg(unix)]
+fn try_lock(file: &File, mode: CutoverLockMode) -> StoreResult<bool> {
     use rustix::fs::{FlockOperation, flock};
 
     let operation = match mode {
-        CutoverLockMode::Shared => FlockOperation::LockShared,
+        CutoverLockMode::Shared => FlockOperation::NonBlockingLockShared,
         CutoverLockMode::Exclusive => FlockOperation::NonBlockingLockExclusive,
     };
-    flock(file, operation).map_err(|error| {
-        StoreError::ActivationBinding(format!("cutover lock is unavailable: {error}"))
-    })
+    match flock(file, operation) {
+        Ok(()) => Ok(true),
+        Err(error) if error == rustix::io::Errno::WOULDBLOCK => Ok(false),
+        Err(error) => Err(StoreError::ActivationBinding(format!(
+            "cutover lock failed: {error}"
+        ))),
+    }
 }
 
 #[cfg(unix)]
@@ -466,7 +495,7 @@ fn unlock(file: &File) {
 
 #[cfg(windows)]
 #[allow(unsafe_code)]
-fn lock(file: &File, mode: CutoverLockMode) -> StoreResult<()> {
+fn try_lock(file: &File, mode: CutoverLockMode) -> StoreResult<bool> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Foundation::ERROR_LOCK_VIOLATION;
     use windows_sys::Win32::Storage::FileSystem::{
@@ -485,14 +514,14 @@ fn lock(file: &File, mode: CutoverLockMode) -> StoreResult<()> {
     let result = unsafe { LockFileEx(file.as_raw_handle(), flags, 0, 1, 0, &raw mut overlapped) };
     if result == 0 {
         let error = std::io::Error::last_os_error();
-        let detail = if error.raw_os_error() == Some(ERROR_LOCK_VIOLATION as i32) {
-            "cutover lock is unavailable".to_owned()
-        } else {
-            format!("cutover lock failed: {error}")
-        };
-        return Err(StoreError::ActivationBinding(detail));
+        if error.raw_os_error() == Some(ERROR_LOCK_VIOLATION as i32) {
+            return Ok(false);
+        }
+        return Err(StoreError::ActivationBinding(format!(
+            "cutover lock failed: {error}"
+        )));
     }
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(windows)]
@@ -508,7 +537,7 @@ fn unlock(file: &File) {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn lock(_: &File, _: CutoverLockMode) -> StoreResult<()> {
+fn try_lock(_: &File, _: CutoverLockMode) -> StoreResult<bool> {
     Err(StoreError::ActivationBinding(
         "cutover locking is unsupported on this platform".to_owned(),
     ))

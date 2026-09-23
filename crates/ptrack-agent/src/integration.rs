@@ -756,7 +756,7 @@ async fn handle_observation(
     };
     let observation: ObservationRequest = match decode_json(request, read_deadline).await {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let result = match route {
         Route::ObserveRuns => observer
@@ -841,7 +841,7 @@ async fn handle_register(
     }
     let registration: ExternalRegistration = match decode_json(request, read_deadline).await {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let Ok(lease) = state.registry.register_external(Registration {
         profile: registration.profile,
@@ -891,7 +891,7 @@ async fn handle_exit(
     }
     let exit: ExitRequest = match decode_json(request, read_deadline).await {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     if state
         .registry
@@ -916,7 +916,7 @@ async fn handle_external_event(
     }
     let provider_event: ProviderEvent = match decode_json(request, read_deadline).await {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     match state
         .registry
@@ -974,7 +974,7 @@ async fn decode_and_record_launched_event(
 ) -> Response<ResponseBody> {
     let provider_event: ProviderEvent = match decode_json(request, read_deadline).await {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     match state
         .registry
@@ -1012,7 +1012,7 @@ fn event_receipt(event: &Event) -> Response<ResponseBody> {
 async fn decode_json<T: for<'de> Deserialize<'de>>(
     request: Request<Incoming>,
     read_deadline: tokio::time::Instant,
-) -> Result<T, Response<ResponseBody>> {
+) -> Result<T, Box<Response<ResponseBody>>> {
     if request
         .headers()
         .get(hyper::header::CONTENT_LENGTH)
@@ -1020,10 +1020,10 @@ async fn decode_json<T: for<'de> Deserialize<'de>>(
         .and_then(|value| value.parse::<u64>().ok())
         .is_some_and(|length| length > MAX_INTEGRATION_BODY_BYTES as u64)
     {
-        return Err(error_response(
+        return Err(Box::new(error_response(
             StatusCode::PAYLOAD_TOO_LARGE,
             "AgentRun request too large",
-        ));
+        )));
     }
     let mut body = request.into_body();
     let read = async {
@@ -1043,24 +1043,31 @@ async fn decode_json<T: for<'de> Deserialize<'de>>(
     let contents = match tokio::time::timeout(read_remaining, read).await {
         Ok(Ok(contents)) => contents,
         Ok(Err(ReadBodyError::TooLarge)) => {
-            return Err(error_response(
+            return Err(Box::new(error_response(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "AgentRun request too large",
-            ));
+            )));
         }
         Ok(Err(ReadBodyError::Read)) | Err(_) => {
-            return Err(error_response(
+            return Err(Box::new(error_response(
                 StatusCode::BAD_REQUEST,
                 "invalid AgentRun request",
-            ));
+            )));
         }
     };
     let mut deserializer = serde_json::Deserializer::from_slice(&contents);
-    let value = T::deserialize(&mut deserializer)
-        .map_err(|_| error_response(StatusCode::BAD_REQUEST, "invalid AgentRun request"))?;
-    deserializer
-        .end()
-        .map_err(|_| error_response(StatusCode::BAD_REQUEST, "invalid AgentRun request"))?;
+    let value = T::deserialize(&mut deserializer).map_err(|_| {
+        Box::new(error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid AgentRun request",
+        ))
+    })?;
+    deserializer.end().map_err(|_| {
+        Box::new(error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid AgentRun request",
+        ))
+    })?;
     Ok(value)
 }
 

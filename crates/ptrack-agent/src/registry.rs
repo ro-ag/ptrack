@@ -3,6 +3,8 @@ use std::fmt;
 use std::path::{Component, Path, PathBuf};
 #[cfg(test)]
 use std::sync::Barrier;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -29,6 +31,10 @@ pub const DEFAULT_LEASE_DURATION: Duration = Duration::from_secs(30);
 pub const DEFAULT_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
 pub const DEFAULT_SNAPSHOT_LIMIT: usize = 64;
 pub const DEFAULT_MAX_RECORDS: usize = 1_024;
+/// How long accepted events may sit in memory before the background flusher
+/// rewrites the run history. Lifecycle changes still persist immediately, and
+/// shutdown flushes whatever is pending.
+pub const DEFAULT_PERSIST_DEBOUNCE: Duration = Duration::from_millis(500);
 
 type Clock = Arc<dyn Fn() -> Timestamp + Send + Sync>;
 type Random = Arc<dyn Fn(&mut [u8]) -> Result<(), String> + Send + Sync>;
@@ -88,6 +94,8 @@ pub struct RegistryConfig {
     pub additional_cwd_validator: Option<CwdValidator>,
     pub event_policy: Option<EventPrivacyPolicy>,
     pub state_path: PathBuf,
+    /// Event-history flush debounce; zero selects the 500 ms default.
+    pub persist_debounce: Duration,
 }
 
 impl Default for RegistryConfig {
@@ -103,6 +111,7 @@ impl Default for RegistryConfig {
             additional_cwd_validator: None,
             event_policy: None,
             state_path: PathBuf::new(),
+            persist_debounce: Duration::ZERO,
         }
     }
 }
@@ -201,6 +210,16 @@ struct Record {
 
 type PendingSignal = Arc<(Mutex<bool>, Condvar)>;
 
+/// Wakes the history flusher: `pending` asks for a debounced write, `stopped`
+/// ends the thread so shutdown can flush synchronously.
+#[derive(Default)]
+struct FlushRequest {
+    pending: bool,
+    stopped: bool,
+}
+
+type FlushSignal = Arc<(Mutex<FlushRequest>, Condvar)>;
+
 struct State {
     records: BTreeMap<String, Record>,
     pending_event_tokens: BTreeMap<String, PendingSignal>,
@@ -224,6 +243,9 @@ struct RegistryInner {
     event_policy: EventPrivacyPolicy,
     state_path: PathBuf,
     state: Mutex<State>,
+    flush_signal: FlushSignal,
+    #[cfg(test)]
+    history_writes: AtomicUsize,
     #[cfg(test)]
     wait_barrier: Mutex<Option<Arc<Barrier>>>,
     #[cfg(test)]
@@ -233,6 +255,7 @@ struct RegistryInner {
 pub struct Registry {
     inner: Arc<RegistryInner>,
     sweep_thread: Mutex<Option<JoinHandle<()>>>,
+    flush_thread: Mutex<Option<JoinHandle<()>>>,
     shutdown_done: Arc<(Mutex<bool>, Condvar)>,
 }
 
@@ -268,6 +291,8 @@ impl Registry {
                 }
             });
         let repository_root = discover_repository_root(&project_root);
+        let persist_debounce = positive_duration(config.persist_debounce, DEFAULT_PERSIST_DEBOUNCE);
+        let flush_signal: FlushSignal = Arc::default();
         let inner = Arc::new(RegistryInner {
             project_root,
             repository_root,
@@ -289,6 +314,9 @@ impl Registry {
                 persistence_writable: true,
                 persistence_error: None,
             }),
+            flush_signal: Arc::clone(&flush_signal),
+            #[cfg(test)]
+            history_writes: AtomicUsize::new(0),
             #[cfg(test)]
             wait_barrier: Mutex::new(None),
             #[cfg(test)]
@@ -299,9 +327,13 @@ impl Registry {
         let shutdown_done = Arc::new((Mutex::new(false), Condvar::new()));
         let thread_done = Arc::clone(&shutdown_done);
         let sweep_thread = std::thread::spawn(move || run_sweeper(weak, ticker, &thread_done));
+        let weak = Arc::downgrade(&inner);
+        let flush_thread =
+            std::thread::spawn(move || run_flusher(&weak, &flush_signal, persist_debounce));
         Self {
             inner,
             sweep_thread: Mutex::new(Some(sweep_thread)),
+            flush_thread: Mutex::new(Some(flush_thread)),
             shutdown_done,
         }
     }
@@ -986,7 +1018,7 @@ impl Registry {
         let start = entry.events.len().saturating_sub(limit);
         let events = entry.events[start..].to_vec();
         if pruned {
-            persist_locked(&self.inner, &mut state);
+            schedule_persist(&self.inner, &mut state);
         }
         Ok((events, total))
     }
@@ -1022,7 +1054,7 @@ impl Registry {
         let start = entry.events.len().saturating_sub(limit);
         let events = entry.events[start..].to_vec();
         if pruned {
-            persist_locked(&self.inner, &mut state);
+            schedule_persist(&self.inner, &mut state);
         }
         Ok((run, events, total, intelligence))
     }
@@ -1231,6 +1263,7 @@ impl Registry {
     /// Returns the final history persistence failure after shutdown completes.
     pub fn shutdown(&self) -> Result<(), RegistryError> {
         self.begin_shutdown();
+        self.stop_flusher();
         self.join_sweeper();
         self.final_persistence_result()
     }
@@ -1241,6 +1274,7 @@ impl Registry {
     /// Returns a fixed timeout error if an injected ticker does not stop in time.
     pub fn shutdown_timeout(&self, timeout: Duration) -> Result<(), RegistryError> {
         self.begin_shutdown();
+        self.stop_flusher();
         let (done, wake) = &*self.shutdown_done;
         let done = lock(done);
         let (done, timeout_result) = wake
@@ -1276,6 +1310,30 @@ impl Registry {
             }
         }
         self.inner.ticker.stop();
+    }
+
+    /// Stops the history flusher, then writes anything an event marked dirty
+    /// after the shutdown save, so no accepted event is lost to the debounce.
+    fn stop_flusher(&self) {
+        {
+            let (request, wake) = &*self.inner.flush_signal;
+            lock(request).stopped = true;
+            wake.notify_all();
+        }
+        if let Some(thread) = lock(&self.flush_thread).take() {
+            let _ = thread.join();
+        }
+        let mut state = lock(&self.inner.state);
+        if state.persistence_dirty {
+            persist_locked(&self.inner, &mut state);
+        }
+    }
+
+    /// Returns how many times the run history was written, for tests that
+    /// bound write amplification.
+    #[cfg(test)]
+    pub(crate) fn history_write_count(&self) -> usize {
+        self.inner.history_writes.load(Ordering::SeqCst)
     }
 
     fn join_sweeper(&self) {
@@ -1333,6 +1391,49 @@ fn run_sweeper(
     }
     let (done, wake) = &**shutdown_done;
     *lock(done) = true;
+    wake.notify_all();
+}
+
+/// Writes the run history at most once per debounce window while events keep
+/// arriving, so the event path never waits on a whole-file rewrite and fsync.
+/// The write itself still runs under the registry mutex, which keeps its
+/// ordering with the synchronous lifecycle saves trivially correct.
+fn run_flusher(inner: &Weak<RegistryInner>, signal: &FlushSignal, debounce: Duration) {
+    let (request, wake) = &**signal;
+    loop {
+        let pending = lock(request);
+        let pending = wake
+            .wait_while(pending, |value| !value.pending && !value.stopped)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if pending.stopped {
+            return;
+        }
+        let (mut pending, _) = wake
+            .wait_timeout_while(pending, debounce, |value| !value.stopped)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if pending.stopped {
+            return;
+        }
+        pending.pending = false;
+        drop(pending);
+        let Some(inner) = inner.upgrade() else {
+            return;
+        };
+        let mut state = lock(&inner.state);
+        if state.persistence_dirty {
+            persist_locked(&inner, &mut state);
+        }
+    }
+}
+
+/// Marks the history dirty and wakes the flusher instead of writing now.
+fn schedule_persist(inner: &RegistryInner, state: &mut State) {
+    if inner.state_path.as_os_str().is_empty() || !state.persistence_writable {
+        return;
+    }
+    state.persistence_dirty = true;
+    let (request, wake) = &*inner.flush_signal;
+    lock(request).pending = true;
     wake.notify_all();
 }
 
@@ -1425,7 +1526,7 @@ fn record_normalized_event(
     if now > entry.run.last_activity_at {
         entry.run.last_activity_at = now;
     }
-    persist_locked(inner, state);
+    schedule_persist(inner, state);
     Ok(event)
 }
 
@@ -1765,6 +1866,8 @@ fn persist_locked(inner: &RegistryInner, state: &mut State) {
         saved_at: now,
         runs,
     };
+    #[cfg(test)]
+    inner.history_writes.fetch_add(1, Ordering::SeqCst);
     match write_history(&inner.state_path, &persisted) {
         Ok(WriteHistoryOutcome::Written) => {
             state.persistence_dirty = false;

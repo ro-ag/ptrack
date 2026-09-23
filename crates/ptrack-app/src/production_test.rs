@@ -59,6 +59,22 @@ impl Drop for Temp {
     }
 }
 
+/// The board projection, read the way the desktop reads it: through the
+/// bounded workspace snapshot.
+fn board_via_snapshot(
+    runtime: &Arc<DesktopRuntime>,
+    generation: u64,
+    plan_id: u64,
+) -> serde_json::Value {
+    let snapshot = runtime
+        .invoke(desktop_request(
+            "GetWorkspaceSnapshot",
+            vec![serde_json::json!(generation), serde_json::json!(plan_id)],
+        ))
+        .unwrap();
+    serde_json::json!({ "board": snapshot["tracking"]["board"] })
+}
+
 fn desktop_request(method: &str, arguments: Vec<serde_json::Value>) -> DesktopCommandRequest {
     DesktopCommandRequest {
         method: method.to_owned(),
@@ -227,12 +243,7 @@ fn production_desktop_json_smoke_first_launch_cancel_initialize_onboard_and_reop
         auto_opened.workspace_state().project.unwrap().root,
         project.to_str().unwrap()
     );
-    let auto_board = auto_opened
-        .invoke(desktop_request(
-            "GetBoardV2",
-            vec![serde_json::json!(1), serde_json::json!(1)],
-        ))
-        .unwrap();
+    let auto_board = board_via_snapshot(&auto_opened, 1, 1);
     assert_eq!(auto_board["board"]["goal"], "Ship the production smoke");
     assert_eq!(
         auto_board["board"]["columns"][1]["tasks"][0]["status"],
@@ -258,15 +269,7 @@ fn production_desktop_json_smoke_first_launch_cancel_initialize_onboard_and_reop
             .unwrap(),
         auto_recents
     );
-    assert_eq!(
-        auto_opened
-            .invoke(desktop_request(
-                "GetBoardV2",
-                vec![serde_json::json!(1), serde_json::json!(1)],
-            ))
-            .unwrap(),
-        auto_board
-    );
+    assert_eq!(board_via_snapshot(&auto_opened, 1, 1), auto_board);
 
     auto_opened
         .invoke(desktop_request("CloseProject", vec![serde_json::json!("")]))
@@ -278,12 +281,7 @@ fn production_desktop_json_smoke_first_launch_cancel_initialize_onboard_and_reop
         ))
         .unwrap();
     assert_eq!(reopened_same_root["state"]["generation"], 2);
-    let reopened_board = auto_opened
-        .invoke(desktop_request(
-            "GetBoardV2",
-            vec![serde_json::json!(2), serde_json::json!(1)],
-        ))
-        .unwrap();
+    let reopened_board = board_via_snapshot(&auto_opened, 2, 1);
     let reopened_recents = auto_opened
         .invoke(desktop_request("GetRecentProjectsV1", Vec::new()))
         .unwrap();
@@ -300,15 +298,7 @@ fn production_desktop_json_smoke_first_launch_cancel_initialize_onboard_and_reop
             .unwrap(),
         reopened_recents
     );
-    assert_eq!(
-        auto_opened
-            .invoke(desktop_request(
-                "GetBoardV2",
-                vec![serde_json::json!(2), serde_json::json!(1)],
-            ))
-            .unwrap(),
-        reopened_board
-    );
+    assert_eq!(board_via_snapshot(&auto_opened, 2, 1), reopened_board);
     auto_opened.begin_shutdown().unwrap();
     drop(auto_opened);
 
@@ -331,12 +321,7 @@ fn production_desktop_json_smoke_first_launch_cancel_initialize_onboard_and_reop
     assert_eq!(opened["requiresConfirmation"], false);
     assert_eq!(opened["state"]["status"], "open");
     assert_eq!(opened["state"]["generation"], 1);
-    let board = reopened
-        .invoke(desktop_request(
-            "GetBoardV2",
-            vec![serde_json::json!(1), serde_json::json!(1)],
-        ))
-        .unwrap();
+    let board = board_via_snapshot(&reopened, 1, 1);
     assert_eq!(board["board"]["goal"], "Ship the production smoke");
     assert!(
         board["board"]["columns"]
@@ -1205,6 +1190,9 @@ fn production_workspace_factory_composes_and_shuts_down_real_services() {
     let factory = ProductionDesktopWorkspaceFactory::new(runtime, None, 0).unwrap();
     let workspace = factory.build(&project, 1).unwrap();
     assert_eq!(Path::new(&workspace.project().root), project);
+    // The production wrapper must forward to the bound workspace, not fall
+    // back to the trait's empty default snapshot (generation 0).
+    assert_eq!(workspace.notification_snapshot().unwrap().generation, 1);
     workspace.shutdown().unwrap();
 }
 
@@ -4192,4 +4180,143 @@ fn desktop_landing_loads_with_permission_denied_project_but_selected_open_fails(
     assert_eq!(before, fs::read(&marker_path).unwrap());
     assert_eq!(desktop.workspace_state().status, WorkspaceStatus::Welcome);
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+/// An update service whose download holds until the test releases it.
+struct HeldDownloadUpdates {
+    inner: Arc<UnavailableUpdateService>,
+    entered: Arc<Barrier>,
+    release: Arc<Barrier>,
+}
+
+impl crate::DesktopUpdateService for HeldDownloadUpdates {
+    fn start(&self) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn state(&self) -> crate::UpdateState {
+        self.inner.state()
+    }
+
+    fn set_automatic_checks(&self, enabled: bool) -> Result<crate::UpdateState, String> {
+        self.inner.set_automatic_checks(enabled)
+    }
+
+    fn check_for_updates(&self) -> Result<crate::UpdateState, String> {
+        Ok(self.inner.state())
+    }
+
+    fn download_update(&self, _expected_version: &str) -> Result<crate::UpdateState, String> {
+        self.entered.wait();
+        self.release.wait();
+        Ok(self.inner.state())
+    }
+
+    fn apply_update(&self, _expected_version: &str) -> Result<crate::UpdateState, String> {
+        Ok(self.inner.state())
+    }
+
+    fn cancel_operation(&self) -> crate::UpdateState {
+        self.inner.state()
+    }
+
+    fn shutdown(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// A download runs for as long as the network takes. The authority must not
+/// hold its state lock across it, or `CancelUpdateOperation`, `GetUpdateState`,
+/// `OpenProject`, and the window close all wait for the whole download.
+#[test]
+fn a_running_update_operation_never_blocks_the_other_authority_delegates() {
+    use crate::DesktopUpdateService as _;
+
+    let temp = Temp::new();
+    let home = temp.0.join("home");
+    let authority = ProductionDesktopAuthority::load(home, "test", None, None, 0).unwrap();
+    let entered = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    authority.replace_update_service_for_test(Arc::new(HeldDownloadUpdates {
+        inner: UnavailableUpdateService::new("test"),
+        entered: entered.clone(),
+        release: release.clone(),
+    }));
+    let downloader = {
+        let authority = Arc::clone(&authority);
+        std::thread::spawn(move || authority.download_update("1.2.4"))
+    };
+    entered.wait();
+    let (answered, answers) = std::sync::mpsc::channel();
+    let probe = {
+        let authority = Arc::clone(&authority);
+        std::thread::spawn(move || {
+            let state = authority.state();
+            let canceled = authority.cancel_operation();
+            let recents = authority.recent_projects();
+            answered.send((state, canceled, recents.is_ok())).unwrap();
+        })
+    };
+    let (state, canceled, recents) = answers
+        .recv_timeout(Duration::from_secs(5))
+        .expect("update delegates must answer while a download runs");
+    assert_eq!(state.current_version, "test");
+    assert_eq!(canceled.current_version, "test");
+    assert!(recents);
+    release.wait();
+    probe.join().unwrap();
+    downloader.join().unwrap().unwrap();
+}
+
+/// The authority loads the generation marker once. A project the command line
+/// registers while the app runs must still be recognized and openable without
+/// a restart, instead of being classified as an unregistered store.
+#[test]
+fn a_project_registered_after_launch_is_existing_and_openable() {
+    let temp = Temp::new();
+    let home = temp.0.join("home");
+    let first_project = temp.0.join("first-project");
+    let second_project = temp.0.join("second-project");
+    fs::create_dir(&home).unwrap();
+    fs::create_dir(&first_project).unwrap();
+    fs::create_dir(&second_project).unwrap();
+    private_directory(&home);
+    let mut first = RoutedApplication::new(home.clone(), first_project.clone(), "test");
+    first
+        .initialize(InitRequest {
+            root: Some(first_project.clone()),
+            goal: String::new(),
+            force: false,
+            no_guide: true,
+        })
+        .unwrap();
+    drop(first);
+
+    let authority = ProductionDesktopAuthority::load(home.clone(), "test", None, None, 0).unwrap();
+    assert_eq!(
+        authority.validate_target(&first_project).unwrap().kind,
+        ProjectTargetKindV1::Existing
+    );
+
+    let mut second = RoutedApplication::new(home, second_project.clone(), "test");
+    second
+        .initialize(InitRequest {
+            root: Some(second_project.clone()),
+            goal: String::new(),
+            force: false,
+            no_guide: true,
+        })
+        .unwrap();
+    drop(second);
+
+    let validation = authority.validate_target(&second_project).unwrap();
+    assert_eq!(
+        validation.kind,
+        ProjectTargetKindV1::Existing,
+        "{validation:?}"
+    );
+    assert_eq!(Path::new(&validation.canonical_root), second_project);
+    let workspace = DesktopWorkspaceFactory::build(&*authority, &second_project, 2).unwrap();
+    assert_eq!(Path::new(&workspace.project().root), second_project);
+    workspace.shutdown().unwrap();
 }

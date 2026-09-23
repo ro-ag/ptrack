@@ -10,6 +10,7 @@ import {
   storedTerminalFontSize,
   terminalFontSizeStorageKey,
   terminalProfileFontSizeStorageKey,
+  terminalZoomFontSize,
   terminalZoomLabel,
   writeTerminalFontSize,
   writeTerminalProfileFontSize,
@@ -66,5 +67,17 @@ describe("terminal font preferences", () => {
     expect(entries.get(terminalProfileFontSizeStorageKey("shell/default"))).toBe("19");
     expect(readTerminalProfileFontSize(storage, "shell/default", 12)).toBe(19);
     expect(readTerminalProfileFontSize(storage, "new-profile", 12)).toBe(16);
+  });
+});
+
+describe("terminalZoomFontSize", () => {
+  it("steps by one, resets to the profile default, and stays in bounds", () => {
+    expect(terminalZoomFontSize("zoom-in", 14, 13)).toBe(15);
+    expect(terminalZoomFontSize("zoom-out", 14, 13)).toBe(13);
+    expect(terminalZoomFontSize("zoom-reset", 20, 13)).toBe(13);
+    expect(terminalZoomFontSize("zoom-in", maximumTerminalFontSize, 13))
+      .toBe(maximumTerminalFontSize);
+    expect(terminalZoomFontSize("zoom-out", minimumTerminalFontSize, 13))
+      .toBe(minimumTerminalFontSize);
   });
 });

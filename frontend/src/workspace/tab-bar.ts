@@ -129,14 +129,6 @@ export function structuralCloseFocusTarget(
   return action === "close-tab" ? "active-tab" : "active-pane";
 }
 
-export function restoreConnectedFocus(
-  target: { readonly isConnected: boolean; focus(): void } | null,
-): boolean {
-  if (!target?.isConnected) return false;
-  target.focus();
-  return true;
-}
-
 export function tabIndicatorPresentation(
   kind: PaneIndicatorKind,
 ): TabIndicatorPresentation {
@@ -411,10 +403,11 @@ export class WorkspaceTabBar {
 
   refresh(): void {
     if (this.#disposed) return;
-    for (const tab of this.#controller.workspace.tabs) {
+    const tabs = this.#controller.workspace.tabs;
+    tabs.forEach((tab, index) => {
       const tabButton = this.#tabButtons.get(tab.id);
-      if (tabButton) this.#refreshIndicator(tab, tabButton);
-    }
+      if (tabButton) this.#refreshIndicator(tab, tabButton, index, tabs.length);
+    });
   }
 
   dispose(): void {

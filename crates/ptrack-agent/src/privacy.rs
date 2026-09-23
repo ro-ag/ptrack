@@ -3,6 +3,10 @@ use std::fmt;
 use std::path::{Component, Path};
 use std::sync::OnceLock;
 
+use ptrack_core::{
+    contains_credential, contains_high_risk_secret, redact_credential_assignments,
+    redact_url_userinfo,
+};
 use regex::Regex;
 
 use crate::{
@@ -142,7 +146,7 @@ pub fn normalize_event_observation(
         if contains_reasoning_marker(&summary) {
             return message("agent event summary contains disallowed reasoning content");
         }
-        if high_risk().is_match(&summary) || private_key().is_match(&summary) {
+        if contains_high_risk_secret(&summary) {
             return message("agent event summary contains disallowed credential content");
         }
         summary = summary.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -352,30 +356,24 @@ pub(crate) fn contains_reasoning_marker(value: &str) -> bool {
     .any(|marker| lower.contains(marker))
 }
 
+/// Reports credential-shaped content with the detector every agent-facing
+/// surface shares.
 pub(crate) fn contains_credential_like(value: &str) -> bool {
-    bearer().is_match(value)
-        || assigned().is_match(value)
-        || high_risk().is_match(value)
-        || private_key().is_match(value)
+    contains_credential(value)
 }
 
 pub(crate) fn contains_rejected_summary_credential(value: &str) -> bool {
-    high_risk().is_match(value) || private_key().is_match(value)
+    contains_high_risk_secret(value)
 }
 
+/// Redacts a summary: shared credential spans first, then this boundary's own
+/// HTTP(S) URL normalisation, then any remaining non-HTTP URL userinfo.
 pub(crate) fn redact_summary(value: &str) -> String {
-    let value = bearer().replace_all(value, "Bearer [redacted]");
-    let value = assigned().replace_all(&value, |captures: &regex::Captures<'_>| {
-        format!(
-            "{}=[redacted]",
-            captures.get(1).map_or("", |value| value.as_str()).trim()
-        )
+    let value = redact_credential_assignments(value);
+    let value = http_url().replace_all(&value, |captures: &regex::Captures<'_>| {
+        redact_url(&captures[0])
     });
-    http_url()
-        .replace_all(&value, |captures: &regex::Captures<'_>| {
-            redact_url(&captures[0])
-        })
-        .into_owned()
+    redact_url_userinfo(&value)
 }
 
 fn redact_url(raw: &str) -> String {
@@ -744,17 +742,4 @@ regex_fn!(stable_source, r"^[A-Za-z0-9][A-Za-z0-9._:-]*$");
 regex_fn!(stable_subject, r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$");
 regex_fn!(stable_error_class, r"^[a-z][a-z0-9_.-]*$");
 regex_fn!(stable_commit_sha, r"^[0-9a-fA-F]{7,64}$");
-regex_fn!(bearer, r"(?i)(?-u:\b)Bearer[ \t]+[A-Za-z0-9._~+/=-]+");
-regex_fn!(
-    assigned,
-    r#"(?i)(?-u:\b)(token|password|passwd|secret|api[_-]?key|authorization|cookie)[ \t]*[:=][ \t]*(?:"[^"]*"|'[^']*'|[^ \t\n\f\r,;]+)"#
-);
-regex_fn!(
-    high_risk,
-    r"(?i)(?:(?-u:\b)sk-[A-Za-z0-9_-]{16,}(?-u:\b)|(?-u:\b)(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{12,}(?-u:\b)|(?-u:\b)glpat-[A-Za-z0-9_-]{12,}(?-u:\b)|(?-u:\b)github_pat_[A-Za-z0-9_]{16,}(?-u:\b)|(?-u:\b)gh[pousr]_[A-Za-z0-9]{16,}(?-u:\b)|(?-u:\b)AKIA[0-9A-Z]{16}(?-u:\b)|(?-u:\b)AIza[0-9A-Za-z_-]{20,}(?-u:\b)|(?-u:\b)xox[baprs]-[0-9A-Za-z-]{10,}(?-u:\b)|(?-u:\b)(?:secret|private)[_-]key[_-]?[A-Za-z0-9_-]{12,}(?-u:\b)|(?-u:\b)eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?-u:\b))"
-);
-regex_fn!(
-    private_key,
-    r"(?i)-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----"
-);
 regex_fn!(http_url, r"https?://[^ \t\n\f\r]+");

@@ -103,6 +103,127 @@ export interface StreamClaim {
   url: string;
   fromSequence: number;
   gap: boolean;
+  /**
+   * The session state when the ticket was minted. An exited session still
+   * replays what it kept, but its stream then ends for good.
+   */
+  state?: string;
+}
+
+/** Whether a claimed session already ended: its stream closing is final. */
+export function streamClaimEnded(claim: Pick<StreamClaim, "state">): boolean {
+  return claim.state === "exited" || claim.state === "failed" || claim.state === "closed";
+}
+
+/**
+ * What a renderer does once its stream closed. A normal closure is the
+ * server saying the output ended — the shell exited — so re-claiming would
+ * only replay the same scrollback forever; any other loss of a live pane is
+ * worth claiming back.
+ */
+export function streamCloseDisposition(input: {
+  outputEnded: boolean;
+  sessionEnded: boolean;
+  recoverable: boolean;
+}): "ended" | "reclaim" | "lost" {
+  if (input.outputEnded || input.sessionEnded) return "ended";
+  return input.recoverable ? "reclaim" : "lost";
+}
+
+/** Said while a stream ended but the exit itself has not been reported yet. */
+export const streamOutputEndedNotice = "Output ended";
+
+/**
+ * Exits that arrive while a tab is between its pane and its window. Tearing
+ * the pane down clears its session, and the window has not subscribed yet,
+ * so an exit in that gap reached nobody and the held pane kept promising a
+ * terminal that was already gone. The dock records it here instead and
+ * applies it once the move settled, whichever way it went.
+ */
+export class PopOutExitLedger<Exit extends { sessionId: string }> {
+  #moving: Map<string, Exit | null> | null = null;
+
+  begin(sessionIds: Iterable<string>): void {
+    this.#moving = new Map([...sessionIds].map((sessionId) => [sessionId, null]));
+  }
+
+  /** Keeps an exit for a session that is moving. Returns whether it was kept. */
+  record(exit: Exit): boolean {
+    if (!this.#moving?.has(exit.sessionId)) return false;
+    this.#moving.set(exit.sessionId, exit);
+    return true;
+  }
+
+  /** Ends the move and hands back every exit that arrived during it. */
+  finish(): Map<string, Exit> {
+    const exits = new Map<string, Exit>();
+    for (const [sessionId, exit] of this.#moving ?? []) {
+      if (exit) exits.set(sessionId, exit);
+    }
+    this.#moving = null;
+    return exits;
+  }
+}
+
+/** A tab the terminal window created that comes back as a new dock tab. */
+export interface ReturnedWindowTab {
+  sessionId: string;
+  title: string;
+  profileId: string;
+  cwd: string;
+}
+
+/**
+ * Tabs a terminal window created itself have no pane in the main window
+ * holding their place. Pop-in hands each of them back as a new tab instead of
+ * closing a running shell the user never asked to stop. Sessions are listed
+ * in the window's pane order, which is how they pair with the returned tabs.
+ */
+export function returnedWindowTabs(
+  payload: { sessions?: readonly string[]; shape?: unknown },
+  held: (sessionId: string) => boolean,
+): ReturnedWindowTab[] {
+  const shape = payload.shape as { windowTabs?: unknown } | undefined;
+  const tabs = Array.isArray(shape?.windowTabs) ? shape.windowTabs : [];
+  const panes: { title: string; profileId: string; cwd: string }[] = [];
+  const visit = (node: unknown, title: string): void => {
+    const value = node as {
+      kind?: string;
+      profileId?: unknown;
+      cwd?: unknown;
+      first?: unknown;
+      second?: unknown;
+    } | null;
+    if (!value || typeof value !== "object") return;
+    if (value.kind === "terminal") {
+      panes.push({
+        title,
+        profileId: typeof value.profileId === "string" ? value.profileId : "",
+        cwd: typeof value.cwd === "string" ? value.cwd : "",
+      });
+      return;
+    }
+    if (value.kind === "split") {
+      visit(value.first, title);
+      visit(value.second, title);
+    }
+  };
+  for (const tab of tabs) {
+    const value = tab as { title?: unknown; root?: unknown } | null;
+    visit(value?.root, typeof value?.title === "string" ? value.title : "");
+  }
+  const returned: ReturnedWindowTab[] = [];
+  (payload.sessions ?? []).forEach((sessionId, index) => {
+    if (!sessionId || held(sessionId)) return;
+    const pane = panes[index];
+    returned.push({
+      sessionId,
+      title: pane?.title || "Terminal",
+      profileId: pane?.profileId ?? "",
+      cwd: pane?.cwd ?? "",
+    });
+  });
+  return returned;
 }
 
 export interface StreamReclaimSteps {
@@ -218,9 +339,12 @@ export function detachedTabCloseIntent(input: {
   return { allowed, confirm: allowed && !input.ended };
 }
 
-/** Title of the close control on the only tab left in a terminal window. */
+/**
+ * Title of the close control on the only tab left in a terminal window.
+ * Closing the window returns every tab it holds, including ones opened there.
+ */
 export const detachedLastTabCloseTitle =
-  "Close this window to return the tab to p-track.";
+  "Close this window to return its tabs to p-track.";
 
 /**
  * Said in the pane a popped-out terminal left behind once its shell ended in

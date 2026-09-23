@@ -7,6 +7,8 @@ mod platform;
 #[cfg(windows)]
 #[path = "pty_windows.rs"]
 mod platform;
+#[cfg(all(unix, test))]
+pub(crate) use platform::parse_stat_session;
 
 /// Independently owned, already validated launch parameters passed to a PTY.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -54,7 +56,8 @@ pub trait PtyProcess: Send + Sync + 'static {
     ///
     /// Returns an error only when no process status can be obtained.
     fn wait(&self) -> io::Result<i32>;
-    /// Request graceful process-tree termination.
+    /// Request graceful process-tree termination. It must never signal a
+    /// leader that `wait` already reaped: its pid may belong to someone else.
     ///
     /// # Errors
     ///
@@ -66,6 +69,12 @@ pub trait PtyProcess: Send + Sync + 'static {
     ///
     /// Returns an OS signalling error.
     fn kill(&self) -> io::Result<()>;
+    /// Whether any process of the terminal's tree may still be running,
+    /// including background jobs that outlived the leader. An implementation
+    /// that cannot tell reports `false` and relies on `close` for containment.
+    fn live_processes(&self) -> bool {
+        false
+    }
     /// Close PTY resources and process containment.
     ///
     /// # Errors

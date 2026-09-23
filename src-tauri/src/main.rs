@@ -6,6 +6,7 @@ mod notification_runtime_test;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -16,8 +17,8 @@ use ptrack_app::window_state::{
 };
 use ptrack_app::{
     AppError, DesktopCommandRequest, DesktopEvent, DesktopEventSink, DesktopRuntime,
-    RoutedApplication, production_desktop_runtime_for_startup, resolve_global_home,
-    resolved_startup_project,
+    RoutedApplication, ShutdownOutcome, production_desktop_runtime_for_startup,
+    resolve_global_home, resolved_startup_project, scope_request_to_window,
 };
 use ptrack_desktop::{
     DesktopPlatform, MenuDispatch, MenuEntrySpec, MenuRole, menu_dispatch, menu_spec, window_spec,
@@ -76,8 +77,13 @@ fn bridge_message(message: &str) -> serde_json::Value {
 async fn gui_invoke(
     runtime: tauri::State<'_, Arc<DesktopRuntime>>,
     app: AppHandle,
+    window: tauri::WebviewWindow,
     request: DesktopCommandRequest,
 ) -> Result<serde_json::Value, serde_json::Value> {
+    // Scoped by the window that sent it, never by anything in the payload: a
+    // terminal window reaches only its own commands and its own assignment.
+    let request =
+        scope_request_to_window(window.label(), request).map_err(serde_json::Value::from)?;
     let runtime = Arc::clone(runtime.inner());
     let notifications = Arc::clone(app.state::<Arc<NativeNotificationController>>().inner());
     let shell_command = request.method == "InstallShellCommand";
@@ -191,17 +197,42 @@ const TERMINAL_WINDOW_TITLE: &str = "p-track Terminal";
 /// `WebviewWindowBuilder::build` deadlocks when it is called synchronously on
 /// Windows and `gui_invoke` runs on `spawn_blocking`, so the build is
 /// dispatched with `run_on_main_thread`.
+///
+/// A window must never outlive its assignment. The build re-checks the
+/// assignment once the window exists and destroys a window whose assignment
+/// is already gone — a project switch expired it while the build was queued —
+/// and a build that times out schedules the same destruction behind itself,
+/// because the queued build can still run after the caller gave up on it.
 fn build_terminal_window(app: &AppHandle, label: &str) -> Result<(), String> {
     let handle = app.clone();
-    let label = label.to_owned();
+    let owned = label.to_owned();
     let (sender, receiver) = channel();
     app.run_on_main_thread(move || {
-        let _ = sender.send(terminal_window(&handle, &label));
+        let built = terminal_window(&handle, &owned);
+        if built.is_ok() && !terminal_window_assigned(&handle, &owned) {
+            destroy_window(&handle, &owned);
+        }
+        let _ = sender.send(built);
     })
     .map_err(|error| error.to_string())?;
-    receiver
-        .recv_timeout(TERMINAL_WINDOW_BUILD_TIMEOUT)
-        .map_err(|error| error.to_string())?
+    match receiver.recv_timeout(TERMINAL_WINDOW_BUILD_TIMEOUT) {
+        Ok(built) => built,
+        Err(error) => {
+            let handle = app.clone();
+            let owned = label.to_owned();
+            let _ = app.run_on_main_thread(move || destroy_window(&handle, &owned));
+            Err(error.to_string())
+        }
+    }
+}
+
+fn terminal_window_assigned<R: Runtime>(app: &AppHandle<R>, label: &str) -> bool {
+    app.try_state::<Arc<DesktopRuntime>>()
+        .is_some_and(|runtime| runtime.terminal_window_tab(label).is_some())
+}
+
+fn destroy_window<R: Runtime>(app: &AppHandle<R>, label: &str) {
+    close_windows(app, vec![label.to_owned()]);
 }
 
 /// The terminal window itself: the existing `index.html` with the window's
@@ -402,7 +433,7 @@ fn main() {
             stdin: Box::new(std::io::stdin()),
             stdout: &mut stdout,
             stderr: &mut stderr,
-            cancellation: ptrack_app::CapabilityCancellation::new(),
+            cancellation: ptrack_app::McpCancellation::new(),
         },
     );
     match outcome {
@@ -687,6 +718,8 @@ fn run_desktop(initial_path: Option<PathBuf>, initial_plan: u64) {
     let notifications_setup = Arc::clone(&notifications);
     let notifications_events = Arc::clone(&notifications);
     let notifications_windows = Arc::clone(&notifications);
+    let closing_events = Arc::new(AtomicBool::new(false));
+    let exit_gate = Arc::new(ExitGate::default());
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
@@ -792,14 +825,11 @@ fn run_desktop(initial_path: Option<PathBuf>, initial_plan: u64) {
                     let _ = window.remove_menu();
                     return;
                 }
-                let runtime = window.state::<Arc<DesktopRuntime>>();
-                if runtime.begin_shutdown().is_err() {
-                    api.prevent_close();
-                    return;
-                }
-                // The app exits with its main window, so the terminal windows
-                // go with it rather than outliving the runtime that serves them.
-                close_windows(window.app_handle(), runtime.drain_terminal_windows());
+                // The close is always held here and finished by the teardown
+                // thread: a teardown that waits out a terminal or an agent
+                // would otherwise freeze the event loop for its whole bound.
+                api.prevent_close();
+                close_main_window(window.app_handle(), &closing_events);
             }
             // The pop-in waits for the webview to be gone. Its stream socket
             // drops with it, and only then does the session release its output
@@ -839,15 +869,162 @@ fn run_desktop(initial_path: Option<PathBuf>, initial_plan: u64) {
         // Whichever window is destroyed last varies once a terminal window
         // exists, so the flush enumerates whatever is still registered instead
         // of assuming `main` is.
-        if matches!(
-            event,
-            tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
-        ) {
-            for webview in app.webview_windows().values() {
-                capture_exit.flush(&AsRef::<tauri::Webview>::as_ref(webview).window(), true);
+        //
+        // Both exit events also tear the runtime down, bounded, exactly like a
+        // main-window close: terminals get their SIGTERM/SIGKILL escalation,
+        // agents and scratchpad writes settle, and an update install finishes
+        // or stops cleanly. A prevented `ExitRequested` runs it off the main
+        // thread and exits again once it is done; `Exit` cannot be prevented,
+        // so it waits on the main thread, never longer than the bound.
+        match event {
+            tauri::RunEvent::ExitRequested { api, code, .. } => match exit_gate.request() {
+                ExitStep::Proceed => flush_all(app, &capture_exit),
+                ExitStep::Hold => api.prevent_exit(),
+                ExitStep::TearDown => {
+                    api.prevent_exit();
+                    exit_after_teardown(app, &exit_gate, code.unwrap_or(0));
+                }
+            },
+            tauri::RunEvent::Exit => {
+                if exit_gate.finish()
+                    && let Some(runtime) = app.try_state::<Arc<DesktopRuntime>>()
+                {
+                    let _ = runtime.shutdown_within(EXIT_TEARDOWN_BOUND, true);
+                }
+                flush_all(app, &capture_exit);
             }
+            _ => {}
         }
     });
+}
+
+/// No close or quit may wait longer than this for the runtime teardown.
+const EXIT_TEARDOWN_BOUND: Duration = Duration::from_secs(3);
+
+fn flush_all(app: &AppHandle, capture: &WindowStateCapture) {
+    for webview in app.webview_windows().values() {
+        capture.flush(&AsRef::<tauri::Webview>::as_ref(webview).window(), true);
+    }
+}
+
+/// Where the application is on its way out. One teardown runs per process:
+/// the first exit request starts it, requests arriving while it runs are held,
+/// and the exit it issues itself — or the final `Exit` — goes through.
+#[derive(Default)]
+struct ExitGate(Mutex<ExitPhase>);
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum ExitPhase {
+    #[default]
+    Running,
+    TearingDown,
+    Finished,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExitStep {
+    /// Start the teardown and exit once it is done.
+    TearDown,
+    /// A teardown is already running; keep the app alive until it exits.
+    Hold,
+    /// The teardown is done; let the exit through.
+    Proceed,
+}
+
+impl ExitGate {
+    fn phase(&self) -> std::sync::MutexGuard<'_, ExitPhase> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn request(&self) -> ExitStep {
+        let mut phase = self.phase();
+        match *phase {
+            ExitPhase::Running => {
+                *phase = ExitPhase::TearingDown;
+                ExitStep::TearDown
+            }
+            ExitPhase::TearingDown => ExitStep::Hold,
+            ExitPhase::Finished => ExitStep::Proceed,
+        }
+    }
+
+    /// Marks the teardown done and reports whether the caller still has to
+    /// run it: true unless a teardown already finished.
+    fn finish(&self) -> bool {
+        let mut phase = self.phase();
+        let pending = *phase != ExitPhase::Finished;
+        *phase = ExitPhase::Finished;
+        pending
+    }
+}
+
+/// Tears the runtime down on its own thread, then exits for real. A process
+/// that cannot even spawn the thread exits at once rather than never.
+fn exit_after_teardown<R: Runtime>(app: &AppHandle<R>, gate: &Arc<ExitGate>, code: i32) {
+    let handle = app.clone();
+    let gate_for_thread = Arc::clone(gate);
+    let spawned = std::thread::Builder::new()
+        .name("ptrack-exit".to_owned())
+        .spawn(move || {
+            if let Some(runtime) = handle.try_state::<Arc<DesktopRuntime>>() {
+                let _ = runtime.shutdown_within(EXIT_TEARDOWN_BOUND, true);
+            }
+            gate_for_thread.finish();
+            handle.exit(code);
+        });
+    if spawned.is_err() {
+        gate.finish();
+        app.exit(code);
+    }
+}
+
+/// Closes the main window once the runtime is torn down, off the event loop.
+///
+/// A refusal — a call that did not drain in time — keeps the window and
+/// every service open and tells the window why, through
+/// `app:close-refused`. A teardown still running at the bound closes the
+/// window anyway: the process is leaving, and the exit path gives the
+/// teardown the rest of its time.
+fn close_main_window<R: Runtime>(app: &AppHandle<R>, closing: &Arc<AtomicBool>) {
+    if closing.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let Some(runtime) = app
+        .try_state::<Arc<DesktopRuntime>>()
+        .map(|runtime| Arc::clone(runtime.inner()))
+    else {
+        closing.store(false, Ordering::SeqCst);
+        destroy_window(app, MAIN_WINDOW_LABEL);
+        return;
+    };
+    let handle = app.clone();
+    let closing_for_thread = Arc::clone(closing);
+    let spawned = std::thread::Builder::new()
+        .name("ptrack-close".to_owned())
+        .spawn(move || {
+            match runtime.shutdown_within(EXIT_TEARDOWN_BOUND, false) {
+                ShutdownOutcome::Completed(windows) => {
+                    // The app exits with its main window, so the terminal
+                    // windows go with it rather than outliving the runtime
+                    // that serves them.
+                    close_windows(&handle, windows);
+                    destroy_window(&handle, MAIN_WINDOW_LABEL);
+                }
+                ShutdownOutcome::TimedOut => {
+                    close_windows(&handle, runtime.drain_terminal_windows());
+                    destroy_window(&handle, MAIN_WINDOW_LABEL);
+                }
+                ShutdownOutcome::Refused(message) => {
+                    closing_for_thread.store(false, Ordering::SeqCst);
+                    let _ = handle.emit_to(MAIN_WINDOW_LABEL, "app:close-refused", message);
+                }
+            }
+        });
+    if spawned.is_err() {
+        closing.store(false, Ordering::SeqCst);
+    }
 }
 
 #[allow(clippy::too_many_lines)] // Native menu order is an explicit frozen contract.

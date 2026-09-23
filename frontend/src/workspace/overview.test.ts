@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterRecentProjects, overviewActivity, overviewDistribution, overviewProgress, type Overview } from "./overview";
+import { filterRecentProjects, overviewActivity, type Overview } from "./overview";
 
 const counts = { activePlans: 1, openTasks: 2, doneTasks: 3, openIssues: 0 };
 const now = 100 * 86400;
@@ -22,18 +22,6 @@ describe("overview", () => {
 });
 
 
-it("reports task progress and cache coverage without inventing missing work", () => {
-  expect(overviewProgress(overview)).toEqual({ totalTasks: 5, completion: 60, coverage: 50 });
-  expect(overviewProgress({ ...overview, counts: { activePlans: 0, openTasks: 0, doneTasks: 0, openIssues: 0 }, trackedProjects: 0, summarizedProjects: 0 })).toEqual({ totalTasks: 0, completion: null, coverage: 0 });
-});
-it("bins all cached records by UTC calendar day, excluding old and future updates", () => {
-  const recent = { ...overview, projects: [{ ...overview.projects[0], activity: Array.from({ length: 25 }, (_, id) => ({ kind: "task", id, title: "Task", status: "done", updatedAt: now - 1 })) }] };
-  const bins = overviewDistribution(recent, now * 1000);
-  expect(bins).toHaveLength(30);
-  expect(bins.reduce((total, bin) => total + bin.count, 0)).toBe(25);
-  expect(bins[28].count).toBe(25);
-  expect(overviewDistribution(overview, now * 1000).every((bin) => bin.count === 0)).toBe(true);
-});
 
 import { overviewRefreshMessage } from "./overview";
 it("reports partial refresh without implying skipped projects were updated", () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { initTheme, nextTheme, resolveTheme, THEME_STORAGE_KEY } from "./theme";
+import { initTheme, nextTheme, resolveTheme, terminalThemeName, THEME_STORAGE_KEY } from "./theme";
+import { terminalProfileTheme } from "./terminal/profile-settings";
 
 function stubStorage(initial = null) {
   const entries = new Map(initial === null ? [] : [[THEME_STORAGE_KEY, initial]]);
@@ -101,5 +102,28 @@ describe("theme controller", () => {
     });
     controller.toggle();
     expect(applied).toEqual(["dark", "light"]);
+  });
+});
+
+describe("terminal palette follows the app theme", () => {
+  // CIE L* of an sRGB hex colour.
+  function lightness(hex) {
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map((c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    return y > 216 / 24389 ? 116 * Math.cbrt(y) - 16 : (24389 / 27) * y;
+  }
+
+  it("draws the default profile light in the light theme and dark in the dark theme", () => {
+    const light = terminalProfileTheme(terminalThemeName("default", "light"));
+    const dark = terminalProfileTheme(terminalThemeName("default", "dark"));
+    expect(lightness(light.background)).toBeGreaterThanOrEqual(90);
+    expect(lightness(dark.background)).toBeLessThan(20);
+    expect(terminalThemeName("", "light")).toBe("platinum");
+  });
+
+  it("keeps a palette the profile chose for itself", () => {
+    expect(terminalThemeName("high-contrast", "light")).toBe("high-contrast");
+    expect(terminalThemeName("platinum", "dark")).toBe("platinum");
   });
 });

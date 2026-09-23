@@ -5,36 +5,116 @@ import { COMMANDS, installTauriBridge } from "./tauri-bridge";
 describe("Tauri compatibility bridge", () => {
   it("pins the exact current command allowlist", () => {
     expect(COMMANDS).toEqual([
-      "AcknowledgeAgentHandoffV2", "AddIssueV1", "AddPlanV1", "AddTask", "AddTaskNote", "AddTaskNoteV2",
-      "AddTaskV2", "ApplyUpdate", "ApproveAgentWorkflowV2", "AssociateAgentRunV2",
-      "AssociateTerminalV2", "CancelUpdateOperation", "CancelWorkspaceChange",
-      "CheckForUpdates", "ClaimTerminalStream", "CloseProject", "CloseTerminal",
-      "CloseTerminalV2", "CompletePlanV1", "CopyPlanV1",
-      "CreateFirstPlanV1", "CreateFirstTaskV1", "CreateTerminal", "CreateTerminalV2", "DeletePlanV1", "DisableCapabilityV2",
-      "DismissAgentWorkflowV2", "DownloadUpdate", "EnableCapabilityV2",
-      "ExpireCapabilityV2", "ForgetRecentProjectV1", "GetActivityHeatmapV2", "GetAgentIntelligenceV2",
-      "GetAgentRunsV2", "GetBoard", "GetBoardV2", "GetCapabilitiesV2",
-      "GetCapabilityAuditsV2", "GetDiagnosticsReport", "GetGlobalOverviewV1", "GetInitializationStatusV1", "GetIssueDetailV1", "GetIssuesV1",
-      "GetLayoutState", "GetPendingInitializationV1",
-      "GetPreferences", "GetProjectTimelineV1", "GetRecentProjects", "GetRecentProjectsV1", "GetScratchpadV1", "GetStackProfileV1", "GetTaskDetailV2",
-      "GetTerminalProfiles", "GetTerminalProfilesV2", "GetTerminalWindowTab",
-      "GetUpdateState",
-      "GetWorkspaceSnapshot", "GetWorkspaceState", "HoldPlanV1", "InitializeProjectV1", "InstallShellCommand",
-      "LaunchLinkedAgentV2", "ListProjectsV1", "MoveIssueTaskV1", "MoveTask", "MoveTaskV2", "MoveTaskV3", "MovePlanV1",
+      "AcknowledgeAgentHandoffV2", "AddIssueV1", "AddPlanV1", "AddTaskNoteV2", "AddTaskV2",
+      "ApplyUpdate", "ApproveAgentWorkflowV2", "CancelUpdateOperation", "CancelWorkspaceChange",
+      "CheckForUpdates", "ClaimTerminalStream", "CloseProject", "CloseTerminalV2", "CompletePlanV1",
+      "CopyPlanV1", "CreateFirstPlanV1", "CreateFirstTaskV1", "CreateTerminalV2", "DeletePlanV1",
+      "DismissAgentWorkflowV2", "DownloadUpdate", "ForgetRecentProjectV1", "GetActivityHeatmapV2",
+      "GetDiagnosticsReport", "GetGlobalOverviewV1", "GetInitializationStatusV1",
+      "GetIssueDetailV1", "GetIssuesV1", "GetLayoutState", "GetPendingInitializationV1",
+      "GetPreferences", "GetProjectTimelineV1", "GetRecentProjectsV1", "GetScratchpadV1",
+      "GetStackProfileV1", "GetTaskDetailV2", "GetTerminalProfiles", "GetTerminalProfilesV2",
+      "GetTerminalWindowTab", "GetUpdateState", "GetWorkspaceSnapshot", "GetWorkspaceState",
+      "HoldPlanV1", "InitializeProjectV1", "InstallShellCommand", "LaunchLinkedAgentV2",
+      "ListProjectsV1", "MoveIssueTaskV1", "MoveTaskV3", "MovePlanV1",
       "MutateTerminalAssociationV2", "OpenHelpDestination", "OpenProject", "OpenRecentProjectV1",
-      "OpenTerminalWindow",
-      "PickProjectDirectory", "PrepareAgentWorkflowV2", "PreviewAgentHandoffV2",
-      "PreviewCapabilityV2", "PreviewProjectGuideV1", "PreviewTerminalWritebackV2", "RefreshGlobalOverviewV1", "RemoveCapabilityV2",
-      "RenamePlanV1", "RenameTask", "RenameTaskV2", "ResetApplicationState", "ResetPreferences", "ResetWindowLayout",
-      "ResizeTerminal", "ResizeTerminalV2", "ResolveRecentProjectV1", "ResumePlanV1",
-      "RollbackLinkedAgentLaunchV2", "SaveCapabilityV2", "ScheduleIssueV1", "SearchV2",
-      "SendAgentHandoffV2", "SetAgentTaskOwnershipV2", "SetAgentWorktreeV2",
-      "SetAutomaticUpdateChecks", "SetIssueTaskV1", "SetLayoutState", "SetPreferences", "SetScratchpadV1", "SetTerminalWindowTab",
-      "StartFirstTaskV1",
-      "TestCapabilityV2", "UpdateIssueV1", "ValidateProjectTargetV1",
-      "ValidateTerminalCWDsV2",
-      "WriteTerminalMemoryV2",
+      "OpenTerminalWindow", "PickProjectDirectory", "PrepareAgentWorkflowV2",
+      "PreviewAgentHandoffV2", "PreviewProjectGuideV1", "PreviewTerminalWritebackV2",
+      "RefreshGlobalOverviewV1", "RenamePlanV1", "RenameTaskV2", "ReopenPlanV1",
+      "ResetApplicationState", "ResetPreferences", "ResetWindowLayout", "ResizeTerminalV2",
+      "ResolveRecentProjectV1", "ResumePlanV1", "RollbackLinkedAgentLaunchV2", "ScheduleIssueV1",
+      "SearchV2", "SendAgentHandoffV2", "SetActivePlanV1", "SetAgentTaskOwnershipV2",
+      "SetAgentWorktreeV2",
+      "SetAutomaticUpdateChecks", "SetIssueTaskV1", "SetLayoutState", "SetPreferences",
+      "SetScratchpadV1", "SetTerminalWindowTab", "StartFirstTaskV1", "UpdateIssueV1",
+      "ValidateProjectTargetV1", "ValidateTerminalCWDsV2", "WriteTerminalMemoryV2",
     ]);
+  });
+
+  // Capability brokering moved to pam; the bridge must not route any of its
+  // old management or test commands.
+  it("no longer exposes the retired capability commands", () => {
+    for (const method of [
+      "DisableCapabilityV2", "EnableCapabilityV2", "ExpireCapabilityV2", "GetCapabilitiesV2",
+      "GetCapabilityAuditsV2", "PreviewCapabilityV2", "RemoveCapabilityV2", "SaveCapabilityV2",
+      "TestCapabilityV2",
+    ]) {
+      expect(COMMANDS).not.toContain(method);
+    }
+    expect(COMMANDS.filter((method) => method.includes("Capabilit"))).toEqual([]);
+  });
+
+  // The retired commands skipped the workspace generation fence (or had no
+  // caller at all); nothing may route them any more.
+  it("no longer exposes the retired generation-free commands", () => {
+    for (const method of [
+      "AddTask", "AddTaskNote", "AssociateAgentRunV2", "AssociateTerminalV2", "CloseTerminal",
+      "CreateTerminal", "GetAgentIntelligenceV2", "GetAgentRunsV2", "GetBoard", "GetBoardV2",
+      "GetRecentProjects", "MoveTask", "MoveTaskV2", "RenameTask", "ResizeTerminal",
+    ]) {
+      expect(COMMANDS).not.toContain(method);
+    }
+  });
+
+  it("routes plan reopen, the preview-bound delete, and set-active with their exact arguments", async () => {
+    const calls = [];
+    const target = { __TAURI_INTERNALS__: {}, navigator: { clipboard: {} } };
+    installTauriBridge(target, {
+      invoke: async (command, payload) => {
+        calls.push([command, payload]);
+        return { generation: 7 };
+      },
+      listen: vi.fn(),
+      clipboard: { readText: vi.fn(), writeText: vi.fn() },
+    });
+    await target.go.gui.App.ReopenPlanV1(7, 3);
+    await target.go.gui.App.DeletePlanV1(7, 3, true, "0123456789abcdef");
+    await target.go.gui.App.SetActivePlanV1(7, 0);
+    expect(calls).toEqual([
+      ["gui_invoke", { request: { method: "ReopenPlanV1", arguments: [7, 3] } }],
+      ["gui_invoke", {
+        request: { method: "DeletePlanV1", arguments: [7, 3, true, "0123456789abcdef"] },
+      }],
+      ["gui_invoke", { request: { method: "SetActivePlanV1", arguments: [7, 0] } }],
+    ]);
+  });
+
+  it("surfaces a refused event subscription instead of dropping it", async () => {
+    const failures = [];
+    const logged = [];
+    const target = {
+      __TAURI_INTERNALS__: {},
+      navigator: { clipboard: {} },
+      console: { error: (message) => logged.push(message) },
+      CustomEvent: class {
+        constructor(type, init) {
+          this.type = type;
+          this.detail = init.detail;
+        }
+      },
+      dispatchEvent: (event) => failures.push(event),
+    };
+    installTauriBridge(target, {
+      invoke: vi.fn(),
+      listen: (name) => (name === "sync:throws"
+        ? (() => { throw new Error("listen unavailable"); })()
+        : Promise.reject({ message: "event.listen not allowed" })),
+      clipboard: { readText: vi.fn(), writeText: vi.fn() },
+    });
+    const callback = vi.fn();
+    const unlisten = target.runtime.EventsOnMultiple("terminal:exit", callback, -1);
+    target.runtime.EventsOnMultiple("sync:throws", callback, -1);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(failures.map((event) => [event.type, event.detail])).toEqual([
+      ["ptrack:event-subscription-failed", { name: "terminal:exit", message: "event.listen not allowed" }],
+      ["ptrack:event-subscription-failed", { name: "sync:throws", message: "listen unavailable" }],
+    ]);
+    expect(logged).toEqual([
+      "p-track could not subscribe to terminal:exit: event.listen not allowed",
+      "p-track could not subscribe to sync:throws: listen unavailable",
+    ]);
+    expect(() => unlisten()).not.toThrow();
+    expect(callback).not.toHaveBeenCalled();
   });
 
   it("keeps a structured error's recovery payload on the normalized Error", async () => {
@@ -363,7 +443,7 @@ describe("Tauri compatibility bridge", () => {
     };
     const target = { __TAURI_INTERNALS__: {}, navigator: { clipboard } };
     installTauriBridge(target, { invoke, listen: vi.fn(), clipboard });
-    await expect(target.go.gui.App.GetBoardV2(7, 1)).rejects.toEqual(
+    await expect(target.go.gui.App.GetWorkspaceSnapshot(7, 1)).rejects.toEqual(
       new Error("backend failed"),
     );
     await expect(target.go.gui.App.PickProjectDirectory()).rejects.toEqual(

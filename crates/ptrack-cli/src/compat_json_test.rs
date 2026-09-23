@@ -55,6 +55,7 @@ fn empty_go_nil_slices_encode_as_null_while_derived_rows_can_remain_arrays() {
             actors: Vec::new(),
             stack: None,
             scratchpad: None,
+            summary_updated_at: None,
         },
         Vec::new(),
         Vec::new(),
@@ -90,10 +91,13 @@ fn plan_row_emits_null_claim_and_a_legacy_actor_sentinel() {
         hold_reason: None,
         claimed_by: None,
         actor: "legacy",
+        open_tasks: 2,
+        done_tasks: 1,
     };
     let encoded = serde_json::to_string(&unclaimed).expect("plan row json");
     assert!(encoded.contains("\"claimed_by\":null"));
     assert!(encoded.contains("\"actor\":\"legacy\""));
+    assert!(encoded.ends_with("\"open_tasks\":2,\"done_tasks\":1}"));
 
     let claimed = PlanRow {
         id: 1,
@@ -103,6 +107,8 @@ fn plan_row_emits_null_claim_and_a_legacy_actor_sentinel() {
         hold_reason: None,
         claimed_by: Some("01hzvyekq3s7m8w9x0abcdefgh"),
         actor: "01hzvyekq3s7m8w9x0abcdefgh",
+        open_tasks: 0,
+        done_tasks: 0,
     };
     let encoded = serde_json::to_string(&claimed).expect("plan row json");
     assert!(encoded.contains("\"claimed_by\":\"01hzvyekq3s7m8w9x0abcdefgh\""));
@@ -122,6 +128,7 @@ fn a_scanned_project_encodes_its_stack_as_structured_rows() {
         actors: Vec::new(),
         stack: None,
         scratchpad: None,
+        summary_updated_at: None,
     };
     meta.stack = Some(ptrack_core::StackProfile {
         projects: vec![ptrack_core::StackProject {
@@ -155,4 +162,52 @@ fn a_scanned_project_encodes_its_stack_as_structured_rows() {
     assert!(encoded.contains("\"files\":38"));
     assert!(encoded.contains("\"evidence\":[\"frontend/package.json\"]"));
     assert!(encoded.contains("\"stack_incomplete\":true"));
+}
+
+#[test]
+fn context_json_carries_the_mcp_notice_and_truncation_fields_last() {
+    let snapshot = ptrack_core::ProjectSnapshot::new(
+        ptrack_core::Meta {
+            goal: String::new(),
+            summary: String::new(),
+            active_plan: 0,
+            created_at: ptrack_core::Timestamp::Zero,
+            updated_at: ptrack_core::Timestamp::Zero,
+            format_version: 5,
+            last_write_version: String::new(),
+            active_plans: Vec::new(),
+            actors: Vec::new(),
+            stack: None,
+            scratchpad: None,
+            summary_updated_at: None,
+        },
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
+    let mut digest = ptrack_core::context(&snapshot);
+    digest.truncated = true;
+    digest.active_plan = Some(ptrack_core::PlanBrief {
+        id: 1,
+        title: "Build CLI".to_owned(),
+        open_tasks: Vec::new(),
+        open_tasks_more: 3,
+        hold_reason: None,
+        waiting_on: Vec::new(),
+    });
+    let encoded = serde_json::to_string(&DigestJson::from(&digest)).expect("digest json");
+    assert!(
+        encoded.contains("\"waiting_on\":null,\"open_tasks_more\":3}"),
+        "{encoded}"
+    );
+    let notice = serde_json::to_string(ptrack_core::UNTRUSTED_DATA_NOTICE).expect("notice");
+    assert!(
+        encoded.ends_with(&format!(
+            "\"stack_incomplete\":false,\"notice\":{notice},\"truncated\":true}}"
+        )),
+        "{encoded}"
+    );
 }

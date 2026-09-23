@@ -83,6 +83,37 @@ fn release_publication_rejects_go_zero_time_but_accepts_unix_epoch() {
     );
 }
 
+#[test]
+fn discovery_requires_an_exact_manifest_signature_asset() {
+    let current = parse_version("1.2.3", true).unwrap();
+    for os in ["linux", "windows", "darwin"] {
+        let target = Target {
+            os: os.to_owned(),
+            arch: "arm64".to_owned(),
+        };
+        for size in [None, Some(0), Some(63), Some(65)] {
+            assert_eq!(
+                select_candidate(
+                    &release_with_signature("", "2026-01-02T03:04:05Z", &target, size),
+                    current,
+                    &target,
+                )
+                .unwrap_err(),
+                UpdateError::InvalidSignature,
+                "{os} accepted signature size {size:?}"
+            );
+        }
+        assert!(
+            select_candidate(
+                &release_with_signature("", "2026-01-02T03:04:05Z", &target, Some(64)),
+                current,
+                &target,
+            )
+            .is_ok()
+        );
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn production_check_executes_fixed_headers_and_selects_exact_assets() {
     let target = Target {
@@ -98,7 +129,8 @@ async fn production_check_executes_fixed_headers_and_selects_exact_assets() {
         "published_at": "2026-01-02T03:04:05Z",
         "assets": [
             {"name": package, "browser_download_url": format!("https://github.com/ro-ag/ptrack/releases/download/v1.2.4/{package}"), "size": 123, "state": "uploaded"},
-            {"name": "checksums.txt", "browser_download_url": "https://github.com/ro-ag/ptrack/releases/download/v1.2.4/checksums.txt", "size": 80, "state": "uploaded"}
+            {"name": "checksums.txt", "browser_download_url": "https://github.com/ro-ag/ptrack/releases/download/v1.2.4/checksums.txt", "size": 80, "state": "uploaded"},
+            {"name": "checksums.txt.sig", "browser_download_url": "https://github.com/ro-ag/ptrack/releases/download/v1.2.4/checksums.txt.sig", "size": 64, "state": "uploaded"}
         ]
     })
     .to_string();
@@ -110,6 +142,8 @@ async fn production_check_executes_fixed_headers_and_selects_exact_assets() {
         .unwrap();
     assert_eq!(candidate.version, "1.2.4");
     assert_eq!(candidate.package.name, package);
+    assert_eq!(candidate.signature.name, "checksums.txt.sig");
+    assert_eq!(candidate.signature.size_bytes, 64);
     let request = request.await.unwrap().to_ascii_lowercase();
     assert!(request.contains("accept: application/vnd.github+json\r\n"));
     assert!(request.contains("user-agent: p-track-updater\r\n"));
@@ -169,17 +203,30 @@ fn release_with_publication(publication: &str, target: &Target) -> Vec<u8> {
 }
 
 fn release_fixture(body: &str, publication: &str, target: &Target) -> Vec<u8> {
+    release_with_signature(body, publication, target, Some(64))
+}
+
+fn release_with_signature(
+    body: &str,
+    publication: &str,
+    target: &Target,
+    signature_size: Option<i64>,
+) -> Vec<u8> {
     let package = package_name(target, "1.2.4").unwrap();
+    let mut assets = vec![
+        serde_json::json!({"name": package, "browser_download_url": format!("https://github.com/ro-ag/ptrack/releases/download/v1.2.4/{package}"), "size": 123, "state": "uploaded"}),
+        serde_json::json!({"name": "checksums.txt", "browser_download_url": "https://github.com/ro-ag/ptrack/releases/download/v1.2.4/checksums.txt", "size": 80, "state": "uploaded"}),
+    ];
+    if let Some(size) = signature_size {
+        assets.push(serde_json::json!({"name": "checksums.txt.sig", "browser_download_url": "https://github.com/ro-ag/ptrack/releases/download/v1.2.4/checksums.txt.sig", "size": size, "state": "uploaded"}));
+    }
     serde_json::to_vec(&serde_json::json!({
         "tag_name": "v1.2.4",
         "body": body,
         "draft": false,
         "prerelease": false,
         "published_at": publication,
-        "assets": [
-            {"name": package, "browser_download_url": format!("https://github.com/ro-ag/ptrack/releases/download/v1.2.4/{package}"), "size": 123, "state": "uploaded"},
-            {"name": "checksums.txt", "browser_download_url": "https://github.com/ro-ag/ptrack/releases/download/v1.2.4/checksums.txt", "size": 80, "state": "uploaded"}
-        ]
+        "assets": assets,
     }))
     .unwrap()
 }

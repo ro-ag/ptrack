@@ -74,3 +74,22 @@ fn the_bootstrap_lock_serializes_initializers_without_excluding_readers() {
     drop(acquire_bootstrap_lock(&temp.0).unwrap());
     drop(reader);
 }
+
+#[test]
+fn a_shared_lease_waits_out_a_brief_exclusive_holder_but_not_forever() {
+    let temp = Temp::new();
+    let exclusive = acquire_cutover_lock(&temp.0, CutoverLockMode::Exclusive).unwrap();
+    let start = std::time::Instant::now();
+    let error = acquire_cutover_lock(&temp.0, CutoverLockMode::Shared).unwrap_err();
+    assert!(error.to_string().contains("cutover lock is unavailable"));
+    assert!(start.elapsed() >= std::time::Duration::from_secs(4));
+    assert!(start.elapsed() < std::time::Duration::from_secs(15));
+
+    let releaser = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        drop(exclusive);
+    });
+    let shared = acquire_cutover_lock(&temp.0, CutoverLockMode::Shared).unwrap();
+    releaser.join().unwrap();
+    assert_eq!(shared.mode(), CutoverLockMode::Shared);
+}

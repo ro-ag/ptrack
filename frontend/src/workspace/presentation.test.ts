@@ -29,10 +29,13 @@ import {
   projectGuideRecoveryCopy,
   projectGuideReviewCopy,
   runtimeAssociationLabel,
-  runtimeCountLabel,
   runtimeEventIsCurrent,
   shortcutIntent,
   stackLanguageRows,
+  repositoryChips,
+  boardGridColumns,
+  collapsedLaneWidth,
+  shortenSummaryHashes,
   summaryShape,
   summaryShapeCaption,
   stackTiles,
@@ -58,29 +61,85 @@ it("flags a rolling summary that was written as a digest of notes", () => {
     "Agents finished. fullrun95new source-boundvalidatedexports+confirmedcloses",
   );
   expect(joined.problem).toBe("joined-tokens");
-  expect(summaryShapeCaption(joined)).toBe(
-    "Written as joined tokens, not sentences: one unbroken run of 44 characters.",
-  );
+  expect(summaryShapeCaption(joined)).toBe("Hard to scan: one unbroken run of 44 bytes");
+  // A full commit hash is shown shortened, so it is not words run together.
+  expect(
+    summaryShape("Schema landed in 3f2c9ab4e1d07a5b8c6f9e2d1a0b3c4d5e6f7a81 today.").problem,
+  ).toBe("");
 
   // A long stretch with no sentence end reads as a note dump.
   const unbroken = summaryShape("x ".repeat(220));
   expect(unbroken.problem).toBe("no-sentences");
-  expect(summaryShapeCaption(unbroken)).toBe(
-    "440 characters with no sentence break. Write 2-4 sentences.",
-  );
+  expect(summaryShapeCaption(unbroken)).toBe("No sentence breaks in 440 bytes");
 
   // Past the write bound, length is the part to fix first.
   const long = summaryShape("word. ".repeat(200));
   expect(long.problem).toBe("over-limit");
-  expect(summaryShapeCaption(long)).toBe(
-    "Too long to read at a glance: 1,200 characters, past the 1,000-byte limit. Write 2-4 sentences.",
-  );
+  expect(summaryShapeCaption(long)).toBe("Long summary: 1,200 of 1,000 bytes");
+  // Bytes, not characters: a multi-byte summary reports its UTF-8 size.
+  const wide = summaryShape("é. ".repeat(400));
+  expect(wide.characters).toBe(1200);
+  expect(summaryShapeCaption(wide)).toBe("Long summary: 1,600 of 1,000 bytes");
+  for (const caption of [joined, unbroken, long].map(summaryShapeCaption)) {
+    expect(caption).not.toMatch(/write|sentences\.|characters/i);
+  }
 
   // Short and unpunctuated is fine: it is not pretending to be a narrative.
   expect(summaryShape("Release staged, tag pending").problem).toBe("");
   expect(summaryShape("").problem).toBe("");
 });
 
+it("shortens full commit SHAs in a summary and keeps the full value", () => {
+  const sha = "0123456789abcdef0123456789abcdef01234567";
+  expect(shortenSummaryHashes(`Merged ${sha} into main.`)).toEqual([
+    { text: "Merged " },
+    { text: "0123456", full: sha },
+    { text: " into main." },
+  ]);
+  // Short SHAs and other hex are left alone.
+  expect(shortenSummaryHashes("Tagged 3aec094 and v0.40.1.")).toEqual([
+    { text: "Tagged 3aec094 and v0.40.1." },
+  ]);
+  expect(shortenSummaryHashes("")).toEqual([{ text: "" }]);
+});
+
+describe("board lane widths", () => {
+  it("gives every expanded lane the same share and collapsed lanes a wide rail", () => {
+    const template = boardGridColumns(["todo", "doing", "blocked", "done"], new Set(["todo", "doing"]));
+    expect(template).toBe("56px 56px minmax(214px, 1fr) minmax(214px, 1fr)");
+    expect(collapsedLaneWidth).toBeGreaterThanOrEqual(56);
+    // Equal flex: no expanded lane can outgrow another, whatever its card count.
+    const expanded = (template.match(/minmax\([^)]*\)|\d+px/g) ?? []).filter((track) => track !== "56px");
+    expect(expanded).toHaveLength(2);
+    expect(new Set(expanded).size).toBe(1);
+  });
+});
+
+describe("repository chips", () => {
+  const clean = {
+    branch: "main", staged: 0, unstaged: 0, untracked: 0, conflicted: 0,
+    upstream: "origin/main", ahead: 0, behind: 0,
+  };
+
+  it("collapses an all-zero tree to one Clean chip beside branch and upstream", () => {
+    expect(repositoryChips(clean, { ahead: 0, behind: 0 }, 0).map((chip) => chip.label))
+      .toEqual(["branch main", "upstream origin/main", "Clean"]);
+  });
+
+  it("shows only the counters that are not zero", () => {
+    const chips = repositoryChips({ ...clean, unstaged: 3, conflicted: 1 }, { ahead: 2, behind: 0 }, 2);
+    expect(chips.map((chip) => chip.label)).toEqual([
+      "branch main", "upstream origin/main", "unstaged 3", "conflicts 1", "ahead 2", "unpushed 2",
+    ]);
+    expect(chips.find((chip) => chip.label === "conflicts 1")?.tone).toBe("error");
+    expect(chips.some((chip) => / 0$/.test(chip.label))).toBe(false);
+  });
+
+  it("flags a branch with no upstream and never counts divergence without one", () => {
+    expect(repositoryChips({ ...clean, upstream: null, ahead: 4 }).map((chip) => chip.label))
+      .toEqual(["branch main", "no upstream", "Clean"]);
+  });
+});
 
 describe("workspace presentation policy", () => {
   it("formats release versions without inventing a development release", () => {
@@ -232,20 +291,13 @@ describe("workspace presentation policy", () => {
     expect(handoffPreviewResponseIsCurrent(7, association, null, 7)).toBe(false);
   });
 
-  it("labels exact runtime targets and separate live resource counts", () => {
+  it("labels exact runtime targets", () => {
     expect(runtimeAssociationLabel({ planId: 2, taskId: 9 })).toBe(
       "plan #2 · task #9",
     );
     expect(runtimeAssociationLabel({ planId: 2 })).toBe("plan #2");
     expect(runtimeAssociationLabel({})).toBe("project");
     expect(runtimeAssociationLabel(null)).toBe("unlinked");
-    expect(runtimeCountLabel(
-      [{ live: true }, { live: false }],
-      [{ live: true }, { live: false }, { live: false }],
-    )).toEqual({
-      compact: "1T · 1A",
-      detail: "1/2 live terminals · 1/3 live agents",
-    });
   });
 
   it("presents only allowlisted content-free agent intelligence", () => {
@@ -622,7 +674,10 @@ describe("workspace presentation policy", () => {
   });
 
   it("retains a successful section as stale when a partial refresh fails", () => {
-    const previous = { state: "ready", snapshot: { branch: "main" } };
+    const previous: { state: string; snapshot?: { branch: string }; error?: string } = {
+      state: "ready",
+      snapshot: { branch: "main" },
+    };
     expect(
       preserveSectionOnError(previous, { state: "error", error: "timed out" }),
     ).toEqual({
@@ -643,8 +698,10 @@ describe("workspace presentation policy", () => {
   it("routes primary-modifier chords to commands", () => {
     expect(commandShortcut({ key: "k", meta: true })).toBe("palette");
     expect(commandShortcut({ key: "K", ctrl: true })).toBe("palette");
-    expect(commandShortcut({ key: "1", meta: true })).toBe("board");
-    expect(commandShortcut({ key: "2", meta: true })).toBe("overview");
+    // Sidebar order: Overview, Board, Issues — the native View menu agrees.
+    expect(commandShortcut({ key: "1", meta: true })).toBe("overview");
+    expect(commandShortcut({ key: "2", meta: true })).toBe("board");
+    expect(commandShortcut({ key: "j", meta: true })).toBe("terminal");
     expect(commandShortcut({ key: "3", meta: true })).toBe("issues");
     expect(commandShortcut({ key: ",", meta: true })).toBe("settings");
     expect(commandShortcut({ key: ",", ctrl: true })).toBe("settings");

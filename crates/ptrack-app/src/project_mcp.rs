@@ -1,15 +1,16 @@
 use std::io::{Read, Write};
 
-use ptrack_capability::{
-    McpCancellation, McpServeOutcome, ToolCall, ToolDefinition, serve_mcp_with_tools,
+use ptrack_core::{
+    Digest, IssueLine, NextView, NoteTarget, TaskLine, UNTRUSTED_DATA_NOTICE, context,
 };
-use ptrack_core::{Digest, IssueLine, NextView, NoteTarget, TaskLine, context, next};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::mcp_transport::{
+    McpCancellation, McpOutcome, ToolCall, ToolDefinition, serve_mcp_with_tools,
+};
 use crate::{
-    AppError, AppResult, ApplicationPort, CapabilityMcpOutcome, Mutation, MutationResult,
-    complete_task,
+    AppError, AppResult, ApplicationPort, Mutation, MutationResult, complete_task, next_task,
 };
 
 const TOOL_GET_CONTEXT: &str = "get_context";
@@ -28,9 +29,9 @@ pub fn serve_project_mcp(
     input: Box<dyn Read + Send>,
     output: &mut dyn Write,
     cancellation: &McpCancellation,
-) -> AppResult<CapabilityMcpOutcome> {
+) -> AppResult<McpOutcome> {
     let tools = project_tool_definitions();
-    let outcome = serve_mcp_with_tools(
+    serve_mcp_with_tools(
         input,
         output,
         cancellation,
@@ -39,11 +40,7 @@ pub fn serve_project_mcp(
         &tools,
         |_, call| dispatch_tool(application, call),
     )
-    .map_err(|error| AppError::Message(error.to_string()))?;
-    Ok(match outcome {
-        McpServeOutcome::Complete => CapabilityMcpOutcome::Complete,
-        McpServeOutcome::Cancelled => CapabilityMcpOutcome::Cancelled,
-    })
+    .map_err(|error| AppError::Message(error.to_string()))
 }
 
 fn project_tool_definitions() -> Vec<ToolDefinition> {
@@ -136,7 +133,7 @@ fn dispatch_tool(application: &mut dyn ApplicationPort, call: ToolCall) -> AppRe
         TOOL_GET_NEXT_TASK => {
             decode_arguments::<EmptyArguments>(call.arguments, TOOL_GET_NEXT_TASK)?;
             Ok(next_value(
-                &next(&application.snapshot()?)
+                &next_task(&application.snapshot()?)
                     .map_err(|error| AppError::Message(error.to_string()))?,
             ))
         }
@@ -279,11 +276,14 @@ fn context_value(digest: &Digest) -> Value {
             "id": plan.id,
             "title": plan.title,
             "open_tasks": plan.open_tasks.iter().map(task_line_value).collect::<Vec<_>>(),
+            "open_tasks_more": plan.open_tasks_more,
             "hold_reason": plan.hold_reason,
             "waiting_on": plan.waiting_on
         })
     });
     json!({
+        "notice": UNTRUSTED_DATA_NOTICE,
+        "truncated": digest.truncated,
         "goal": digest.goal,
         "summary": digest.summary,
         "active_plan": active_plan,

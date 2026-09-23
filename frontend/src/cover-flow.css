@@ -74,13 +74,20 @@
 #welcome-panel .cover-freshness { display: block; font-size: 12px; line-height: 1.2; color: #aebed1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #welcome-panel .cover-metrics:empty { display: none; }
 #welcome-panel .project-card h3 { margin: 0 0 7px; font-size: clamp(24px, 2.4vw, 30px); line-height: 1.1; letter-spacing: -.04em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#welcome-panel .project-card .project-plan { margin: 0; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #b4c1d3; }
+#welcome-panel .project-card .project-plan { margin: 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #b4c1d3; }
 #welcome-panel .project-strip { position: relative; display: flex; overflow-x: auto; scroll-behavior: auto; gap: 6px; padding: 10px 14px; scrollbar-width: thin; }
 #welcome-panel .orbit-strip-item { flex: 0 0 auto; min-width: 0; max-width: 170px; }
 #welcome-panel .strip-item { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 38px; padding: 9px 11px; border-radius: 8px; box-shadow: none; }
-#welcome-panel .strip-item small { margin: 0; font-size: 12px; color: var(--accent); }
-#welcome-panel .strip-item strong { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#welcome-panel .strip-item.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, #121a28); }
+#welcome-panel .strip-item strong { min-width: 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The one selection style: the chosen row. Last opened is a text tag. */
+#welcome-panel .strip-item.active { border-color: rgba(95,175,255,.6); background: rgba(95,175,255,.1); }
+#welcome-panel .strip-meta { display: none; }
+#welcome-panel .last-opened-tag { flex: 0 0 auto; margin-left: auto; padding: 1px 6px; border: 1px solid var(--home-line); border-radius: 999px; color: var(--muted); font-size: 12px; font-weight: 500; line-height: 1.4; white-space: nowrap; }
+#welcome-panel .card-top .last-opened-tag { margin-left: 0; margin-right: auto; }
+/* Edge fades show that the chip strip scrolls further that way. */
+#welcome-panel .project-strip[data-overflow-end="true"] { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent); }
+#welcome-panel .project-strip[data-overflow-start="true"] { -webkit-mask-image: linear-gradient(to right, transparent, #000 40px); mask-image: linear-gradient(to right, transparent, #000 40px); }
+#welcome-panel .project-strip[data-overflow-start="true"][data-overflow-end="true"] { -webkit-mask-image: linear-gradient(to right, transparent, #000 40px, #000 calc(100% - 40px), transparent); mask-image: linear-gradient(to right, transparent, #000 40px, #000 calc(100% - 40px), transparent); }
 :root[data-reduced-motion="always"] #welcome-panel .project-card { transition: none; }
 @media (prefers-reduced-motion: reduce) {
   :root:not([data-reduced-motion="never"]) #welcome-panel .project-card { transition: none; }
@@ -107,8 +114,11 @@
   #welcome-panel .cover-metric strong { font-size: 18px; }
 }
 
-#welcome-panel .project-strip.is-list .strip-item { justify-content: flex-start; text-align: left; }
-#welcome-panel .project-strip.is-list .strip-item strong { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; font-size: 14px; }
+#welcome-panel .project-strip.is-list .strip-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; row-gap: 3px; column-gap: 10px; justify-content: stretch; text-align: left; }
+#welcome-panel .project-strip.is-list .strip-item strong { grid-column: 1; white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; font-size: 14px; }
+#welcome-panel .project-strip.is-list .strip-meta { grid-column: 1; display: flex; flex-wrap: wrap; gap: 2px 12px; min-width: 0; color: var(--muted); font-size: 12px; line-height: 1.4; }
+#welcome-panel .project-strip.is-list .strip-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+#welcome-panel .project-strip.is-list .last-opened-tag { grid-column: 2; grid-row: 1 / span 2; }
 #welcome-panel .selected-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 #welcome-panel .selected-heading h3 { min-width: 0; flex: 1; }
 #welcome-panel .selected-heading .orbit-selected-actions { flex: 0 0 auto; margin: 0; padding: 0; border: 0; }
@@ -158,10 +168,9 @@
 :root[data-theme="light"] #welcome-panel .selected-folder-details { border-top-color: var(--line); }
 :root[data-theme="light"] #welcome-panel .cover-cache-info { background: var(--surface-soft); border-color: var(--line); }
 :root[data-theme="light"] #welcome-panel .strip-item { background: var(--surface); color: var(--text); border-color: var(--line); }
-:root[data-theme="light"] #welcome-panel .strip-item small { color: color-mix(in srgb, var(--accent) 40%, #1a2230); }
 :root[data-theme="light"] #welcome-panel .strip-item.active {
-  background: color-mix(in srgb, var(--accent) 12%, #fff);
-  border-color: color-mix(in srgb, var(--accent) 60%, #77869b);
+  background: color-mix(in srgb, var(--info) 10%, #fff);
+  border-color: color-mix(in srgb, var(--info) 60%, #77869b);
 }
 :root[data-theme="light"] #welcome-panel .selected-update-meta,
 :root[data-theme="light"] #welcome-panel .selected-last-opened,

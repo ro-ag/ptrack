@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::io;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::profile::ProfileKind;
 use crate::pty::{PtyFactory, PtyProcess, StartRequest};
@@ -13,6 +13,7 @@ use crate::shell_integration::ShellIntegrationDescriptor;
 use crate::stream::StreamAttachRefusal;
 
 #[derive(Default)]
+#[allow(clippy::struct_excessive_bools)]
 struct FakeState {
     output: VecDeque<u8>,
     eof: bool,
@@ -25,6 +26,16 @@ struct FakeState {
     terminate_calls: usize,
     kill_calls: usize,
     close_calls: usize,
+    /// A background job keeps the slave open, so the leader's exit is not end
+    /// of file: output ends only when the PTY is closed, as on a real PTY.
+    background_job: bool,
+    /// The reader cannot be cancelled at all, even by closing the PTY.
+    stuck_reader: bool,
+    /// The leader ignores SIGTERM and only a kill ends it.
+    ignore_terminate: bool,
+    background_killed: bool,
+    reaped: bool,
+    signals_after_reap: usize,
 }
 
 #[derive(Default)]
@@ -55,8 +66,12 @@ impl FakeProcess {
     fn exit(&self, code: i32) {
         let mut state = self.state.lock().unwrap();
         state.exit = Some((code, None));
-        state.eof = true;
+        state.eof = !state.background_job && !state.stuck_reader;
         self.changed.notify_all();
+    }
+
+    fn configure(&self, change: impl FnOnce(&mut FakeState)) {
+        change(&mut self.state.lock().unwrap());
     }
 }
 
@@ -107,14 +122,20 @@ impl PtyProcess for FakeProcess {
             state = self.changed.wait(state).unwrap();
         }
         let (code, error) = state.exit.unwrap();
+        state.reaped = true;
         error.map_or(Ok(code), |kind| Err(io::Error::from(kind)))
     }
 
     fn terminate(&self) -> io::Result<()> {
         let mut state = self.state.lock().unwrap();
         state.terminate_calls += 1;
-        state.exit = Some((0, None));
-        state.eof = true;
+        if state.reaped {
+            state.signals_after_reap += 1;
+        }
+        if !state.ignore_terminate && state.exit.is_none() {
+            state.exit = Some((0, None));
+            state.eof = !state.background_job && !state.stuck_reader;
+        }
         self.changed.notify_all();
         Ok(())
     }
@@ -122,8 +143,15 @@ impl PtyProcess for FakeProcess {
     fn kill(&self) -> io::Result<()> {
         let mut state = self.state.lock().unwrap();
         state.kill_calls += 1;
-        state.exit = Some((1, None));
-        state.eof = true;
+        if state.reaped {
+            state.signals_after_reap += 1;
+        }
+        if state.exit.is_none() {
+            state.exit = Some((1, None));
+        }
+        // Killing the tree takes the background job with it.
+        state.background_killed = true;
+        state.eof = !state.stuck_reader;
         self.changed.notify_all();
         Ok(())
     }
@@ -131,7 +159,7 @@ impl PtyProcess for FakeProcess {
     fn close(&self) -> io::Result<()> {
         let mut state = self.state.lock().unwrap();
         state.close_calls += 1;
-        state.eof = true;
+        state.eof = !state.stuck_reader;
         self.changed.notify_all();
         Ok(())
     }
@@ -172,6 +200,10 @@ impl PtyProcess for SharedFake {
     }
     fn kill(&self) -> io::Result<()> {
         self.0.kill()
+    }
+    fn live_processes(&self) -> bool {
+        let state = self.0.state.lock().unwrap();
+        state.exit.is_none() || (state.background_job && !state.background_killed)
     }
     fn close(&self) -> io::Result<()> {
         self.0.close()
@@ -472,6 +504,7 @@ fn the_reclaim_window_restarts_on_release_and_expires_when_unclaimed() {
 
 #[test]
 fn graceful_and_force_close_use_distinct_paths() {
+    // A leader that honours SIGTERM is never killed by a graceful close.
     let (graceful, process, _) = harness(SessionOptions::default());
     graceful.start().unwrap();
     graceful.close(false).unwrap();
@@ -479,11 +512,103 @@ fn graceful_and_force_close_use_distinct_paths() {
     assert_eq!((state.terminate_calls, state.kill_calls), (1, 0));
     drop(state);
 
+    // Force always ends with the kill sweep, after a short SIGTERM grace.
     let (forced, process, _) = harness(SessionOptions::default());
     forced.start().unwrap();
     forced.close(true).unwrap();
     let state = process.state.lock().unwrap();
-    assert_eq!((state.terminate_calls, state.kill_calls), (0, 1));
+    assert_eq!((state.terminate_calls, state.kill_calls), (1, 1));
+}
+
+#[test]
+fn force_close_escalates_after_a_short_grace_and_graceful_waits_the_full_timeout() {
+    let options = SessionOptions {
+        graceful_timeout: Duration::from_millis(600),
+        ..SessionOptions::default()
+    };
+    let (forced, process, _) = harness(options);
+    process.configure(|state| state.ignore_terminate = true);
+    forced.start().unwrap();
+    let started = Instant::now();
+    forced.close(true).unwrap();
+    assert!(started.elapsed() < Duration::from_millis(500));
+    assert_eq!(process.state.lock().unwrap().kill_calls, 1);
+
+    let (graceful, process, _) = harness(options);
+    process.configure(|state| state.ignore_terminate = true);
+    graceful.start().unwrap();
+    let started = Instant::now();
+    graceful.close(false).unwrap();
+    assert!(started.elapsed() >= Duration::from_millis(600));
+    assert_eq!(process.state.lock().unwrap().kill_calls, 1);
+}
+
+#[test]
+fn an_exit_is_recorded_while_a_background_job_holds_the_slave_open() {
+    let (session, process, _) = harness(SessionOptions::default());
+    process.configure(|state| state.background_job = true);
+    let exits = session.take_exit_results().unwrap();
+    session.start().unwrap();
+    process.exit(4);
+    // End of file never comes on its own; the drain window closes the PTY,
+    // which cancels the reader, and the exit is delivered anyway.
+    let result = exits.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_eq!(result.exit_code, 4);
+    assert_eq!(result.state, SessionState::Exited);
+    let started = Instant::now();
+    session.close(false).unwrap();
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert_eq!(process.state.lock().unwrap().close_calls, 1);
+}
+
+#[test]
+fn closing_a_shell_with_a_background_job_never_hangs() {
+    for force in [false, true] {
+        let (session, process, _) = harness(SessionOptions::default());
+        process.configure(|state| state.background_job = true);
+        session.start().unwrap();
+        let started = Instant::now();
+        session.close(force).unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "close(force = {force}) took {:?}",
+            started.elapsed()
+        );
+        assert_eq!(session.state(), SessionState::Closed);
+        assert!(process.state.lock().unwrap().kill_calls >= 1);
+    }
+}
+
+#[test]
+fn a_reader_that_cannot_be_cancelled_is_detached_not_joined_forever() {
+    let (session, process, _) = harness(SessionOptions::default());
+    process.configure(|state| state.stuck_reader = true);
+    session.start().unwrap();
+    let started = Instant::now();
+    session.close(true).unwrap();
+    assert!(started.elapsed() < Duration::from_secs(4));
+    assert_eq!(session.state(), SessionState::Closed);
+}
+
+#[test]
+fn a_reaped_leader_is_never_signalled_by_a_later_close() {
+    for force in [false, true] {
+        let (session, process, _) = harness(SessionOptions::default());
+        let exits = session.take_exit_results().unwrap();
+        session.start().unwrap();
+        process.exit(0);
+        exits.recv_timeout(Duration::from_secs(1)).unwrap();
+        for _ in 0..200 {
+            if process.state.lock().unwrap().close_calls == 1 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        session.close(force).unwrap();
+        let state = process.state.lock().unwrap();
+        assert_eq!(state.signals_after_reap, 0, "force = {force}");
+        assert_eq!(state.close_calls, 1);
+    }
 }
 
 #[test]
@@ -521,4 +646,149 @@ fn association_changes_are_revision_fenced_and_live_fenced() {
     thread::sleep(Duration::from_millis(30));
     assert!(session.with_live_association(1, |_| ()).is_err());
     session.close(false).unwrap();
+}
+
+/// A real shell with a job-control background job that holds the slave open.
+/// Returns the running session, its exit receiver, and the job's pid.
+#[cfg(unix)]
+fn native_shell_with_background_job() -> (
+    Arc<Session>,
+    std::sync::mpsc::Receiver<crate::session::ExitResult>,
+    rustix::process::Pid,
+) {
+    let path = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_owned());
+    let session = Session::new_with_options(
+        StartRequest {
+            executable: "/bin/sh".to_owned(),
+            args: vec!["-i".to_owned()],
+            env: vec![
+                format!("PATH={path}"),
+                "TERM=dumb".to_owned(),
+                "PS1=$ ".to_owned(),
+                "ENV=/dev/null".to_owned(),
+            ],
+            cwd: std::env::temp_dir(),
+            rows: 24,
+            columns: 80,
+        },
+        SessionMetadata {
+            id: "native".to_owned(),
+            profile_id: "shell".to_owned(),
+            profile_kind: ProfileKind::Shell,
+            provider: String::new(),
+            cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+            shell_integration: ShellIntegrationDescriptor::none(),
+        },
+        Arc::new(crate::pty::NativePtyFactory),
+        SessionOptions::default(),
+    );
+    let exits = session.take_exit_results().unwrap();
+    session.start().unwrap();
+    let mut attachment = session.attach_output(0).unwrap();
+    session
+        // Interactive bash history-expands the `!` in `$!` for the whole
+        // line, so expansion is switched off on a line of its own first.
+        .write_input(
+            attachment.lease,
+            b"set +H 2>/dev/null\nsleep 30 & echo \"bg=[$!]\"\n",
+        )
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut output = String::from_utf8_lossy(&attachment.replay).into_owned();
+    let pid = loop {
+        // The echoed command line holds the literal `$!`; only the expanded
+        // line carries digits between the brackets.
+        if let Some(pid) = output.split("bg=[").skip(1).find_map(|rest| {
+            rest.split(']')
+                .next()
+                .and_then(|digits| digits.parse::<i32>().ok())
+        }) {
+            break rustix::process::Pid::from_raw(pid).unwrap();
+        }
+        assert!(Instant::now() < deadline, "no background pid in {output:?}");
+        match attachment.live.try_recv() {
+            Ok(chunk) => output.push_str(&String::from_utf8_lossy(&chunk)),
+            Err(_) => thread::sleep(Duration::from_millis(10)),
+        }
+    };
+    assert!(rustix::process::test_kill_process(pid).is_ok());
+    assert!(session.release_output(attachment.lease));
+    (session, exits, pid)
+}
+
+#[cfg(unix)]
+fn assert_process_gone(pid: rustix::process::Pid) {
+    // Killed, the job is a zombie until the reaper collects it.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while rustix::process::test_kill_process(pid).is_ok() {
+        assert!(Instant::now() < deadline, "background job {pid:?} survived");
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn native_close_with_a_background_job_returns_and_ends_the_job() {
+    for force in [false, true] {
+        let (session, _exits, job) = native_shell_with_background_job();
+        let started = Instant::now();
+        session.close(force).unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "close(force = {force}) took {:?}",
+            started.elapsed()
+        );
+        assert_eq!(session.state(), SessionState::Closed);
+        assert_process_gone(job);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn native_exit_with_a_background_job_is_recorded_and_close_ends_the_job() {
+    let (session, exits, job) = native_shell_with_background_job();
+    let attachment = session.attach_output(0).unwrap();
+    session.write_input(attachment.lease, b"exit\n").unwrap();
+    // Keep rendering: a shell restoring its terminal modes on exit waits for
+    // its output to drain, exactly as it would behind a real renderer.
+    let mut attachment = attachment;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let result = loop {
+        while attachment.live.try_recv().is_ok() {}
+        if let Ok(result) = exits.try_recv() {
+            break result;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the exit must be recorded although the job holds the slave"
+        );
+        thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(result.state, SessionState::Exited);
+    let started = Instant::now();
+    session.close(false).unwrap();
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert_process_gone(job);
+}
+
+#[test]
+fn an_attachment_reports_the_sequence_its_replay_actually_resumes_from() {
+    let options = SessionOptions {
+        replay_buffer_bytes: 4,
+        ..SessionOptions::default()
+    };
+    let (session, process, _) = harness(options);
+    session.start().unwrap();
+    process.output(b"abcdef");
+    wait_for_output(&session, 6);
+    // A mint clamped to 2 is stale once more output wrapped the buffer.
+    let attachment = session.attach_output(1).unwrap();
+    assert!(attachment.gap);
+    assert_eq!(attachment.resumed, 2);
+    assert_eq!(attachment.replay, b"cdef");
+    assert!(session.release_output(attachment.lease));
+    let exact = session.attach_output(3).unwrap();
+    assert!(!exact.gap);
+    assert_eq!(exact.resumed, 3);
+    session.close(true).unwrap();
 }

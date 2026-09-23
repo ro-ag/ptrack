@@ -1,9 +1,9 @@
 use ptrack_app::{Mutation, MutationResult};
-use ptrack_core::{IssueStatus, MilestoneStatus, NoteTarget, PlanStatus, TaskStatus};
+use ptrack_core::{IssueStatus, MilestoneStatus, NoteTarget, TaskStatus};
 
 use crate::input::Key;
 use crate::model::{
-    AgentPane, BOARD_STATUSES, Effect, InputPurpose, Model, PaneFocus, Success, Tab,
+    AgentPane, BOARD_STATUSES, Effect, InputPurpose, Model, PaneFocus, Success, Tab, UiClose,
 };
 
 const MENU_LEN: usize = 13;
@@ -547,13 +547,10 @@ fn update_overview(model: &mut Model, key: &Key) -> Option<Effect> {
         }
         Key::Char('x') => {
             if let Some(id) = model.current_plan().map(|plan| plan.id) {
-                return mutate!(
-                    Mutation::SetPlanStatus {
-                        id,
-                        status: PlanStatus::Done,
-                    },
-                    Success::Message("plan done".to_owned()),
-                );
+                return Some(Effect::Close {
+                    target: UiClose::Plan(id),
+                    success: Success::Message("plan done".to_owned()),
+                });
             }
         }
         Key::Char('s') => return set_task(model, TaskStatus::Doing, "task started"),
@@ -587,10 +584,18 @@ fn set_task(model: &mut Model, status: TaskStatus, message: &str) -> Option<Effe
         "no task selected".clone_into(&mut model.status);
         return None;
     };
-    mutate!(
-        Mutation::SetTaskStatus { id, status },
-        Success::Message(message.to_owned()),
-    )
+    task_status_effect(id, status, Success::Message(message.to_owned()))
+}
+
+/// A status change, except that `done` goes through the recorded human close.
+fn task_status_effect(id: u64, status: TaskStatus, success: Success) -> Option<Effect> {
+    if status == TaskStatus::Done {
+        return Some(Effect::Close {
+            target: UiClose::Task(id),
+            success,
+        });
+    }
+    mutate!(Mutation::SetTaskStatus { id, status }, success)
 }
 
 fn update_board(model: &mut Model, key: &Key) -> Option<Effect> {
@@ -647,8 +652,9 @@ fn move_card(model: &mut Model, right: bool) -> Option<Effect> {
     };
     let column = column.filter(|column| *column < BOARD_STATUSES.len())?;
     let status = BOARD_STATUSES[column];
-    mutate!(
-        Mutation::SetTaskStatus { id, status },
+    task_status_effect(
+        id,
+        status,
         Success::MovedCard {
             message: format!("moved #{id} → {status}"),
             column,

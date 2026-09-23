@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="Reference for every p-track CLI command, JSON-capable read command, TUI screen, and Desktop command palette behavior.">
+    <meta name="description" content="Reference for every p-track CLI command, JSON-capable read command, TUI screen, and Desktop search behavior.">
     <meta name="ptrack-version" content="0.40.1">
     <title>Reference · p-track Help Center</title>
     <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
@@ -53,7 +53,7 @@
       <div class="article-layout">
         <article class="article">
           <p class="eyebrow">Command and interface reference</p>
-          <h1>CLI, TUI, and command palette</h1>
+          <h1>CLI, TUI, and Desktop search</h1>
           <p class="lede">Use this page to find a command family or terminal-interface action. Run <code>ptrack &lt;command&gt; --help</code>, and then the relevant subcommand with <code>--help</code>, for authoritative arguments and flags in your installed version.</p>
 
           <h2 id="cli-commands">CLI commands</h2>
@@ -65,26 +65,27 @@
                 <tr><td><code>goal</code></td><td><code>show</code>, <code>set &lt;text…&gt;</code></td><td>Read or replace the north-star goal.</td></tr>
                 <tr><td><code>summary</code></td><td><code>show</code>, <code>set &lt;text…&gt;</code></td><td>Read or replace the rolling project summary.</td></tr>
                 <tr><td><code>milestone</code> / <code>ms</code></td><td><code>add</code>, <code>list</code>, <code>show</code>, <code>done</code>, <code>open</code>, <code>due</code>, <code>rename</code></td><td><code>add --due YYYY-MM-DD</code>; <code>due &lt;id&gt; &lt;YYYY-MM-DD&gt;</code>.</td></tr>
-                <tr><td><code>plan</code></td><td><code>add</code>, <code>list</code>, <code>show</code>, <code>done</code>, <code>use</code>, <code>rename</code>, <code>delete</code>, <code>move</code>, <code>copy</code>, <code>dep</code>, <code>hold</code>, <code>resume</code></td><td><code>add --milestone &lt;id&gt;</code> appends an "Integrate and verify" task (<code>--no-verify-task</code> skips it). <code>done</code> refuses while tasks are open (<code>--force</code> overrides, recorded) and prints the checkpoint block. <code>use</code> sets the CLI active plan. <code>hold &lt;id&gt; &lt;reason&#8230;&gt;</code> pauses a plan; <code>resume &lt;id&gt;</code> clears the hold. <code>delete &lt;id&gt; --force</code>, <code>move &lt;id&gt; --to &lt;project&gt; [--as "&lt;title&gt;"]</code>, and <code>copy &lt;id&gt; [--to &lt;project&gt;] [--as "&lt;title&gt;"]</code> are covered below, as is <code>dep add|remove|list</code>.</td></tr>
-                <tr><td><code>task</code></td><td><code>add</code>, <code>list</code>, <code>show</code>, <code>start</code>, <code>done</code>, <code>block</code>, <code>rename</code>, <code>move</code>, <code>convert</code> / <code>promote</code>, <code>dep</code>, <code>hold</code>, <code>resume</code></td><td><code>add --plan &lt;id&gt;</code>; <code>done &lt;id&gt; --summary "&#8230;"</code> requires the summary and a linked commit; <code>add</code>/<code>start</code> refuse while another started task is unfinished (<code>--force</code> overrides, recorded); <code>list --plan &lt;id&gt; --status todo,doing,done,blocked</code>; <code>move &lt;id&gt; --plan &lt;id&gt;</code>; <code>hold &lt;id&gt; &lt;reason&#8230;&gt;</code> and <code>resume &lt;id&gt;</code>; <code>dep add|remove|list</code> is covered below.</td></tr>
+                <tr><td><code>plan</code></td><td><code>add</code>, <code>list</code>, <code>show</code>, <code>done</code>, <code>use</code>, <code>rename</code>, <code>delete</code>, <code>move</code>, <code>copy</code>, <code>dep</code>, <code>hold</code>, <code>resume</code></td><td><code>add --milestone &lt;id&gt;</code> appends an "Integrate and verify" task (<code>--no-verify-task</code> skips it). <code>done</code> refuses while tasks are open (<code>--force</code> overrides, recorded) and prints the checkpoint block. <code>list</code> shows each plan's open and done task counts. <code>use</code> sets the CLI active plan (choosing a plan in the Desktop sidebar does the same). <code>hold &lt;id&gt; &lt;reason&#8230;&gt;</code> pauses a plan; <code>resume &lt;id&gt;</code> clears the hold. <code>delete &lt;id&gt; --force</code>, <code>move &lt;id&gt; --to &lt;project&gt; [--as "&lt;title&gt;"]</code>, and <code>copy &lt;id&gt; [--to &lt;project&gt;] [--as "&lt;title&gt;"]</code> are covered below, as is <code>dep add|remove|list</code>.</td></tr>
+                <tr><td><code>task</code></td><td><code>add</code>, <code>list</code>, <code>show</code>, <code>start</code>, <code>done</code>, <code>block</code>, <code>rename</code>, <code>move</code>, <code>convert</code> / <code>promote</code>, <code>dep</code>, <code>hold</code>, <code>resume</code></td><td><code>add --plan &lt;id&gt;</code>; <code>done &lt;id&gt; --summary "&#8230;"</code> requires the summary and a linked commit; <code>add</code>/<code>start</code> refuse while another started, unheld task is unfinished (<code>--force</code> overrides, recorded); <code>block &lt;id&gt; [reason&#8230;]</code> records the optional reason as a task note; <code>list --plan &lt;id&gt; --status todo,doing,done,blocked</code>; <code>move &lt;id&gt; --plan &lt;id&gt;</code>; <code>hold &lt;id&gt; &lt;reason&#8230;&gt;</code> parks started work without counting against the in-progress gate, and <code>resume &lt;id&gt;</code> clears it; <code>dep add|remove|list</code> is covered below.</td></tr>
                 <tr><td><code>issue</code></td><td><code>add</code>, <code>list</code>, <code>show</code>, <code>edit</code>, <code>close</code>, <code>open</code>, <code>severity</code>, <code>rename</code>, <code>schedule</code>, <code>link</code>, <code>unlink</code></td><td><code>add --severity --task --body</code>; <code>edit &lt;id&gt; --title --body --severity --status</code>; <code>schedule &lt;id&gt; --plan &lt;id&gt; [--title text]</code>; <code>link &lt;id&gt; --task &lt;id&gt;</code>; <code>unlink &lt;id&gt;</code>. Unscheduled issues remain triage context, not next work.</td></tr>
                 <tr><td><code>note</code></td><td><code>add</code>, <code>list</code></td><td><code>add --plan &lt;id&gt;</code> or <code>--task &lt;id&gt;</code>; <code>list --plan --task --limit</code>.</td></tr>
-                <tr><td><code>commit</code></td><td><code>add</code>, <code>record</code>, <code>list</code>, <code>show</code></td><td><code>add --plan --task</code>; <code>record --sha --subject</code>; <code>list --plan --task</code>; <code>show --stat</code>.</td></tr>
-                <tr><td><code>hook</code></td><td><code>install</code>, <code>uninstall</code>, <code>status</code></td><td>Manage the repository hook integration.</td></tr>
+                <tr><td><code>commit</code></td><td><code>add</code>, <code>record</code>, <code>list</code>, <code>show</code></td><td><code>add --plan --task</code>; <code>record --sha --subject</code>; <code>list --plan --task</code>; <code>show --stat</code>. A SHA must be 4 to 64 hexadecimal digits.</td></tr>
+                <tr><td><code>hook</code></td><td><code>install</code>, <code>uninstall</code>, <code>status</code></td><td>Manage the repository hook integration. Follows <code>core.hooksPath</code>; refuses a hooks directory outside the project and a hook written for another interpreter.</td></tr>
                 <tr><td><code>config</code></td><td><code>set user &lt;name&gt;</code>, <code>show</code></td><td>Mint or rename the per-machine identity used for plan claims (<code>set</code> requires a name).</td></tr>
-                <tr><td><code>context</code></td><td>Print a bounded resume digest.</td><td>Use at the start of a work session.</td></tr>
+                <tr><td><code>context</code></td><td>Print a bounded resume digest.</td><td>Use at the start of a work session. Fields and the whole digest are capped, likely credentials are redacted, and the digest opens with a notice that it is untrusted project data.</td></tr>
                 <tr><td><code>guide</code></td><td>Install or refresh managed agent guidance.</td><td><code>--print</code> writes the guide to standard output instead of files.</td></tr>
-                <tr><td><code>next</code></td><td>Choose the next actionable task in the active plan.</td><td>Read-only orientation; led by the goal line.</td></tr>
+                <tr><td><code>next</code></td><td>Choose the next actionable task in the active plan.</td><td>Read-only orientation; led by the goal line. Defers the plan's <em>Integrate and verify</em> task until its other work is done.</td></tr>
                 <tr><td><code>agent list|show|inbox</code></td><td>Inspect bounded live runs, inferred intelligence, and pending handoffs.</td><td>Reads the active project's coordination host; every command accepts <code>--json</code>.</td></tr>
                 <tr><td><code>mcp</code></td><td>Serve project-planning MCP tools over standard input and output.</td><td>Launch with the project directory as the working directory; exposes <code>get_context</code>, <code>get_next_task</code>, <code>complete_task</code>, and <code>add_note</code>.</td></tr>
                 <tr><td><code>checkpoint</code></td><td>Print the whole-picture re-evaluation block.</td><td>Goal, summary, open plans, open issues; also printed after <code>plan done</code>.</td></tr>
-                <tr><td><code>search &lt;term&gt;</code></td><td>Search project records.</td><td>Requires one search term.</td></tr>
+                <tr><td><code>search &lt;term&gt;</code></td><td>Search project records.</td><td>Requires one search term. Note matches show a one-line snippet of at most 120 characters; no matches prints nothing.</td></tr>
                 <tr><td><code>board</code></td><td>Render the board or open its Desktop form.</td><td><code>--plan &lt;id&gt;</code>, <code>--gui</code>.</td></tr>
                 <tr><td><code>gui [PATH]</code></td><td>Open p-track Desktop.</td><td>Optional project path.</td></tr>
                 <tr><td><code>status</code></td><td>Show storage and project status.</td><td>Read-only.</td></tr>
                 <tr><td><code>projects</code></td><td>List known projects.</td><td>Read-only.</td></tr>
                 <tr><td><code>backup</code></td><td>Create a database backup copy.</td><td>No restore subcommand is provided.</td></tr>
                 <tr><td><code>version</code></td><td>Print the installed version.</td><td>No project required.</td></tr>
+                <tr><td><code>capability</code></td><td>Retired.</td><td>Capability brokering moved to pam; the command prints a <a href="../agents-and-capabilities/#capability-model">pointer to pam</a> and exits with an error.</td></tr>
               </tbody>
             </table>
           </div>
@@ -124,6 +125,7 @@
               </tbody>
             </table>
           </div>
+          <p>The TUI is a human surface: finishing a task from it does not require a closeout summary or linked commit, and finishing a plan does not require every task to be done. When evidence is missing or tasks remain open, p-track records an override note naming the TUI and what was missing, in the same write as the status change.</p>
           <h3>Screen-specific keys</h3>
           <ul>
             <li><strong>Overview:</strong> <kbd>←</kbd>/<kbd>h</kbd> and <kbd>→</kbd>/<kbd>l</kbd> switch plan/task pane; <kbd>↑</kbd>/<kbd>k</kbd> and <kbd>↓</kbd>/<kbd>j</kbd> select; <kbd>a</kbd> add; <kbd>n</kbd> note; <kbd>u</kbd> activate plan; <kbd>x</kbd> finish plan; <kbd>s</kbd>/<kbd>d</kbd>/<kbd>b</kbd> start/finish/block task; <kbd>M</kbd> move; <kbd>P</kbd> convert.</li>
@@ -133,13 +135,13 @@
             <li><strong>Maintenance:</strong> uses the global navigation, reload, backup, menu, and quit keys.</li>
           </ul>
 
-          <h2 id="command-palette">Desktop command palette</h2>
-          <p>Open the palette with <kbd>Cmd+K</kbd> on macOS or <kbd>Ctrl+K</kbd> elsewhere. It is a project search surface, <strong>not a command launcher</strong>. It performs a case-insensitive substring search over plan titles, task titles, and note bodies in the current workspace, returns at most 50 results, and groups them Plans → Tasks → Notes.</p>
+          <h2 id="command-palette">Desktop search</h2>
+          <p>Open <strong>Search Plans, Tasks, and Notes</strong> with <kbd>Cmd+K</kbd> on macOS or <kbd>Ctrl+K</kbd> elsewhere, or from the View menu. It is a project search surface, <strong>not a command launcher</strong>. It performs a case-insensitive substring search over plan titles, task titles, and note bodies in the current workspace, returns at most 50 results, and groups them Plans → Tasks → Notes.</p>
           <p>Use <kbd>↑</kbd>/<kbd>↓</kbd> to select, <kbd>Enter</kbd> to open, and <kbd>Esc</kbd> to close. A plan result opens that plan's Board snapshot. A task result opens its plan's Board and task drawer. A note result opens Overview, where Recent memory is shown.</p>
           <figure class="screenshot-pair">
             <img class="screenshot-dark" src="../assets/screenshots/project-search-dark.png" width="1552" height="1012" loading="lazy" decoding="async" alt="Dark p-track command palette matching a recovery query to one task and one note">
             <img class="screenshot-light" src="../assets/screenshots/project-search-light.png" width="1552" height="1012" loading="lazy" decoding="async" alt="Light p-track command palette showing the same project task and note results">
-            <figcaption>The Desktop palette searches project context only; Help Center search remains a separate surface.</figcaption>
+            <figcaption>Desktop search covers project context only; Help Center search remains a separate surface.</figcaption>
           </figure>
 
           <h2 id="shortcut-reference">Keyboard shortcut reference</h2>
@@ -152,7 +154,7 @@
             <li><a href="#cli-commands">CLI commands</a></li>
             <li><a href="#json-output">JSON output</a></li>
             <li><a href="#tui-screens">TUI screens</a></li>
-            <li><a href="#command-palette">Command palette</a></li>
+            <li><a href="#command-palette">Desktop search</a></li>
             <li><a href="#shortcut-reference">Keyboard shortcuts</a></li>
           </ul>
         </aside>

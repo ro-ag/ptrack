@@ -71,15 +71,23 @@ A — direct store-to-store; no intermediate file format).
 - Copy phase (both move and copy): in a single write transaction on the
   target store, remint sequential IDs for the plan and every child, remap all
   references (task.plan_id, note targets, issue↔task links, commit-record
-  plan/task ids), and insert. The plan arrives unclaimed (claim_owner None,
+  plan/task ids), and insert. Dependency edges to plans or tasks outside the
+  subtree survive only a copy within the same store, and only when the record
+  they name still exists; every cross-store copy or move drops them, because a
+  small sequential ID in the target would name an unrelated record. Edges
+  between tasks of the subtree are remapped. The plan arrives unclaimed (claim_owner None,
   claim_epoch 0). Hold reasons travel. The milestone link is dropped (a
   milestone is a source-project grouping). `--as` replaces the title at
   insert time.
 - Issues follow their task: a moved task's linked issue moves with it; a
   copied task's issue is duplicated into the target.
-- Commit records travel with the plan on move and are duplicated on copy;
-  their git SHAs are foreign context in the target project but remain useful
-  audit history.
+- A commit's SHA is its natural key in a store. On a cross-store move or copy,
+  commit records travel with the plan and link to the reminted tasks; their
+  git SHAs are foreign context in the target project but remain useful audit
+  history. A commit whose SHA the target already holds is left as it is rather
+  than duplicated. A same-store copy therefore shares the source's commit
+  records: the copy gains no commit records of its own, and the commits stay
+  linked to the original tasks.
 - Delete phase (move only): only after the target transaction has committed
   does the source store run the delete cascade (same code path as
   `plan delete`, without the `--force` ceremony — the move already succeeded).
@@ -118,6 +126,22 @@ Plan context menu (sidebar and board header): Rename, Delete, Move, Copy.
   refusals and guard errors surface in the dialog as the store's own message.
 - These are the GUI's first plan-level content mutations; they reuse the
   existing desktop runtime mutation plumbing (agent-task-ownership precedent).
+
+## Amendments (2026-09-22)
+
+- A done plan can be reopened from the plan context menu (**Reopen plan**,
+  desktop command `ReopenPlanV1`); it returns to active under the normal claim
+  gate. This is the way back from a plan closed too early, including by the
+  closeout prompt that appears when its last task finishes.
+- A desktop delete is bound to the preview it confirms: `DeletePlanV1` carries
+  the preview's revision and refuses when the plan changed after the preview,
+  so the confirmed counts are the ones deleted.
+- Desktop delete and move refuse while a live terminal or agent run is linked
+  to the plan or to any of its tasks, the same check a task move applies.
+- A finished plan refuses new open work: adding or moving an open task into a
+  done or archived plan fails until the plan is reopened.
+- The move-phase delete runs only when the recomputed cascade is exactly the
+  exported subtree, so it never removes a record the target did not receive.
 
 ## Testing
 

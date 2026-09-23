@@ -14,9 +14,9 @@ use ptrack_terminal::{
 
 use super::terminal_runtime::{
     PreparedTerminalIdentity, TerminalEventSink, TerminalExitV2, TerminalIdentityAuthority,
-    TerminalRuntime, TerminalRuntimeConfig, TerminalStatusV2, revoke_prepared_tokens,
+    TerminalRuntime, TerminalRuntimeConfig, TerminalStatusV2,
 };
-use crate::AppResult;
+use crate::{AppResult, ProductionTerminalIdentityAuthority};
 
 struct TempDirectory(PathBuf);
 
@@ -63,6 +63,7 @@ impl PtyProcess for TestProcess {
         while !state.exited && !state.closed {
             state = self.changed.wait(state).unwrap();
         }
+        drop(state);
         Ok(0)
     }
 
@@ -85,6 +86,7 @@ impl PtyProcess for TestProcess {
     fn terminate(&self) -> io::Result<()> {
         let mut state = self.state.lock().unwrap();
         state.exited = true;
+        drop(state);
         self.changed.notify_all();
         Ok(())
     }
@@ -93,6 +95,7 @@ impl PtyProcess for TestProcess {
         let mut state = self.state.lock().unwrap();
         state.exited = true;
         state.killed = true;
+        drop(state);
         self.changed.notify_all();
         Ok(())
     }
@@ -100,6 +103,7 @@ impl PtyProcess for TestProcess {
     fn close(&self) -> io::Result<()> {
         let mut state = self.state.lock().unwrap();
         state.closed = true;
+        drop(state);
         self.changed.notify_all();
         Ok(())
     }
@@ -160,6 +164,48 @@ impl PtyProcess for KillErrorProcess {
         Err(io::Error::other("forced cleanup failed"))
     }
     fn close(&self) -> io::Result<()> {
+        self.0.close()
+    }
+}
+
+/// A PTY whose teardown blocks for a while, like a close waiting out a
+/// process escalation.
+#[derive(Default)]
+struct SlowCloseFactory;
+
+impl PtyFactory for SlowCloseFactory {
+    fn start(&self, _request: StartRequest) -> io::Result<Box<dyn PtyProcess>> {
+        Ok(Box::new(SlowCloseProcess::default()))
+    }
+}
+
+#[derive(Default)]
+struct SlowCloseProcess(TestProcess);
+
+impl PtyProcess for SlowCloseProcess {
+    fn pid(&self) -> u32 {
+        self.0.pid()
+    }
+    fn read(&self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.0.read(buffer)
+    }
+    fn write(&self, buffer: &[u8]) -> io::Result<usize> {
+        self.0.write(buffer)
+    }
+    fn resize(&self, rows: u16, columns: u16) -> io::Result<()> {
+        self.0.resize(rows, columns)
+    }
+    fn wait(&self) -> io::Result<i32> {
+        self.0.wait()
+    }
+    fn terminate(&self) -> io::Result<()> {
+        self.0.terminate()
+    }
+    fn kill(&self) -> io::Result<()> {
+        self.0.kill()
+    }
+    fn close(&self) -> io::Result<()> {
+        std::thread::sleep(Duration::from_millis(600));
         self.0.close()
     }
 }
@@ -354,17 +400,17 @@ fn agent_profile(root: &Path) -> Profile {
 }
 
 #[test]
-fn prepared_failure_authority_is_revoked_event_before_capability() {
-    let order = Mutex::new(Vec::new());
-    revoke_prepared_tokens(
-        "event-token",
-        "capability-token",
-        |token| order.lock().unwrap().push(format!("event:{token}")),
-        |token| order.lock().unwrap().push(format!("capability:{token}")),
-    );
-    assert_eq!(
-        order.into_inner().unwrap(),
-        ["event:event-token", "capability:capability-token"]
+fn an_agent_terminal_is_prepared_without_capability_authority() {
+    let root = TempDirectory::new();
+    let identity = ProductionTerminalIdentityAuthority::new(None)
+        .prepare(1, &root.0, &agent_profile(&root.0))
+        .unwrap();
+    assert!(
+        identity
+            .environment()
+            .keys()
+            .all(|key| !key.starts_with("PTRACK_CAPABILITY")),
+        "capability brokering is retired; no terminal may carry its variables"
     );
 }
 
@@ -695,12 +741,10 @@ async fn linked_launch_publishes_paired_revision_and_rolls_back_after_close() {
         manager.get(&linked.session_id).unwrap_err().kind(),
         ptrack_terminal::ManagerErrorKind::SessionNotFound
     );
-    {
-        let calls = identity.calls.lock().unwrap();
-        assert_eq!(calls[0], format!("bind-linked:{}", linked.session_id));
-        assert_eq!(calls[1], format!("revoke:{}", linked.session_id));
-        assert_eq!(calls[2], format!("remove:{}", linked.session_id));
-    }
+    let calls = identity.calls.lock().unwrap().clone();
+    assert_eq!(calls[0], format!("bind-linked:{}", linked.session_id));
+    assert_eq!(calls[1], format!("revoke:{}", linked.session_id));
+    assert_eq!(calls[2], format!("remove:{}", linked.session_id));
     runtime.shutdown().await.unwrap();
 }
 
@@ -796,6 +840,51 @@ async fn published_linked_failure_uses_failure_order_and_surfaces_force_close_er
             format!("revoke-failed:{}", linked.session_id),
             format!("remove:{}", linked.session_id),
         ]
+    );
+    runtime.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_expired_lease_closes_the_session_off_the_async_worker() {
+    let root = TempDirectory::new();
+    let manager = Manager::new(&root.0, vec![profile(&root.0)], Arc::new(SlowCloseFactory))
+        .await
+        .unwrap();
+    let events = Arc::new(TestEvents::default());
+    let runtime = TerminalRuntime::new(TerminalRuntimeConfig {
+        generation: 5,
+        project_root: root.0.clone(),
+        manager,
+        identity: Arc::new(TestIdentity::default()),
+        events: events.clone(),
+        attachment_lease: Duration::from_millis(10),
+    })
+    .unwrap();
+    let started = std::time::Instant::now();
+    runtime.create(5, "shell-default", None, 24, 80).unwrap();
+    // The monitor fires after 10 ms and starts a close that blocks for 600 ms;
+    // the only runtime thread must stay free to wake this timer meanwhile.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        started.elapsed() < Duration::from_millis(400),
+        "the async worker was blocked for {:?}",
+        started.elapsed()
+    );
+    for _ in 0..200 {
+        if events
+            .statuses
+            .lock()
+            .unwrap()
+            .last()
+            .is_some_and(|status| status.state == ptrack_terminal::SessionState::Closed)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        events.statuses.lock().unwrap().last().unwrap().state,
+        ptrack_terminal::SessionState::Closed
     );
     runtime.shutdown().await.unwrap();
 }

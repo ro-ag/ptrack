@@ -115,8 +115,8 @@ Releases publish via GitHub Actions on tag push only
 
   ```sh
   cargo test --all-targets --no-fail-fast \
-    -p ptrack-app -p ptrack-capability -p ptrack-desktop \
-    -p ptrack-store -p ptrack-terminal -p ptrack-updater
+    -p ptrack-app -p ptrack-desktop -p ptrack-store \
+    -p ptrack-terminal -p ptrack-updater
   ```
 
   Expected: all pass on that host. A cross compile does not substitute for

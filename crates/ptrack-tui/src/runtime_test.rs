@@ -1,20 +1,19 @@
 use std::cell::Cell;
-use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::rc::Rc;
 
 use ptrack_app::{
     ActivityState, ActorIdentity, AgentHandoffInbox, AgentRunObservationV1, AgentRunsV2,
-    AgentRuntimeSummary, AppError, AppResult, ApplicationPort, BoundedSnapshot,
-    CapabilityCancellation, CapabilityMcpOutcome, GuideAction, HookAction, HookResult, InitRequest,
-    InitResult, LeaseState, Mutation, MutationResult, PlanLifecycleOutcome, PlanLifecycleRequest,
-    ProcessOutput, ProcessState, RegistrationKind, RunState,
+    AgentRuntimeSummary, AppError, AppResult, ApplicationPort, BoundedSnapshot, GuideAction,
+    HookAction, HookResult, InitRequest, InitResult, LeaseState, Mutation, MutationResult,
+    PlanLifecycleOutcome, PlanLifecycleRequest, ProcessOutput, ProcessState, RegistrationKind,
+    RunState,
 };
 use ptrack_core::{
     Meta, Plan, PlanStatus, ProjectRef, ProjectSnapshot, Task, TaskStatus, Timestamp,
 };
 
-use crate::model::{Effect, Success};
+use crate::model::{Effect, Success, UiClose};
 use crate::runtime::{TerminalMode, apply_effect};
 use crate::{Model, RuntimeContext, Tab};
 
@@ -25,6 +24,7 @@ struct FakeApplication {
     agent_runs: Option<AgentRunsV2>,
     agent_inbox: Option<AgentHandoffInbox>,
     agent_detail: Option<AgentRunObservationV1>,
+    mutations: Vec<Mutation>,
 }
 
 impl ApplicationPort for FakeApplication {
@@ -40,12 +40,20 @@ impl ApplicationPort for FakeApplication {
         }
     }
 
-    fn mutate(&mut self, _mutation: Mutation) -> AppResult<MutationResult> {
+    fn mutate(&mut self, mutation: Mutation) -> AppResult<MutationResult> {
         if self.mutation_fails {
-            Err(AppError::Message("mutation failed".to_owned()))
-        } else {
-            Ok(MutationResult::None)
+            return Err(AppError::Message("mutation failed".to_owned()));
         }
+        let with_notes = matches!(
+            mutation,
+            Mutation::SetTaskStatusWithNotes { .. } | Mutation::SetPlanStatusWithNotes { .. }
+        );
+        self.mutations.push(mutation);
+        Ok(if with_notes {
+            MutationResult::Notes(Vec::new())
+        } else {
+            MutationResult::None
+        })
     }
 
     fn plan_lifecycle(
@@ -83,19 +91,6 @@ impl ApplicationPort for FakeApplication {
         unreachable!()
     }
 
-    fn capability_call(&mut self, _tool: &str, _arguments: &str) -> AppResult<Vec<u8>> {
-        unreachable!()
-    }
-
-    fn capability_mcp(
-        &mut self,
-        _input: Box<dyn Read + Send>,
-        _output: &mut dyn Write,
-        _cancellation: &CapabilityCancellation,
-    ) -> AppResult<CapabilityMcpOutcome> {
-        unreachable!()
-    }
-
     fn agent_runs(&mut self) -> AppResult<AgentRunsV2> {
         self.agent_runs
             .clone()
@@ -129,6 +124,7 @@ fn snapshot(status: TaskStatus) -> ProjectSnapshot {
             actors: Vec::new(),
             stack: None,
             scratchpad: None,
+            summary_updated_at: None,
         },
         vec![],
         vec![Plan {
@@ -228,6 +224,7 @@ fn board_column_commits_only_after_mutation_and_snapshot_both_succeed() {
         agent_runs: None,
         agent_inbox: None,
         agent_detail: None,
+        mutations: Vec::new(),
     };
     assert!(!apply_effect(
         &mut mutation_failure,
@@ -244,6 +241,7 @@ fn board_column_commits_only_after_mutation_and_snapshot_both_succeed() {
         agent_runs: None,
         agent_inbox: None,
         agent_detail: None,
+        mutations: Vec::new(),
     };
     assert!(!apply_effect(
         &mut reload_failure,
@@ -260,6 +258,7 @@ fn board_column_commits_only_after_mutation_and_snapshot_both_succeed() {
         agent_runs: None,
         agent_inbox: None,
         agent_detail: None,
+        mutations: Vec::new(),
     };
     assert!(!apply_effect(&mut success, &mut value, move_effect()));
     assert_eq!(value.board_col, 1);
@@ -283,6 +282,7 @@ fn reload_refreshes_agent_data_and_preserves_or_clamps_selected_identity() {
         agent_runs: Some(agent_runs(&["run-two"])),
         agent_inbox: Some(empty_inbox()),
         agent_detail: None,
+        mutations: Vec::new(),
     };
     assert!(!apply_effect(
         &mut application,
@@ -340,4 +340,58 @@ fn empty_inbox() -> AgentHandoffInbox {
         bounds: BoundedSnapshot::new(0, 0),
         incomplete: false,
     }
+}
+
+#[test]
+fn a_tui_close_records_the_missing_evidence_in_the_same_write() {
+    let mut value = model();
+    let mut application = FakeApplication {
+        snapshot: snapshot(TaskStatus::Done),
+        mutation_fails: false,
+        snapshot_fails: false,
+        agent_runs: None,
+        agent_inbox: None,
+        agent_detail: None,
+        mutations: Vec::new(),
+    };
+    assert!(!apply_effect(
+        &mut application,
+        &mut value,
+        Effect::Close {
+            target: UiClose::Task(2),
+            success: Success::Message("task done".to_owned()),
+        }
+    ));
+    assert_eq!(value.status, "task done");
+    assert_eq!(
+        application.mutations,
+        [Mutation::SetTaskStatusWithNotes {
+            id: 2,
+            status: TaskStatus::Done,
+            notes: vec![
+                "override: closed from TUI without evidence (no closeout summary; no linked commit)"
+                    .to_owned()
+            ],
+        }]
+    );
+
+    // A plan closed over its open task names the surface and the count.
+    application.snapshot = snapshot(TaskStatus::Todo);
+    application.mutations.clear();
+    apply_effect(
+        &mut application,
+        &mut value,
+        Effect::Close {
+            target: UiClose::Plan(1),
+            success: Success::Message("plan done".to_owned()),
+        },
+    );
+    assert_eq!(
+        application.mutations,
+        [Mutation::SetPlanStatusWithNotes {
+            id: 1,
+            status: PlanStatus::Done,
+            notes: vec!["override: plan completed from TUI with 1 open task #2".to_owned()],
+        }]
+    );
 }

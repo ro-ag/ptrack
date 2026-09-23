@@ -45,3 +45,11 @@ export function initTheme({ root, storage, media, onChange }) {
     },
   };
 }
+
+// The embedded terminal follows the app theme: a profile left on the
+// "default" palette draws with the light "platinum" palette while the app is
+// light. A profile that chose its own palette keeps it in both themes.
+export function terminalThemeName(profileTheme, appTheme) {
+  const name = profileTheme || "default";
+  return name === "default" && appTheme === "light" ? "platinum" : name;
+}

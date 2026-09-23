@@ -477,6 +477,19 @@ impl UpdateRuntime {
         total: u64,
         automatic: bool,
     ) -> Result<(u64, CancellationToken, String), String> {
+        self.begin_guarded(phase, total, automatic, |_| Ok(()))
+    }
+
+    /// Marks one operation active after `guard` accepts the current state,
+    /// both under one lock so nothing can change between the check and the
+    /// admission.
+    fn begin_guarded(
+        &self,
+        phase: UpdatePhase,
+        total: u64,
+        automatic: bool,
+        guard: impl FnOnce(&RuntimeState) -> Result<(), String>,
+    ) -> Result<(u64, CancellationToken, String), String> {
         let mut state = lock(&self.core.state);
         if state.shutting_down {
             return Err("update service is not running".to_owned());
@@ -493,6 +506,7 @@ impl UpdateRuntime {
         if state.active {
             return Err("another update operation is active".to_owned());
         }
+        guard(&state)?;
         state.active = true;
         state.automatic_operation = automatic;
         state.operation = state.operation.saturating_add(1);
@@ -681,6 +695,7 @@ impl UpdateRuntime {
             state.public.checksum_verified = true;
             state.stage = Some(stage);
         }
+        drop(state);
         Ok(())
     }
 }
@@ -739,18 +754,22 @@ impl DesktopUpdateService for UpdateRuntime {
                 .cloned()
                 .ok_or_else(|| "the selected update is stale".to_owned())?
         };
-        let (operation, cancellation, _) = self.begin(
+        // The candidate is re-checked under the same lock that marks the
+        // operation active. Checking it after `begin` left a stale candidate
+        // with `active` set and nothing to settle it, which failed every
+        // later update operation.
+        let (operation, cancellation, _) = self.begin_guarded(
             UpdatePhase::Downloading,
             candidate.package.size_bytes,
             false,
+            |state| {
+                if state.candidate.as_ref() == Some(&candidate) {
+                    Ok(())
+                } else {
+                    Err("the selected update is stale".to_owned())
+                }
+            },
         )?;
-        {
-            let state = lock(&self.core.state);
-            if state.candidate.as_ref() != Some(&candidate) {
-                cancellation.cancel();
-                return Err("the selected update is stale".to_owned());
-            }
-        }
         let core = Arc::clone(&self.core);
         let progress =
             Arc::new(move |progress: Progress| publish_progress(&core, operation, &progress));
@@ -874,19 +893,27 @@ impl DesktopUpdateService for UpdateRuntime {
         while state.active {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                return Err("update operation did not stop before shutdown".to_owned());
+                break;
             }
-            let (next, result) = self
+            let (next, _) = self
                 .core
                 .idle
                 .wait_timeout(state, remaining)
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             state = next;
-            if result.timed_out() && state.active {
-                return Err("update operation did not stop before shutdown".to_owned());
-            }
         }
-        Ok(())
+        let stopped = !state.active;
+        if !stopped {
+            // A refused shutdown keeps the service usable: the window that
+            // asked for it stays open and must still reach its updates.
+            state.shutting_down = false;
+        }
+        drop(state);
+        if stopped {
+            Ok(())
+        } else {
+            Err("update operation did not stop before shutdown".to_owned())
+        }
     }
 }
 

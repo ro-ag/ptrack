@@ -102,7 +102,8 @@ surface (CLI/TUI/GUI/agent) reads or writes. New committed directory
   interactive actor emits the release event alongside the status event
   (replay never emits).
 - `ConvertTaskToPlan` on a claimed plan births the new plan already claimed
-  by the converting actor.
+  by the converting actor. Converting a task in an unclaimed plan leaves the
+  new plan unclaimed: convert never creates a claim the parent did not have.
 
 ## IDs
 

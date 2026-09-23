@@ -14,7 +14,7 @@ use std::ffi::OsString;
 use std::io::{Read, Write};
 
 pub use error::CliError;
-use ptrack_app::{ApplicationPort, CapabilityCancellation};
+use ptrack_app::{ApplicationPort, McpCancellation};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RunOutcome {
@@ -27,7 +27,7 @@ pub struct Io<'a> {
     pub stdin: Box<dyn Read + Send>,
     pub stdout: &'a mut dyn Write,
     pub stderr: &'a mut dyn Write,
-    pub cancellation: CapabilityCancellation,
+    pub cancellation: McpCancellation,
 }
 
 /// Parses and executes one process invocation. Errors contain only the bare

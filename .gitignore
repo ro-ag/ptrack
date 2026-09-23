@@ -36,6 +36,7 @@ __pycache__/
 .playwright-mcp/
 .mimosa/
 frontend/
+!/frontend/
 .superpowers/
 MEMENTO.md
 .claude/

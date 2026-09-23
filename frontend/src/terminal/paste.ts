@@ -35,10 +35,51 @@ export interface ClipboardPasteRequest {
   lineCount: number;
   preview: string;
   previewTruncated: boolean;
+  /** Control characters and bracketed-paste markers removed from the text. */
+  controlCharactersRemoved: number;
   requiresConfirmation: boolean;
 }
 
-export function binaryStringToBytes(input: string): Uint8Array {
+/**
+ * Where a paste is going. The alternate screen is entered by program output,
+ * so on its own it proves nothing: any `cat`-ed file can switch to it. Only
+ * authenticated shell integration saying a command is running makes it the
+ * mark of a full-screen program that owns the input.
+ */
+export interface PasteTarget {
+  alternateScreen: boolean;
+  shell?: { quality: string; phase: string } | null;
+}
+
+// The markers a bracketed paste is wrapped in: a copy containing the closing
+// one ends the bracket early, and whatever follows runs as typed input.
+const bracketedPasteMarkers = /\x1b\[20[01]~/g;
+// Every C0 control but tab and newline, DEL, and C1: carriage returns were
+// already folded into newlines, and anything else is a keystroke, not text.
+const pasteControlCharacters = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
+
+/** Whether a multi-line paste may skip review because a program owns the input. */
+export function multiLinePasteReviewBypassed(target: PasteTarget): boolean {
+  return target.alternateScreen &&
+    target.shell?.quality === "rich" &&
+    target.shell.phase === "executing";
+}
+
+/** One line of review detail shared by the dock's dialog and the terminal window. */
+export function pasteReviewSummary(request: ClipboardPasteRequest): string {
+  const parts = [`${request.lineCount} ${request.lineCount === 1 ? "line" : "lines"}`];
+  if (request.previewTruncated) parts.push("preview truncated");
+  if (request.controlCharactersRemoved > 0) {
+    parts.push(
+      `${request.controlCharactersRemoved} control ${
+        request.controlCharactersRemoved === 1 ? "character" : "characters"
+      } removed`,
+    );
+  }
+  return parts.join(" · ");
+}
+
+export function binaryStringToBytes(input: string): Uint8Array<ArrayBuffer> {
   const bytes = new Uint8Array(input.length);
   for (let index = 0; index < input.length; index += 1) {
     bytes[index] = input.charCodeAt(index) & 0xff;
@@ -46,12 +87,12 @@ export function binaryStringToBytes(input: string): Uint8Array {
   return bytes;
 }
 
-export function terminalTextToBytes(input: string): Uint8Array {
+export function terminalTextToBytes(input: string): Uint8Array<ArrayBuffer> {
   return utf8Encoder.encode(input);
 }
 
-export function splitTerminalInput(input: Uint8Array): Uint8Array[] {
-  const chunks: Uint8Array[] = [];
+export function splitTerminalInput(input: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer>[] {
+  const chunks: Uint8Array<ArrayBuffer>[] = [];
   for (let offset = 0; offset < input.byteLength; offset += maximumInputFrameBytes) {
     chunks.push(input.subarray(offset, offset + maximumInputFrameBytes));
   }
@@ -60,10 +101,13 @@ export function splitTerminalInput(input: Uint8Array): Uint8Array[] {
 
 export function prepareClipboardPaste(
   input: string,
-  alternateScreen: boolean,
+  target: PasteTarget,
   maximumPreviewCharacters = defaultPreviewCharacters,
 ): ClipboardPasteRequest {
-  const text = input.replace(/\r\n?/g, "\n");
+  const normalized = input.replace(/\r\n?/g, "\n");
+  const unbracketed = normalized.replace(bracketedPasteMarkers, "");
+  const text = unbracketed.replace(pasteControlCharacters, "");
+  const controlCharactersRemoved = normalized.length - text.length;
   const previewCharacters: string[] = [];
   let previewTruncated = false;
   for (const character of text) {
@@ -83,7 +127,11 @@ export function prepareClipboardPaste(
     lineCount,
     preview,
     previewTruncated,
-    requiresConfirmation: !alternateScreen && text.includes("\n"),
+    controlCharactersRemoved,
+    // Removed controls always mean a look: what arrives differs from what
+    // was copied, and a copy hiding keystrokes is exactly the one to review.
+    requiresConfirmation: controlCharactersRemoved > 0 ||
+      (!multiLinePasteReviewBypassed(target) && text.includes("\n")),
   };
 }
 
@@ -100,6 +148,19 @@ export async function commitClipboardPaste(
 
 export function isTerminalCompositionEvent(event: CompositionEvent): boolean {
   return event.isComposing === true || event.keyCode === 229 || event.key === "Process";
+}
+
+/**
+ * The shortcut a key event means in a terminal, or null when xterm should
+ * take it: input-method composition always belongs to the terminal.
+ */
+export function terminalKeyShortcut(
+  event: ShortcutEvent & CompositionEvent,
+  platform: TerminalPlatform,
+  hasSelection: boolean,
+): TerminalShortcutAction | null {
+  if (isTerminalCompositionEvent(event)) return null;
+  return terminalShortcutAction(event, platform, hasSelection);
 }
 
 export function terminalShortcutAction(
