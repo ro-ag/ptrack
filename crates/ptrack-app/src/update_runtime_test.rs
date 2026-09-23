@@ -88,6 +88,79 @@ fn cancel_retains_single_flight_until_worker_exits_and_shutdown_is_owned() {
 }
 
 #[test]
+fn a_stale_download_request_never_leaves_an_operation_active() {
+    let root = temporary_root();
+    let runtime = UpdateRuntime::with_backend(
+        "1.2.3".to_owned(),
+        target(),
+        root.clone(),
+        Arc::new(MemoryPreferences::default()),
+        None,
+        Arc::new(FakeBackend::normal(&root)),
+    );
+    runtime.start().unwrap();
+    runtime.check_for_updates().unwrap();
+    assert_eq!(
+        runtime.download_update("9.9.9").unwrap_err(),
+        "the selected update is stale"
+    );
+    // The refused request admitted nothing, so the real one still runs.
+    assert_eq!(
+        runtime.download_update("1.2.4").unwrap().phase,
+        UpdatePhase::Ready
+    );
+    assert_eq!(
+        runtime.check_for_updates().unwrap_err(),
+        "a verified update is already ready"
+    );
+    cleanup(&root);
+}
+
+#[test]
+fn a_refused_shutdown_leaves_the_update_service_usable() {
+    let root = temporary_root();
+    let started = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let runtime = UpdateRuntime::with_backend(
+        "1.2.3".to_owned(),
+        target(),
+        root.clone(),
+        Arc::new(MemoryPreferences::default()),
+        None,
+        Arc::new(FakeBackend::canceling(
+            &root,
+            started.clone(),
+            release.clone(),
+        )),
+    );
+    runtime.start().unwrap();
+    runtime.check_for_updates().unwrap();
+    let worker = {
+        let runtime = runtime.clone();
+        std::thread::spawn(move || runtime.download_update("1.2.4"))
+    };
+    started.wait();
+    // The fake ignores cancellation until released, so the bounded shutdown
+    // gives up and the window that asked for it stays open.
+    assert_eq!(
+        runtime.shutdown().unwrap_err(),
+        "update operation did not stop before shutdown"
+    );
+    release.wait();
+    worker.join().unwrap().unwrap_err();
+    assert_eq!(
+        runtime.check_for_updates().unwrap().phase,
+        UpdatePhase::Available
+    );
+    runtime.shutdown().unwrap();
+    assert_eq!(
+        runtime.check_for_updates().unwrap_err(),
+        "update service is not running"
+    );
+    cleanup(&root);
+}
+
+#[test]
 fn startup_recovery_blocks_more_than_sixty_four_stage_directories_before_authority() {
     let root = temporary_root();
     for index in 0..65 {
@@ -405,6 +478,11 @@ fn candidate() -> Candidate {
             name: "checksums.txt".to_owned(),
             download_url: "https://github.com/ro-ag/ptrack/releases/download/v1.2.4/checksums.txt".to_owned(),
             size_bytes: 80,
+        },
+        signature: Asset {
+            name: "checksums.txt.sig".to_owned(),
+            download_url: "https://github.com/ro-ag/ptrack/releases/download/v1.2.4/checksums.txt.sig".to_owned(),
+            size_bytes: 64,
         },
     }
 }

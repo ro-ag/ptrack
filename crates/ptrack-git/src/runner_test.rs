@@ -4,7 +4,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::runner::{
-    CancellationToken, ExecRunner, RepositoryError, Runner, git_command_args, git_environment,
+    CancellationToken, ExecRunner, NO_EXTERNAL_DIFF_ARGS, RepositoryError, Runner,
+    git_command_args, git_environment, hardened_git_command,
 };
 
 #[test]
@@ -177,6 +178,112 @@ fn runner_deadline_is_not_extended_by_descendant_inheriting_pipes() {
     );
     std::thread::sleep(Duration::from_millis(1_050));
     std::fs::remove_dir_all(directory).expect("remove runner test directory");
+}
+
+#[cfg(unix)]
+#[test]
+fn runner_timeout_kills_the_process_group_and_releases_reader_slots() {
+    use std::os::unix::fs::PermissionsExt;
+
+    static READERS: AtomicUsize = AtomicUsize::new(0);
+    let directory = tempfile_dir("ptrack-git-runner-group");
+    let script = directory.join("fake-git");
+    let marker = directory.join("descendant-survived");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\n(sleep 2; touch '{}') &\nsleep 30\n",
+            marker.display()
+        ),
+    )
+    .expect("write fake git");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700))
+        .expect("make fake git executable");
+    // Long enough for the script to fork its background descendant.
+    let runner =
+        ExecRunner::with_reader_counter_for_test(&script, Duration::from_millis(400), &READERS);
+    let started = Instant::now();
+    assert_eq!(
+        runner.output(
+            &CancellationToken::new(),
+            &directory,
+            &[OsString::from("status")]
+        ),
+        Err(RepositoryError::CommandTimeout)
+    );
+    assert!(started.elapsed() < Duration::from_millis(1_500));
+    assert_eq!(
+        READERS.load(Ordering::Acquire),
+        0,
+        "reader slots leaked past a timed-out command"
+    );
+    std::thread::sleep(Duration::from_millis(2_300));
+    assert!(!marker.exists(), "descendant outlived its process group");
+    std::fs::remove_dir_all(directory).expect("remove runner test directory");
+}
+
+#[cfg(unix)]
+#[test]
+fn runner_releases_reader_slots_after_success_and_cancellation() {
+    use std::os::unix::fs::PermissionsExt;
+
+    static READERS: AtomicUsize = AtomicUsize::new(0);
+    let directory = tempfile_dir("ptrack-git-runner-slots");
+    let script = directory.join("fake-git");
+    std::fs::write(&script, "#!/bin/sh\nprintf ok\n").expect("write fake git");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700))
+        .expect("make fake git executable");
+    let runner =
+        ExecRunner::with_reader_counter_for_test(&script, Duration::from_secs(2), &READERS);
+    for _ in 0..40 {
+        assert_eq!(
+            runner.output(
+                &CancellationToken::new(),
+                &directory,
+                &[OsString::from("status")]
+            ),
+            Ok(b"ok".to_vec())
+        );
+    }
+    assert_eq!(READERS.load(Ordering::Acquire), 0);
+    std::fs::remove_dir_all(directory).expect("remove runner test directory");
+}
+
+#[test]
+fn hardened_git_command_carries_the_runner_policy() {
+    let command = hardened_git_command(
+        Path::new("/project"),
+        &[
+            OsString::from("show"),
+            OsString::from(NO_EXTERNAL_DIFF_ARGS[0]),
+            OsString::from(NO_EXTERNAL_DIFF_ARGS[1]),
+        ],
+    );
+    assert_eq!(command.get_program(), "git");
+    let arguments: Vec<_> = command.get_args().collect();
+    assert_eq!(
+        arguments,
+        [
+            "--no-optional-locks",
+            "-c",
+            "core.fsmonitor=false",
+            "-C",
+            "/project",
+            "show",
+            "--no-ext-diff",
+            "--no-textconv",
+        ]
+    );
+    let environment: Vec<_> = command.get_envs().collect();
+    assert!(environment.iter().any(|(key, value)| {
+        *key == "GIT_TERMINAL_PROMPT" && value.is_some_and(|value| value == "0")
+    }));
+    assert!(environment.iter().all(|(key, _)| {
+        !key.to_string_lossy().eq_ignore_ascii_case("GIT_DIR")
+            && !key
+                .to_string_lossy()
+                .eq_ignore_ascii_case("GIT_CONFIG_COUNT")
+    }));
 }
 
 #[cfg(windows)]

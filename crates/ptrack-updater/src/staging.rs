@@ -17,6 +17,7 @@ use crate::permissions::{
     create_private_dir, create_private_regular, open_private_regular, prepare_private_dir,
     secure_private_path, validate_private_path,
 };
+use crate::signature::{SIGNATURE_ASSET_NAME, SIGNATURE_BYTES, verify_manifest_signature};
 
 const MAX_ARCHIVE_ENTRY_BYTES: u64 = 128 << 20;
 const MAX_ARCHIVE_TOTAL_BYTES: u64 = 160 << 20;
@@ -113,6 +114,22 @@ impl Client {
             progress,
         )
         .await?;
+        let signature_path = root.join(SIGNATURE_ASSET_NAME);
+        self.download(
+            cancellation,
+            &candidate.signature,
+            &signature_path,
+            "signature",
+            None,
+        )
+        .await?;
+        // No digest in the manifest is trusted until the manifest itself is
+        // proven to come from the release key.
+        verify_manifest_signature(
+            self.release_public_key(),
+            &read_private_file(cancellation, &manifest_path, MAX_MANIFEST_BYTES)?,
+            &read_private_file(cancellation, &signature_path, SIGNATURE_BYTES)?,
+        )?;
         let wanted_digest = checksum_for(&manifest_path, &candidate.package.name)?;
 
         let asset_path = root.join(&candidate.package.name);
@@ -285,6 +302,17 @@ fn validate_candidate(candidate: &Candidate, target: &Target) -> Result<(), Upda
         || candidate.checksums.size_bytes > MAX_MANIFEST_BYTES
     {
         return Err(UpdateError::InvalidStage);
+    }
+    if candidate.signature.name != SIGNATURE_ASSET_NAME
+        || candidate.signature.size_bytes != SIGNATURE_BYTES
+        || validate_asset_url(
+            &candidate.signature.download_url,
+            &candidate.tag,
+            SIGNATURE_ASSET_NAME,
+        )
+        .is_err()
+    {
+        return Err(UpdateError::InvalidSignature);
     }
     validate_asset_url(
         &candidate.package.download_url,
@@ -878,7 +906,7 @@ fn valid_digest(value: &str) -> bool {
 
 fn path_within(root: &Path, path: &Path) -> bool {
     path.is_absolute()
-        && path.strip_prefix(root).ok().is_some_and(|relative| {
+        && path.strip_prefix(root).is_ok_and(|relative| {
             relative.components().next().is_some()
                 && relative
                     .components()

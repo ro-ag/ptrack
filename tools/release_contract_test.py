@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
+import re
 import tarfile
 import tempfile
 import unittest
@@ -71,6 +72,38 @@ class ReleaseArtifactTests(unittest.TestCase):
                 list(release_contract.package_names("1.2.3")),
             )
             release_contract.validate_dist(dist, "1.2.3")
+            (dist / "checksums.txt.sig").write_bytes(b"s" * 64)
+            release_contract.validate_dist(dist, "1.2.3")
+
+    def test_signature_is_accepted_only_beside_its_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            dist = Path(temporary)
+            for name in release_contract.package_names("1.2.3"):
+                if name.endswith(".dmg"):
+                    (dist / name).write_bytes(b"dmg")
+                elif name.endswith(".zip"):
+                    write_zip(dist / name, name.rsplit("_", 1)[1].removesuffix(".zip"))
+                else:
+                    os_name, arch = name.removesuffix(".tar.gz").split("_")[2:]
+                    write_tar(dist / name, os_name, arch)
+            (dist / "checksums.txt.sig").write_bytes(b"s" * 64)
+            with self.assertRaisesRegex(release_contract.ContractError, "release assets differ"):
+                release_contract.validate_dist(dist, "1.2.3")
+
+    def test_pinned_public_key_matches_the_updater_and_encodes_as_ed25519_spki(self) -> None:
+        source = (
+            Path(__file__).resolve().parent.parent / "crates/ptrack-updater/src/signature.rs"
+        ).read_text(encoding="utf-8")
+        body = source.split("RELEASE_SIGNING_PUBLIC_KEY: [u8; 32] = [", 1)[1].split("];", 1)[0]
+        updater_key = bytes(int(value, 16) for value in re.findall(r"0x([0-9a-f]{2})", body))
+        self.assertEqual(updater_key.hex(), release_contract.RELEASE_SIGNING_PUBLIC_KEY_HEX)
+        der = release_contract.release_public_key_der()
+        self.assertEqual(len(der), 44)
+        self.assertEqual(der[-32:], updater_key)
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "public.der"
+            self.assertEqual(release_contract.main(["public-key", str(destination)]), 0)
+            self.assertEqual(destination.read_bytes(), der)
 
     def test_archive_extra_entry_and_release_asset_extra_file_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -126,6 +159,29 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("go vet", workflow)
         self.assertNotIn("cmd/wails", workflow.lower())
         self.assertNotIn("wails build", workflow.lower())
+
+    def test_release_workflow_signs_and_self_verifies_checksums_before_publishing(self) -> None:
+        workflow = (Path(__file__).resolve().parent.parent / ".github/workflows/release.yml").read_text(
+            encoding="utf-8"
+        )
+        release_job = workflow.split("\n  release:\n", 1)[1]
+        self.assertIn("PTRACK_RELEASE_SIGNING_KEY: ${{ secrets.PTRACK_RELEASE_SIGNING_KEY }}", release_job)
+        self.assertIn('if [ -z "${PTRACK_RELEASE_SIGNING_KEY}" ]; then', release_job)
+        self.assertIn("::error::The PTRACK_RELEASE_SIGNING_KEY secret is not set", release_job)
+        self.assertIn('chmod 600 "$key"', release_job)
+        self.assertIn('rm -f "$key"', release_job)
+        self.assertIn("openssl pkeyutl -sign -inkey \"$key\" -rawin", release_job)
+        self.assertIn("-out dist/checksums.txt.sig", release_job)
+        self.assertIn("tools/release_contract.py public-key", release_job)
+        self.assertIn("openssl pkeyutl -verify -pubin", release_job)
+        self.assertIn("-sigfile dist/checksums.txt.sig", release_job)
+        sign = release_job.index("openssl pkeyutl -sign")
+        verify = release_job.index("openssl pkeyutl -verify")
+        publish = release_job.index("gh release create")
+        self.assertLess(release_job.index("tools/release_contract.py checksums"), sign)
+        self.assertLess(sign, verify)
+        self.assertLess(verify, publish)
+        self.assertNotIn("secrets.PTRACK_RELEASE_SIGNING_KEY", workflow.split("\n  release:\n", 1)[0])
 
     def test_native_acceptance_is_nonpublishing_and_exactly_five_native_hosts(self) -> None:
         workflow = (

@@ -8,6 +8,8 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use tokio_util::sync::CancellationToken;
 
+use crate::signature::{RELEASE_SIGNING_PUBLIC_KEY, SIGNATURE_ASSET_NAME, SIGNATURE_BYTES};
+
 pub const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/ro-ag/ptrack/releases/latest";
 const USER_AGENT_VALUE: &str = "p-track-updater";
 const MAX_METADATA_BYTES: usize = 1 << 20;
@@ -24,6 +26,9 @@ pub enum UpdateError {
     InvalidStage,
     InstallRefused,
     PendingStageMismatch,
+    /// The release has no `checksums.txt.sig`, or it does not verify against
+    /// the compiled-in release key.
+    InvalidSignature,
     Cancelled,
     Message(String),
 }
@@ -38,6 +43,7 @@ impl fmt::Display for UpdateError {
             Self::InvalidStage => "invalid staged update",
             Self::InstallRefused => "update installation refused",
             Self::PendingStageMismatch => "pending update belongs to another verified stage",
+            Self::InvalidSignature => "release checksums are not signed by the p-track release key",
             Self::Cancelled => "update operation was canceled",
             Self::Message(message) => message,
         })
@@ -87,11 +93,14 @@ pub struct Candidate {
     pub notes: String,
     pub package: Asset,
     pub checksums: Asset,
+    /// Raw Ed25519 signature over the exact `checksums` bytes.
+    pub signature: Asset,
 }
 
 pub struct Client {
     endpoint: String,
     http: reqwest::Client,
+    release_public_key: [u8; 32],
     #[cfg(test)]
     test_asset_base: Option<String>,
     #[cfg(test)]
@@ -113,6 +122,7 @@ impl Client {
         Ok(Self {
             endpoint: LATEST_RELEASE_URL.to_owned(),
             http,
+            release_public_key: RELEASE_SIGNING_PUBLIC_KEY,
             #[cfg(test)]
             test_asset_base: None,
             #[cfg(test)]
@@ -139,6 +149,18 @@ impl Client {
                 .map_err(|_| UpdateError::InvalidStage)?,
         );
         Ok(value)
+    }
+
+    /// Replaces the pinned release key so tests can sign fixtures with a
+    /// throwaway key pair.
+    #[cfg(test)]
+    pub(crate) fn with_release_public_key(mut self, key: [u8; 32]) -> Self {
+        self.release_public_key = key;
+        self
+    }
+
+    pub(crate) fn release_public_key(&self) -> &[u8; 32] {
+        &self.release_public_key
     }
 
     #[cfg(test)]
@@ -312,6 +334,17 @@ pub(crate) fn select_candidate(
         "checksums.txt",
         MAX_MANIFEST_BYTES,
     )?;
+    // A release without a manifest signature is never a candidate: its
+    // digests cannot be trusted, whatever the platform.
+    let signature = select_asset(
+        &release.assets,
+        &release.tag_name,
+        SIGNATURE_ASSET_NAME,
+        SIGNATURE_BYTES,
+    )
+    .ok()
+    .filter(|asset| asset.size_bytes == SIGNATURE_BYTES)
+    .ok_or(UpdateError::InvalidSignature)?;
     Ok(Candidate {
         version: remote.to_string(),
         tag: release.tag_name.clone(),
@@ -323,6 +356,7 @@ pub(crate) fn select_candidate(
         notes: release.body,
         package,
         checksums,
+        signature,
     })
 }
 

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use flate2::Compression;
 use flate2::write::GzEncoder;
+use ring::signature::{Ed25519KeyPair, KeyPair};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -16,57 +17,163 @@ use super::staging::{
     StageKind, StagedUpdate, checksum_for, extract_tar_payload, extract_zip_payload,
     hash_regular_file, load_stage, validate_download_url, validate_stage, write_stage_record,
 };
-use super::{Asset, Candidate, Client, Target};
+use super::{Asset, Candidate, Client, Target, UpdateError};
 
 #[tokio::test(flavor = "current_thread")]
 async fn real_http_stage_streams_both_assets_and_publishes_only_after_verification() {
     let base = private_temp_dir();
-    let source = base.join("source.tar.gz");
-    make_tar(&source, &fake_elf(62));
-    let package = fs::read(&source).unwrap();
-    fs::remove_file(source).unwrap();
-    let digest = hex_lower(&Sha256::digest(&package));
-    let asset_name = "ptrack_1.2.4_linux_amd64.tar.gz";
-    let manifest = format!("{digest}  {asset_name}\n").into_bytes();
-    let server = AssetServer::start(manifest.clone(), package.clone()).await;
-    let candidate = Candidate {
-        version: "1.2.4".to_owned(),
-        tag: "v1.2.4".to_owned(),
-        page_url: "https://github.com/ro-ag/ptrack/releases/tag/v1.2.4".to_owned(),
-        published_at: "2026-08-13T00:00:00Z".to_owned(),
-        notes: String::new(),
-        package: Asset {
-            name: asset_name.to_owned(),
-            download_url: format!(
-                "https://github.com/ro-ag/ptrack/releases/download/v1.2.4/{asset_name}"
-            ),
-            size_bytes: package.len() as u64,
-        },
-        checksums: Asset {
-            name: "checksums.txt".to_owned(),
-            download_url: "https://github.com/ro-ag/ptrack/releases/download/v1.2.4/checksums.txt"
-                .to_owned(),
-            size_bytes: manifest.len() as u64,
-        },
-    };
+    let fixture = SignedRelease::new(&base);
+    let server = AssetServer::start(vec![
+        ("/checksums", fixture.manifest.clone()),
+        ("/signature", fixture.signature.clone()),
+        ("/package", fixture.package.clone()),
+    ])
+    .await;
     let progress = MutexProgress::default();
-    let stage = Client::with_test_asset_server(server.base.clone())
-        .unwrap()
+    let stage = fixture
+        .client(&server)
         .stage(
             &CancellationToken::new(),
-            &candidate,
-            &Target {
-                os: "linux".to_owned(),
-                arch: "amd64".to_owned(),
-            },
+            &fixture.candidate(),
+            &linux_amd64(),
             &base,
             Some(&|item| progress.push(item)),
         )
         .await
         .unwrap();
     validate_stage(&CancellationToken::new(), &stage).unwrap();
-    assert_eq!(stage.sha256, digest);
-    assert_eq!(progress.last().unwrap().downloaded, package.len() as u64);
+    assert_eq!(stage.sha256, fixture.digest);
+    assert_eq!(
+        progress.last().unwrap().downloaded,
+        fixture.package.len() as u64
+    );
+    assert!(
+        progress.all().iter().all(|item| item.asset != "signature"),
+        "the signature download must not drive the progress bar"
+    );
+    server.finish().await;
+    cleanup(&base);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn stage_rejects_a_manifest_that_does_not_match_its_signature() {
+    let base = private_temp_dir();
+    let fixture = SignedRelease::new(&base);
+    let mut tampered = fixture.manifest.clone();
+    tampered[0] = if tampered[0] == b'0' { b'1' } else { b'0' };
+    let server = AssetServer::start(vec![
+        ("/checksums", tampered),
+        ("/signature", fixture.signature.clone()),
+    ])
+    .await;
+    let error = fixture
+        .client(&server)
+        .stage(
+            &CancellationToken::new(),
+            &fixture.candidate(),
+            &linux_amd64(),
+            &base,
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error, UpdateError::InvalidSignature);
+    server.finish().await;
+    assert_no_stage_left(&base);
+    cleanup(&base);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn stage_rejects_a_signature_from_another_key() {
+    let base = private_temp_dir();
+    let fixture = SignedRelease::new(&base);
+    let server = AssetServer::start(vec![
+        ("/checksums", fixture.manifest.clone()),
+        ("/signature", fixture.signature.clone()),
+    ])
+    .await;
+    let other = test_key_pair(0x42);
+    let error = Client::with_test_asset_server(server.base.clone())
+        .unwrap()
+        .with_release_public_key(public_key(&other))
+        .stage(
+            &CancellationToken::new(),
+            &fixture.candidate(),
+            &linux_amd64(),
+            &base,
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error, UpdateError::InvalidSignature);
+    server.finish().await;
+    assert_no_stage_left(&base);
+    cleanup(&base);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn stage_rejects_the_production_key_for_a_test_signed_release() {
+    let base = private_temp_dir();
+    let fixture = SignedRelease::new(&base);
+    let server = AssetServer::start(vec![
+        ("/checksums", fixture.manifest.clone()),
+        ("/signature", fixture.signature.clone()),
+    ])
+    .await;
+    let error = Client::with_test_asset_server(server.base.clone())
+        .unwrap()
+        .stage(
+            &CancellationToken::new(),
+            &fixture.candidate(),
+            &linux_amd64(),
+            &base,
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error, UpdateError::InvalidSignature);
+    server.finish().await;
+    cleanup(&base);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn stage_refuses_a_candidate_without_a_signature_before_any_download() {
+    let base = private_temp_dir();
+    let fixture = SignedRelease::new(&base);
+    let server = AssetServer::start(Vec::new()).await;
+    for signature in [
+        Asset {
+            size_bytes: 0,
+            ..fixture.candidate().signature
+        },
+        Asset {
+            name: "checksums.sig".to_owned(),
+            ..fixture.candidate().signature
+        },
+        Asset {
+            download_url:
+                "https://github.com/ro-ag/ptrack/releases/download/v1.2.3/checksums.txt.sig"
+                    .to_owned(),
+            ..fixture.candidate().signature
+        },
+    ] {
+        let candidate = Candidate {
+            signature,
+            ..fixture.candidate()
+        };
+        let error = fixture
+            .client(&server)
+            .stage(
+                &CancellationToken::new(),
+                &candidate,
+                &linux_amd64(),
+                &base,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error, UpdateError::InvalidSignature);
+    }
     server.finish().await;
     cleanup(&base);
 }
@@ -356,20 +463,115 @@ impl MutexProgress {
     fn last(&self) -> Option<super::Progress> {
         self.0.lock().unwrap().last().cloned()
     }
+
+    fn all(&self) -> Vec<super::Progress> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+struct SignedRelease {
+    package: Vec<u8>,
+    manifest: Vec<u8>,
+    signature: Vec<u8>,
+    digest: String,
+    key: [u8; 32],
+}
+
+impl SignedRelease {
+    /// Builds a Linux release whose manifest is signed with a throwaway key
+    /// derived from a fixed seed; no private key is ever stored on disk.
+    fn new(scratch: &Path) -> Self {
+        let source = scratch.join("source.tar.gz");
+        make_tar(&source, &fake_elf(62));
+        let package = fs::read(&source).unwrap();
+        fs::remove_file(source).unwrap();
+        let digest = hex_lower(&Sha256::digest(&package));
+        let manifest = format!("{digest}  {PACKAGE_NAME}\n").into_bytes();
+        let key_pair = test_key_pair(0x17);
+        let signature = key_pair.sign(&manifest).as_ref().to_vec();
+        Self {
+            package,
+            manifest,
+            signature,
+            digest,
+            key: public_key(&key_pair),
+        }
+    }
+
+    fn candidate(&self) -> Candidate {
+        let release = "https://github.com/ro-ag/ptrack/releases/download/v1.2.4";
+        Candidate {
+            version: "1.2.4".to_owned(),
+            tag: "v1.2.4".to_owned(),
+            page_url: "https://github.com/ro-ag/ptrack/releases/tag/v1.2.4".to_owned(),
+            published_at: "2026-08-13T00:00:00Z".to_owned(),
+            notes: String::new(),
+            package: Asset {
+                name: PACKAGE_NAME.to_owned(),
+                download_url: format!("{release}/{PACKAGE_NAME}"),
+                size_bytes: self.package.len() as u64,
+            },
+            checksums: Asset {
+                name: "checksums.txt".to_owned(),
+                download_url: format!("{release}/checksums.txt"),
+                size_bytes: self.manifest.len() as u64,
+            },
+            signature: Asset {
+                name: "checksums.txt.sig".to_owned(),
+                download_url: format!("{release}/checksums.txt.sig"),
+                size_bytes: 64,
+            },
+        }
+    }
+
+    fn client(&self, server: &AssetServer) -> Client {
+        Client::with_test_asset_server(server.base.clone())
+            .unwrap()
+            .with_release_public_key(self.key)
+    }
+}
+
+const PACKAGE_NAME: &str = "ptrack_1.2.4_linux_amd64.tar.gz";
+
+fn test_key_pair(seed: u8) -> Ed25519KeyPair {
+    Ed25519KeyPair::from_seed_unchecked(&[seed; 32]).unwrap()
+}
+
+fn public_key(key_pair: &Ed25519KeyPair) -> [u8; 32] {
+    key_pair.public_key().as_ref().try_into().unwrap()
+}
+
+fn linux_amd64() -> Target {
+    Target {
+        os: "linux".to_owned(),
+        arch: "amd64".to_owned(),
+    }
+}
+
+fn assert_no_stage_left(base: &Path) {
+    let leftovers: Vec<_> = fs::read_dir(base)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with(".stage-"))
+        .collect();
+    assert!(leftovers.is_empty(), "a rejected stage was left behind");
 }
 
 struct AssetServer {
     base: String,
+    expected: Vec<String>,
     task: tokio::task::JoinHandle<Vec<String>>,
 }
 
 impl AssetServer {
-    async fn start(manifest: Vec<u8>, package: Vec<u8>) -> Self {
+    /// Serves each route once, in any order, then records the paths asked for.
+    async fn start(routes: Vec<(&'static str, Vec<u8>)>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
+        let expected = routes.iter().map(|(path, _)| (*path).to_owned()).collect();
         let task = tokio::spawn(async move {
             let mut paths = Vec::new();
-            for _ in 0..2 {
+            for _ in 0..routes.len() {
                 let (mut stream, _) = listener.accept().await.unwrap();
                 let mut request = Vec::new();
                 let mut buffer = [0_u8; 1024];
@@ -387,11 +589,11 @@ impl AssetServer {
                     .and_then(|line| line.split_whitespace().nth(1))
                     .unwrap()
                     .to_owned();
-                let body = if path == "/checksums" {
-                    &manifest
-                } else {
-                    &package
-                };
+                let body = &routes
+                    .iter()
+                    .find(|(route, _)| *route == path)
+                    .unwrap_or_else(|| panic!("unexpected asset request {path}"))
+                    .1;
                 let header = format!(
                     "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                     body.len()
@@ -404,12 +606,13 @@ impl AssetServer {
         });
         Self {
             base: format!("http://{address}"),
+            expected,
             task,
         }
     }
 
     async fn finish(self) {
-        assert_eq!(self.task.await.unwrap(), ["/checksums", "/package"]);
+        assert_eq!(self.task.await.unwrap(), self.expected);
     }
 }
 

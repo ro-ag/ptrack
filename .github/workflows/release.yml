@@ -375,6 +375,38 @@ jobs:
           python3 tools/release_contract.py validate-dist dist "$version"
           python3 tools/release_contract.py checksums dist "$version"
 
+      # Updaters trust a package digest only after checksums.txt verifies
+      # against the Ed25519 release key compiled into ptrack-updater, so an
+      # unsigned release is never installable.
+      - name: Sign checksums with the release key
+        shell: bash
+        env:
+          PTRACK_RELEASE_SIGNING_KEY: ${{ secrets.PTRACK_RELEASE_SIGNING_KEY }}
+        run: |
+          if [ -z "${PTRACK_RELEASE_SIGNING_KEY}" ]; then
+            echo "::error::The PTRACK_RELEASE_SIGNING_KEY secret is not set; updaters refuse releases whose checksums.txt is unsigned."
+            exit 1
+          fi
+          umask 077
+          key="$(mktemp "${RUNNER_TEMP}/release-signing-key.XXXXXX")"
+          trap 'rm -f "$key"' EXIT
+          chmod 600 "$key"
+          printf '%s\n' "${PTRACK_RELEASE_SIGNING_KEY}" > "$key"
+          openssl pkeyutl -sign -inkey "$key" -rawin \
+            -in dist/checksums.txt -out dist/checksums.txt.sig
+          rm -f "$key"
+          test "$(wc -c < dist/checksums.txt.sig)" -eq 64
+
+      - name: Verify the checksums signature against the pinned key
+        shell: bash
+        run: |
+          public_key="${RUNNER_TEMP}/release-signing-public.der"
+          python3 tools/release_contract.py public-key "$public_key"
+          openssl pkeyutl -verify -pubin -inkey "$public_key" -keyform DER -rawin \
+            -in dist/checksums.txt -sigfile dist/checksums.txt.sig
+          version="${GITHUB_REF_NAME#v}"
+          python3 tools/release_contract.py validate-dist dist "$version"
+
       - name: Extract bounded release notes
         shell: bash
         run: |
