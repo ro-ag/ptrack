@@ -10,7 +10,7 @@ import {
 describe("native menu event routing", () => {
   it("registers every native action and delegates to the supplied behavior", () => {
     const handlers = new Map<string, () => void>();
-    const disposers = Array.from({ length: 11 }, () => vi.fn());
+    const disposers = Array.from({ length: 12 }, () => vi.fn());
     let disposerIndex = 0;
     const subscribe = vi.fn((name: string, callback: () => void) => {
       handlers.set(name, callback);
@@ -27,6 +27,7 @@ describe("native menu event routing", () => {
       "toggleTerminalPanel",
       "toggleCommandPalette",
       "installShellCommand",
+      "showAbout",
       "checkForUpdates",
     ];
     const actions = Object.fromEntries(
@@ -46,6 +47,7 @@ describe("native menu event routing", () => {
       "workspace:terminal-panel-toggle-requested",
       "workspace:command-palette-requested",
       "workspace:install-shell-command-requested",
+      "about:open-requested",
       "update:open-requested",
     ]);
     [...handlers.values()].forEach((handler) => handler());

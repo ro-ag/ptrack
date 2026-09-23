@@ -24,6 +24,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   distinct icons for the sidebar, Board, and terminal, and set the theme
   control apart. A dimmed Board control says why it cannot hide the Board yet.
 
+## [0.41.1] - 2026-09-23
+
+### Fixed
+- The macOS About p-track menu now opens the custom About & Updates dialog,
+  matching the in-app version button instead of showing the system About panel.
+
 ## [0.41.0] - 2026-09-22
 
 This minor release lands the full UI and code review: correctness, security,

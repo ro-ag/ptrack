@@ -23,9 +23,7 @@ use ptrack_app::{
 use ptrack_desktop::{
     DesktopPlatform, MenuDispatch, MenuEntrySpec, MenuRole, menu_dispatch, menu_spec, window_spec,
 };
-use tauri::menu::{
-    AboutMetadataBuilder, Menu, MenuBuilder, MenuItem, MenuItemBuilder, SubmenuBuilder,
-};
+use tauri::menu::{Menu, MenuBuilder, MenuItem, MenuItemBuilder, SubmenuBuilder};
 use tauri::{AppHandle, Emitter, Manager, Runtime, WindowEvent};
 use tauri_plugin_dialog::DialogExt as _;
 use tauri_plugin_opener::OpenerExt as _;
@@ -1048,12 +1046,6 @@ fn build_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
                 } => submenu.item(&item(app, id, label, macos_accelerator)?),
                 MenuEntrySpec::Separator => submenu.separator(),
                 MenuEntrySpec::Role(role) => match role {
-                    MenuRole::About => submenu.about(Some(
-                        AboutMetadataBuilder::new()
-                            .name(Some("p-track"))
-                            .version(Some(ptrack_cli::version()))
-                            .build(),
-                    )),
                     MenuRole::Services => submenu.services(),
                     MenuRole::Hide => submenu.hide(),
                     MenuRole::HideOthers => submenu.hide_others(),

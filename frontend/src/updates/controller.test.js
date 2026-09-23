@@ -23,12 +23,23 @@ describe("About and updates", () => {
     expect(harness.document.activeElement.id).toBe("app-version");
   });
 
+  it("opens the same About dialog from the native menu without checking for updates", async () => {
+    harness = await bootApp();
+    await harness.emit("about:open-requested");
+    expect(harness.$("#updates-modal").hidden).toBe(false);
+    expect(harness.backend.callsTo("CheckForUpdates")).toEqual([]);
+    await harness.key(harness.document.body, "Escape");
+    expect(harness.$("#updates-modal").hidden).toBe(true);
+    expect(harness.document.activeElement.id).toBe("app-version");
+  });
+
   it("stays closed, with its entry points disabled, while project setup runs", async () => {
     harness = await bootApp({ responses: journeyResponses() });
     await reachReview(harness);
     expect(harness.$("#app-version").disabled).toBe(true);
     expect(harness.$("#landing-settings-open").disabled).toBe(true);
     harness.app.updates.openAboutUpdates();
+    await harness.emit("about:open-requested");
     await harness.emit("update:open-requested");
     expect(harness.$("#updates-modal").hidden).toBe(true);
     expect(harness.backend.names()).not.toContain("CheckForUpdates");
