@@ -1190,6 +1190,9 @@ fn production_workspace_factory_composes_and_shuts_down_real_services() {
     let factory = ProductionDesktopWorkspaceFactory::new(runtime, None, 0).unwrap();
     let workspace = factory.build(&project, 1).unwrap();
     assert_eq!(Path::new(&workspace.project().root), project);
+    // The production wrapper must forward to the bound workspace, not fall
+    // back to the trait's empty default snapshot (generation 0).
+    assert_eq!(workspace.notification_snapshot().unwrap().generation, 1);
     workspace.shutdown().unwrap();
 }
 

@@ -3189,6 +3189,10 @@ impl DesktopWorkspace for ProductionDesktopWorkspace {
         self.inner.drain_runtime_invalidations()
     }
 
+    fn notification_snapshot(&self) -> AppResult<crate::DesktopNotificationSnapshotV1> {
+        self.inner.notification_snapshot()
+    }
+
     fn capability_counts(&self) -> Option<crate::diagnostics_report::CapabilityCountsV1> {
         self.inner.capability_counts()
     }
