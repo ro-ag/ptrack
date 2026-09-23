@@ -741,12 +741,10 @@ async fn linked_launch_publishes_paired_revision_and_rolls_back_after_close() {
         manager.get(&linked.session_id).unwrap_err().kind(),
         ptrack_terminal::ManagerErrorKind::SessionNotFound
     );
-    {
-        let calls = identity.calls.lock().unwrap();
-        assert_eq!(calls[0], format!("bind-linked:{}", linked.session_id));
-        assert_eq!(calls[1], format!("revoke:{}", linked.session_id));
-        assert_eq!(calls[2], format!("remove:{}", linked.session_id));
-    }
+    let calls = identity.calls.lock().unwrap().clone();
+    assert_eq!(calls[0], format!("bind-linked:{}", linked.session_id));
+    assert_eq!(calls[1], format!("revoke:{}", linked.session_id));
+    assert_eq!(calls[2], format!("remove:{}", linked.session_id));
     runtime.shutdown().await.unwrap();
 }
 

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 use std::sync::Mutex;
 use std::time::Duration;
 
