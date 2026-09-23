@@ -2,7 +2,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
 import { WebLinksAddon } from "@xterm/addon-web-links";
-import { Terminal } from "@xterm/xterm";
+import { type ITheme, Terminal } from "@xterm/xterm";
 
 import type { TerminalPlatform } from "./paste";
 import { terminalPlatform } from "./platform";
@@ -80,4 +80,21 @@ export function createTerminalRenderer(options: {
     new WebLinksAddon(terminalLinkActivation({ onError: options.onLinkError })),
   );
   return { terminal, fit, search, unicode };
+}
+
+/**
+ * Applies a terminal theme and paints the renderer element with its
+ * background. xterm's stylesheet paints the viewport black, which otherwise
+ * shows as a strip below the last row whenever the pane is not an exact
+ * multiple of the row height (glaring in the light theme).
+ */
+export function applyTerminalTheme(terminal: Terminal, theme: ITheme): void {
+  terminal.options.theme = theme;
+  paintTerminalBackground(terminal);
+}
+
+export function paintTerminalBackground(terminal: Terminal): void {
+  if (terminal.element) {
+    terminal.element.style.backgroundColor = terminal.options.theme?.background ?? "";
+  }
 }

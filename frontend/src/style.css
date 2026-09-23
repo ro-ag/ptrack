@@ -5522,6 +5522,13 @@ button.modal-backdrop:active {
   height: 100%;
 }
 
+/* xterm's stylesheet paints the viewport black; the renderer element carries
+   the active terminal theme's background instead (see applyTerminalTheme). */
+.terminal-host .xterm-viewport,
+.terminal-window-host .xterm-viewport {
+  background-color: transparent;
+}
+
 .terminal-host .xterm-viewport {
   scrollbar-color: var(--scrollbar-thumb) var(--terminal-bg);
   scrollbar-width: thin;

@@ -20,6 +20,8 @@ vi.mock("./renderer", () => {
     set: () => true,
   });
   return {
+    applyTerminalTheme: () => {},
+    paintTerminalBackground: () => {},
     createTerminalRenderer: () => ({ terminal: stub, fit: stub, search: stub, unicode: stub }),
     openExternalURL: async () => {},
     terminalLinkActivation: () => false,

@@ -59,7 +59,7 @@ import {
   terminalProfileTheme,
   type NormalizedTerminalProfileSettings,
 } from "./profile-settings";
-import { createTerminalRenderer } from "./renderer";
+import { applyTerminalTheme, createTerminalRenderer, paintTerminalBackground } from "./renderer";
 import { TerminalResizeDispatcher } from "./resize-dispatch";
 import { terminalSearchOptions, terminalSearchResultLabel } from "./search";
 import { readModernUnicodeSetting } from "./unicode";
@@ -229,6 +229,7 @@ class DetachedTerminalWindow {
       onLinkError: (error) => this.setStatus(messageFrom(error)),
     });
     terminal.open(paneHost);
+    paintTerminalBackground(terminal);
     terminal.textarea?.setAttribute(
       "aria-label",
       `Terminal session — ${owner?.title}`,
@@ -554,8 +555,11 @@ class DetachedTerminalWindow {
     new MutationObserver(() => {
       const appTheme = document.documentElement.dataset.theme;
       for (const pane of this.#panes.values()) {
-        pane.terminal.options.theme = terminalProfileTheme(
-          terminalThemeName(this.settingsForProfile(pane.profileId).theme, appTheme),
+        applyTerminalTheme(
+          pane.terminal,
+          terminalProfileTheme(
+            terminalThemeName(this.settingsForProfile(pane.profileId).theme, appTheme),
+          ),
         );
       }
     }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });

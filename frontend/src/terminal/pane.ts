@@ -56,7 +56,7 @@ import type {
   TerminalShortcutAction,
 } from "./paste";
 import { terminalPlatform } from "./platform";
-import { createTerminalRenderer } from "./renderer";
+import { applyTerminalTheme, createTerminalRenderer, paintTerminalBackground } from "./renderer";
 import {
   clampTerminalFontSize,
   defaultTerminalFontSize,
@@ -2143,6 +2143,7 @@ class TerminalDock {
       },
     });
     terminal.open(host);
+    paintTerminalBackground(terminal);
     const tab = this.#tabController.workspace.tabs.find((candidate) =>
       paneIds(candidate.root).includes(runtime.paneId)
     );
@@ -3854,8 +3855,9 @@ class TerminalDock {
       const profileId = this.#descriptorFor(runtime.paneId)?.pane.profileId ||
         this.#defaultProfileId;
       const profileTheme = this.#profileSettings.get(profileId)?.theme ?? "default";
-      resources.terminal.options.theme = terminalProfileTheme(
-        terminalThemeName(profileTheme, appTheme),
+      applyTerminalTheme(
+        resources.terminal,
+        terminalProfileTheme(terminalThemeName(profileTheme, appTheme)),
       );
     }
   }
