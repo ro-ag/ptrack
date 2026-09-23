@@ -439,8 +439,8 @@ pub(crate) fn decode_digest(value: &str) -> Result<Digest32, WireError> {
         ));
     }
     let mut digest = [0_u8; 32];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
-        digest[index] = (hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?;
+    for (index, [high, low]) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
+        digest[index] = (hex_nibble(*high)? << 4) | hex_nibble(*low)?;
     }
     Ok(Digest32(digest))
 }
