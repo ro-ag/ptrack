@@ -14,7 +14,11 @@ fn platform_menu_specs_pin_order_roles_and_macos_only_accelerators() {
     assert_eq!(
         macos[0].entries,
         [
-            MenuEntrySpec::Role(MenuRole::About),
+            MenuEntrySpec::Command {
+                id: "about:open-requested",
+                label: "About p-track",
+                macos_accelerator: None,
+            },
             MenuEntrySpec::Command {
                 id: "update:open-requested",
                 label: "Check for Updates…",
@@ -76,6 +80,7 @@ fn platform_menu_specs_pin_order_roles_and_macos_only_accelerators() {
 #[test]
 fn dispatch_and_window_contracts_are_exact() {
     let events = [
+        "about:open-requested",
         "update:open-requested",
         "workspace:board-requested",
         "workspace:close-requested",

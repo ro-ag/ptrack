@@ -6,7 +6,6 @@ pub enum DesktopPlatform {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MenuRole {
-    About,
     Services,
     Hide,
     HideOthers,
@@ -59,7 +58,8 @@ pub enum MenuDispatch {
     Ignore,
 }
 
-const MENU_EVENTS: [&str; 11] = [
+const MENU_EVENTS: [&str; 12] = [
+    "about:open-requested",
     "update:open-requested",
     "workspace:board-requested",
     "workspace:close-requested",
@@ -190,7 +190,7 @@ pub fn menu_spec(platform: DesktopPlatform) -> Vec<MenuSpec> {
         MenuSpec {
             label: "p-track",
             entries: vec![
-                MenuEntrySpec::Role(MenuRole::About),
+                command("about:open-requested", "About p-track", None),
                 check_for_updates,
                 MenuEntrySpec::Separator,
                 settings,
