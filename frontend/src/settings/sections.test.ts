@@ -5,6 +5,7 @@ import {
   nextSettingsSectionIndex,
   resetApplicationStateConfirmation,
   resetApplicationStateMessage,
+  resetSettingsConfirmation,
   resetWindowLayoutConfirmation,
   settingsPanelId,
   settingsSectionIndex,
@@ -79,6 +80,14 @@ describe("reset confirmations", () => {
 // Every fixture below is shaped like DiagnosticsReportV1 in
 // crates/ptrack-app/src/diagnostics_report.rs, so a backend field that moves
 // breaks these rather than passing against a shape nothing emits.
+describe("settings reset", () => {
+  it("states that it resets every section and asks first", () => {
+    expect(resetSettingsConfirmation.heading).toBe("Reset all settings?");
+    expect(resetSettingsConfirmation.detail).toMatch(/Every section of Settings/);
+    expect(resetSettingsConfirmation.cancel).not.toBe(resetSettingsConfirmation.submit);
+  });
+});
+
 describe("diagnostics rows", () => {
   it("labels the scalar sections and names what each copy control copies", () => {
     const rows = diagnosticsRows({
@@ -92,21 +101,16 @@ describe("diagnostics rows", () => {
 
     // The runtime still reports the deprecated capability broker, and the
     // dialog no longer renders it.
-    expect(rows.map((row) => row.label)).not.toContain("Capabilities · Granted");
+    expect(rows.map((row) => row.label).join(" ")).not.toMatch(/Capabilit/);
 
-    expect(rows).toContainEqual({
-      label: "Paths · Global home",
-      value: "/Users/dev/.ptrack",
-      copy: "Copy Paths · Global home",
-    });
-    expect(rows).toContainEqual({
-      label: "Runtime · Status",
-      value: "active",
-      copy: null,
-    });
+    expect(rows).toEqual([
+      { group: "Global", label: "Home folder", value: "/Users/dev/.ptrack", copy: "Copy global home folder path" },
+      { group: "Global", label: "Database", value: "/Users/dev/.ptrack/global.redb", copy: "Copy global database path" },
+      { group: "Global", label: "Runtime status", value: "active", copy: null },
+    ]);
   });
 
-  it("keeps nested project paths that the report groups under a section", () => {
+  it("groups the open project's paths under This project, after Global", () => {
     const rows = diagnosticsRows({
       paths: {
         globalHome: "/Users/dev/.ptrack",
@@ -114,11 +118,11 @@ describe("diagnostics rows", () => {
       },
     });
 
-    expect(rows).toContainEqual({
-      label: "Paths · Project · Root",
-      value: "/work/app",
-      copy: "Copy Paths · Project · Root",
-    });
+    expect(rows).toEqual([
+      { group: "Global", label: "Home folder", value: "/Users/dev/.ptrack", copy: "Copy global home folder path" },
+      { group: "This project", label: "Root folder", value: "/work/app", copy: "Copy project root folder path" },
+      { group: "This project", label: "Database", value: "/work/app/.ptrack/ptrack.redb", copy: "Copy project database path" },
+    ]);
   });
 
   // `paths.globalDatabase` is null when the marker cannot be read, and
@@ -132,8 +136,8 @@ describe("diagnostics rows", () => {
     });
 
     expect(rows).toEqual([
-      { label: "Paths · Global database", value: "Not available", copy: null },
-      { label: "Paths · Project", value: "No project open", copy: null },
+      { group: "Global", label: "Database", value: "Not available", copy: null },
+      { group: "This project", label: "Project", value: "No project open", copy: null },
     ]);
   });
 
@@ -161,6 +165,7 @@ describe("diagnostics rows", () => {
     // Both entries still render, and each backup is one row rather than four.
     expect(rows).toHaveLength(2);
     expect(rows[0]).toEqual({
+      group: "Global",
       label: "Backup",
       value: "/Users/dev/.ptrack/backups/ptrack-20260813.redb",
       detail: "2026-08-13 09:15:00 UTC · /work/app",
@@ -175,9 +180,9 @@ describe("diagnostics rows", () => {
 
   it("reports an unreadable or empty backup ledger honestly", () => {
     expect(diagnosticsRows({ backups: { status: "unavailable", entries: [] } }))
-      .toEqual([{ label: "Backups", value: "Not available", copy: null }]);
+      .toEqual([{ group: "Global", label: "Backups", value: "Not available", copy: null }]);
     expect(diagnosticsRows({ backups: { status: "available", entries: [] } }))
-      .toEqual([{ label: "Backups", value: "None recorded", copy: null }]);
+      .toEqual([{ group: "Global", label: "Backups", value: "None recorded", copy: null }]);
   });
 
   // The runtime writes "" when it cannot format the recorded stamp at all.
@@ -203,19 +208,21 @@ describe("diagnostics rows", () => {
       },
     });
 
-
     expect(rows).toContainEqual({
+      group: "Global",
       label: "Quarantine · Global",
       value: "0 records",
       copy: null,
     });
     expect(rows).toContainEqual({
+      group: "Global",
       label: "Quarantine · Project",
       value: "3 records",
       copy: null,
     });
     expect(rows.map((row) => row.value)).not.toContain("2 recorded");
     expect(rows).toContainEqual({
+      group: "Global",
       label: "Migration receipt 0001",
       value: "/Users/dev/.ptrack/migrations/0001/receipt.json",
       copy: "Copy migration receipt path 0001",
@@ -255,37 +262,55 @@ describe("diagnostics rows", () => {
         receipts: [],
       },
     })).toEqual([
-      { label: "Quarantine · Project", value: "Not available", copy: null },
-      { label: "Migration receipts", value: "None recorded", copy: null },
+      { group: "Global", label: "Quarantine · Project", value: "Not available", copy: null },
+      { group: "Global", label: "Migration receipts", value: "None recorded", copy: null },
     ]);
   });
 
   it("summarizes a list it has no shape for instead of dropping it", () => {
     expect(diagnosticsRows({ audits: [{ id: 1 }, { id: 2 }] })).toContainEqual({
+      group: "Global",
       label: "Audits",
       value: "2 recorded",
       copy: null,
     });
   });
 
-  // Key order is the serializer's business; reading order is the dialog's.
+  // Key order is the serializer's business; reading order is the dialog's:
+  // Global home, database, backups, migrations, runtime; then This project.
   it("orders the report rather than trusting the serializer's key order", () => {
     const rows = diagnosticsRows({
       backups: { status: "available", entries: [] },
       runtime: { status: "active" },
-      paths: { globalHome: "/Users/dev/.ptrack" },
+      migration: { quarantine: [], receipts: [] },
+      paths: {
+        project: { database: "/w/.ptrack/ptrack.redb", root: "/w" },
+        updatesDirectory: "/Users/dev/.ptrack/updates",
+        runtimeDirectory: "/Users/dev/.ptrack/runtime",
+        migrationsDirectory: "/Users/dev/.ptrack/migrations",
+        backupsDirectory: "/Users/dev/.ptrack/backups",
+        globalDatabase: "/Users/dev/.ptrack/global.redb",
+        globalHome: "/Users/dev/.ptrack",
+      },
     });
 
-    expect(rows.map((row) => row.label)).toEqual([
-      "Paths · Global home",
-      "Runtime · Status",
-      "Backups",
+    expect(rows.map((row) => `${row.group}: ${row.label}`)).toEqual([
+      "Global: Home folder",
+      "Global: Database",
+      "Global: Backups folder",
+      "Global: Backups",
+      "Global: Migrations folder",
+      "Global: Migration receipts",
+      "Global: Runtime folder",
+      "Global: Runtime status",
+      "Global: Updates folder",
+      "This project: Root folder",
+      "This project: Database",
     ]);
   });
 
-  // The row cap cuts from the end, so the two unbounded ledgers sit there and
-  // the bounded sections sit above them. This fixture is the realistic worst
-  // case plus four more path fields.
+  // The row cap is a runaway guard. This fixture is the realistic worst case
+  // plus twelve unknown path fields, and every section still renders.
   it("keeps every section when the report outgrows the old 64-row cap", () => {
     const entries = Array.from({ length: 30 }, (_, index) => ({
       recordedAt: "2026-08-13T09:15:00Z",
@@ -294,9 +319,12 @@ describe("diagnostics rows", () => {
       present: true,
     }));
     const rows = diagnosticsRows({
-      paths: Object.fromEntries(
-        Array.from({ length: 12 }, (_, index) => [`path${index}`, `/p/${index}`]),
-      ),
+      paths: {
+        ...Object.fromEntries(
+          Array.from({ length: 12 }, (_, index) => [`path${index}`, `/p/${index}`]),
+        ),
+        project: { root: "/w", database: "/w/db" },
+      },
       runtime: { status: "active" },
       backups: { status: "available", entries },
       migration: {
@@ -312,11 +340,12 @@ describe("diagnostics rows", () => {
       capabilities: { granted: 1, total: 5 },
     });
 
-    // 12 paths + 1 runtime + 25 backups + 2 quarantine + 25 receipts, with
-    // both ledgers already capped at 25 by their own slices; the deprecated
-    // `capabilities` section contributes nothing.
-    expect(rows).toHaveLength(65);
-    expect(rows.at(-1)?.label).toBe("Migration receipt 24");
+    // 25 backups + 2 quarantine + 25 receipts + 1 runtime + 12 paths + 2
+    // project rows, with both ledgers capped at 25 by their own slices; the
+    // deprecated `capabilities` section contributes nothing.
+    expect(rows).toHaveLength(67);
+    expect(rows.at(-1)?.label).toBe("Database");
+    expect(rows.at(-1)?.group).toBe("This project");
   });
 
   it("ignores empty values and non-object reports", () => {

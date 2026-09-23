@@ -92,6 +92,33 @@ export function coverSummary(summary?: Summary, now = Date.now()) {
     syncedAt: summary && Number.isFinite(summary.syncedAt) && summary.syncedAt > 0 ? summary.syncedAt : null,
   };
 }
+/** "/Users/ana/dev/app" → "~/dev/app"; paths outside a home folder stay whole. */
+export function shortenHomePath(path: string): string {
+  const match = /^(?:\/Users|\/home)\/[^/]+(?=\/|$)/.exec(path);
+  return match ? `~${path.slice(match[0].length)}` : path;
+}
+/** The facts a list row shows beside the project name. */
+export function landingRowDetails(project: RecentProjectEntry, summary?: Summary, now = Date.now()) {
+  const counts = summary ? [
+    `${summary.counts.openTasks} open ${summary.counts.openTasks === 1 ? "task" : "tasks"}`,
+    `${summary.counts.openIssues} open ${summary.counts.openIssues === 1 ? "issue" : "issues"}`,
+  ] : [];
+  return {
+    path: shortenHomePath(project.canonicalPath),
+    counts,
+    opened: `Opened ${relativeTime(new Date(project.lastOpenedAt).getTime(), "long", now)}`,
+  };
+}
+/** Edge fades tell the reader the chip strip scrolls further in that direction. */
+export function stripOverflow(scrollLeft: number, scrollWidth: number, clientWidth: number) {
+  return { start: scrollLeft > 1, end: scrollLeft + clientWidth < scrollWidth - 1 };
+}
+function syncStripOverflow(strip: HTMLElement) {
+  const list = strip.classList.contains("is-list");
+  const overflow = stripOverflow(strip.scrollLeft, strip.scrollWidth, strip.clientWidth);
+  strip.dataset.overflowStart = String(!list && overflow.start);
+  strip.dataset.overflowEnd = String(!list && overflow.end);
+}
 function timeLabel(className: string, prefix: string, timestamp: number) {
   const element = node("time", className, `${prefix}${relativeTime(timestamp, "long")}`);
   if (Number.isFinite(timestamp)) {
@@ -197,6 +224,8 @@ function initializeCarousel(stage: HTMLElement, strip: HTMLElement, options: Lan
       projects.forEach((project, i) => state.entries.get(project.entryId)?.motion.move(i, index));
     },
   });
+  strip.addEventListener("scroll", () => syncStripOverflow(strip), { passive: true });
+  if ("ResizeObserver" in window) new ResizeObserver(() => syncStripOverflow(strip)).observe(strip);
   carousels.set(stage, state);
   return state;
 }
@@ -265,7 +294,8 @@ export function renderLandingProjects(options: LandingRenderOptions) {
     card.disabled = options.busy;
     card.setAttribute("aria-label", `${project === selected && project.availability === "available" ? "Open" : "Select"} ${project.name}, ${index + 1} of ${projects.length}`);
     const top = node("div", "card-top");
-    top.append(node("span", "project-code", `PROJECT ${String(index + 1).padStart(2, "0")}`), node("span", "status-pill", project.availability === "available" ? "Available" : "Locate project"));
+    top.append(node("span", "status-pill", project.availability === "available" ? "Available" : "Locate project"));
+    if (project.entryId === options.preselectedId) top.prepend(node("span", "last-opened-tag", "Last opened"));
     const summary = summaries.find((summary) => summary.root === project.canonicalPath);
     const info = coverSummary(summary);
     const body = node("div", "cover-identity");
@@ -292,8 +322,15 @@ export function renderLandingProjects(options: LandingRenderOptions) {
     thumbnail.setAttribute("aria-current", String(project === selected));
     thumbnail.setAttribute("aria-label", `Select ${project.name}`);
     thumbnail.title = project.name;
-    thumbnail.style.setProperty("--accent", color);
-    thumbnail.replaceChildren(node("small", "", String(index + 1).padStart(2, "0")), node("strong", "", project.name));
+    // One selection style: the active row. The last-opened project is a text
+    // tag, never a second highlight.
+    const row = landingRowDetails(project, summary);
+    const name = node("strong", "", project.name);
+    const meta = node("span", "strip-meta");
+    const path = node("span", "strip-path", row.path); path.title = project.canonicalPath;
+    meta.append(path, ...row.counts.map((count) => node("span", "", count)), node("span", "", row.opened));
+    thumbnail.replaceChildren(name, meta);
+    if (project.entryId === options.preselectedId) thumbnail.append(node("span", "last-opened-tag", "Last opened"));
   });
   if (state.selectedId !== selected.entryId) {
     const thumbnail = state.entries.get(selected.entryId)!.thumbnail;
@@ -309,6 +346,7 @@ export function renderLandingProjects(options: LandingRenderOptions) {
     }
   }
   state.selectedId = selected.entryId;
+  syncStripOverflow(strip);
   if (focusSurface && document.activeElement !== focused) {
     const fallback = state.entries.get(selected.entryId)!;
     (focused?.isConnected ? focused : focusSurface === "stage" ? fallback.card : fallback.thumbnail).focus({ preventScroll: true });

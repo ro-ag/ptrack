@@ -992,3 +992,164 @@ describe("app.js mutation and refresh guards", () => {
     expect(appSource).toMatch(/InstallShellCommand\(\)\)\.catch\(/);
   });
 });
+
+describe("type scale", () => {
+  const sheets = ["style.css", "landing.css", "cover-flow.css", "settings-kimi.css"];
+  // SVG text sized in viewBox units, not CSS pixels on screen.
+  const svgUnits = new Set([".heatmap-label", ".history-marker-label", ".plan-ring-caption"]);
+  const labelSelector = /eyebrow|section-label|kicker|kbd|badge|project-code|summary|palette-kind|h4/;
+
+  function fontRules() {
+    const rules = [];
+    for (const sheet of sheets) {
+      const css = readFileSync(resolve(frontendRoot, "src", sheet), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+      for (const match of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+        const size = match[2].match(/font-size:\s*([\d.]+)(rem|px)\s*;/);
+        if (!size) continue;
+        const px = size[2] === "rem" ? Number(size[1]) * 16 : Number(size[1]);
+        rules.push({
+          sheet,
+          selector: match[1].trim().replace(/\s+/g, " "),
+          body: match[2],
+          value: `${size[1]}${size[2]}`,
+          px,
+        });
+      }
+    }
+    return rules;
+  }
+
+  it("has no 10px text and keeps 11px for a few uppercase labels only", () => {
+    const rules = fontRules();
+    expect(rules.filter((rule) => rule.value === "0.625rem" || rule.px === 10)).toEqual([]);
+    const small = rules.filter((rule) => rule.px === 11);
+    const selectors = small.flatMap((rule) => rule.selector.split(","));
+    expect(selectors.length).toBeLessThanOrEqual(12);
+    for (const rule of small) {
+      const uppercase = /text-transform:\s*uppercase/.test(rule.body) || /eyebrow|section-label/.test(rule.selector);
+      expect({ selector: rule.selector, label: uppercase || /kbd/.test(rule.selector) }).toEqual({
+        selector: rule.selector,
+        label: true,
+      });
+      expect(rule.selector).toMatch(labelSelector);
+    }
+  });
+
+  it("keeps body, meta, and description text at 12px or larger", () => {
+    const tooSmall = fontRules()
+      .filter((rule) => rule.px < 12 && rule.px !== 11 && !svgUnits.has(rule.selector))
+      .map((rule) => `${rule.sheet}: ${rule.selector} ${rule.value}`);
+    expect(tooSmall).toEqual([]);
+    const style = fontRules().filter((rule) => rule.sheet === "style.css");
+    for (const selector of [".intelligence-detail", ".intelligence-path", ".card-meta", ".activity-detail"]) {
+      const rule = style.find((candidate) => candidate.selector === selector);
+      expect(rule?.px, selector).toBeGreaterThanOrEqual(12);
+    }
+  });
+});
+
+describe("UI review guards", () => {
+  const app = readFileSync(resolve(frontendRoot, "src/app.js"), "utf8");
+  const index = readFileSync(resolve(frontendRoot, "index.html"), "utf8");
+  const style = readFileSync(resolve(frontendRoot, "src/style.css"), "utf8");
+  const functionSource = (name) => {
+    const start = app.search(new RegExp(`\\n(?:async )?function ${name}\\(`));
+    expect(start).toBeGreaterThan(0);
+    return app.slice(start, app.indexOf("\n}\n", start));
+  };
+  const rule = (selector) => {
+    const start = style.indexOf(`${selector} {`);
+    expect(start, selector).toBeGreaterThanOrEqual(0);
+    return style.slice(start, style.indexOf("}", start));
+  };
+
+  it("opens the task drawer from the card itself and keeps the board visible behind it", () => {
+    const card = functionSource("cardElement");
+    expect(card).toContain('card.addEventListener("click"');
+    expect(card).toContain('event.key !== "Enter" && event.key !== " "');
+    expect(card).toContain("openTaskDetail(task)");
+    const scrim = rule("#task-drawer > .modal-backdrop,\n#issue-drawer > .modal-backdrop");
+    expect(scrim).toContain("backdrop-filter: none");
+    for (const theme of [":root {", '[data-theme="light"] {']) {
+      const block = style.slice(style.indexOf(theme), style.indexOf("\n}\n", style.indexOf(theme)));
+      const alpha = Number(block.match(/--drawer-scrim: rgba\([^)]*,\s*([\d.]+)\)/)?.[1]);
+      expect(alpha, theme).toBeLessThanOrEqual(0.45);
+    }
+  });
+
+  it("moves tasks by drag, drawer, or card menu — never a select on the card", () => {
+    const card = functionSource("cardElement");
+    expect(card).not.toContain('createElement("select")');
+    expect(style).not.toContain(".card-actions");
+    const menu = functionSource("openTaskContextMenu");
+    expect(menu).toContain("label: `Move to ${statusTitles[status]}`");
+    expect(menu).toContain('label: "Add note"');
+    expect(rule(".drawer-actions select")).toMatch(/min-height: (2[89]|3\d)px/);
+  });
+
+  it("keeps the terminal dock on every view and one Unicode control in Settings", () => {
+    const view = functionSource("applyView");
+    expect(view).toContain("terminalHandle?.setVisible(open)");
+    expect(view).not.toContain('view === "board");\n}');
+    const pages = index.indexOf('<div class="work-area">');
+    expect(index.indexOf('id="overview-page"')).toBeGreaterThan(pages);
+    expect(index.indexOf('id="issues-page"')).toBeLessThan(index.indexOf('id="terminal-dock"'));
+    expect(index).toMatch(/class="terminal-unicode-setting"[\s\S]*?hidden\s*>/);
+    expect(index).toMatch(/id="terminal-start-shell" type="button">Start shell<\/button>/);
+    expect(style).toContain('.terminal-dock[data-state="closed"] .terminal-status {\n  display: none;');
+  });
+
+  it("names every icon-only button with an aria-label and a tooltip", () => {
+    for (const match of index.matchAll(/<button([\s\S]*?)>([\s\S]*?)<\/button>/g)) {
+      const attributes = match[1];
+      if (/modal-backdrop|terminal-paste-backdrop|terminal-termination-backdrop|id="(theme-toggle|terminal-window-theme-toggle)"/.test(attributes)) continue;
+      const text = match[2].replace(/<svg[\s\S]*?<\/svg>/g, "").replace(/<!--[\s\S]*?-->/g, "").replace(/<[^>]+>/g, "").trim();
+      // Short words such as "OK" are visible labels, not icons.
+      if (text.length > 2 || /^[A-Za-z]{2}$/.test(text)) continue;
+      expect({ button: attributes.trim().slice(0, 60), labelled: /aria-label=/.test(attributes) && /title=/.test(attributes) })
+        .toEqual({ button: attributes.trim().slice(0, 60), labelled: true });
+    }
+  });
+
+  it("opens Projects on its search field and hides panel toggles without a project", () => {
+    expect(app).not.toContain("elements.stateInitialize.focus()");
+    expect(functionSource("focusLandingSearch")).toContain("#recent-project-search");
+    expect(index).toMatch(/id="board-panel-toggle"[\s\S]*?hidden\s*>/);
+    expect(index).toMatch(/id="terminal-panel-toggle"[\s\S]*?hidden\s*>/);
+    expect(functionSource("applyView")).toContain("elements.terminalPanelToggle.hidden = !open");
+    const search = index.match(/<span class="orbit-sr-only">([^<]+)<\/span><input[^>]*id="recent-project-search"[^>]*placeholder="([^"]+)"/);
+    expect(search?.[2]).toBe(`${search?.[1]}…`);
+    expect(index).not.toContain("summary-guidance");
+    expect(index.match(/Refresh summaries/g)).toHaveLength(1);
+  });
+
+  it("says Projects, not Welcome, and labels commit counts by source", () => {
+    const visibleText = index.replace(/<!--[\s\S]*?-->/g, "").replace(/<[^>]+>/g, " ");
+    expect(visibleText).not.toMatch(/\bWelcome\b/);
+    // No string literal the UI shows says Welcome (identifiers may).
+    expect(app.split("\n").filter((line) => /(["`])[^"`]*\bWelcome\b[^"`]*\1/.test(line))).toEqual([]);
+    expect(app).toContain('statElement(board.stats.commits, "Linked commits")');
+    expect(functionSource("renderProjectHistory")).toContain("Git commits");
+  });
+
+  it("gives the version button a 24px hit target", () => {
+    const version = rule(".app-version");
+    expect(version).toContain("min-width: 24px");
+    expect(version).toContain("min-height: 24px");
+  });
+
+  it("styles the closeout reminder as a neutral notice stacked with the toast", () => {
+    expect(index).toMatch(/id="notice-stack"[\s\S]*?id="toast"/);
+    expect(functionSource("showPlanCloseoutBanner")).toContain('banner.className = "plan-closeout-banner"');
+    const banner = rule(".plan-closeout-banner");
+    expect(banner).toContain("border-left: 3px solid var(--info)");
+    expect(banner).not.toContain("blocked");
+    expect(app).toContain('showNotice(`p-track could not close yet: ${messageFrom(message)}`, "warning")');
+  });
+
+  it("keeps terminal-window keystrokes away from main-window shortcuts", () => {
+    const handler = app.slice(app.indexOf('document.addEventListener("keydown", (event) => {\n  trapModalFocus'));
+    expect(handler.indexOf("if (terminalWindowLabel(window.location.hash)) return;"))
+      .toBeLessThan(handler.indexOf("const command = commandShortcut("));
+  });
+});

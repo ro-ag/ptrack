@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterPlans, splitCurrentPlan } from "./plan-list";
+import { currentPlanCloseoutLabel, filterPlans, splitCurrentPlan } from "./plan-list";
 
 const plans = [
   { id: 1, title: "Foundation", status: "done" },
@@ -42,5 +42,48 @@ describe("sidebar current-plan split", () => {
 
   it("keeps the list whole for an empty project", () => {
     expect(splitCurrentPlan([])).toEqual({ current: undefined, rest: [] });
+  });
+});
+
+describe("one current plan", () => {
+  const loaded = [
+    { id: 13, title: "Selected", status: "active" },
+    { id: 29, title: "CLI active", status: "active", isActive: true },
+    { id: 30, title: "Other", status: "active" },
+  ];
+
+  it("pins the plan the board shows, not a different active plan", () => {
+    const { current, rest } = splitCurrentPlan(loaded, 13);
+    expect(current?.id).toBe(13);
+    expect(rest.map((plan) => plan.id)).toEqual([29, 30]);
+    expect(splitCurrentPlan(loaded, "30").current?.id).toBe(30);
+  });
+
+  it("falls back to the active plan only when no plan is on the board", () => {
+    expect(splitCurrentPlan(loaded, 0).current?.id).toBe(29);
+  });
+
+  it("pins nothing when the selected plan is not loaded", () => {
+    const { current, rest } = splitCurrentPlan(loaded, 99);
+    expect(current).toBeUndefined();
+    expect(rest).toEqual(loaded);
+  });
+});
+
+describe("current plan closeout call to action", () => {
+  it("appears once every task of an active plan is done", () => {
+    expect(currentPlanCloseoutLabel({ id: 29, title: "x", status: "active", tasksDone: 8, tasksTotal: 8 }))
+      .toBe("All 8 tasks done · Close plan…");
+    expect(currentPlanCloseoutLabel({ id: 1, title: "x", status: "active", tasksDone: 1, tasksTotal: 1 }))
+      .toBe("All 1 task done · Close plan…");
+  });
+
+  it("stays hidden with work left, on hold, closed, empty, or no plan", () => {
+    const base = { id: 1, title: "x", status: "active", tasksDone: 8, tasksTotal: 8 };
+    expect(currentPlanCloseoutLabel({ ...base, tasksDone: 7 })).toBeNull();
+    expect(currentPlanCloseoutLabel({ ...base, holdReason: "waiting" })).toBeNull();
+    expect(currentPlanCloseoutLabel({ ...base, status: "done" })).toBeNull();
+    expect(currentPlanCloseoutLabel({ ...base, tasksDone: 0, tasksTotal: 0 })).toBeNull();
+    expect(currentPlanCloseoutLabel(undefined)).toBeNull();
   });
 });

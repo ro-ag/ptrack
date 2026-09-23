@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { animate } from "motion";
 vi.mock("motion", () => ({ animate: vi.fn() }));
-import { bindCoverDrag, boundedSelection, carouselGeometry, coverSummary, createCoverMotion, carouselPosition, horizontalGesture, landingProjects, selectedLandingProject } from "./landing";
+import { bindCoverDrag, boundedSelection, carouselGeometry, coverSummary, createCoverMotion, carouselPosition, horizontalGesture, landingProjects, landingRowDetails, selectedLandingProject, shortenHomePath, stripOverflow } from "./landing";
 import { relativeTime } from "./format";
 import type { RecentProjectEntry } from "./recent-projects";
 import type { Overview } from "./overview";
@@ -191,5 +191,30 @@ describe("relative project freshness", () => {
   it("handles future clock skew and missing dates honestly", () => {
     expect(relativeTime(now + 120000, "long", now)).toBe("in 2 minutes");
     expect(relativeTime(NaN, "long", now)).toBe("Date unavailable");
+  });
+});
+
+describe("landing list rows", () => {
+  const now = Date.UTC(2026, 0, 3);
+  it("shortens home paths with ~ and leaves other paths whole", () => {
+    expect(shortenHomePath("/Users/rodox/dev/rs/ptrack")).toBe("~/dev/rs/ptrack");
+    expect(shortenHomePath("/home/ana/src/app")).toBe("~/src/app");
+    expect(shortenHomePath("/Users/rodox")).toBe("~");
+    expect(shortenHomePath("/opt/work/app")).toBe("/opt/work/app");
+  });
+  it("shows path, open tasks, open issues, and last opened", () => {
+    const row = landingRowDetails({ ...a, canonicalPath: "/Users/ana/dev/alpha" }, overview.projects[0], now);
+    expect(row).toEqual({
+      path: "~/dev/alpha",
+      counts: ["2 open tasks", "1 open issue"],
+      opened: "Opened 2 days ago",
+    });
+    expect(landingRowDetails(a, undefined, now).counts).toEqual([]);
+  });
+  it("reports which edges of the chip strip hide more chips", () => {
+    expect(stripOverflow(0, 600, 300)).toEqual({ start: false, end: true });
+    expect(stripOverflow(150, 600, 300)).toEqual({ start: true, end: true });
+    expect(stripOverflow(300, 600, 300)).toEqual({ start: true, end: false });
+    expect(stripOverflow(0, 300, 300)).toEqual({ start: false, end: false });
   });
 });

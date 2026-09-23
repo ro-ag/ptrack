@@ -15,6 +15,17 @@ fn platform_menu_specs_pin_order_roles_and_macos_only_accelerators() {
         macos[0].entries,
         [
             MenuEntrySpec::Role(MenuRole::About),
+            MenuEntrySpec::Command {
+                id: "update:open-requested",
+                label: "Check for Updates…",
+                macos_accelerator: None,
+            },
+            MenuEntrySpec::Separator,
+            MenuEntrySpec::Command {
+                id: "workspace:settings-requested",
+                label: "Settings…",
+                macos_accelerator: Some("CmdOrCtrl+,"),
+            },
             MenuEntrySpec::Separator,
             MenuEntrySpec::Role(MenuRole::Services),
             MenuEntrySpec::Separator,
@@ -105,5 +116,87 @@ fn dispatch_and_window_contracts_are_exact() {
             560,
             false
         )
+    );
+}
+
+fn command_ids(menu: &super::MenuSpec) -> Vec<&'static str> {
+    menu.entries
+        .iter()
+        .filter_map(|entry| match entry {
+            MenuEntrySpec::Command { id, .. } => Some(*id),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn macos_keeps_settings_and_updates_in_the_app_menu_only() {
+    let macos = menu_spec(DesktopPlatform::MacOs);
+    let everywhere = macos.iter().flat_map(command_ids).collect::<Vec<_>>();
+    for id in ["workspace:settings-requested", "update:open-requested"] {
+        assert_eq!(
+            everywhere.iter().filter(|seen| **seen == id).count(),
+            1,
+            "{id}"
+        );
+        assert!(
+            command_ids(&macos[0]).contains(&id),
+            "{id} belongs in the app menu"
+        );
+    }
+    assert_eq!(
+        command_ids(&macos[2]),
+        ["workspace:install-shell-command-requested"]
+    );
+
+    let other = menu_spec(DesktopPlatform::Other);
+    assert_eq!(command_ids(&other[1]), ["workspace:settings-requested"]);
+    assert!(command_ids(&other[3]).contains(&"update:open-requested"));
+}
+
+#[test]
+fn view_shortcuts_follow_the_sidebar_order() {
+    let macos = menu_spec(DesktopPlatform::MacOs);
+    let view = &macos[4];
+    let commands = view
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            MenuEntrySpec::Command {
+                label,
+                macos_accelerator,
+                ..
+            } => Some((*label, *macos_accelerator)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        commands,
+        [
+            ("Overview", Some("CmdOrCtrl+1")),
+            ("Board", Some("CmdOrCtrl+2")),
+            ("Issues", Some("CmdOrCtrl+3")),
+            ("Toggle Terminal Panel", Some("CmdOrCtrl+J")),
+            ("Search Plans, Tasks, and Notes…", Some("CmdOrCtrl+K")),
+        ]
+    );
+    let accelerators = macos
+        .iter()
+        .flat_map(|menu| &menu.entries)
+        .filter_map(|entry| match entry {
+            MenuEntrySpec::Command {
+                macos_accelerator: Some(accelerator),
+                ..
+            } => Some(*accelerator),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let mut unique = accelerators.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(
+        unique.len(),
+        accelerators.len(),
+        "no accelerator is bound twice"
     );
 }

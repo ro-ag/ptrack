@@ -52,14 +52,14 @@
             id="nav-overview"
             class="sidebar-nav-item"
             type="button"
-            title="Overview — ⌘2"
+            title="Overview — ⌘1"
             disabled
           >Overview</button>
           <button
             id="nav-board"
             class="sidebar-nav-item"
             type="button"
-            title="Board — ⌘1"
+            title="Board — ⌘2"
             aria-current="page"
             disabled
           >Board</button>
@@ -184,6 +184,7 @@
             aria-label="Hide board panel"
             title="Hide board panel"
             disabled
+            hidden
           >
             <svg viewBox="0 0 16 16" aria-hidden="true">
               <rect x="1.5" y="2" width="13" height="12" rx="2"></rect>
@@ -199,6 +200,7 @@
             aria-label="Hide terminal panel"
             title="Hide terminal panel"
             disabled
+            hidden
           >
             <svg viewBox="0 0 16 16" aria-hidden="true">
               <rect x="1.5" y="2" width="13" height="12" rx="2"></rect>
@@ -233,7 +235,7 @@
               </header>
               <section class="home-summary" aria-label="Global project summary">
                 <div id="global-overview-counts" class="stats-grid" aria-label="Global work statistics"></div>
-                <div class="home-coverage"><span class="panel-kicker">Summary coverage</span><strong id="orbit-sync-status">Loading summaries…</strong><p id="global-overview-coverage" role="status">Work counts reflect synced projects only.</p><button id="overview-refresh-button" class="summary-refresh" type="button">Refresh summaries</button><p id="overview-refresh-status" role="status" aria-live="polite"></p><details class="summary-guidance"><summary>Update work summaries</summary><p id="overview-refresh-guidance">Refresh reads the latest work from registered projects. Unavailable projects keep their previous summaries.</p></details></div>
+                <div class="home-coverage"><span class="panel-kicker">Summary coverage</span><strong id="orbit-sync-status">Loading summaries…</strong><p id="global-overview-coverage" role="status">Totals count only projects with a summary.</p><button id="overview-refresh-button" class="summary-refresh" type="button" title="Read the latest work from every registered project. Projects that are unavailable keep their last summary.">Refresh summaries</button><p id="overview-refresh-status" role="status" aria-live="polite"></p></div>
               </section>
               <div class="launch-grid">
                 <section class="project-preview-panel" aria-label="Selected project preview">
@@ -242,10 +244,10 @@
                 </section>
                 <section class="projects-panel" aria-labelledby="recent-project-heading">
                   <div class="panel-head"><div class="panel-title"><h3 id="recent-project-heading" tabindex="-1">Choose a project <span id="overview-project-count"></span></h3></div>
-                    <label class="search-wrap"><span class="orbit-sr-only">Search recent projects</span><input class="search-input" id="recent-project-search" type="search" placeholder="Search projects…" autocomplete="off" /></label>
+                    <label class="search-wrap"><span class="orbit-sr-only">Search projects</span><input class="search-input" id="recent-project-search" type="search" placeholder="Search projects…" autocomplete="off" /></label>
                     <div class="chooser-options"><div class="project-view-toggle" role="group" aria-label="Project view"><button type="button" data-project-view="carousel" aria-pressed="true" aria-controls="recent-project-list orbit-project-strip">Carousel</button><button type="button" data-project-view="list" aria-pressed="false" aria-controls="orbit-project-strip">List</button></div><div class="filter-row" aria-label="Project filters"><button class="chip active" type="button" data-orbit-filter="all" aria-pressed="true">All</button><button class="chip" type="button" data-orbit-filter="available" aria-pressed="false">Available</button><button class="chip" type="button" data-orbit-filter="synced" aria-pressed="false">With summary</button></div></div>
                   </div>
-                  <div class="project-stage-wrap"><div id="recent-project-list" class="project-stage" role="list" aria-label="Project carousel" aria-labelledby="recent-project-heading" aria-busy="false"></div><div class="stage-nav" aria-label="Project carousel controls"><button id="orbit-previous" type="button" aria-label="Previous project">←</button><button id="orbit-next" type="button" aria-label="Next project">→</button></div></div>
+                  <div class="project-stage-wrap"><div id="recent-project-list" class="project-stage" role="list" aria-label="Project carousel" aria-labelledby="recent-project-heading" aria-busy="false"></div><div class="stage-nav" aria-label="Project carousel controls"><button id="orbit-previous" type="button" aria-label="Previous project" title="Previous project">←</button><button id="orbit-next" type="button" aria-label="Next project" title="Next project">→</button></div></div>
                   <div class="project-index"><p class="panel-kicker">Recent projects · direct access</p><div id="orbit-project-strip" class="project-strip" role="list" aria-label="Recent tracked projects"></div></div>
                   <div class="orbit-feedback"><p id="recent-project-status" role="status" aria-live="polite" aria-atomic="true"></p><p id="recent-project-error" role="alert" aria-atomic="true"></p></div>
                 </section>
@@ -383,7 +385,7 @@
                 <button id="setup-open-recovery" class="button-secondary" type="button" hidden>Open Project</button>
                 <button id="setup-recovery-help" class="button-secondary" type="button" hidden>Open Recovery Help</button>
                 <button id="setup-recovery-choose" class="button-secondary" type="button">Choose Another Folder</button>
-                <button id="setup-return-welcome" class="button-secondary" type="button">Return to Welcome</button>
+                <button id="setup-return-welcome" class="button-secondary" type="button">Return to Projects</button>
               </div>
 
               <div id="setup-uncertain-actions" class="setup-actions" hidden>
@@ -506,7 +508,7 @@
 
         <section id="workspace" class="workspace" hidden>
           <div class="work-area">
-            <section class="board-shell">
+            <section id="board-shell" class="board-shell">
               <header class="board-heading">
                 <div class="plan-context">
                   <p class="eyebrow" id="plan-eyebrow">Current plan</p>
@@ -517,6 +519,7 @@
                       id="plan-title-menu"
                       class="plan-menu-trigger"
                       aria-label="Plan actions"
+                      title="Plan actions"
                       aria-haspopup="menu"
                     ><!-- gear-fill from Bootstrap Icons (MIT) -->
                       <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -562,6 +565,195 @@
               </header>
 
               <section id="board" class="board" aria-label="Kanban board"></section>
+            </section>
+
+            <!-- The pages share the work area with the board so the terminal dock
+                 below them stays put when the view changes. -->
+            <section
+              id="overview-page"
+              class="overview-page"
+              aria-label="Project overview"
+              hidden
+            >
+              <header class="overview-heading">
+                <p class="eyebrow">Project memory</p>
+                <h2 id="overview-heading" tabindex="-1">Overview</h2>
+              </header>
+
+              <div class="overview-grid">
+                <section class="memory-section north-star">
+                  <p class="section-label">North star</p>
+                  <p id="goal" class="goal">Loading project goal…</p>
+                </section>
+
+                <section class="memory-section summary-section">
+                  <div class="section-heading">
+                    <p class="section-label">Rolling project summary</p>
+                    <span id="summary-age" class="section-caption" hidden></span>
+                    <span id="summary-flag" class="summary-flag" hidden>folded</span>
+                  </div>
+                  <p id="summary" class="summary">No rolling summary yet.</p>
+                  <p id="summary-shape" class="summary-shape" hidden>
+                    <span id="summary-metrics"></span>
+                    <button id="summary-expand" type="button" class="summary-expand">Show all</button>
+                  </p>
+                </section>
+
+                <section class="memory-section overview-wide">
+                  <p class="section-label">Project status</p>
+                  <div class="status-layout">
+                    <div id="plan-ring" class="plan-ring" role="img" hidden></div>
+                    <div id="project-stats" class="stats-grid"></div>
+                  </div>
+                  <details class="snapshot-details">
+                    <summary>Snapshot details</summary>
+                    <div id="snapshot-bounds" class="intelligence-summary"></div>
+                  </details>
+                </section>
+
+                <section class="memory-section overview-wide">
+                  <div class="section-heading">
+                    <p class="section-label">Project history</p>
+                    <span id="history-caption" class="section-caption"></span>
+                  </div>
+                  <div id="project-history" class="project-history"></div>
+                </section>
+
+                <section class="memory-section">
+                  <div class="section-heading">
+                    <p class="section-label">Open issues</p>
+                    <span id="issue-total" class="section-count">0</span>
+                  </div>
+                  <div id="issue-list" class="issue-list"></div>
+                </section>
+
+                <section class="memory-section overview-wide">
+                  <div class="section-heading">
+                    <p class="section-label">Activity</p>
+                    <span class="section-caption">Notes and commits, last 16 weeks</span>
+                  </div>
+                  <div id="activity-heatmap" class="heatmap"></div>
+                </section>
+
+                <section class="memory-section activity-section">
+                  <div class="section-heading">
+                    <p class="section-label">Recent memory</p>
+                    <span class="section-caption">Notes and commits</span>
+                  </div>
+                  <div id="activity-list" class="activity-list"></div>
+                  <button
+                    id="activity-more"
+                    class="activity-more"
+                    type="button"
+                    aria-label="Show all recent memory"
+                    hidden
+                  >
+                    Show more…
+                  </button>
+                </section>
+
+                <section class="memory-section intelligence-section">
+                  <div class="section-heading">
+                    <p class="section-label">Repository</p>
+                    <span id="git-state" class="section-count">Loading</span>
+                  </div>
+                  <p id="project-root" class="intelligence-path"></p>
+                  <p id="storage-status" class="intelligence-meta"></p>
+                  <div id="git-summary" class="intelligence-summary"></div>
+                  <div id="stack-summary" class="intelligence-summary"></div>
+                  <details id="stack-projects-disclosure" class="stack-projects" hidden>
+                    <summary id="stack-projects-summary">Discovered projects</summary>
+                    <div id="stack-projects" class="intelligence-list" aria-label="Discovered projects"></div>
+                  </details>
+                  <p id="stack-empty" class="intelligence-meta" hidden>
+                    No project manifest found in tracked files.
+                  </p>
+                  <p id="stack-scanned" class="intelligence-meta"></p>
+                  <button id="stack-rescan" type="button" class="button-secondary" hidden>Rescan stack</button>
+                </section>
+
+                <section class="memory-section intelligence-section">
+                  <div class="section-heading">
+                    <p id="agent-activity-heading" class="section-label" tabindex="-1">Agent activity</p>
+                    <span id="agent-activity-total" class="section-count">0</span>
+                  </div>
+                  <div id="agent-activity-summary" class="intelligence-summary"></div>
+                  <form id="agent-handoff-form" class="agent-handoff-form" hidden>
+                    <label>From <select id="agent-handoff-source" aria-label="Handoff source agent"></select></label>
+                    <label>To <select id="agent-handoff-target" aria-label="Handoff target agent"></select></label>
+                    <button id="agent-handoff-send" type="submit">Send handoff</button>
+                  </form>
+                  <p id="agent-handoff-help" class="intelligence-meta" hidden>Handoffs are bounded proposals only; they grant no authority and change no task.</p>
+                  <div id="agent-handoff-inbox" class="intelligence-list" aria-label="Agent handoff inbox"></div>
+    				<form id="agent-workflow-form" class="agent-handoff-form" hidden>
+    					<label>Agent <select id="agent-workflow-run" aria-label="Workflow agent"></select></label>
+    					<label>Workflow
+    						<select id="agent-workflow-kind" aria-label="Workflow kind">
+    							<option value="validation">Validation</option>
+    							<option value="commit">Commit</option>
+    							<option value="pullRequest">Pull request</option>
+    							<option value="merge">Merge</option>
+    						</select>
+    					</label>
+    					<label>Target <select id="agent-workflow-target" aria-label="Workflow target branch"></select></label>
+    					<button id="agent-workflow-prepare" type="submit">Prepare</button>
+    				</form>
+    				<p id="agent-workflow-help" class="intelligence-meta" hidden>Workflow proposals and approvals execute nothing and grant no capability.</p>
+    				<div id="agent-workflow-inbox" class="intelligence-list" aria-label="Agent workflow proposals"></div>
+                  <div id="agent-drift" class="intelligence-list" aria-label="Observable work comparison"></div>
+                  <p id="agent-activity-live" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></p>
+                  <div id="agent-activity" class="intelligence-list" aria-label="Agent activity and notifications"></div>
+                </section>
+
+                <details id="git-remotes-disclosure" class="memory-section intelligence-section">
+                  <summary>Remotes and branches</summary>
+                  <div id="git-remotes" class="intelligence-list"></div>
+                  <div id="git-branches" class="intelligence-list"></div>
+                </details>
+
+                <details id="git-commits-disclosure" class="memory-section intelligence-section">
+                  <summary>Recent Git commits</summary>
+                  <div id="git-commits" class="intelligence-list"></div>
+                </details>
+
+                <details class="memory-section intelligence-section overview-wide overview-blockers">
+                  <summary>Project blockers and notes</summary>
+                  <div id="overview-blockers" class="intelligence-list"></div>
+                  <div id="overview-notes" class="intelligence-list"></div>
+                </details>
+              </div>
+            </section>
+
+            <section
+              id="issues-page"
+              class="issues-page"
+              aria-label="Project issues"
+              hidden
+            >
+              <header class="issues-heading">
+                <div>
+                  <p class="eyebrow">Reported issues</p>
+                  <h2 id="issues-heading" tabindex="-1">Issues</h2>
+                  <p class="issues-intro">Review reported problems, then explicitly schedule the ones that belong in a plan.</p>
+                </div>
+                <div class="issues-toolbar">
+                  <label for="issues-filter">Filter</label>
+                  <select id="issues-filter">
+                    <option value="open">Open</option>
+                    <option value="unscheduled">Unscheduled</option>
+                    <option value="scheduled">Scheduled</option>
+                    <option value="closed">Closed</option>
+                    <option value="all">All</option>
+                  </select>
+                  <button id="issues-new" type="button">New issue</button>
+                </div>
+              </header>
+              <p id="issues-status" class="issues-status" role="status" aria-live="polite"></p>
+              <div id="issues-pagination" class="issues-toolbar issues-pagination">
+                <button id="issues-previous" type="button" class="button-secondary">Newer issues</button>
+                <button id="issues-next" type="button" class="button-secondary">Older issues</button>
+              </div>
+              <div id="issues-inbox" class="issues-inbox" role="list" aria-busy="false"></div>
             </section>
 
             <section
@@ -649,14 +841,18 @@
                     spellcheck="false"
                   />
                 </label>
+                <!-- Settings > Terminal > Unicode mode is the one control for this.
+                     The hidden checkbox only carries that choice into open panes. -->
                 <label
                   class="terminal-unicode-setting"
                   title="Use experimental Unicode 15 grapheme and emoji cell widths"
+                  hidden
                 >
                   <input
                     id="terminal-modern-unicode"
                     type="checkbox"
                     aria-label="Modern Unicode support"
+                    tabindex="-1"
                     checked
                   />
                   <span>Modern Unicode</span>
@@ -899,6 +1095,10 @@
                   on its own is claimed back for the same session.
                 </p>
               </section>
+              <div id="terminal-empty" class="terminal-empty">
+                <p>No shell is running in this tab.</p>
+                <button id="terminal-start-shell" type="button">Start shell</button>
+              </div>
               <div
                 id="terminal-body"
                 class="terminal-body"
@@ -1028,192 +1228,6 @@
             </section>
           </div>
         </section>
-
-        <section
-          id="overview-page"
-          class="overview-page"
-          aria-label="Project overview"
-          hidden
-        >
-          <header class="overview-heading">
-            <p class="eyebrow">Project memory</p>
-            <h2 id="overview-heading" tabindex="-1">Overview</h2>
-          </header>
-
-          <div class="overview-grid">
-            <section class="memory-section north-star">
-              <p class="section-label">North star</p>
-              <p id="goal" class="goal">Loading project goal…</p>
-            </section>
-
-            <section class="memory-section summary-section">
-              <div class="section-heading">
-                <p class="section-label">Rolling project summary</p>
-                <span id="summary-flag" class="summary-flag" hidden>note digest</span>
-              </div>
-              <p id="summary" class="summary">No rolling summary yet.</p>
-              <p id="summary-shape" class="summary-shape" hidden>
-                <span id="summary-metrics"></span>
-                <button id="summary-expand" type="button" class="summary-expand">Show all</button>
-              </p>
-            </section>
-
-            <section class="memory-section overview-wide">
-              <p class="section-label">Project status</p>
-              <div class="status-layout">
-                <div id="plan-ring" class="plan-ring" role="img" hidden></div>
-                <div id="project-stats" class="stats-grid"></div>
-              </div>
-              <details class="snapshot-details">
-                <summary>Snapshot details</summary>
-                <div id="snapshot-bounds" class="intelligence-summary"></div>
-              </details>
-            </section>
-
-            <section class="memory-section overview-wide">
-              <div class="section-heading">
-                <p class="section-label">Project history</p>
-                <span id="history-caption" class="section-caption"></span>
-              </div>
-              <div id="project-history" class="project-history"></div>
-            </section>
-
-            <section class="memory-section overview-wide">
-              <div class="section-heading">
-                <p class="section-label">Activity</p>
-                <span class="section-caption">Notes and commits, last 16 weeks</span>
-              </div>
-              <div id="activity-heatmap" class="heatmap"></div>
-            </section>
-
-            <section class="memory-section">
-              <div class="section-heading">
-                <p class="section-label">Open issues</p>
-                <span id="issue-total" class="section-count">0</span>
-              </div>
-              <div id="issue-list" class="issue-list"></div>
-            </section>
-
-            <section class="memory-section activity-section">
-              <div class="section-heading">
-                <p class="section-label">Recent memory</p>
-                <span class="section-caption">Notes and commits</span>
-              </div>
-              <div id="activity-list" class="activity-list"></div>
-              <button
-                id="activity-more"
-                class="activity-more"
-                type="button"
-                aria-label="Show all recent memory"
-                hidden
-              >
-                Show more…
-              </button>
-            </section>
-
-            <section class="memory-section intelligence-section">
-              <div class="section-heading">
-                <p class="section-label">Repository</p>
-                <span id="git-state" class="section-count">Loading</span>
-              </div>
-              <p id="project-root" class="intelligence-path"></p>
-              <p id="storage-status" class="intelligence-meta"></p>
-              <div id="git-summary" class="intelligence-summary"></div>
-              <div id="stack-summary" class="intelligence-summary"></div>
-              <details id="stack-projects-disclosure" class="stack-projects" hidden>
-                <summary id="stack-projects-summary">Discovered projects</summary>
-                <div id="stack-projects" class="intelligence-list" aria-label="Discovered projects"></div>
-              </details>
-              <p id="stack-empty" class="intelligence-meta" hidden>
-                No project manifest found in tracked files.
-              </p>
-              <p id="stack-scanned" class="intelligence-meta"></p>
-              <button id="stack-rescan" type="button" class="button-secondary" hidden>Rescan stack</button>
-            </section>
-
-            <section class="memory-section intelligence-section">
-              <div class="section-heading">
-                <p id="agent-activity-heading" class="section-label" tabindex="-1">Agent activity</p>
-                <span id="agent-activity-total" class="section-count">0</span>
-              </div>
-              <div id="agent-activity-summary" class="intelligence-summary"></div>
-              <form id="agent-handoff-form" class="agent-handoff-form" hidden>
-                <label>From <select id="agent-handoff-source" aria-label="Handoff source agent"></select></label>
-                <label>To <select id="agent-handoff-target" aria-label="Handoff target agent"></select></label>
-                <button id="agent-handoff-send" type="submit">Send handoff</button>
-              </form>
-              <p id="agent-handoff-help" class="intelligence-meta" hidden>Handoffs are bounded proposals only; they grant no authority and change no task.</p>
-              <div id="agent-handoff-inbox" class="intelligence-list" aria-label="Agent handoff inbox"></div>
-				<form id="agent-workflow-form" class="agent-handoff-form" hidden>
-					<label>Agent <select id="agent-workflow-run" aria-label="Workflow agent"></select></label>
-					<label>Workflow
-						<select id="agent-workflow-kind" aria-label="Workflow kind">
-							<option value="validation">Validation</option>
-							<option value="commit">Commit</option>
-							<option value="pullRequest">Pull request</option>
-							<option value="merge">Merge</option>
-						</select>
-					</label>
-					<label>Target <select id="agent-workflow-target" aria-label="Workflow target branch"></select></label>
-					<button id="agent-workflow-prepare" type="submit">Prepare</button>
-				</form>
-				<p id="agent-workflow-help" class="intelligence-meta" hidden>Workflow proposals and approvals execute nothing and grant no capability.</p>
-				<div id="agent-workflow-inbox" class="intelligence-list" aria-label="Agent workflow proposals"></div>
-              <div id="agent-drift" class="intelligence-list" aria-label="Observable work comparison"></div>
-              <p id="agent-activity-live" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></p>
-              <div id="agent-activity" class="intelligence-list" aria-label="Agent activity and notifications"></div>
-            </section>
-
-            <details class="memory-section intelligence-section">
-              <summary>Remotes and branches</summary>
-              <div id="git-remotes" class="intelligence-list"></div>
-              <div id="git-branches" class="intelligence-list"></div>
-            </details>
-
-            <details class="memory-section intelligence-section">
-              <summary>Recent Git commits</summary>
-              <div id="git-commits" class="intelligence-list"></div>
-            </details>
-
-            <details class="memory-section intelligence-section overview-wide">
-              <summary>Project blockers and notes</summary>
-              <div id="overview-blockers" class="intelligence-list"></div>
-              <div id="overview-notes" class="intelligence-list"></div>
-            </details>
-          </div>
-        </section>
-
-        <section
-          id="issues-page"
-          class="issues-page"
-          aria-label="Project issues"
-          hidden
-        >
-          <header class="issues-heading">
-            <div>
-              <p class="eyebrow">Reported issues</p>
-              <h2 id="issues-heading" tabindex="-1">Issues</h2>
-              <p class="issues-intro">Review reported problems, then explicitly schedule the ones that belong in a plan.</p>
-            </div>
-            <div class="issues-toolbar">
-              <label for="issues-filter">Filter</label>
-              <select id="issues-filter">
-                <option value="open">Open</option>
-                <option value="unscheduled">Unscheduled</option>
-                <option value="scheduled">Scheduled</option>
-                <option value="closed">Closed</option>
-                <option value="all">All</option>
-              </select>
-              <button id="issues-new" type="button">New issue</button>
-            </div>
-          </header>
-          <p id="issues-status" class="issues-status" role="status" aria-live="polite"></p>
-          <div id="issues-pagination" class="issues-toolbar issues-pagination">
-            <button id="issues-previous" type="button" class="button-secondary">Newer issues</button>
-            <button id="issues-next" type="button" class="button-secondary">Older issues</button>
-          </div>
-          <div id="issues-inbox" class="issues-inbox" role="list" aria-busy="false"></div>
-        </section>
         </main>
       </div>
     </div>
@@ -1265,6 +1279,7 @@
           id="terminal-window-search-close"
           type="button"
           aria-label="Close search"
+          title="Close search"
         >×</button>
       </div>
       <p id="terminal-window-gap" class="terminal-window-gap" role="note" hidden>
@@ -1469,7 +1484,7 @@
                 <span>
                   Reopen the last project when p-track starts
                   <small>Off by default. The last project reopens only while it is still
-                  valid; otherwise p-track opens Welcome.</small>
+                  valid; otherwise p-track opens Projects.</small>
                 </span>
               </label>
               <p class="dialog-help">
@@ -1557,7 +1572,7 @@
                 />
               </label>
               <p id="settings-terminal-font-family-help" class="dialog-help">
-                Use monospace for the built-in stack.
+                Leave as monospace to use the bundled terminal font stack.
               </p>
               <label class="settings-field" for="settings-terminal-font-size">
                 <span>Font size</span>
@@ -1689,7 +1704,7 @@
               <p class="dialog-help">
                 The report is read-only. Nothing here changes stored project data.
               </p>
-              <dl id="settings-diagnostics" class="settings-diagnostics"></dl>
+              <div id="settings-diagnostics" class="settings-diagnostics"></div>
               <h4 class="section-label">Reset</h4>
               <p id="settings-reset-help" class="dialog-help">
                 Neither reset touches plans, tasks, notes, or Recent projects.
@@ -1723,7 +1738,7 @@
           ></p>
           <div class="dialog-actions">
             <button id="settings-reset" class="button-secondary" type="button">
-              Reset to defaults
+              Reset all settings…
             </button>
           </div>
         </div>
@@ -1883,7 +1898,7 @@
             Rename
           </button>
           <button id="drawer-memory" class="button-secondary" type="button">
-            Record memory
+            Add note
           </button>
           <button id="drawer-copy-context" class="button-secondary" type="button">Copy context</button>
           <button id="drawer-launch-agent" class="button-secondary" type="button">
@@ -2342,7 +2357,11 @@
     </div>
 
     <span id="context-copy-status" class="visually-hidden" role="status" aria-live="polite"></span>
-    <div id="toast" class="toast" role="alert" aria-live="assertive" hidden></div>
+    <!-- Notices stack bottom-right: the error toast never covers the plan
+         closeout banner, and neither covers the other. -->
+    <div id="notice-stack" class="notice-stack">
+      <div id="toast" class="toast" role="alert" aria-live="assertive" hidden></div>
+    </div>
     <script type="module" src="/src/app.js"></script>
   </body>
 </html>

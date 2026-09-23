@@ -6,7 +6,7 @@ import { landingProjects, selectedLandingProject, renderLandingProjects } from "
 import { formatBytes, relativeTime as formatRelativeTime } from "./workspace/format";
 import { overviewActivity, overviewRefreshMessage } from "./workspace/overview";
 import "./tauri-bridge";
-import { filterPlans, splitCurrentPlan } from "./workspace/plan-list";
+import { currentPlanCloseoutLabel, filterPlans, splitCurrentPlan } from "./workspace/plan-list";
 import { bindPlanMotion } from "./workspace/plan-motion";
 import { agentContextText } from "./workspace/copy-context";
 import { readModernUnicodeSetting } from "./terminal/unicode";
@@ -30,6 +30,7 @@ import { terminalSearchOptions, terminalSearchResultLabel } from "./terminal/sea
 import {
   loadTerminalFont,
   normalizeTerminalProfileSettings,
+  terminalProfileTheme,
 } from "./terminal/profile-settings";
 import {
   detachedLastTabCloseTitle,
@@ -58,7 +59,7 @@ import {
   stableTerminalWritebackRequestID,
   terminalWritebackContentPolicy,
 } from "./terminal/writeback";
-import { THEME_STORAGE_KEY, initTheme } from "./theme";
+import { THEME_STORAGE_KEY, initTheme, terminalThemeName } from "./theme";
 import {
   applyPreferenceMirrors,
   defaultPreferences,
@@ -79,6 +80,7 @@ import {
   nextSettingsSectionIndex,
   resetApplicationStateConfirmation,
   resetApplicationStateMessage,
+  resetSettingsConfirmation,
   resetWindowLayoutConfirmation,
   settingsPanelId,
   settingsSectionIndex,
@@ -196,6 +198,8 @@ import {
   agentActivityPresentation,
   driftPresentation,
   appVersionLabel,
+  boardGridColumns,
+  repositoryChips,
   collapsedLaneStatuses,
   commandShortcut,
   confirmationCopy,
@@ -218,6 +222,7 @@ import {
   runtimeEventIsCurrent,
   shortcutIntent,
   stackLanguageRows,
+  shortenSummaryHashes,
   summaryShape,
   summaryShapeCaption,
   workflowMutationFocusKey,
@@ -249,6 +254,8 @@ const elements = {
   boardPanelToggle: document.querySelector("#board-panel-toggle"),
   terminalPanelToggle: document.querySelector("#terminal-panel-toggle"),
   workspace: document.querySelector("#workspace"),
+  workArea: document.querySelector("#workspace .work-area"),
+  boardShell: document.querySelector("#board-shell"),
   overviewPage: document.querySelector("#overview-page"),
   overviewHeading: document.querySelector("#overview-heading"),
   issuesPage: document.querySelector("#issues-page"),
@@ -435,6 +442,7 @@ const elements = {
   goal: document.querySelector("#goal"),
   summary: document.querySelector("#summary"),
   summaryFlag: document.querySelector("#summary-flag"),
+  summaryAge: document.querySelector("#summary-age"),
   summaryShapeRow: document.querySelector("#summary-shape"),
   summaryMetrics: document.querySelector("#summary-metrics"),
   summaryExpand: document.querySelector("#summary-expand"),
@@ -502,6 +510,8 @@ const elements = {
   gitRemotes: document.querySelector("#git-remotes"),
   gitBranches: document.querySelector("#git-branches"),
   gitCommits: document.querySelector("#git-commits"),
+  gitRemotesDisclosure: document.querySelector("#git-remotes-disclosure"),
+  gitCommitsDisclosure: document.querySelector("#git-commits-disclosure"),
   agentActivityHeading: document.querySelector("#agent-activity-heading"),
   agentActivityTotal: document.querySelector("#agent-activity-total"),
   agentActivitySummary: document.querySelector("#agent-activity-summary"),
@@ -1013,8 +1023,15 @@ function messageFrom(error) {
 }
 
 function showError(error) {
+  showNotice(messageFrom(error), "error");
+}
+
+// Errors and cautions share the toast so they look and stack alike; only the
+// tone differs.
+function showNotice(message, tone = "error") {
   window.clearTimeout(toastTimer);
-  elements.toast.textContent = messageFrom(error);
+  elements.toast.textContent = message;
+  elements.toast.dataset.tone = tone;
   elements.toast.hidden = false;
   toastTimer = window.setTimeout(() => {
     elements.toast.hidden = true;
@@ -1254,10 +1271,25 @@ function renderSummary() {
   // deliberately opened is the same bug as scrolling them back to the top.
   // Only new text earns a fresh fold; the same text keeps the state it was
   // left in. Read before the write, or the comparison is against itself.
-  const unchanged = elements.summary.textContent === display;
+  const unchanged = elements.summary.dataset.source === display;
   const expanded = unchanged && elements.summary.dataset.expanded === "true";
 
-  elements.summary.textContent = display;
+  elements.summary.dataset.source = display;
+  elements.summary.replaceChildren(
+    ...shortenSummaryHashes(display).map((segment) => {
+      if (!segment.full) return document.createTextNode(segment.text);
+      const hash = document.createElement("abbr");
+      hash.className = "summary-hash";
+      hash.title = segment.full;
+      hash.textContent = segment.text;
+      return hash;
+    }),
+  );
+  // How old the summary is, when the snapshot says; a summary that predates
+  // the last release reads very differently from one written this morning.
+  const age = board.summaryUpdatedAt ? relativeTime(board.summaryUpdatedAt) : "";
+  elements.summaryAge.hidden = !text || !age;
+  elements.summaryAge.textContent = age ? `Updated ${age}` : "";
   const shape = text ? summaryShape(text) : null;
   const dense = Boolean(shape?.problem);
   elements.summary.dataset.dense = dense ? "true" : "false";
@@ -1301,7 +1333,9 @@ function renderMemory() {
     statElement(board.stats.tasksBlocked, "Blocked"),
     statElement(board.stats.openIssues, "Open issues"),
     statElement(board.stats.notes, "Notes"),
-    statElement(board.stats.commits, "Commits"),
+    // Commits recorded against tasks, not the repository's Git history (the
+    // Project history chart counts those).
+    statElement(board.stats.commits, "Linked commits"),
   );
   // Tracked files, counted from the manifests git tracks. A line count is not
   // reported: one vendored directory or generated bundle outweighs the code
@@ -1388,11 +1422,15 @@ function renderIssuesInbox() {
   // buttons.
   elements.issuesPagination.hidden = total <= shown && issuesOffset === 0;
   if (issues.length === 0) {
-    elements.issuesInbox.append(emptyMemory(
+    // One message, not a "0 open issues." count above "No open issues.".
+    elements.issuesStatus.textContent = "";
+    const empty = emptyMemory(
       filter === "unscheduled"
         ? "No unscheduled issues. New reports remain triage-only until you schedule them."
         : `No ${filter === "all" ? "" : `${filter} `}issues.`,
-    ));
+    );
+    elements.issuesInbox.append(empty);
+    if (filter !== "closed" && filter !== "all") void offerClosedIssues(empty);
     return;
   }
   issues.forEach((issue) => {
@@ -1427,6 +1465,33 @@ function renderIssuesInbox() {
     item.append(row);
     elements.issuesInbox.append(item);
   });
+}
+
+// An empty inbox points at closed issues when there are any, so resolved
+// work is one click away instead of behind the filter menu.
+async function offerClosedIssues(empty) {
+  const ticket = workspaceController.capture();
+  const request = issuesRequest;
+  try {
+    const response = await api().GetIssuesV1(ticket.generation, "closed", 0);
+    const closed = Number(response.bounds?.total || response.issues?.length || 0);
+    if (
+      closed === 0 || request !== issuesRequest || !empty.isConnected ||
+      !workspaceController.accepts(ticket, Number(response.generation))
+    ) return;
+    const show = document.createElement("button");
+    show.type = "button";
+    show.className = "button-secondary issues-show-closed";
+    show.textContent = closed === 1 ? "Show 1 closed issue" : `Show ${closed} closed issues`;
+    show.addEventListener("click", () => {
+      elements.issuesFilter.value = "closed";
+      issuesOffset = 0;
+      void loadIssues();
+    });
+    empty.append(show);
+  } catch {
+    // The offer is a convenience; the empty message already stands on its own.
+  }
 }
 
 async function loadIssues(quiet = false) {
@@ -1843,7 +1908,7 @@ function renderProjectHistory() {
     class: "history-svg",
     role: "img",
     preserveAspectRatio: "none",
-    "aria-label": `Commit history, ${timeline.commits.length} commits`,
+    "aria-label": `Git commit history, ${timeline.commits.length} Git commits`,
   });
 
   const defs = svgElement("defs");
@@ -1890,8 +1955,8 @@ function renderProjectHistory() {
   const last = new Date(timeline.commits[timeline.commits.length - 1] * 1000);
   const span = `${first.toLocaleDateString()} to ${last.toLocaleDateString()}`;
   elements.historyCaption.textContent = timeline.truncated
-    ? `${timeline.commits.length.toLocaleString()} most recent commits, ${span}`
-    : `${timeline.commits.length.toLocaleString()} commits, ${span}`;
+    ? `${timeline.commits.length.toLocaleString()} most recent Git commits, ${span}`
+    : `${timeline.commits.length.toLocaleString()} Git commits, ${span}`;
 }
 
 // Read once per project and re-read only when a snapshot lands, since the
@@ -2005,11 +2070,12 @@ function cardElement(task) {
   cardMenu.className = "card-menu";
   cardMenu.append(elements.planTitleMenu.querySelector("svg").cloneNode(true));
   cardMenu.setAttribute("aria-label", `Task #${task.id} actions`);
+  cardMenu.title = `Task #${task.id} actions`;
   cardMenu.setAttribute("aria-haspopup", "menu");
   cardMenu.addEventListener("click", (event) => {
     event.stopPropagation();
     const rect = cardMenu.getBoundingClientRect();
-    openTaskContextMenu(task, { x: rect.right, y: rect.bottom + 4 });
+    openTaskContextMenu(task, { x: rect.right, y: rect.bottom + 4 }, cardMenu);
   });
   meta.append(cardMenu);
   const title = document.createElement("p");
@@ -2034,7 +2100,8 @@ function cardElement(task) {
     const hold = document.createElement("span");
     hold.className = "card-hold";
     hold.textContent = "⏸ On hold";
-    hold.title = task.holdReason;
+    // Parked, not blocked: the status and the lane are unchanged.
+    hold.title = `On hold: ${task.holdReason}`;
     dragZone.append(hold);
     dragZone.setAttribute(
       "aria-label",
@@ -2070,7 +2137,11 @@ function cardElement(task) {
     if (task.issueCount) context.append(contextChip(task.issueCount, "issue", "issue-chip"));
     dragZone.append(context);
   }
-  dragZone.addEventListener("click", () => {
+  // Anywhere on the card except its own controls opens the task drawer.
+  card.addEventListener("click", (event) => {
+    if (event.target instanceof Element && event.target.closest("button, a, input, select, textarea")) {
+      return;
+    }
     // A click that ends a drag, or the first click of a double-click rename,
     // must not open the drawer.
     if (Date.now() - dragJustEndedAt < 300) return;
@@ -2081,7 +2152,8 @@ function cardElement(task) {
     }, 240);
   });
   dragZone.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter") return;
+    if (event.target !== dragZone) return;
+    if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
     window.clearTimeout(drawerOpenTimer);
     drawerOpenTimer = null;
@@ -2105,25 +2177,10 @@ function cardElement(task) {
     document.querySelectorAll(".drag-over").forEach((node) => node.classList.remove("drag-over"));
   });
 
-  const actions = document.createElement("div");
-  actions.className = "card-actions";
-  const statusSelect = document.createElement("select");
-  statusSelect.setAttribute("aria-label", `Move task #${task.id}`);
-  board.columns.forEach((column) => {
-    const option = document.createElement("option");
-    option.value = column.status;
-    option.textContent = column.title;
-    option.selected = column.status === task.status;
-    statusSelect.append(option);
-  });
-  statusSelect.addEventListener("change", (event) =>
-    void moveTask(task.id, statusSelect.value, event.currentTarget)
-  );
-  // The status select is the one control a card needs on its face; Agent,
-  // Copy context, Edit, and Memory live in the ⋯ menu (and the right-click
-  // menu), keeping the accessibility tree to a few nodes per lane.
-  actions.append(statusSelect);
-  card.append(dragZone, actions);
+  // The lane already shows the status, so the card carries no status
+  // control of its own: drag it, use the drawer's status field, or pick
+  // "Move to …" from the ⋯ / right-click menu.
+  card.append(dragZone);
 
   // Right-click opens the same task menu as the gear trigger.
   card.addEventListener("contextmenu", (event) => {
@@ -2253,8 +2310,8 @@ function renderPlanList() {
   // card out of the grid track sizing that painted it over the next row.
   // The card survives filtering on purpose: it is the project's active
   // context, and the filters only reshape the browsing list below it.
-  const { current } = board ? splitCurrentPlan(board.plans) : { current: undefined };
-  const { rest } = splitCurrentPlan(plans);
+  const { current } = board ? splitCurrentPlan(board.plans, board.planId) : { current: undefined };
+  const { rest } = splitCurrentPlan(plans, board?.planId ?? 0);
   renderCurrentPlan(current);
   elements.planList.replaceChildren();
   if (!board) return;
@@ -2282,38 +2339,21 @@ function renderPlanList() {
       item.setAttribute("aria-current", "true");
     }
     if (settled) item.classList.add("settled");
-    item.title = plan.title;
+    item.title = `#${plan.id} ${plan.title}`;
     if (totalTasks > 0) item.title = `${item.title} · ${doneTasks}/${totalTasks} done`;
     const title = document.createElement("span");
     title.className = "sidebar-plan-title";
     title.textContent = `#${plan.id} ${plan.title}`;
+    // The row truncates long names; the full name rides on the title too.
+    title.title = `#${plan.id} ${plan.title}`;
     item.append(title);
     bindPlanMotion(item, title);
     if (plan.status === "done") item.append(planDoneTick());
-    if (plan.holdReason) {
-      const hold = document.createElement("span");
-      hold.className = "sidebar-plan-flag hold";
-      hold.title = `on hold: ${plan.holdReason}`;
-      hold.setAttribute("aria-hidden", "true");
-      item.append(hold);
-      item.title = `${item.title} · on hold: ${plan.holdReason}`;
-    }
-    if (plan.claimedBy) {
-      const claim = document.createElement("span");
-      claim.className = "sidebar-plan-flag claim";
-      claim.title = `claimed by ${plan.claimedBy}`;
-      claim.setAttribute("aria-hidden", "true");
-      item.append(claim);
-      item.title = `${item.title} · claimed by ${plan.claimedBy}`;
-    }
-    if (plan.depsOpen?.length) {
-      const deps = document.createElement("span");
-      deps.className = "sidebar-plan-flag deps";
-      deps.title = `waiting on ${plan.depsOpen.map((id) => `#${id}`).join(", ")}`;
-      deps.setAttribute("aria-hidden", "true");
-      item.append(deps);
-      item.title = `${item.title} · waiting on ${plan.depsOpen.map((id) => `#${id}`).join(", ")}`;
-    }
+    const flags = planFlagElements(plan);
+    item.append(...flags);
+    flags.forEach((flag) => {
+      item.title = `${item.title} · ${flag.title}`;
+    });
     item.addEventListener("click", () => selectPlan(plan.id));
     item.addEventListener("keydown", (event) => {
       // Ignore keys bubbling up from the nested gear button (Enter/Space
@@ -2334,6 +2374,8 @@ function renderPlanList() {
     // icon path lives in index.html exactly once.
     menuButton.append(elements.planTitleMenu.querySelector("svg").cloneNode(true));
     menuButton.setAttribute("aria-label", `Plan #${plan.id} actions`);
+  menuButton.title = `Plan #${plan.id} actions`;
+    menuButton.title = `Plan #${plan.id} actions`;
     menuButton.setAttribute("aria-haspopup", "menu");
     menuButton.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -2363,13 +2405,9 @@ function renderCurrentPlan(plan) {
   card.setAttribute("role", "button");
   card.tabIndex = 0;
   card.className = "sidebar-current-card";
-  card.title = `${plan.title} · current plan`;
+  card.title = `#${plan.id} ${plan.title} · current plan`;
   if (totalTasks > 0) card.title = `${card.title} · ${doneTasks}/${totalTasks} done`;
-  if (plan.holdReason) card.title = `${card.title} · on hold: ${plan.holdReason}`;
-  if (plan.claimedBy) card.title = `${card.title} · claimed by ${plan.claimedBy}`;
-  if (plan.depsOpen?.length) {
-    card.title = `${card.title} · waiting on ${plan.depsOpen.map((id) => `#${id}`).join(", ")}`;
-  }
+  for (const flag of planFlagElements(plan)) card.title = `${card.title} · ${flag.title}`;
   const row = document.createElement("span");
   row.className = "sidebar-current-title-row";
   // The tick leads the title so it can't collide with the gear pinned at
@@ -2378,28 +2416,8 @@ function renderCurrentPlan(plan) {
   const title = document.createElement("span");
   title.className = "sidebar-current-title";
   title.textContent = `#${plan.id} ${plan.title}`;
-  row.append(title);
-  if (plan.holdReason) {
-    const hold = document.createElement("span");
-    hold.className = "sidebar-plan-flag hold";
-    hold.title = `on hold: ${plan.holdReason}`;
-    hold.setAttribute("aria-hidden", "true");
-    row.append(hold);
-  }
-  if (plan.claimedBy) {
-    const claim = document.createElement("span");
-    claim.className = "sidebar-plan-flag claim";
-    claim.title = `claimed by ${plan.claimedBy}`;
-    claim.setAttribute("aria-hidden", "true");
-    row.append(claim);
-  }
-  if (plan.depsOpen?.length) {
-    const deps = document.createElement("span");
-    deps.className = "sidebar-plan-flag deps";
-    deps.title = `waiting on ${plan.depsOpen.map((id) => `#${id}`).join(", ")}`;
-    deps.setAttribute("aria-hidden", "true");
-    row.append(deps);
-  }
+  title.title = `#${plan.id} ${plan.title}`;
+  row.append(title, ...planFlagElements(plan));
   card.append(row);
   if (totalTasks > 0) {
     const meter = document.createElement("span");
@@ -2426,6 +2444,20 @@ function renderCurrentPlan(plan) {
     stats.textContent = "No tasks yet";
   }
   card.append(stats);
+  // A finished plan that is still active asks to be closed right here,
+  // instead of staying pinned as "current" with nothing left to do.
+  const closeout = currentPlanCloseoutLabel(plan);
+  if (closeout) {
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "sidebar-current-closeout";
+    close.textContent = closeout;
+    close.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openPlanDoneDialog(plan);
+    });
+    card.append(close);
+  }
   card.addEventListener("click", () => selectPlan(plan.id));
   card.addEventListener("keydown", (event) => {
     // Ignore keys bubbling up from the nested gear button (Enter/Space
@@ -2460,20 +2492,41 @@ function planDoneTick() {
   svg.append(svgElement("path", { d: "M2 6.5 4.8 9 10 3.5" }));
   const tick = document.createElement("span");
   tick.className = "sidebar-plan-tick";
-  tick.setAttribute("aria-hidden", "true");
+  tick.setAttribute("role", "img");
+  tick.setAttribute("aria-label", "Done");
+  tick.title = "Done";
   tick.append(svg);
   return tick;
+}
+
+// Status dots beside a sidebar plan name. Each one is named for screen
+// readers and carries the same words as its tooltip. "On hold" parks the
+// plan without changing its status; it never means blocked.
+function planFlagElements(plan) {
+  const flags = [];
+  const flag = (kind, label) => {
+    const dot = document.createElement("span");
+    dot.className = `sidebar-plan-flag ${kind}`;
+    dot.setAttribute("role", "img");
+    dot.setAttribute("aria-label", label);
+    dot.title = label;
+    flags.push(dot);
+  };
+  if (plan.holdReason) flag("hold", `On hold: ${plan.holdReason}`);
+  if (plan.claimedBy) flag("claim", `Claimed by ${plan.claimedBy}`);
+  if (plan.depsOpen?.length) {
+    flag("deps", `Waiting on ${plan.depsOpen.map((id) => `#${id}`).join(", ")}`);
+  }
+  return flags;
 }
 
 function renderBoard() {
   elements.projectName.textContent = board.projectName;
   elements.planTitle.textContent = board.planTitle || "No active plan";
-  // "Current plan" is the project's single in-progress plan; a different
-  // plan the user opened is merely selected, and the header says so.
-  const selectedPlanIsCurrent = board.planId !== 0 &&
-    board.plans.some((plan) => String(plan.id) === String(board.planId) && plan.isActive);
+  // One plan concept: the plan on the board is the current plan, the same
+  // one the sidebar pins and the one Add task writes to.
   elements.planEyebrow.hidden = board.planId === 0;
-  elements.planEyebrow.textContent = selectedPlanIsCurrent ? "Current plan" : "Selected plan";
+  elements.planEyebrow.textContent = "Current plan";
   renderPlanList();
   const total = board.stats.planTasks;
   const done = board.stats.planTasksDone;
@@ -2494,9 +2547,10 @@ function renderBoard() {
       foldedLanes,
     ),
   );
-  elements.board.style.gridTemplateColumns = board.columns
-    .map((column) => (collapsed.has(column.status) ? "48px" : "minmax(214px, 1fr)"))
-    .join(" ");
+  elements.board.style.gridTemplateColumns = boardGridColumns(
+    board.columns.map((column) => column.status),
+    collapsed,
+  );
   elements.board.replaceChildren();
   board.columns.forEach((column) =>
     elements.board.append(columnElement(column, collapsed.has(column.status))),
@@ -2550,7 +2604,7 @@ function renderDrift(section) {
       intelligenceItem(
         "Work comparison incomplete",
         "Bounded Git or agent evidence was omitted. No missing warning should be treated as proof of alignment.",
-        "stale",
+        "advisory",
       ),
     );
   }
@@ -2568,7 +2622,9 @@ function renderDrift(section) {
       intelligenceItem(
         title,
         `${meaning} · ${evidence} · ${finding.evidenceCount} evidence signal${finding.evidenceCount === 1 ? "" : "s"}. This is advisory, not proof of drift.`,
-        finding.severity === "warning" ? "waiting" : "",
+        // Drift is advisory evidence, never an error: it reads in the info
+        // colour whatever its severity.
+        "advisory",
       ),
     );
   };
@@ -2694,7 +2750,7 @@ function renderGitIntelligence(section) {
   }
   if (section.state === "stale") {
     elements.gitSummary.append(
-      pill("Git", `stale · ${section.error || "refresh unavailable"}`, "error"),
+      pill("Git", `stale · ${section.error || "refresh unavailable"}`, "warning"),
     );
   }
   const git = section.snapshot;
@@ -2709,23 +2765,12 @@ function renderGitIntelligence(section) {
     : git.linkedWorktree
       ? "Worktree"
       : "Ready";
-  elements.gitSummary.append(
-    pill("branch", status.detached ? status.oid?.slice(0, 8) || "detached" : status.branch || "initial"),
-    pill("staged", status.staged),
-    pill("unstaged", status.unstaged),
-    pill("untracked", status.untracked),
-    pill("conflicts", status.conflicted, status.conflicted ? "error" : ""),
-    pill("ignored", status.ignored),
-  );
-  if (status.upstream) {
-    elements.gitSummary.append(
-      pill("upstream", status.upstream),
-      pill("ahead", git.divergence?.ahead ?? status.ahead, status.ahead ? "warning" : ""),
-      pill("behind", git.divergence?.behind ?? status.behind, status.behind ? "warning" : ""),
-      pill("unpushed", git.unpushedCommits?.length || 0, git.unpushedCommits?.length ? "warning" : ""),
-    );
-  } else {
-    elements.gitSummary.append(pill("upstream", "none", "warning"));
+  for (const chip of repositoryChips(status, git.divergence, git.unpushedCommits?.length || 0)) {
+    const item = document.createElement("span");
+    item.className = "intelligence-pill";
+    if (chip.tone) item.dataset.tone = chip.tone;
+    item.textContent = chip.label;
+    elements.gitSummary.append(item);
   }
 
   if (!git.remotes?.length) {
@@ -2751,6 +2796,18 @@ function renderGitIntelligence(section) {
   });
   if (branches.length === 0) {
     elements.gitBranches.append(emptyMemory("No branch refs found."));
+  }
+  // Remotes and commits open on their first render with data, so the
+  // Overview's last row is not two bare disclosure headers; after that the
+  // reader's open/closed choice stands.
+  for (const [disclosure, hasData] of [
+    [elements.gitRemotesDisclosure, Boolean(git.remotes?.length || branches.length)],
+    [elements.gitCommitsDisclosure, Boolean(git.recentCommits?.length)],
+  ]) {
+    if (disclosure && hasData && disclosure.dataset.autoOpened !== "true") {
+      disclosure.dataset.autoOpened = "true";
+      disclosure.open = true;
+    }
   }
   (git.recentCommits || []).slice(0, 12).forEach((commit) => {
     const areas = commit.changedAreas?.map((area) => `${area.name} ${area.files}`).join(", ");
@@ -3416,13 +3473,7 @@ function focusTaskTransitionOrigin(request) {
     return;
   }
   if (intent === "card-select") {
-    const select = document.querySelector(
-      `.card[data-task-id="${request.taskId}"] .card-actions select`,
-    );
-    if (select instanceof HTMLElement) {
-      select.focus();
-      return;
-    }
+    // Cards carry no status select any more; the card itself takes focus.
     document.querySelector(
       `.card[data-task-id="${request.taskId}"] .card-drag-zone`,
     )?.focus?.();
@@ -3625,8 +3676,8 @@ function openMemory(task) {
   dialogReturnFocus = document.activeElement instanceof HTMLElement
     ? document.activeElement
     : null;
-  elements.dialogEyebrow.textContent = "p-track memory";
-  elements.dialogHeading.textContent = `Record context for task #${task.id}`;
+  elements.dialogEyebrow.textContent = "Note";
+  elements.dialogHeading.textContent = `Add note to task #${task.id}`;
   elements.dialogLabel.textContent = "Decision or observation";
   elements.dialogLabel.htmlFor = "dialog-note";
   elements.dialogInput.hidden = true;
@@ -3634,7 +3685,7 @@ function openMemory(task) {
   elements.dialogNote.hidden = false;
   elements.dialogHelp.textContent =
     "Capture a decision, constraint, or durable observation—not a narration of routine work.";
-  elements.dialogSubmit.textContent = "Record memory";
+  elements.dialogSubmit.textContent = "Add note";
   elements.modal.hidden = false;
   requestAnimationFrame(() => elements.dialogNote.focus());
 }
@@ -3746,9 +3797,19 @@ function openPlanContextMenu(plan, titleElement, invoker, position) {
   );
 }
 
-function openTaskContextMenu(task, position) {
+function openTaskContextMenu(task, position, invoker = null) {
+  const dragZone = () => document.querySelector(`.card[data-task-id="${task.id}"] .card-drag-zone`);
+  // Keyboard path for a status change: one "Move to …" entry per other lane.
+  const moves = statuses
+    .filter((status) => status !== task.status)
+    .map((status) => ({
+      label: `Move to ${statusTitles[status]}`,
+      onSelect: () => void moveTask(task.id, status, dragZone()),
+    }));
   openContextMenu(
     [
+      { label: "Open details", onSelect: () => openTaskDetail(task) },
+      ...moves,
       {
         label: "Launch agent",
         onSelect: () => void openAgentLaunchPicker(
@@ -3758,10 +3819,10 @@ function openTaskContextMenu(task, position) {
       },
       { label: "Copy context", onSelect: () => void copyAgentContext("task", task, null) },
       { label: "Edit", onSelect: () => openRename(task) },
-      { label: "Memory", onSelect: () => openMemory(task) },
+      { label: "Add note", onSelect: () => openMemory(task) },
     ],
     position,
-    null,
+    invoker,
   );
 }
 
@@ -3932,7 +3993,7 @@ function completionPromptContext() {
 function showPlanCloseoutBanner(plan, key) {
   hidePlanCloseoutBanner();
   const banner = document.createElement("div");
-  banner.className = "toast plan-closeout-banner";
+  banner.className = "plan-closeout-banner";
   banner.setAttribute("role", "status");
   banner.setAttribute("aria-live", "polite");
   const message = document.createElement("span");
@@ -3957,7 +4018,7 @@ function showPlanCloseoutBanner(plan, key) {
   dismiss.setAttribute("aria-label", "Dismiss plan closeout reminder");
   dismiss.addEventListener("click", hidePlanCloseoutBanner);
   banner.append(message, review, " ", dismiss);
-  document.body.append(banner);
+  (document.querySelector("#notice-stack") ?? document.body).prepend(banner);
   planCloseoutBanner = { element: banner, key };
 }
 
@@ -4546,7 +4607,8 @@ async function savePreferences(patch) {
   }
 }
 
-async function resetPreferences() {
+async function resetPreferences(invoker = elements.settingsReset) {
+  if (!(await showConfirmation(resetSettingsConfirmation, invoker))) return;
   const sequence = ++settingsSaveSequence;
   setSettingsSaveStatus("saving");
   elements.settingsReset.disabled = true;
@@ -4626,13 +4688,25 @@ function renderDiagnosticsReport(report) {
   const rows = diagnosticsRows(report);
   elements.settingsDiagnostics.replaceChildren();
   if (rows.length === 0) {
-    const empty = document.createElement("dt");
+    const empty = document.createElement("p");
     empty.className = "dialog-help";
     empty.textContent = "No diagnostics are available yet.";
-    elements.settingsDiagnostics.append(empty, document.createElement("dd"));
+    elements.settingsDiagnostics.append(empty);
     return;
   }
+  // One headed list per group: Global storage first, then This project.
+  let list = null;
+  let currentGroup = "";
   for (const row of rows) {
+    if (row.group !== currentGroup || !list) {
+      currentGroup = row.group;
+      const heading = document.createElement("h4");
+      heading.className = "settings-diagnostics-group";
+      heading.textContent = row.group;
+      list = document.createElement("dl");
+      list.className = "settings-diagnostics-list";
+      elements.settingsDiagnostics.append(heading, list);
+    }
     const group = document.createElement("div");
     group.className = "settings-diagnostic";
     const term = document.createElement("dt");
@@ -4667,7 +4741,7 @@ function renderDiagnosticsReport(report) {
       description.append(copy);
     }
     group.append(term, description);
-    elements.settingsDiagnostics.append(group);
+    list.append(group);
   }
 }
 
@@ -5159,7 +5233,7 @@ function renderDrawerSections(detail) {
   elements.drawerNotes.replaceChildren();
   if (detail.notes.length === 0) {
     elements.drawerNotes.append(
-      drawerEmptyState("No memory recorded yet. Use “Record memory” to capture a decision."),
+      drawerEmptyState("No notes yet. Use “Add note” to capture a decision."),
     );
   } else {
     detail.notes.forEach((note) => elements.drawerNotes.append(drawerNoteElement(note)));
@@ -6325,7 +6399,7 @@ function renderFirstRunFlow(focus = false) {
   elements.setupRecoveryHelp.hidden = true;
   elements.setupRecoveryChoose.hidden = false;
   elements.setupReturnWelcome.hidden = false;
-  elements.setupReturnWelcome.textContent = "Return to Welcome";
+  elements.setupReturnWelcome.textContent = "Return to Projects";
   elements.setupGoalError.textContent = "";
   elements.setupGoal.removeAttribute("aria-invalid");
 
@@ -6608,7 +6682,7 @@ function renderFirstRunFlow(focus = false) {
       elements.setupRecoveryChoose.hidden = !firstRunState.canonicalRoot;
       elements.setupReturnWelcome.textContent = firstRunState.errorKind === "project-not-found"
         ? "Cancel Setup"
-        : "Return to Welcome";
+        : "Return to Projects";
       setSetupContent({
         progress: "Setup stopped",
         eyebrow: "Project setup",
@@ -6998,11 +7072,18 @@ async function loadRecentProjects({
 
 function applyView() {
   const open = workspaceState.status === "open";
+  // Board and terminal panel toggles mean nothing without a project.
+  elements.boardPanelToggle.hidden = !open;
+  elements.terminalPanelToggle.hidden = !open;
   // Never reveal a previous project's DOM under a new project's heading.
   for (const panel of [elements.workspace, elements.overviewPage, elements.issuesPage]) {
     panel.style.visibility = open && !snapshot ? "hidden" : "";
   }
-  elements.workspace.hidden = !open || view !== "board";
+  // The workspace (and the terminal dock inside it) stays up on every view;
+  // only the page above the dock changes, so the dock never jumps.
+  elements.workspace.hidden = !open;
+  elements.boardShell.hidden = !open || view !== "board";
+  elements.workArea.dataset.view = view;
   elements.overviewPage.hidden = !open || view !== "overview";
   elements.issuesPage.hidden = !open || view !== "issues";
   elements.navBoard.classList.toggle("active", view === "board");
@@ -7014,7 +7095,8 @@ function applyView() {
   else elements.navOverview.removeAttribute("aria-current");
   if (view === "issues") elements.navIssues.setAttribute("aria-current", "page");
   else elements.navIssues.removeAttribute("aria-current");
-  terminalHandle?.setVisible(open && view === "board");
+  // The dock follows only the terminal-panel toggle, never the view.
+  terminalHandle?.setVisible(open);
 }
 
 function setView(nextView, focusHeading = false) {
@@ -7189,12 +7271,18 @@ function renderWorkspaceState(state, focus = false) {
   if (state.status !== "loading") void loadRecentProjects();
   if (focus) {
     requestAnimationFrame(() => {
-      if (state.status === "welcome" && !elements.stateInitialize.hidden) {
-        elements.stateInitialize.focus();
-      } else if (!elements.stateOpen.hidden) elements.stateOpen.focus();
+      if (state.status === "welcome" && focusLandingSearch()) return;
+      if (!elements.stateOpen.hidden) elements.stateOpen.focus();
       else elements.stateHeading.focus();
     });
   }
+}
+
+function focusLandingSearch() {
+  const search = document.querySelector("#recent-project-search");
+  if (!(search instanceof HTMLInputElement) || search.closest("[hidden]")) return false;
+  search.focus();
+  return true;
 }
 
 function publishBackendState(state, transition, focus = false, keepInert = false) {
@@ -8125,7 +8213,7 @@ async function ensureTerminalDock(generation, projectRoot) {
     });
     terminalHandle = handle;
     handle.setLayoutLocked(firstPlanState.phase !== "idle");
-    handle.setVisible(workspaceState.status === "open" && view === "board");
+    handle.setVisible(workspaceState.status === "open");
     applicationOverlayCoordinator.setDock(handle);
     await handle.ready;
     const current = workspaceController.state;
@@ -8352,7 +8440,7 @@ function registerNativeProjectActions() {
     // A window close the runtime refused (a call still running) leaves every
     // service up; say why the window stayed open instead of doing nothing.
     eventsOn("app:close-refused", (message) =>
-      showError(new Error(`p-track could not close yet: ${messageFrom(message)}`)),
+      showNotice(`p-track could not close yet: ${messageFrom(message)}`, "warning"),
     ),
     eventsOn("workspace:data-changed", () =>
       void loadSnapshot(board?.planId || 0, true),
@@ -8780,8 +8868,55 @@ elements.settingsTerminalFontSize.addEventListener("change", (event) => {
   void savePreferences({ terminal: { fontSize: Number(event.currentTarget.value) } });
 });
 elements.settingsTerminalUnicode.addEventListener("change", (event) => {
-  void savePreferences({ terminal: { unicodeMode: event.currentTarget.value } });
+  const unicodeMode = event.currentTarget.value;
+  void savePreferences({ terminal: { unicodeMode } });
+  // Settings is the only visible Unicode control; the dock's hidden checkbox
+  // is how an open dock applies the choice to its live panes.
+  const dockUnicode = document.querySelector("#terminal-modern-unicode");
+  if (dockUnicode instanceof HTMLInputElement && dockUnicode.checked !== (unicodeMode === "modern")) {
+    dockUnicode.checked = unicodeMode === "modern";
+    dockUnicode.dispatchEvent(new Event("change"));
+  }
 });
+
+// The stopped-pane "Start shell" button is the dock's own Open control with
+// a visible label, so it starts exactly what Open would and shares its
+// enabled state.
+{
+  const startShell = document.querySelector("#terminal-start-shell");
+  const openTerminal = document.querySelector("#terminal-open");
+  if (startShell instanceof HTMLButtonElement && openTerminal instanceof HTMLButtonElement) {
+    const sync = () => {
+      startShell.disabled = openTerminal.disabled || openTerminal.hidden;
+    };
+    new MutationObserver(sync).observe(openTerminal, {
+      attributes: true,
+      attributeFilter: ["disabled", "hidden"],
+    });
+    sync();
+    startShell.addEventListener("click", () => openTerminal.click());
+  }
+}
+
+// The working-directory field is narrower than some paths: its tooltip
+// carries the full path, and when it is not being edited it scrolls to the
+// end so the project folder name stays visible.
+{
+  const cwd = document.querySelector("#terminal-cwd");
+  if (cwd instanceof HTMLInputElement) {
+    const showTail = () => {
+      cwd.title = cwd.value || "Project root";
+      if (document.activeElement !== cwd) cwd.scrollLeft = cwd.scrollWidth;
+    };
+    cwd.addEventListener("pointerenter", showTail);
+    cwd.addEventListener("blur", showTail);
+    cwd.addEventListener("change", showTail);
+    new MutationObserver(() => requestAnimationFrame(showTail)).observe(
+      document.querySelector("#terminal-dock") ?? document.body,
+      { attributes: true, attributeFilter: ["data-state"] },
+    );
+  }
+}
 elements.settingsTerminalScrollback.addEventListener("change", (event) => {
   void savePreferences({ terminal: { scrollback: Number(event.currentTarget.value) } });
 });
@@ -8817,7 +8952,9 @@ elements.settingsOpenUpdates.addEventListener("click", () => {
   closeSettings();
   openAboutUpdates(invoker);
 });
-elements.settingsReset.addEventListener("click", () => void resetPreferences());
+elements.settingsReset.addEventListener("click", (event) =>
+  void resetPreferences(event.currentTarget),
+);
 elements.planLaunchAgent.addEventListener("click", (event) => {
   if (!board?.planId) return;
   void openAgentLaunchPicker(
@@ -9058,8 +9195,8 @@ elements.dialogForm.addEventListener("submit", async (event) => {
     closeDialog();
     await runMutation(
       (generation) => api().AddTaskNoteV2(generation, Number(task.id), note),
-      `Recording memory for task #${task.id}…`,
-      `Could not record memory for task #${task.id}`,
+      `Adding note to task #${task.id}…`,
+      `Could not add note to task #${task.id}`,
     );
   }
 });
@@ -9158,6 +9295,10 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     if (event.defaultPrevented || closeActiveApplicationOverlay(event)) return;
   }
+  // A terminal window has no palette, Settings, board, or snapshot: the
+  // backend refuses those commands there, so its shortcuts stay with the
+  // terminal instead.
+  if (terminalWindowLabel(window.location.hash)) return;
   const command = commandShortcut({
     key: event.key,
     composing: event.isComposing,
@@ -9168,6 +9309,16 @@ document.addEventListener("keydown", (event) => {
     repeat: event.repeat,
     prevented: event.defaultPrevented,
   });
+  if (command === "terminal") {
+    // ⌘J toggles the terminal panel from anywhere in an open project,
+    // including from inside the terminal, like the View menu item.
+    event.preventDefault();
+    const toggle = elements.terminalPanelToggle;
+    if (workspaceController.state.status === "open" && !toggle.disabled && !toggle.hidden) {
+      toggle.click();
+    }
+    return;
+  }
   if (command === "palette") {
     // ⌘K works globally, even while typing in an input.
     event.preventDefault();
@@ -9250,7 +9401,11 @@ async function start() {
         ? hydratePendingInitialization(startup.pending)
         : false;
       if (state.status === "welcome" && !restored) {
-        requestAnimationFrame(() => elements.stateInitialize.focus());
+        // Projects opens on its search field: typing filters right away, and
+        // Enter can never initialize a folder by accident.
+        requestAnimationFrame(() => {
+          if (!focusLandingSearch()) elements.stateOpen.focus();
+        });
       }
       registerNativeProjectActions();
       refreshLoop.start();
@@ -9377,7 +9532,10 @@ async function startTerminalWindow(label) {
       const fontSize = readTerminalProfileFontSize(localStorage, profileId, settings.fontSize);
       // The dock's renderer, add-ons and link rule (terminal/renderer.ts).
       const { terminal, fit, search } = createTerminalRenderer({
-        settings,
+        settings: {
+          ...settings,
+          theme: terminalThemeName(settings.theme, document.documentElement.dataset.theme),
+        },
         fontSize,
         modernUnicode: readModernUnicodeSetting(localStorage),
         onLinkError: (error) => setStatus(messageFrom(error)),
@@ -9423,6 +9581,15 @@ async function startTerminalWindow(label) {
     for (const [index, paneId] of paneOrder.entries()) {
       if (sessions[index]) createRenderer(paneId, sessions[index]);
     }
+    // The window's panes follow the app theme the same way the dock does.
+    new MutationObserver(() => {
+      const appTheme = document.documentElement.dataset.theme;
+      for (const pane of panes.values()) {
+        pane.terminal.options.theme = terminalProfileTheme(
+          terminalThemeName(settingsForProfile(pane.profileId).theme, appTheme),
+        );
+      }
+    }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     const currentTab = () => controller.workspace.tabs.find((item) => item.id === controller.workspace.activeTabId);
 
     // One status line for the window: the least-connected pane speaks for it,
@@ -9972,13 +10139,12 @@ function renderGlobalOverview() {
     card.append(number, title);counts.append(card);
   }
   document.querySelector("#orbit-sync-status").textContent = overview ? `${overview.summarizedProjects} of ${overview.trackedProjects} projects summarized` : "Synced summaries unavailable";
-  const guidance = document.querySelector("#overview-refresh-guidance");
-  if (guidance) guidance.textContent = "Refresh reads the latest work from registered projects. Unavailable projects keep their previous summaries.";
   document.querySelector("#overview-refresh-status").textContent = overviewRefreshNotice;
   if (!overview) return;
   const oldest = Math.min(...overview.projects.map((project) => project.syncedAt));
-  coverage.textContent = "Work counts include only these summaries. " +
-    (overview.projects.length ? `Oldest summary updated ${formatRelativeTime(oldest * 1000, "long")}.` : "Open any project without a summary.");
+  coverage.textContent = overview.projects.length
+    ? `Totals count only projects with a summary. The oldest was updated ${formatRelativeTime(oldest * 1000, "long")}.`
+    : "No project has a summary yet. Open a project to add its work to these totals.";
   const period = document.querySelector("#global-overview-period").value;
   const updates = overviewActivity(overview, period === "all" ? null : 30);
   if (!updates.length) activity.textContent = "No synced record updates in this period.";

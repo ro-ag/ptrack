@@ -950,10 +950,11 @@ export function driftPresentation(section: unknown): {
 // commandShortcut routes primary-modifier (⌘/Ctrl) chords. "palette" and
 // "settings" are global — Settings is an application dialog that opens with
 // no project open; the caller decides whether the view shortcuts are blocked
-// by an input, a modal, or the terminal.
+// by an input, a modal, or the terminal. The view numbers follow the sidebar
+// order (Overview, Board, Issues) and match the native View menu.
 export function commandShortcut(
   input: ShortcutInput,
-): "palette" | "settings" | "board" | "overview" | "issues" | "addTask" | null {
+): "palette" | "settings" | "board" | "overview" | "issues" | "addTask" | "terminal" | null {
   if (
     input.composing ||
     input.repeat ||
@@ -965,9 +966,10 @@ export function commandShortcut(
   if (key === "k") return "palette";
   if (input.shift) return null;
   if (key === ",") return "settings";
-  if (key === "1") return "board";
-  if (key === "2") return "overview";
+  if (key === "1") return "overview";
+  if (key === "2") return "board";
   if (key === "3") return "issues";
+  if (key === "j") return "terminal";
   if (key === "n") return "addTask";
   return null;
 }
@@ -1070,6 +1072,22 @@ export function collapsedLaneStatuses(
     .map((lane) => lane.status);
 }
 
+// A collapsed lane stays a real drop target and keeps its rotated label
+// legible, so the rail is never narrower than this.
+export const collapsedLaneWidth = 56;
+
+// Grid tracks for the board: collapsed lanes get the fixed rail and every
+// expanded lane shares the remaining width equally, so a lane with one card
+// is never wider than a lane with ten.
+export function boardGridColumns(
+  statuses: readonly string[],
+  collapsed: ReadonlySet<string>,
+): string {
+  return statuses
+    .map((status) => (collapsed.has(status) ? `${collapsedLaneWidth}px` : "minmax(214px, 1fr)"))
+    .join(" ");
+}
+
 export interface HeatmapDay {
   date: string; // YYYY-MM-DD
   count: number;
@@ -1077,6 +1095,8 @@ export interface HeatmapDay {
 
 export interface SummaryShape {
   characters: number;
+  /** UTF-8 size, the unit the store's 1,000-byte bound is written in. */
+  bytes: number;
   sentences: number;
   longestRun: number;
   // "" when the summary reads as prose; otherwise which rule it broke.
@@ -1104,32 +1124,108 @@ export function summaryShape(text: string): SummaryShape {
   // Length first: when a summary is both too long and badly written, its
   // length is the part the writer has to fix before anything else matters.
   let problem: SummaryShape["problem"] = "";
-  if (new TextEncoder().encode(text).length > SUMMARY_MAX_BYTES) {
+  const bytes = new TextEncoder().encode(text).length;
+  if (bytes > SUMMARY_MAX_BYTES) {
     problem = "over-limit";
   } else if (longestRun >= SUMMARY_RUN_LIMIT) {
     problem = "joined-tokens";
   } else if (characters > SUMMARY_PROSE_LIMIT && sentences < 2) {
     problem = "no-sentences";
   }
-  return { characters, sentences, longestRun, problem };
+  return { characters, bytes, sentences, longestRun, problem };
 }
 
-// The card says which rule the summary broke and what to do about it, in the
-// terms the rule is written in, so the fix is obvious without opening the
-// guide. Each reads as a sentence: the diagnosis first, then the measurement
-// that supports it.
+// The card notes, in neutral terms, why a summary is folded. It is read by
+// whoever opens the Overview, not only by the agent that wrote the summary,
+// so it states the measurement and never instructs. Sizes are in bytes, the
+// unit the store's bound is written in.
 export function summaryShapeCaption(shape: SummaryShape): string {
-  const characters = `${shape.characters.toLocaleString()} characters`;
+  const bytes = `${shape.bytes.toLocaleString("en-US")} bytes`;
   switch (shape.problem) {
     case "over-limit":
-      return `Too long to read at a glance: ${characters}, past the ${SUMMARY_MAX_BYTES.toLocaleString()}-byte limit. Write 2-4 sentences.`;
+      return `Long summary: ${shape.bytes.toLocaleString("en-US")} of ${SUMMARY_MAX_BYTES.toLocaleString("en-US")} bytes`;
     case "joined-tokens":
-      return `Written as joined tokens, not sentences: one unbroken run of ${shape.longestRun} characters.`;
+      return `Hard to scan: one unbroken run of ${shape.longestRun.toLocaleString("en-US")} bytes`;
     case "no-sentences":
-      return `${characters} with no sentence break. Write 2-4 sentences.`;
+      return `No sentence breaks in ${bytes}`;
     default:
       return "";
   }
+}
+
+export interface SummarySegment {
+  text: string;
+  /** The full identifier when `text` is its short form. */
+  full?: string;
+}
+
+// Commit SHAs (40 hex, or 64 for SHA-256 repositories) are shown the way Git
+// shows them, as 7 characters; the full value stays available as a tooltip.
+export function shortenSummaryHashes(text: string): SummarySegment[] {
+  const segments: SummarySegment[] = [];
+  let last = 0;
+  for (const match of text.matchAll(/\b(?:[0-9a-f]{64}|[0-9a-f]{40})\b/gi)) {
+    const index = match.index ?? 0;
+    if (index > last) segments.push({ text: text.slice(last, index) });
+    segments.push({ text: match[0].slice(0, 7), full: match[0] });
+    last = index + match[0].length;
+  }
+  if (last < text.length || segments.length === 0) segments.push({ text: text.slice(last) });
+  return segments;
+}
+
+export interface RepositoryChip {
+  label: string;
+  tone: "" | "warning" | "error";
+}
+
+interface RepositoryStatusInput {
+  detached?: boolean;
+  oid?: string | null;
+  branch?: string | null;
+  staged?: number;
+  unstaged?: number;
+  untracked?: number;
+  conflicted?: number;
+  upstream?: string | null;
+  ahead?: number;
+  behind?: number;
+}
+
+// The Repository card's chips: the branch and upstream always, then only
+// the counters that are not zero. A tree with nothing to report says
+// "Clean" once instead of listing six zeros. Ignored files are left out: they
+// are expected, and never make a tree dirty.
+export function repositoryChips(
+  status: RepositoryStatusInput,
+  divergence?: { ahead?: number; behind?: number } | null,
+  unpushed = 0,
+): RepositoryChip[] {
+  const count = (value: unknown) => Math.max(0, Math.trunc(Number(value)) || 0);
+  const chips: RepositoryChip[] = [{
+    label: `branch ${status.detached ? status.oid?.slice(0, 8) || "detached" : status.branch || "initial"}`,
+    tone: "",
+  }];
+  chips.push(status.upstream
+    ? { label: `upstream ${status.upstream}`, tone: "" }
+    : { label: "no upstream", tone: "warning" });
+  const counters: Array<[string, number, RepositoryChip["tone"]]> = [
+    ["staged", count(status.staged), ""],
+    ["unstaged", count(status.unstaged), ""],
+    ["untracked", count(status.untracked), ""],
+    ["conflicts", count(status.conflicted), "error"],
+  ];
+  if (status.upstream) {
+    counters.push(
+      ["ahead", count(divergence?.ahead ?? status.ahead), "warning"],
+      ["behind", count(divergence?.behind ?? status.behind), "warning"],
+      ["unpushed", count(unpushed), "warning"],
+    );
+  }
+  const nonZero = counters.filter(([, value]) => value > 0);
+  if (nonZero.length === 0) chips.push({ label: "Clean", tone: "" });
+  for (const [name, value, tone] of nonZero) chips.push({ label: `${name} ${value}`, tone });
+  return chips;
 }
 
 export interface HeatmapCell {

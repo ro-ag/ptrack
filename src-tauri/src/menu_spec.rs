@@ -114,21 +114,23 @@ pub fn menu_spec(platform: DesktopPlatform) -> Vec<MenuSpec> {
             command("workspace:close-requested", "Close Project", None),
         ],
     };
-    let mut project_entries = vec![command(
+    let settings = command(
         "workspace:settings-requested",
         "Settings…",
         Some("CmdOrCtrl+,"),
-    )];
-    if platform == DesktopPlatform::MacOs {
-        project_entries.extend([
-            MenuEntrySpec::Separator,
-            command(
-                "workspace:install-shell-command-requested",
-                "Install 'ptrack' Shell Command…",
-                None,
-            ),
-        ]);
-    }
+    );
+    let check_for_updates = command("update:open-requested", "Check for Updates…", None);
+    // macOS keeps Settings and Check for Updates in the app menu, where the
+    // platform puts them; elsewhere they stay in Project and Help.
+    let project_entries = if platform == DesktopPlatform::MacOs {
+        vec![command(
+            "workspace:install-shell-command-requested",
+            "Install 'ptrack' Shell Command…",
+            None,
+        )]
+    } else {
+        vec![settings]
+    };
     let project = MenuSpec {
         label: "Project",
         entries: project_entries,
@@ -136,35 +138,39 @@ pub fn menu_spec(platform: DesktopPlatform) -> Vec<MenuSpec> {
     let view = MenuSpec {
         label: "View",
         entries: vec![
+            // The numbers follow the sidebar order: Overview, Board, Issues.
             command(
                 "workspace:intelligence-requested",
                 "Overview",
-                Some("CmdOrCtrl+2"),
+                Some("CmdOrCtrl+1"),
             ),
-            command("workspace:board-requested", "Board", Some("CmdOrCtrl+1")),
+            command("workspace:board-requested", "Board", Some("CmdOrCtrl+2")),
             command("workspace:issues-requested", "Issues", Some("CmdOrCtrl+3")),
             MenuEntrySpec::Separator,
             command(
                 "workspace:terminal-panel-toggle-requested",
                 "Toggle Terminal Panel",
-                None,
+                Some("CmdOrCtrl+J"),
             ),
             command(
                 "workspace:command-palette-requested",
-                "Command Palette…",
-                None,
+                "Search Plans, Tasks, and Notes…",
+                Some("CmdOrCtrl+K"),
             ),
         ],
     };
+    let mut help_entries = vec![
+        command("help:help-center", "Help Center", None),
+        command("help:keyboard-shortcuts", "Keyboard Shortcuts", None),
+        MenuEntrySpec::Separator,
+    ];
+    if platform == DesktopPlatform::Other {
+        help_entries.push(check_for_updates);
+    }
+    help_entries.push(command("help:report-issue", "Report Issue", None));
     let help = MenuSpec {
         label: "Help",
-        entries: vec![
-            command("help:help-center", "Help Center", None),
-            command("help:keyboard-shortcuts", "Keyboard Shortcuts", None),
-            MenuEntrySpec::Separator,
-            command("update:open-requested", "Check for Updates…", None),
-            command("help:report-issue", "Report Issue", None),
-        ],
+        entries: help_entries,
     };
     if platform == DesktopPlatform::Other {
         let mut menus = vec![file, project, view, help];
@@ -185,6 +191,9 @@ pub fn menu_spec(platform: DesktopPlatform) -> Vec<MenuSpec> {
             label: "p-track",
             entries: vec![
                 MenuEntrySpec::Role(MenuRole::About),
+                check_for_updates,
+                MenuEntrySpec::Separator,
+                settings,
                 MenuEntrySpec::Separator,
                 MenuEntrySpec::Role(MenuRole::Services),
                 MenuEntrySpec::Separator,

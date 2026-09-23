@@ -72,8 +72,10 @@ import {
   loadTerminalFont,
   normalizeTerminalProfileSettings,
   terminalProfileClosesAfterExit,
+  terminalProfileTheme,
   type NormalizedTerminalProfileSettings,
 } from "./profile-settings";
+import { terminalThemeName } from "../theme";
 import {
   maximumWebglRecoveryAttempts,
   webglAttachAllowed,
@@ -754,7 +756,14 @@ class TerminalDock {
         this.#runtimes.get(paneId)?.session?.linkedLaunch === true,
       fitPanes: (paneIdList) => this.#fitPanes(paneIdList),
     });
+    // Open panes repaint in the new palette when the app theme changes.
+    const themeObserver = new MutationObserver(() => this.#applyAppTheme());
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
+    });
     this.#dockDisposers.push(
+      () => themeObserver.disconnect(),
       this.#tabController.subscribe((workspace, previous) => {
         this.#reconcileWorkspace(workspace, previous);
         this.#markPersistenceDirty();
@@ -2119,7 +2128,10 @@ class TerminalDock {
     host.hidden = !this.#isPaneVisible(runtime.paneId);
     (this.#splitView.mountForPane(runtime.paneId) ?? this.#host).append(host);
     const { terminal, fit, search, unicode } = createTerminalRenderer({
-      settings,
+      settings: {
+        ...settings,
+        theme: terminalThemeName(settings.theme, document.documentElement.dataset.theme),
+      },
       fontSize,
       modernUnicode: this.#modernUnicodeEnabled,
       onLinkError: (error) => {
@@ -3809,6 +3821,22 @@ class TerminalDock {
         resources.terminal.focus();
       }
     });
+  }
+
+  // A pane's palette is its profile's, mapped through the app theme.
+  #applyAppTheme(): void {
+    if (this.#disposed) return;
+    const appTheme = document.documentElement.dataset.theme;
+    for (const runtime of this.#runtimes.values()) {
+      const resources = runtime.resources;
+      if (!resources || resources.disposed) continue;
+      const profileId = this.#descriptorFor(runtime.paneId)?.pane.profileId ||
+        this.#defaultProfileId;
+      const profileTheme = this.#profileSettings.get(profileId)?.theme ?? "default";
+      resources.terminal.options.theme = terminalProfileTheme(
+        terminalThemeName(profileTheme, appTheme),
+      );
+    }
   }
 
   #setModernUnicode(enabled: boolean): void {
