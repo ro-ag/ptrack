@@ -2749,7 +2749,11 @@ fn build_drift(
     }
     // p-track's own project state is expected to be untracked in repositories
     // that do not ignore it; flagging it would be advice about p-track itself.
-    for path in git.untracked_paths.iter().filter(|path| !is_ptrack_state(path)) {
+    for path in git
+        .untracked_paths
+        .iter()
+        .filter(|path| !is_ptrack_state(path))
+    {
         findings.push(drift_path("untrackedFile", "warning", path));
     }
     let observed = git
