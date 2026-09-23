@@ -1,9 +1,18 @@
 import { animate } from "motion";
-import { reducedMotionActive } from "../settings/preferences";
+import {
+  preferenceChoice,
+  reducedMotionActive,
+  reducedMotionPreferences,
+} from "../settings/preferences";
 import type { RecentProjectEntry } from "./recent-projects";
 import type { Overview, Summary } from "./overview";
 import { filterRecentProjects } from "./overview";
-import { relativeTime } from "./format";
+import { messageFrom, relativeTime } from "./format";
+import type { AppContext } from "./app-context";
+import { element } from "./dom";
+import { overviewActivity, overviewRefreshMessage } from "./overview";
+import { bindProjectView } from "./project-view";
+import { preselectedRecentProject, recentProjectPrimaryAction } from "./recent-projects";
 
 export type LandingFilter = "all" | "available" | "synced";
 export function landingProjects(projects: RecentProjectEntry[], overview: Overview | null, query: string, filter: LandingFilter) {
@@ -38,7 +47,7 @@ export function createCoverMotion(card: HTMLElement) {
       const geometry = carouselGeometry(index, selected);
       const identity = `${geometry.x},${geometry.z},${geometry.angle}`;
       const reduced = reducedMotionActive(
-        document.documentElement.dataset.reducedMotion || "system",
+        preferenceChoice(document.documentElement.dataset.reducedMotion ?? "", reducedMotionPreferences) ?? "system",
         window.matchMedia("(prefers-reduced-motion: reduce)").matches,
       );
       if (target === identity && !reduced) return;
@@ -391,3 +400,297 @@ function renderDetail(detail: HTMLElement, selected: RecentProjectEntry, summary
   copy.append(timeLabel("selected-last-opened", "Last opened ", new Date(selected.lastOpenedAt).getTime()));
   detail.append(copy);
 }
+
+// --------------------------------------------------- landing controller
+
+const landingFilters: readonly LandingFilter[] = ["all", "available", "synced"];
+
+// What the landing status line says while a recent-project action runs.
+const recentOperationStatus: Partial<Record<string, (name: string) => string>> = {
+  picking: (name) => `Choose the folder for “${name}”.`,
+  resolving: (name) => `Checking “${name}”…`,
+  "confirming-relocation": (name) => `Waiting for confirmation for “${name}”.`,
+  opening: (name) => `Opening “${name}”…`,
+  "confirming-forget": (name) => `Waiting for confirmation to remove “${name}” from Recent projects.`,
+  forgetting: (name) => `Removing “${name}” from Recent projects…`,
+};
+
+const overviewStatColors = ["#AFA8FF", "#5FAFFF", "#3DD6A3", "#AFA8FF"];
+
+/** The four landing totals; a dash for anything no summary has counted yet. */
+export function overviewTotals(overview: Overview | null): Array<[string, string | number]> {
+  return [
+    ["Tracked projects", overview?.trackedProjects ?? "—"],
+    ["Active plans", overview?.summarizedProjects ? overview.counts.activePlans : "—"],
+    ["Open tasks", overview?.summarizedProjects ? overview.counts.openTasks : "—"],
+    ["Open issues", overview?.summarizedProjects ? overview.counts.openIssues : "—"],
+  ];
+}
+
+export function createLandingController(ctx: AppContext) {
+  const { api, workspaceController } = ctx;
+  const elements = {
+    recentError: element("#recent-project-error", HTMLParagraphElement),
+    recentStatus: element("#recent-project-status", HTMLParagraphElement),
+    recents: element("#recent-project-list", HTMLDivElement),
+    stateInitialize: element("#state-initialize-project-button", HTMLButtonElement),
+    stateOpen: element("#state-open-project-button", HTMLButtonElement),
+    search: element("#recent-project-search", HTMLInputElement),
+    projectCount: element("#overview-project-count", HTMLSpanElement),
+    refreshButton: element("#overview-refresh-button", HTMLButtonElement),
+    overviewCounts: element("#global-overview-counts", HTMLDivElement),
+    overviewCoverage: element("#global-overview-coverage", HTMLParagraphElement),
+    overviewActivity: element("#global-overview-activity", HTMLDivElement),
+    syncStatus: element("#orbit-sync-status", HTMLElement),
+    refreshStatus: element("#overview-refresh-status", HTMLParagraphElement),
+    overviewPeriod: element("#global-overview-period", HTMLSelectElement),
+    previous: element("#orbit-previous", HTMLButtonElement),
+    next: element("#orbit-next", HTMLButtonElement),
+    activityToggle: element("#orbit-activity-toggle", HTMLButtonElement),
+    activityPanel: element("#orbit-activity-panel", HTMLElement),
+    activityClose: element("#orbit-activity-close", HTMLButtonElement),
+  };
+
+  let globalOverview: Overview | null = null;
+  let landingSelectedId = "";
+  let landingFilter: LandingFilter = "all";
+  let overviewError = "";
+  let overviewRequest = 0;
+  let overviewLoading = false;
+  let overviewRefreshNotice = "";
+
+  function visibleProjects(): RecentProjectEntry[] {
+    return landingProjects(ctx.state.recentProjectsState.projects, globalOverview, elements.search.value, landingFilter);
+  }
+
+  function renderRecentStatus(projects: RecentProjectEntry[], preselectedEntryId: string, operationActive: boolean): void {
+    const recent = ctx.state.recentProjectsState;
+    const preselected = projects.find(
+      (project) => project.entryId === preselectedEntryId,
+    );
+    elements.recentStatus.textContent = recent.announcement ||
+      (preselected
+        ? `“${preselected.name}” is preselected as the last project p-track recorded. Confirm it to continue.`
+        : "");
+    elements.recentError.textContent = recent.message ||
+      recent.listError;
+    const active = projects.find(
+      (project) => project.entryId === recent.activeEntryId,
+    );
+    if (active && operationActive) {
+      elements.recentStatus.textContent = recentOperationStatus[recent.phase]?.(active.name) || "";
+    }
+  }
+
+  function renderProjectActions(host: HTMLElement, project: RecentProjectEntry, descriptionId: string): void {
+    const primaryAction = recentProjectPrimaryAction(project.availability);
+    const button = ctx.recent.recentProjectActionButton(project, primaryAction, ctx.recent.recentProjectPrimaryLabel(project.availability), descriptionId, () => {
+      if (primaryAction === "open") void ctx.recent.openAvailableRecentProject(project);
+      else if (primaryAction === "retry") void ctx.recent.retryRecentProject(project);
+      else void ctx.recent.locateRecentProject(project);
+    });
+    button.className = "primary-button";
+    host.append(button);
+    if (project.availability !== "available") {
+      const forget = ctx.recent.recentProjectActionButton(project, "forget", "Forget", descriptionId, () => void ctx.recent.forgetRecentProject(project));
+      forget.className = "secondary-button";
+      host.append(forget);
+    }
+  }
+
+  function renderRecentProjects(): void {
+    const recent = ctx.state.recentProjectsState;
+    const projects = visibleProjects();
+    const operationActive = ctx.recent.recentProjectOperationActive();
+    elements.projectCount.textContent = `${projects.length} / ${recent.projects.length}`;
+    ctx.updates.updateAboutUpdatesAvailability();
+    elements.stateInitialize.disabled = operationActive;
+    elements.stateOpen.disabled = operationActive;
+    elements.recents.setAttribute(
+      "aria-busy",
+      String(recent.listLoading || operationActive),
+    );
+    // The opted-in last project that did not auto-open is pointed at rather than
+    // opened: the row says so, the live region says so, and nothing takes focus.
+    const preselectedEntryId = preselectedRecentProject(projects, ctx.state.preferences.startup);
+    renderRecentStatus(projects, preselectedEntryId, operationActive);
+    landingSelectedId = selectedLandingProject(projects, projects.some((project) => project.entryId === landingSelectedId) ? landingSelectedId : preselectedEntryId)?.entryId || "";
+    renderLandingProjects({
+      projects, summaries: globalOverview?.projects || [], selectedId: landingSelectedId, preselectedId: preselectedEntryId,
+      busy: operationActive || recent.listLoading, loading: recent.listLoading,
+      select: (id) => { landingSelectedId = id; renderRecentProjects(); },
+      open: (entry) => void ctx.recent.openAvailableRecentProject(entry),
+      actions: renderProjectActions,
+    });
+  }
+
+  async function readGlobalOverview(refresh: boolean): Promise<{ overview: Overview; notice: string }> {
+    if (!refresh) return { overview: await api().GetGlobalOverviewV1(), notice: "" };
+    const result = await api().RefreshGlobalOverviewV1();
+    return { overview: result.overview, notice: overviewRefreshMessage(result) };
+  }
+
+  function setRefreshButtonBusy(busy: boolean, refresh: boolean): void {
+    elements.refreshButton.disabled = busy;
+    elements.refreshButton.textContent = busy
+      ? refresh ? "Refreshing…" : "Loading…"
+      : "Refresh summaries";
+  }
+
+  async function loadGlobalOverview(refresh = false): Promise<void> {
+    const request = ++overviewRequest;
+    overviewLoading = true;
+    setRefreshButtonBusy(true, refresh);
+    const ticket = workspaceController.capture();
+    const isCurrent = () => {
+      const current = workspaceController.capture();
+      return request === overviewRequest && current.epoch === ticket.epoch &&
+        current.generation === ticket.generation &&
+        !["open", "loading"].includes(workspaceController.state.status);
+    };
+    try {
+      const { overview, notice } = await readGlobalOverview(refresh);
+      if (!isCurrent()) return;
+      globalOverview = overview;
+      overviewRefreshNotice = notice;
+      overviewError = "";
+    } catch (error) {
+      if (!isCurrent()) return;
+      // Stated on the landing page itself (never a blocking dialog), with the
+      // backend's reason so the failure can be acted on.
+      const reason = messageFrom(error);
+      if (!refresh) globalOverview = null;
+      overviewRefreshNotice = refresh ? `Could not refresh summaries: ${reason}. Existing summaries are still available. Try again.` : "";
+      overviewError = refresh ? "" : `Could not load summaries: ${reason}. You can still open a project.`;
+    } finally {
+      if (request === overviewRequest) {
+        overviewLoading = false;
+        setRefreshButtonBusy(false, refresh);
+      }
+    }
+    renderGlobalOverview();
+    renderRecentProjects();
+  }
+
+  function cancelGlobalOverviewRead(): void {
+    overviewRequest += 1;
+  }
+
+  function overviewUpdateRow(update: ReturnType<typeof overviewActivity>[number]): HTMLElement {
+    const row = document.createElement("div");
+    row.setAttribute("role", "listitem");
+    const entry = ctx.state.recentProjectsState.projects.find((project) => project.canonicalPath === update.root);
+    row.className = "overview-update";
+    const openable = entry?.availability === "available";
+    const content = document.createElement(openable ? "button" : "div");
+    content.className = "overview-update-content";
+    const title = document.createElement("span");
+    title.className = "overview-update-title";
+    title.textContent = update.title;
+    const metadata = document.createElement("span");
+    metadata.className = "overview-update-meta";
+    const status = document.createElement("span");
+    status.className = "overview-status";
+    status.dataset.status = update.status;
+    status.textContent = update.status;
+    const context = document.createElement("span");
+    context.textContent = `${entry?.name || update.root.split(/[\\/]/).filter(Boolean).pop() || update.root} · ${update.kind} #${update.id}`;
+    context.title = update.root;
+    const time = document.createElement("time");
+    time.dateTime = new Date(update.updatedAt * 1000).toISOString();
+    time.textContent = relativeTime(time.dateTime, "long");
+    time.title = `Updated ${new Date(update.updatedAt * 1000).toLocaleString()}`;
+    metadata.append(status, context, time);
+    content.append(title, metadata);
+    if (entry && content instanceof HTMLButtonElement) {
+      content.type = "button";
+      content.title = `Open ${entry.name}`;
+      content.addEventListener("click", () => void ctx.recent.openAvailableRecentProject(entry));
+    }
+    row.append(content);
+    return row;
+  }
+
+  function renderOverviewTotals(overview: Overview | null): void {
+    for (const [index, [label, value]] of overviewTotals(overview).entries()) {
+      const card = document.createElement("div");card.className = "stat-card";
+      card.style.setProperty("--stat-color", overviewStatColors[index]);
+      const number = document.createElement("span");number.className = "stat-value";number.textContent = String(value);
+      const title = document.createElement("span");title.className = "stat-label";title.textContent = label;
+      card.append(number, title);elements.overviewCounts.append(card);
+    }
+  }
+
+  function renderGlobalOverview(): void {
+    elements.overviewCounts.replaceChildren();
+    elements.overviewActivity.replaceChildren();
+    elements.overviewCoverage.textContent = overviewError;
+    const overview = globalOverview;
+    renderOverviewTotals(overview);
+    elements.syncStatus.textContent = overview ? `${overview.summarizedProjects} of ${overview.trackedProjects} projects summarized` : "Synced summaries unavailable";
+    elements.refreshStatus.textContent = overviewRefreshNotice;
+    if (!overview) return;
+    const oldest = Math.min(...overview.projects.map((project) => project.syncedAt));
+    elements.overviewCoverage.textContent = overview.projects.length
+      ? `Totals count only projects with a summary. The oldest was updated ${relativeTime(oldest * 1000, "long")}.`
+      : "No project has a summary yet. Open a project to add its work to these totals.";
+    const updates = overviewActivity(overview, elements.overviewPeriod.value === "all" ? null : 30);
+    if (!updates.length) elements.overviewActivity.textContent = "No synced record updates in this period.";
+    for (const update of updates) elements.overviewActivity.append(overviewUpdateRow(update));
+  }
+
+  function moveLandingSelection(direction: number, focus = false): void {
+    const projects = visibleProjects();
+    if (projects.length < 2 || ctx.recent.recentProjectOperationActive() || ctx.state.recentProjectsState.listLoading) return;
+    const selected = selectedLandingProject(projects, landingSelectedId);
+    const index = selected ? projects.indexOf(selected) : -1;
+    landingSelectedId = projects[Math.max(0, Math.min(projects.length - 1, index + direction))].entryId;
+    renderRecentProjects();
+    const target = [...document.querySelectorAll<HTMLElement>("[data-orbit-project-id]")].find((button) => button.dataset.orbitProjectId === landingSelectedId);
+    target?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    if (focus) target?.focus();
+  }
+
+  function toggleLandingActivity(open: boolean): void {
+    elements.activityPanel.hidden = !open;elements.activityToggle.setAttribute("aria-expanded", String(open));
+    (open ? elements.activityClose : elements.activityToggle).focus();
+  }
+
+  function selectLandingFilter(button: HTMLElement): void {
+    const filter = landingFilters.find((candidate) => candidate === button.dataset.orbitFilter);
+    if (!filter) return;
+    landingFilter = filter;
+    for (const chip of document.querySelectorAll("[data-orbit-filter]")) {
+      const selected = chip === button;
+      chip.classList.toggle("active", selected);chip.setAttribute("aria-pressed", String(selected));
+    }
+    renderRecentProjects();
+  }
+
+  function bind(): void {
+    elements.search.addEventListener("input", renderRecentProjects);
+    elements.refreshButton.addEventListener("click", () => {
+      if (!overviewLoading) void loadGlobalOverview(true);
+    });
+    elements.overviewPeriod.addEventListener("change", renderGlobalOverview);
+    elements.previous.addEventListener("click", () => moveLandingSelection(-1));
+    elements.next.addEventListener("click", () => moveLandingSelection(1));
+    for (const button of document.querySelectorAll<HTMLElement>("[data-orbit-filter]")) {
+      button.addEventListener("click", () => selectLandingFilter(button));
+    }
+    bindProjectView();
+    elements.activityToggle.addEventListener("click", () => toggleLandingActivity(Boolean(elements.activityPanel.hidden)));
+    elements.activityClose.addEventListener("click", () => toggleLandingActivity(false));
+    elements.activityPanel.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); toggleLandingActivity(false); } });
+  }
+
+  return {
+    bind,
+    renderRecentProjects,
+    loadGlobalOverview,
+    cancelGlobalOverviewRead,
+    renderGlobalOverview,
+  };
+}
+
+export type LandingController = ReturnType<typeof createLandingController>;

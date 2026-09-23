@@ -403,10 +403,11 @@ export class WorkspaceTabBar {
 
   refresh(): void {
     if (this.#disposed) return;
-    for (const tab of this.#controller.workspace.tabs) {
+    const tabs = this.#controller.workspace.tabs;
+    tabs.forEach((tab, index) => {
       const tabButton = this.#tabButtons.get(tab.id);
-      if (tabButton) this.#refreshIndicator(tab, tabButton);
-    }
+      if (tabButton) this.#refreshIndicator(tab, tabButton, index, tabs.length);
+    });
   }
 
   dispose(): void {

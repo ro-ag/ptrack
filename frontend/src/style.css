@@ -5017,29 +5017,6 @@ button.modal-backdrop:active {
   font-size: 0.75rem;
 }
 
-.terminal-unicode-setting {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted);
-  font-size: 0.75rem;
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.terminal-unicode-setting input {
-  flex: 0 0 auto;
-  width: 15px;
-  min-height: 15px;
-  height: 15px;
-  padding: 0;
-  border: 0;
-  box-shadow: none;
-  margin: 0;
-  accent-color: var(--accent);
-}
-
 .terminal-toolbar button {
   min-height: 32px;
   padding: 5px var(--space-150);
@@ -6254,10 +6231,6 @@ html[data-window-mode="terminal"] #app {
 
   .board {
     grid-template-columns: repeat(4, minmax(220px, 1fr));
-  }
-
-  .terminal-unicode-setting span {
-    display: none;
   }
 }
 

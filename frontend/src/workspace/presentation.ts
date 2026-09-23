@@ -391,6 +391,48 @@ export interface AgentActivityItemPresentation {
   [key: string]: unknown;
 }
 
+/** A runtime association as the Overview trusts it: positive ids only. */
+export interface RuntimeAssociationView {
+  planId: number;
+  taskId: number;
+  revision: number;
+}
+
+export interface AgentOwnershipView {
+  planId: number;
+  taskId: number;
+  associationRevision: number;
+}
+
+export interface AgentWorktreeView {
+  identity: { root: string; branch: string; head: string; linked: boolean };
+  verified: true;
+  isolated: boolean;
+  cwdMatches: boolean;
+}
+
+/**
+ * One agent run after the presentation layer bounded and validated it. A type
+ * alias rather than an interface, so it still reads as a plain record where a
+ * caller accepts any field.
+ */
+export type AgentActivityItemView = {
+  runId: string;
+  state: AgentActivityState;
+  registrationKind?: "launched" | "external";
+  terminalBacked?: boolean;
+  terminalPresent?: boolean;
+  correspondingTerminal?: boolean;
+  live?: boolean;
+  association?: RuntimeAssociationView;
+  confidence?: "low" | "medium" | "high";
+  evidenceCount?: number;
+  eventCount?: number;
+  lastEventAt?: string;
+  ownership?: AgentOwnershipView;
+  worktree?: AgentWorktreeView;
+};
+
 export interface AgentActivitySectionPresentation {
   items?: unknown;
   bounds?: {
@@ -426,7 +468,7 @@ export interface AgentActivitySectionPresentation {
 export function agentActivityPresentation(
   section: AgentActivitySectionPresentation | null | undefined,
 ): {
-  items: Array<AgentActivityItemPresentation & { state: AgentActivityState }>;
+  items: AgentActivityItemView[];
   counts: Array<{ state: AgentActivityState; count: number }>;
   conflicts: Array<{
     planId: number;
@@ -442,7 +484,7 @@ export function agentActivityPresentation(
     kind: "approvalRequested" | "question" | "failure" | "completion";
     observedAt: string;
     terminalBacked: boolean;
-    association?: unknown;
+    association?: RuntimeAssociationView;
   }>;
   notificationsIncomplete: boolean;
   handoffs: {
@@ -500,7 +542,7 @@ export function agentActivityPresentation(
     const confidence = ["low", "medium", "high"].includes(String(item.confidence))
       ? item.confidence as "low" | "medium" | "high"
       : "";
-    const safeItem: AgentActivityItemPresentation & { state: AgentActivityState } = {
+    const safeItem: AgentActivityItemView = {
       runId,
       state,
       ...(registrationKind ? { registrationKind } : {}),
@@ -805,7 +847,7 @@ function nonnegativeInteger(value: unknown): number {
   return Math.max(0, Math.trunc(Number(value)) || 0);
 }
 
-function sanitizeRuntimeAssociation(value: unknown): unknown | null {
+function sanitizeRuntimeAssociation(value: unknown): RuntimeAssociationView | null {
   if (!value || typeof value !== "object") return null;
   const association = value as Record<string, unknown>;
   const planId = nonnegativeInteger(association.planId);
@@ -815,7 +857,7 @@ function sanitizeRuntimeAssociation(value: unknown): unknown | null {
   return { planId, taskId, revision };
 }
 
-function sanitizeAgentOwnership(value: unknown): unknown | null {
+function sanitizeAgentOwnership(value: unknown): AgentOwnershipView | null {
   if (!value || typeof value !== "object") return null;
   const ownership = value as Record<string, unknown>;
   const planId = nonnegativeInteger(ownership.planId);
@@ -831,7 +873,7 @@ function normalizedWorktreeHead(value: unknown): string {
     : "";
 }
 
-function sanitizeAgentWorktree(value: unknown): unknown | null {
+function sanitizeAgentWorktree(value: unknown): AgentWorktreeView | null {
   if (!value || typeof value !== "object") return null;
   const worktree = value as Record<string, unknown>;
   const identity = worktree.identity && typeof worktree.identity === "object"
@@ -1029,12 +1071,9 @@ export function groupSearchResults(results: PaletteResult[]): PaletteGroup[] {
   return groups;
 }
 
-export interface PaletteTarget {
-  view: "board" | "overview" | "issues";
-  planId: number;
-  taskId: number;
-  issueId?: number;
-}
+export type PaletteTarget =
+  | { view: "issues"; planId: number; taskId: number; issueId: number }
+  | { view: "board" | "overview"; planId: number; taskId: number; issueId?: undefined };
 
 // paletteTarget maps a result to its activation: plans and tasks land on
 // the board (tasks also open their detail drawer), notes land on the

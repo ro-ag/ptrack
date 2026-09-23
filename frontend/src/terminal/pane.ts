@@ -157,7 +157,6 @@ import { readModernUnicodeSetting } from "./unicode";
 import {
   readTerminalPreferenceOverrides,
   webglPreferredByPreference,
-  type UnicodeModePreference,
 } from "../settings/preferences";
 import {
   activeTerminalDescriptor,
@@ -260,7 +259,7 @@ interface TerminalExit {
   error?: string;
 }
 
-interface TerminalBackend {
+export interface TerminalBackend {
   GetTerminalProfiles(): Promise<TerminalProfile[]>;
   ValidateTerminalCWDs(cwds: string[]): Promise<TerminalCWDValidation[]>;
   CreateTerminal(
@@ -321,9 +320,6 @@ interface MountOptions {
   projectRoot: string;
   workspaceGeneration?: number;
   showError(error: unknown): void;
-  // The stored preferences record is the authority for the Unicode mode, so
-  // the dock toggle writes through it instead of the localStorage mirror.
-  saveUnicodeMode(mode: UnicodeModePreference): void;
 }
 
 export interface TerminalDockHandle {
@@ -352,6 +348,16 @@ export interface TerminalDockHandle {
   ): Promise<TerminalWritebackResult>;
   setVisible(visible: boolean): void;
   setLayoutLocked(locked: boolean): void;
+  /**
+   * Applies the stored Unicode mode to every open pane. Settings owns the
+   * preference and has already saved it; the dock only follows it.
+   */
+  setModernUnicode(enabled: boolean): void;
+  /**
+   * Starts the active tab's shell, exactly as the Open control would, and does
+   * nothing while that control is unavailable.
+   */
+  startSession(): void;
   setApplicationOverlayOpen(open: boolean, focusTerminal: false): void;
   /**
    * Writes pending project-scoped edits (the scratchpad note) and resolves once
@@ -421,7 +427,7 @@ function messageFrom(error: unknown): string {
 }
 
 function eventsOn(name: string, callback: (payload: any) => void): () => void {
-  const runtime = (window as any).runtime;
+  const runtime = window.runtime;
   if (typeof runtime?.EventsOnMultiple !== "function") return () => {};
   return runtime.EventsOnMultiple(name, callback, -1);
 }
@@ -431,17 +437,15 @@ function nativeClipboard(): {
   getText(): Promise<string>;
   setText(text: string): Promise<void>;
 } {
-  const runtime = (window as any).runtime;
-  if (
-    typeof runtime?.ClipboardGetText !== "function" ||
-    typeof runtime?.ClipboardSetText !== "function"
-  ) {
+  const readText = window.runtime?.ClipboardGetText;
+  const writeText = window.runtime?.ClipboardSetText;
+  if (typeof readText !== "function" || typeof writeText !== "function") {
     throw new Error("Native clipboard access is unavailable");
   }
   return {
-    getText: () => runtime.ClipboardGetText(),
+    getText: () => readText(),
     setText: async (text) => {
-      if ((await runtime.ClipboardSetText(text)) !== true) {
+      if ((await writeText(text)) !== true) {
         throw new Error("Native clipboard copy failed");
       }
     },
@@ -451,7 +455,6 @@ function nativeClipboard(): {
 class TerminalDock {
   readonly #backend: TerminalBackend;
   readonly #showError: (error: unknown) => void;
-  readonly #saveUnicodeMode: (mode: UnicodeModePreference) => void;
   readonly #workspaceGeneration: number;
   readonly #dock = requiredElement<HTMLElement>("#terminal-dock");
   readonly #workArea = requiredElement<HTMLElement>(".work-area");
@@ -462,10 +465,10 @@ class TerminalDock {
   readonly #title = requiredElement<HTMLElement>("#terminal-title");
   readonly #profile = requiredElement<HTMLSelectElement>("#terminal-profile");
   readonly #cwd = requiredElement<HTMLInputElement>("#terminal-cwd");
-  readonly #modernUnicode = requiredElement<HTMLInputElement>(
-    "#terminal-modern-unicode",
-  );
   readonly #open = requiredElement<HTMLButtonElement>("#terminal-open");
+  // The stopped pane's labelled start control: the Open control's twin, so it
+  // shares its availability.
+  readonly #startShell = requiredElement<HTMLButtonElement>("#terminal-start-shell");
   readonly #start = requiredElement<HTMLButtonElement>("#terminal-start");
   readonly #popOut = requiredElement<HTMLButtonElement>("#terminal-pop-out");
   readonly #restart = requiredElement<HTMLButtonElement>("#terminal-restart");
@@ -649,7 +652,6 @@ class TerminalDock {
   constructor(options: MountOptions) {
     this.#backend = options.backend;
     this.#showError = options.showError;
-    this.#saveUnicodeMode = options.saveUnicodeMode;
     this.#projectRoot = options.projectRoot;
     this.#workspaceGeneration = options.workspaceGeneration ?? 0;
     const restored = loadTerminalWorkspace(
@@ -856,10 +858,7 @@ class TerminalDock {
     });
     this.#terminalToggle.disabled = this.#layoutLocked;
     this.#modernUnicodeEnabled = readModernUnicodeSetting(localStorage);
-    this.#modernUnicode.checked = this.#modernUnicodeEnabled;
-    this.#listen(this.#modernUnicode, "change", () =>
-      this.#setModernUnicode(this.#modernUnicode.checked),
-    );
+    this.#listen(this.#startShell, "click", () => this.startSession());
     this.#listen(this.#profile, "change", () => {
       this.#updateEditableDescriptor({ profileId: this.#profile.value });
       this.#syncActiveProfileFontSize();
@@ -1347,7 +1346,7 @@ class TerminalDock {
     resources.sequence = claim?.fromSequence ?? 0;
     let gapShown = claim?.gap === true;
     const client: TerminalStreamClient = new TerminalStreamClient({
-      createWebSocket: (streamUrl) => new WebSocket(streamUrl) as any,
+      createWebSocket: (streamUrl) => new WebSocket(streamUrl),
       // The rendered byte count is the sequence: a re-claim resumes exactly
       // where the renderer stopped drawing, never where the socket stopped.
       writeOutput: (output, done) => resources.terminal.write(output, () => {
@@ -2286,13 +2285,14 @@ class TerminalDock {
       resources.webglRecoveryAttempts = 0;
       resources.webglRecoveryPaused = false;
       resources.diagnosticChangedAt = Date.now();
-      const contextLoss = webgl.onContextLoss(() => {
+      const attached = webgl;
+      const contextLoss = attached.onContextLoss(() => {
         contextLoss.dispose();
-        if (resources.webgl === webgl) {
+        if (resources.webgl === attached) {
           resources.webgl = null;
           resources.webglContextLoss = null;
         }
-        webgl.dispose();
+        attached.dispose();
         if (resources.disposed || !this.#accepts(runtime, ticket)) return;
         resources.diagnosticChangedAt = Date.now();
         resources.terminal.refresh(0, resources.terminal.rows - 1);
@@ -3063,22 +3063,22 @@ class TerminalDock {
   ): TerminalDiagnosticInput {
     const process: TerminalDiagnosticProcess = runtime.closing
       ? "stopping"
-      : {
+      : ({
         closed: "stopped",
         opening: "starting",
         running: "running",
         exited: "exited",
         failed: "failed",
-      }[runtime.state];
+      } satisfies Record<DockState, TerminalDiagnosticProcess>)[runtime.state];
     const clientState = resources?.client?.state;
     const stream: TerminalDiagnosticStream = !runtime.session || !clientState
       ? "idle"
-      : {
+      : ({
         closed: "disconnected",
         connecting: "connecting",
         open: "connected",
         error: "failed",
-      }[clientState];
+      } satisfies Record<StreamState, TerminalDiagnosticStream>)[clientState];
     const visible = Boolean(
       resources &&
       !resources.disposed &&
@@ -3287,6 +3287,7 @@ class TerminalDock {
     this.#popOut.disabled = popOut.disabled;
     this.#open.disabled = runtime.busy || runtime.closing || linked || poppedOut ||
       !descriptor?.pane.profileId;
+    this.#startShell.disabled = this.#open.disabled || this.#open.hidden;
     this.#restart.disabled = !diagnosticView.canRestart;
     this.#start.disabled = runtime.state === "closed"
       ? this.#open.disabled
@@ -3853,14 +3854,11 @@ class TerminalDock {
         }
       }
     } catch (error) {
-      this.#modernUnicode.checked = this.#modernUnicodeEnabled;
       this.#showError(error);
       return;
     }
 
     this.#modernUnicodeEnabled = enabled;
-    this.#modernUnicode.checked = enabled;
-    this.#saveUnicodeMode(enabled ? "modern" : "legacy");
     for (const runtime of this.#runtimes.values()) {
       const resources = runtime.resources;
       if (resources && !resources.disposed) {
@@ -3989,7 +3987,9 @@ class TerminalDock {
     const rows = activeResources?.terminal.rows ?? 24;
     const columns = activeResources?.terminal.cols ?? 80;
 
-    let releasePersistenceStage: (() => void) | null = null;
+    // Set from inside the stage callback, so it lives on an object the
+    // compiler does not narrow back to its initial null.
+    const persistenceStage: { release: (() => void) | null } = { release: null };
     try {
       await completeLinkedLaunchTransaction<TerminalSession, LinkedTabStage>({
         launch: () => this.#backend.LaunchLinkedAgent(
@@ -4004,7 +4004,7 @@ class TerminalDock {
           // Persist the last committed workspace before staging. While the
           // backend session is unattached, neither timers nor project teardown
           // may serialize the tentative linked descriptor.
-          releasePersistenceStage = this.#linkedPersistenceStage.begin(
+          persistenceStage.release = this.#linkedPersistenceStage.begin(
             () => this.#flushPersistence(),
           );
           const priorTabIDs = new Set(
@@ -4097,6 +4097,7 @@ class TerminalDock {
         },
       });
     } finally {
+      const releasePersistenceStage = persistenceStage.release;
       if (releasePersistenceStage !== null) {
         releasePersistenceStage();
         if (!this.#disposed) this.#markPersistenceDirty();
@@ -4261,6 +4262,16 @@ class TerminalDock {
     this.#renderPanelVisibility();
   }
 
+  setModernUnicode(enabled: boolean): void {
+    if (this.#disposed || this.#modernUnicodeEnabled === enabled) return;
+    this.#setModernUnicode(enabled);
+  }
+
+  startSession(): void {
+    if (this.#disposed || this.#open.disabled || this.#open.hidden) return;
+    void this.#runOperation((runtime) => this.#openTerminal(runtime));
+  }
+
   setLayoutLocked(locked: boolean): void {
     if (this.#disposed) return;
     this.#layoutLocked = locked;
@@ -4307,6 +4318,8 @@ export function mountTerminalDock(
     },
     setVisible: (visible) => dock.setVisible(visible),
     setLayoutLocked: (locked) => dock.setLayoutLocked(locked),
+    setModernUnicode: (enabled) => dock.setModernUnicode(enabled),
+    startSession: () => dock.startSession(),
     setApplicationOverlayOpen: (open, focusTerminal) =>
       dock.setApplicationOverlayOpen(open, focusTerminal),
     flushPending: () => dock.flushPending(),

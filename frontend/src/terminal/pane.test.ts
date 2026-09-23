@@ -349,11 +349,12 @@ describe("TerminalStreamClient", () => {
 
   it("fails closed when an ACK cannot be sent", () => {
     const socket = new FakeWebSocket();
-    let writeDone: (() => void) | null = null;
+    // A holder, not a local: the callback assigns it after control flow ran.
+    const pending: { writeDone: (() => void) | null } = { writeDone: null };
     const client = new TerminalStreamClient({
       createWebSocket: () => socket,
       writeOutput(_bytes: Uint8Array, done: () => void) {
-        writeDone = done;
+        pending.writeDone = done;
       },
       onStateChange: vi.fn(),
     });
@@ -362,18 +363,19 @@ describe("TerminalStreamClient", () => {
     socket.receive(new Uint8Array([1, 2, 3]).buffer);
     socket.sendError = new Error("send failed");
 
-    writeDone?.();
+    pending.writeDone?.();
     expect(client.state).toBe("error");
     expect(socket.closeCalls).toBe(1);
   });
 
   it("does not ACK after the socket starts closing", () => {
     const socket = new FakeWebSocket();
-    let writeDone: (() => void) | null = null;
+    // A holder, not a local: the callback assigns it after control flow ran.
+    const pending: { writeDone: (() => void) | null } = { writeDone: null };
     const client = new TerminalStreamClient({
       createWebSocket: () => socket,
       writeOutput(_bytes: Uint8Array, done: () => void) {
-        writeDone = done;
+        pending.writeDone = done;
       },
       onStateChange: vi.fn(),
     });
@@ -382,7 +384,7 @@ describe("TerminalStreamClient", () => {
     socket.receive(new Uint8Array([1]).buffer);
     socket.beginClosing();
 
-    writeDone?.();
+    pending.writeDone?.();
     expect(socket.sent).toEqual([]);
     expect(client.state).toBe("error");
   });

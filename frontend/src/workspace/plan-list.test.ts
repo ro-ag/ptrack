@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { currentPlanCloseoutLabel, filterPlans, splitCurrentPlan } from "./plan-list";
+import {
+  currentPlanCloseoutLabel,
+  filterPlans,
+  pinnedPlanSelection,
+  planIsViewOnly,
+  planViewingLabel,
+  splitCurrentPlan,
+} from "./plan-list";
 
 const plans = [
   { id: 1, title: "Foundation", status: "done" },
@@ -85,5 +92,38 @@ describe("current plan closeout call to action", () => {
     expect(currentPlanCloseoutLabel({ ...base, status: "done" })).toBeNull();
     expect(currentPlanCloseoutLabel({ ...base, tasksDone: 0, tasksTotal: 0 })).toBeNull();
     expect(currentPlanCloseoutLabel(undefined)).toBeNull();
+  });
+});
+
+describe("view-only plans", () => {
+  const board = [
+    { id: 1, title: "Foundation", status: "done" },
+    { id: 2, title: "Playback engine", status: "active", isActive: true },
+    { id: 4, title: "Prototype", status: "archived" },
+    { id: 5, title: "Wrapped up", status: "done", isActive: true },
+  ];
+
+  it("treats done and archived plans as viewable but never current", () => {
+    expect(planIsViewOnly(board[0])).toBe(true);
+    expect(planIsViewOnly(board[2])).toBe(true);
+    expect(planIsViewOnly(board[1])).toBe(false);
+    expect(planIsViewOnly(undefined)).toBe(false);
+  });
+
+  it("keeps a plan completed while current as the current plan", () => {
+    expect(planIsViewOnly(board[3])).toBe(false);
+  });
+
+  it("names the viewed plan and its state on the board heading", () => {
+    expect(planViewingLabel(board[0])).toBe("Viewing #1 (done)");
+    expect(planViewingLabel(board[2])).toBe("Viewing #4 (archived)");
+  });
+
+  it("pins the current plan while a view-only plan is on the board", () => {
+    expect(pinnedPlanSelection(board, 1)).toBe(0);
+    expect(splitCurrentPlan(board, pinnedPlanSelection(board, 1)).current?.id).toBe(2);
+    expect(pinnedPlanSelection(board, 2)).toBe(2);
+    expect(pinnedPlanSelection(board, 5)).toBe(5);
+    expect(pinnedPlanSelection(board, 99)).toBe(99);
   });
 });

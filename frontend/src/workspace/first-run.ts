@@ -1,3 +1,4 @@
+import type { WorkspaceStateResponse } from "./snapshot-types";
 import { projectGuideRecoveryCopy } from "./presentation";
 
 export type FirstRunIntent = "initialize" | "open";
@@ -909,7 +910,7 @@ export function initializationStatusMatchesOperation(
 export function completedInitializationWorkspaceMatches(
   value: unknown,
   canonicalRoot: string,
-): boolean {
+): value is WorkspaceStateResponse {
   if (!value || typeof value !== "object" || !canonicalRoot) return false;
   const state = value as Record<string, unknown>;
   const project = state.project && typeof state.project === "object"

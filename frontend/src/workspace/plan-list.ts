@@ -59,3 +59,29 @@ export function currentPlanCloseoutLabel(plan: CloseoutCandidate | undefined): s
   if (total === 0 || Number(plan.tasksDone || 0) !== total) return null;
   return `All ${total} ${total === 1 ? "task" : "tasks"} done · Close plan…`;
 }
+
+/// A done or archived plan can be opened on the board to read it, but it can
+/// never become the current plan (the runtime refuses it), so opening one is
+/// viewing it. The plan that is current stays current — unless it is this
+/// one, completed while it was current.
+export function planIsViewOnly(plan: SidebarPlan | undefined): boolean {
+  if (!plan || plan.isActive) return false;
+  return plan.status === "done" || plan.status === "archived";
+}
+
+/// The board heading's eyebrow while a view-only plan is open: which plan,
+/// and why it is only being viewed.
+export function planViewingLabel(plan: SidebarPlan): string {
+  return `Viewing #${plan.id} (${plan.status})`;
+}
+
+/// The plan the sidebar pins as current: the board's plan, except while the
+/// board shows a view-only plan — then the project's current plan stays
+/// pinned, so the pinned card always names the plan work is added to.
+export function pinnedPlanSelection<T extends SidebarPlan>(
+  plans: T[],
+  boardPlanId: number,
+): number {
+  const shown = plans.find((plan) => String(plan.id) === String(boardPlanId));
+  return planIsViewOnly(shown) ? 0 : boardPlanId;
+}

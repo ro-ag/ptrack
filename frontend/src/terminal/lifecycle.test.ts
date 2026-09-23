@@ -21,7 +21,7 @@ interface TestResources {
 
 function fixture() {
   const registry = new PaneRuntimeRegistry<TestSession, TestResources>();
-  const closeSession = vi.fn(async () => {});
+  const closeSession = vi.fn(async (_sessionId: string, _force: boolean) => {});
   const disposeResources = vi.fn();
   const deleteEarlyExit = vi.fn();
   const lifecycle = new PaneLifecycleCoordinator(registry, {

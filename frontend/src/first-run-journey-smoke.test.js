@@ -29,7 +29,6 @@ import {
 
 const frontendRoot = resolve(import.meta.dirname, "..");
 const indexSource = readFileSync(resolve(frontendRoot, "index.html"), "utf8");
-const appSource = readFileSync(resolve(frontendRoot, "src/app.js"), "utf8");
 const operationId = "o".repeat(43);
 const canonicalRoot = "/projects/alpha";
 const createdAt = "2026-08-14T12:00:00Z";
@@ -60,6 +59,8 @@ function methodNames(calls) {
   );
 }
 
+// The window's own wiring of these journeys — which button starts which step —
+// is driven through the real controllers in workspace/first-run-view.test.js.
 describe("first-run journey smoke coverage", () => {
   it("boots a true first launch through the bridge and renders the two primary journeys", async () => {
     let workspaceReads = 0;
@@ -95,9 +96,6 @@ describe("first-run journey smoke coverage", () => {
     expect(indexSource.match(/class="state-card"/g)).toHaveLength(1);
     expect(indexSource).toMatch(
       /id="state-open-project-button"[\s\S]*?Open folder…<\/button>[\s\S]*id="state-initialize-project-button"[\s\S]*?Initialize project<\/button>/,
-    );
-    expect(appSource).toMatch(
-      /resolveFirstRunStartupState\([\s\S]*GetWorkspaceState\(\)[\s\S]*GetPendingInitializationV1\(\)[\s\S]*hydratePendingInitialization/,
     );
   });
 
@@ -269,9 +267,6 @@ describe("first-run journey smoke coverage", () => {
     expect(indexSource).toMatch(
       /id="setup-goal-form"[\s\S]*id="setup-guide"[\s\S]*id="setup-review"[\s\S]*id="post-project-onboarding"[\s\S]*id="onboarding-plan-form"[\s\S]*id="onboarding-task-form"/,
     );
-    expect(appSource).toMatch(
-      /setupCommit\.addEventListener[\s\S]*onboardingPlanForm\.addEventListener[\s\S]*onboardingTaskForm\.addEventListener/,
-    );
   });
 
   it("keeps existing-project discovery on the explicit open path", async () => {
@@ -329,9 +324,6 @@ describe("first-run journey smoke coverage", () => {
     expect(calls[0][1].request.arguments).toEqual([selectedDescendant]);
     expect(indexSource).toMatch(
       /id="setup-existing-actions"[\s\S]*id="setup-open-existing"[^>]*>Open Existing Project<\/button>/,
-    );
-    expect(appSource).toMatch(
-      /setupOpenExisting\.addEventListener\("click", \(\) => void openExistingFromSetup\(\)\)/,
     );
   });
 
@@ -604,9 +596,6 @@ describe("first-run journey smoke coverage", () => {
     expect(indexSource).toMatch(
       /id="setup-recovery-actions"[\s\S]*id="setup-resume"[\s\S]*id="setup-open-recovery"[\s\S]*id="setup-recovery-help"/,
     );
-    expect(appSource).toMatch(
-      /hydratePendingInitialization\(pending\)[\s\S]*pendingInitializationEvent\(pending\)/,
-    );
   });
 
   it("keeps picker cancellation mutation-free and reconciles uncertain transport by status only", async () => {
@@ -703,10 +692,6 @@ describe("first-run journey smoke coverage", () => {
       "pick_project_directory",
       { purpose: "initialize" },
     ]);
-    expect(appSource).toContain("commitInitialization(api(), request)");
-    expect(appSource).toMatch(
-      /async function retryInitializationStatus\(\)[\s\S]*setFirstRunState\(\{ type: "reconcile" \}[\s\S]*reconcileInitializationStatus/,
-    );
   });
 
   it("revalidates an authoritative no-write failure before retrying the same request", async () => {
@@ -836,8 +821,5 @@ describe("first-run journey smoke coverage", () => {
     ]);
     expect(calls[1][1].request.arguments).toEqual([firstRequest]);
     expect(calls[4][1].request.arguments).toEqual([firstRequest]);
-    expect(appSource).toContain(
-      'elements.setupRetry.addEventListener("click", retryFirstRunValidation)',
-    );
   });
 });

@@ -84,3 +84,14 @@ export function stableTerminalWritebackRequestID(
 ): string {
   return existing ?? create();
 }
+
+export const terminalWritebackKinds: readonly TerminalWritebackKind[] = [
+  "summary",
+  "decision",
+  "blocker",
+  "handoff",
+];
+
+export function isTerminalWritebackKind(value: unknown): value is TerminalWritebackKind {
+  return terminalWritebackKinds.some((kind) => kind === value);
+}

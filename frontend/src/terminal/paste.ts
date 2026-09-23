@@ -79,7 +79,7 @@ export function pasteReviewSummary(request: ClipboardPasteRequest): string {
   return parts.join(" · ");
 }
 
-export function binaryStringToBytes(input: string): Uint8Array {
+export function binaryStringToBytes(input: string): Uint8Array<ArrayBuffer> {
   const bytes = new Uint8Array(input.length);
   for (let index = 0; index < input.length; index += 1) {
     bytes[index] = input.charCodeAt(index) & 0xff;
@@ -87,12 +87,12 @@ export function binaryStringToBytes(input: string): Uint8Array {
   return bytes;
 }
 
-export function terminalTextToBytes(input: string): Uint8Array {
+export function terminalTextToBytes(input: string): Uint8Array<ArrayBuffer> {
   return utf8Encoder.encode(input);
 }
 
-export function splitTerminalInput(input: Uint8Array): Uint8Array[] {
-  const chunks: Uint8Array[] = [];
+export function splitTerminalInput(input: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer>[] {
+  const chunks: Uint8Array<ArrayBuffer>[] = [];
   for (let offset = 0; offset < input.byteLength; offset += maximumInputFrameBytes) {
     chunks.push(input.subarray(offset, offset + maximumInputFrameBytes));
   }

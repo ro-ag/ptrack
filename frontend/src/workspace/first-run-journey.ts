@@ -8,6 +8,7 @@ import {
   type InitializeProjectResult,
   type ProjectTargetValidation,
 } from "./first-run";
+import type { ActiveResources, WorkspaceStateResponse } from "./snapshot-types";
 
 export interface InitializeProjectRequestV1 {
   operationId: string;
@@ -116,11 +117,11 @@ export async function resumeInitialization(
   };
 }
 
-interface WorkspaceChangeResult {
-  state: Record<string, unknown>;
+export interface WorkspaceChangeResult {
+  state: WorkspaceStateResponse;
   requiresConfirmation: boolean;
   confirmationToken?: string;
-  activeResources?: Record<string, unknown>;
+  activeResources?: ActiveResources;
   warning?: unknown;
 }
 

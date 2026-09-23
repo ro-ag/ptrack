@@ -8,7 +8,7 @@ interface WebSocketLike {
   readonly readyState: number;
   addEventListener(type: SocketEventType, listener: SocketListener): void;
   removeEventListener(type: SocketEventType, listener: SocketListener): void;
-  send(data: string | Uint8Array): void;
+  send(data: string | Uint8Array<ArrayBuffer>): void;
   close(): void;
 }
 
@@ -124,7 +124,7 @@ export class TerminalStreamClient {
     this.#setState("connecting");
   }
 
-  sendInput(input: Uint8Array): void {
+  sendInput(input: Uint8Array<ArrayBuffer>): void {
     const socket = this.#socket;
     if (!socket || this.#state !== "open" || socket.readyState !== 1 || input.byteLength === 0) {
       return;

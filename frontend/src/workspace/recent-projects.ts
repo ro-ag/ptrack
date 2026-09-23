@@ -1,8 +1,15 @@
+import type { ActiveResources, WorkspaceStateResponse } from "./snapshot-types";
+
 export type RecentProjectAvailability =
   | "available"
   | "missing"
   | "permission-required"
   | "changed";
+
+function isRecentProjectAvailability(value: unknown): value is RecentProjectAvailability {
+  return value === "available" || value === "missing" ||
+    value === "permission-required" || value === "changed";
+}
 
 export interface RecentProjectLanguage {
   language: string;
@@ -34,14 +41,20 @@ export interface RecentProjectResolution {
   confirmationToken: string;
 }
 
+/** The workspace reply an open carries; the parser checks the fields it needs. */
+export interface RecentProjectWorkspaceOpen {
+  state: WorkspaceStateResponse;
+  requiresConfirmation: boolean;
+  confirmationToken?: string;
+  activeResources?: ActiveResources;
+  warning?: string;
+}
+
 export interface RecentProjectOpenResult {
   entryId: string;
   registryBase: string;
   registryStatus: "unchanged" | "relocated" | "stale";
-  open: Record<string, unknown> & {
-    state: Record<string, unknown>;
-    requiresConfirmation: boolean;
-  };
+  open: RecentProjectWorkspaceOpen;
 }
 
 export type RecentProjectIntent = "open" | "locate" | "retry" | "forget";
@@ -262,7 +275,7 @@ export function parseRecentProjects(value: unknown): RecentProjectEntry[] {
     throw new Error("Recent projects exceeded the 20-entry limit.");
   }
   const seen = new Set<string>();
-  const parsed = projects.map((candidate) => {
+  const parsed = projects.map((candidate): RecentProjectEntry => {
     if (!candidate || typeof candidate !== "object") {
       throw new Error("Recent projects returned an invalid entry.");
     }
@@ -273,12 +286,7 @@ export function parseRecentProjects(value: unknown): RecentProjectEntry[] {
     const canonicalPath = requiredString(project.canonicalPath, "path");
     const lastOpenedAt = requiredString(project.lastOpenedAt, "last-opened time", 128);
     const availability = project.availability;
-    if (
-      availability !== "available" &&
-      availability !== "missing" &&
-      availability !== "permission-required" &&
-      availability !== "changed"
-    ) {
+    if (!isRecentProjectAvailability(availability)) {
       throw new Error("Recent project availability is invalid.");
     }
     if (!Number.isFinite(Date.parse(lastOpenedAt))) {
@@ -388,7 +396,45 @@ export function parseRecentProjectOpenResult(
     entryId: expected.entryId,
     registryBase: requiredString(result.registryBase, "registry base", 4096),
     registryStatus,
-    open: open as RecentProjectOpenResult["open"],
+    open: workspaceOpen(open, state),
+  };
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? value as Record<string, unknown> : null;
+}
+
+// The validated open reply, carrying only the fields the window reads.
+function workspaceOpen(
+  open: Record<string, unknown>,
+  state: Record<string, unknown>,
+): RecentProjectWorkspaceOpen {
+  const project = objectRecord(state.project);
+  const resources = objectRecord(open.activeResources);
+  return {
+    state: {
+      status: "open",
+      generation: Number(state.generation),
+      ...(typeof state.version === "string" ? { version: state.version } : {}),
+      ...(typeof state.error === "string" ? { error: state.error } : {}),
+      ...(project && typeof project.root === "string"
+        ? { project: { root: project.root, name: typeof project.name === "string" ? project.name : "" } }
+        : {}),
+    },
+    requiresConfirmation: open.requiresConfirmation === true,
+    ...(typeof open.confirmationToken === "string" ? { confirmationToken: open.confirmationToken } : {}),
+    ...(resources
+      ? {
+        activeResources: {
+          terminals: Number(resources.terminals) || 0,
+          agentRuns: Number(resources.agentRuns) || 0,
+          ...(resources.pendingAdmissions !== undefined
+            ? { pendingAdmissions: Number(resources.pendingAdmissions) || 0 }
+            : {}),
+        },
+      }
+      : {}),
+    ...(typeof open.warning === "string" ? { warning: open.warning } : {}),
   };
 }
 

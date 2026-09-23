@@ -841,22 +841,6 @@
                     spellcheck="false"
                   />
                 </label>
-                <!-- Settings > Terminal > Unicode mode is the one control for this.
-                     The hidden checkbox only carries that choice into open panes. -->
-                <label
-                  class="terminal-unicode-setting"
-                  title="Use experimental Unicode 15 grapheme and emoji cell widths"
-                  hidden
-                >
-                  <input
-                    id="terminal-modern-unicode"
-                    type="checkbox"
-                    aria-label="Modern Unicode support"
-                    tabindex="-1"
-                    checked
-                  />
-                  <span>Modern Unicode</span>
-                </label>
                 </div>
                 <div class="terminal-controls-row">
                 <div class="terminal-tools" role="group" aria-label="Terminal tools">
@@ -2362,6 +2346,6 @@
     <div id="notice-stack" class="notice-stack">
       <div id="toast" class="toast" role="alert" aria-live="assertive" hidden></div>
     </div>
-    <script type="module" src="/src/app.js"></script>
+    <script type="module" src="/src/main.js"></script>
   </body>
 </html>

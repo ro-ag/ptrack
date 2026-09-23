@@ -1,10 +1,22 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { animate } from "motion";
 vi.mock("motion", () => ({ animate: vi.fn() }));
 import { bindCoverDrag, boundedSelection, carouselGeometry, coverSummary, createCoverMotion, carouselPosition, horizontalGesture, landingProjects, landingRowDetails, selectedLandingProject, shortenHomePath, stripOverflow } from "./landing";
 import { relativeTime } from "./format";
 import type { RecentProjectEntry } from "./recent-projects";
 import type { Overview } from "./overview";
+function mediaQueryList(matches: boolean): MediaQueryList {
+  return {
+    matches,
+    media: "",
+    onchange: null,
+    addListener() {},
+    removeListener() {},
+    addEventListener() {},
+    removeEventListener() {},
+    dispatchEvent: () => false,
+  };
+}
 const a: RecentProjectEntry = { entryId: "a", base: "authorized-a", name: "Alpha", canonicalPath: "/alpha", lastOpenedAt: "2026-01-01T00:00:00Z", availability: "available" };
 const b: RecentProjectEntry = { ...a, entryId: "b", name: "Beta", canonicalPath: "/beta", availability: "missing" };
 const overview: Overview = { trackedProjects: 2, summarizedProjects: 1, counts: { activePlans: 1, openTasks: 2, doneTasks: 3, openIssues: 1 }, projects: [{ root: "/beta", syncedAt: 123, counts: { activePlans: 1, openTasks: 2, doneTasks: 3, openIssues: 1 }, activity: [] }] };
@@ -102,7 +114,7 @@ describe("Motion cover animation", () => {
   });
   it("honors reduced motion and the app override, stopping active movement", () => {
     const motion = createCoverMotion(card);
-    window.matchMedia = (() => ({ matches: true })) as typeof window.matchMedia;
+    window.matchMedia = () => mediaQueryList(true);
     motion.move(1, 0); motion.move(1, 1);
     expect(animate).not.toHaveBeenCalled();
     document.documentElement.dataset.reducedMotion = "never";
@@ -138,7 +150,9 @@ describe("cover information", () => {
 
 describe("pointer drag navigation", () => {
   let handlers: Record<string, (event: unknown) => void>;
-  let follow: ReturnType<typeof vi.fn>, finish: ReturnType<typeof vi.fn>, capture: ReturnType<typeof vi.fn>;
+  let follow: Mock<(fraction: number) => void>;
+  let finish: Mock<(direction: number) => void>;
+  let capture: Mock<(pointerId: number) => void>;
   const event = (x: number, y = 0, extra = {}) => ({ clientX: x, clientY: y, pointerId: 1, button: 0, isPrimary: true, preventDefault: vi.fn(), ...extra });
   beforeEach(() => {
     handlers = {}; follow = vi.fn(); finish = vi.fn(); capture = vi.fn();

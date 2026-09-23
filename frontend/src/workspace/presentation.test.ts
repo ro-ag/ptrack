@@ -670,7 +670,10 @@ describe("workspace presentation policy", () => {
   });
 
   it("retains a successful section as stale when a partial refresh fails", () => {
-    const previous = { state: "ready", snapshot: { branch: "main" } };
+    const previous: { state: string; snapshot?: { branch: string }; error?: string } = {
+      state: "ready",
+      snapshot: { branch: "main" },
+    };
     expect(
       preserveSectionOnError(previous, { state: "error", error: "timed out" }),
     ).toEqual({

@@ -53,3 +53,53 @@ export function formatBytes(value: unknown): string {
   if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MiB`;
   return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
 }
+
+/** The text an error, a rejected promise, or a bare string carries. */
+export function messageFrom(error: unknown): string {
+  if (typeof error === "string") return error;
+  if (error && typeof error === "object" && "message" in error) {
+    const message = error.message;
+    if (message) return String(message);
+  }
+  return "Something went wrong";
+}
+
+// Dense metadata rows use the short style of the shared formatter; the
+// landing page uses its long style.
+export function shortRelativeTime(value: unknown): string {
+  return relativeTime(value, "short");
+}
+
+// Display names for the identifiers the backend can send. An unknown
+// identifier renders as itself: a newer backend must never produce a blank
+// label.
+export const languageLabels: Readonly<Record<string, string>> = {
+  rust: "Rust",
+  go: "Go",
+  javascript: "JavaScript",
+  typescript: "TypeScript",
+  python: "Python",
+  swift: "Swift",
+  java: "Java",
+  kotlin: "Kotlin",
+  csharp: "C#",
+  ruby: "Ruby",
+  php: "PHP",
+  elixir: "Elixir",
+  dart: "Dart",
+  c: "C/C++",
+  terraform: "Terraform",
+  container: "Containers",
+};
+
+export function languageLabel(id: string): string {
+  return languageLabels[id] || id;
+}
+
+// Long report titles (whole paragraphs, paths) must not become screen-reader
+// labels: announcements stay to one line and the full text remains visible
+// content on the button itself.
+export function compactAriaText(text: unknown, max = 80): string {
+  const flat = String(text).replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}

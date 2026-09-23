@@ -1,4 +1,4 @@
-.PHONY: build frontend-build frontend-install frontend-test help-check test \
+.PHONY: build frontend-build frontend-install frontend-test frontend-typecheck help-check test \
 	package archive dmg icons sign verify-sign signed-dmg notarize release-dmg
 
 # Version and target are explicit so local packages exercise the same identity
@@ -105,6 +105,9 @@ frontend-install:
 frontend-test:
 	cd frontend && npm test
 
+frontend-typecheck:
+	cd frontend && npm run typecheck
+
 frontend-build:
 	cd frontend && npm run build
 
@@ -112,7 +115,7 @@ help-check:
 	python3 -B -m unittest tools.help_check_test tools.release_contract_test
 	python3 -B tools/help_check.py all
 
-test: frontend-install frontend-test frontend-build
+test: frontend-install frontend-typecheck frontend-test frontend-build
 	cargo fmt --all -- --check
 	cargo test --workspace --all-targets --no-fail-fast
 	cargo clippy --workspace --all-targets -- -D warnings
