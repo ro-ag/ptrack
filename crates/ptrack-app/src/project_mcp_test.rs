@@ -166,6 +166,10 @@ fn project_mcp_lists_and_executes_the_four_bounded_structured_tools() {
         rows[2]["result"]["structuredContent"]["active_plan"]["id"],
         1
     );
+    let context = &rows[2]["result"]["structuredContent"];
+    assert_eq!(context["notice"], ptrack_core::UNTRUSTED_DATA_NOTICE);
+    assert_eq!(context["truncated"], false);
+    assert_eq!(context["active_plan"]["open_tasks_more"], 0);
     assert_eq!(
         rows[3]["result"]["structuredContent"]["task"]["id"],
         task_id

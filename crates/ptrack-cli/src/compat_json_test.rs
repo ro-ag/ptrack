@@ -161,3 +161,50 @@ fn a_scanned_project_encodes_its_stack_as_structured_rows() {
     assert!(encoded.contains("\"evidence\":[\"frontend/package.json\"]"));
     assert!(encoded.contains("\"stack_incomplete\":true"));
 }
+
+#[test]
+fn context_json_carries_the_mcp_notice_and_truncation_fields_last() {
+    let snapshot = ptrack_core::ProjectSnapshot::new(
+        ptrack_core::Meta {
+            goal: String::new(),
+            summary: String::new(),
+            active_plan: 0,
+            created_at: ptrack_core::Timestamp::Zero,
+            updated_at: ptrack_core::Timestamp::Zero,
+            format_version: 5,
+            last_write_version: String::new(),
+            active_plans: Vec::new(),
+            actors: Vec::new(),
+            stack: None,
+            scratchpad: None,
+        },
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
+    let mut digest = ptrack_core::context(&snapshot);
+    digest.truncated = true;
+    digest.active_plan = Some(ptrack_core::PlanBrief {
+        id: 1,
+        title: "Build CLI".to_owned(),
+        open_tasks: Vec::new(),
+        open_tasks_more: 3,
+        hold_reason: None,
+        waiting_on: Vec::new(),
+    });
+    let encoded = serde_json::to_string(&DigestJson::from(&digest)).expect("digest json");
+    assert!(
+        encoded.contains("\"waiting_on\":null,\"open_tasks_more\":3}"),
+        "{encoded}"
+    );
+    let notice = serde_json::to_string(ptrack_core::UNTRUSTED_DATA_NOTICE).expect("notice");
+    assert!(
+        encoded.ends_with(&format!(
+            "\"stack_incomplete\":false,\"notice\":{notice},\"truncated\":true}}"
+        )),
+        "{encoded}"
+    );
+}

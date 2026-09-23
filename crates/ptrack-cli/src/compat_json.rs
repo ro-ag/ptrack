@@ -1,7 +1,7 @@
 use ptrack_core::{
     Board, CheckpointView, Commit, Counts, DepSkip, DepWait, Digest, Issue, IssueLine, IssueShow,
     Milestone, MilestoneRef, MilestoneShow, NextView, NoteLine, PlanRef, PlanShow, ProjectRef,
-    SearchView, TaskLine, TaskShow, Timestamp,
+    SearchView, TaskLine, TaskShow, Timestamp, UNTRUSTED_DATA_NOTICE,
 };
 use serde::Serialize;
 
@@ -276,6 +276,8 @@ struct PlanBriefJson<'a> {
     open_tasks: Option<Vec<TaskLineJson<'a>>>,
     hold_reason: Option<&'a str>,
     waiting_on: Option<&'a [u64]>,
+    /// Open tasks dropped from `open_tasks` to fit the digest byte ceiling.
+    open_tasks_more: usize,
 }
 
 #[derive(Serialize)]
@@ -356,6 +358,11 @@ pub struct DigestJson<'a> {
     stack: Option<Vec<StackProjectJson<'a>>>,
     /// True when the scan hit its path cap and the counts are partial.
     stack_incomplete: bool,
+    /// The same untrusted-data notice the MCP `get_context` result carries.
+    notice: &'static str,
+    /// True when a value was shortened or list entries were dropped to keep
+    /// the digest within its byte ceiling.
+    truncated: bool,
 }
 
 /// One discovered project: its tracked-file count and, since 0.38.0, the lines
@@ -381,6 +388,7 @@ impl<'a> From<&'a Digest> for DigestJson<'a> {
                 open_tasks: nonempty(plan.open_tasks.iter().map(Into::into).collect()),
                 hold_reason: plan.hold_reason.as_deref(),
                 waiting_on: nonempty_ids(&plan.waiting_on),
+                open_tasks_more: plan.open_tasks_more,
             }),
             blocked: nonempty(value.blocked.iter().map(Into::into).collect()),
             blocked_more: value.blocked_more,
@@ -410,6 +418,8 @@ impl<'a> From<&'a Digest> for DigestJson<'a> {
                     .collect(),
             ),
             stack_incomplete: value.stack_incomplete,
+            notice: UNTRUSTED_DATA_NOTICE,
+            truncated: value.truncated,
         }
     }
 }

@@ -966,3 +966,186 @@ fn next_defers_the_integration_task_until_real_work_is_done() {
     let view = crate::next_task(&snapshot).unwrap();
     assert_eq!(view.task.unwrap().id, real.id);
 }
+
+const TITLE_REFUSAL: &str = "the title must be one line without control characters";
+
+#[test]
+fn creating_a_record_refuses_a_multi_line_title_and_writes_nothing() {
+    let directory = TestDirectory::new("title-create");
+    let (mut application, _) = configured(&directory, true);
+    let (plan_id, task_id) = add_plan_and_task(&mut application);
+    let refused = [
+        Mutation::AddTask {
+            plan_id,
+            title: "a\nb".to_owned(),
+        },
+        Mutation::AddPlan {
+            title: "a\rb".to_owned(),
+            milestone_id: 0,
+        },
+        Mutation::AddMilestone {
+            title: "a\u{2028}b".to_owned(),
+            due: ptrack_core::Timestamp::Zero,
+        },
+        Mutation::AddIssue {
+            title: "a\u{1b}[31mb".to_owned(),
+            body: String::new(),
+            severity: None,
+            task_id,
+        },
+    ];
+    for mutation in refused {
+        let error = application
+            .mutate(mutation.clone())
+            .expect_err("a multi-line title is refused");
+        assert_eq!(error.to_string(), TITLE_REFUSAL, "{mutation:?}");
+    }
+    let snapshot = application.snapshot().unwrap();
+    assert_eq!(snapshot.plans.len(), 1);
+    assert_eq!(snapshot.tasks.len(), 1);
+    assert!(snapshot.milestones.is_empty());
+    assert!(snapshot.issues.is_empty());
+}
+
+#[test]
+fn renaming_a_record_refuses_a_multi_line_title() {
+    let directory = TestDirectory::new("title-rename");
+    let (mut application, _) = configured(&directory, true);
+    let (plan_id, task_id) = add_plan_and_task(&mut application);
+    let MutationResult::Milestone(milestone) = application
+        .mutate(Mutation::AddMilestone {
+            title: "M".to_owned(),
+            due: ptrack_core::Timestamp::Zero,
+        })
+        .unwrap()
+    else {
+        panic!("milestone result");
+    };
+    let MutationResult::Issue(issue) = application
+        .mutate(Mutation::AddIssue {
+            title: "Bug".to_owned(),
+            body: String::new(),
+            severity: None,
+            task_id,
+        })
+        .unwrap()
+    else {
+        panic!("issue result");
+    };
+    let title = "one\ntwo".to_owned();
+    let refused = [
+        Mutation::SetPlanTitle {
+            id: plan_id,
+            title: title.clone(),
+        },
+        Mutation::SetTaskTitle {
+            id: task_id,
+            title: title.clone(),
+        },
+        Mutation::SetMilestoneTitle {
+            id: milestone.id,
+            title: title.clone(),
+        },
+        Mutation::SetIssueTitle {
+            id: issue.id,
+            title: title.clone(),
+        },
+        Mutation::UpdateIssue {
+            id: issue.id,
+            expected_updated_at: issue.updated_at,
+            title: title.clone(),
+            body: String::new(),
+            severity: issue.severity,
+            status: issue.status,
+        },
+        Mutation::ScheduleIssue {
+            id: issue.id,
+            plan_id,
+            task_title: title.clone(),
+        },
+    ];
+    for mutation in refused {
+        let error = application
+            .mutate(mutation.clone())
+            .expect_err("a multi-line rename is refused");
+        assert_eq!(error.to_string(), TITLE_REFUSAL, "{mutation:?}");
+    }
+    let copy = application
+        .plan_lifecycle(PlanLifecycleRequest::Copy {
+            plan_id,
+            to: None,
+            rename: Some(title),
+        })
+        .unwrap_err();
+    assert_eq!(copy.to_string(), TITLE_REFUSAL);
+    let snapshot = application.snapshot().unwrap();
+    assert_eq!(snapshot.plan(plan_id).unwrap().title, "Plan");
+    assert_eq!(snapshot.task(task_id).unwrap().title, "Task");
+    assert_eq!(snapshot.issue(issue.id).unwrap().title, "Bug");
+    assert_eq!(snapshot.plans.len(), 1);
+}
+
+#[test]
+fn a_legacy_multi_line_title_still_loads_and_takes_unrelated_updates() {
+    let directory = TestDirectory::new("title-legacy");
+    let (mut application, endpoint) = configured(&directory, true);
+    let (_, task_id) = add_plan_and_task(&mut application);
+    let MutationResult::Issue(issue) = application
+        .mutate(Mutation::AddIssue {
+            title: "Bug".to_owned(),
+            body: String::new(),
+            severity: None,
+            task_id,
+        })
+        .unwrap()
+    else {
+        panic!("issue result");
+    };
+    // A record written before the rule existed: straight through the store.
+    let legacy = "first line\nsecond line";
+    let store = ProjectStore::open_existing(&endpoint.database, &endpoint.binding, "test").unwrap();
+    store.set_task_title(task_id, legacy).unwrap();
+    store.set_issue_title(issue.id, legacy).unwrap();
+    let issue = store.issue(issue.id).unwrap();
+    drop(store);
+
+    let snapshot = application.snapshot().expect("a legacy title still loads");
+    assert_eq!(snapshot.task(task_id).unwrap().title, legacy);
+    application
+        .mutate(Mutation::SetTaskStatus {
+            id: task_id,
+            status: TaskStatus::Doing,
+        })
+        .expect("an unrelated update of a legacy record still writes");
+    let MutationResult::Issue(edited) = application
+        .mutate(Mutation::UpdateIssue {
+            id: issue.id,
+            expected_updated_at: issue.updated_at,
+            title: legacy.to_owned(),
+            body: "more detail".to_owned(),
+            severity: issue.severity,
+            status: issue.status,
+        })
+        .expect("editing a legacy issue without touching its title still writes")
+    else {
+        panic!("issue result");
+    };
+    assert_eq!(edited.title, legacy);
+    assert_eq!(edited.body, "more detail");
+    let snapshot = application.snapshot().unwrap();
+    assert_eq!(snapshot.task(task_id).unwrap().status, TaskStatus::Doing);
+    assert_eq!(snapshot.task(task_id).unwrap().title, legacy);
+}
+
+#[test]
+fn a_multi_line_goal_yields_a_one_line_integration_task_title() {
+    assert_eq!(
+        crate::integration_task_title("ship\r\nthe\u{2028}  release\t"),
+        "Integrate and verify against goal: ship the release"
+    );
+    assert_eq!(
+        crate::integration_task_title("\n"),
+        "Integrate and verify against the project goal"
+    );
+    assert!(ptrack_core::check_title(&crate::integration_task_title("a\nb")).is_ok());
+}

@@ -13,7 +13,7 @@ use ptrack_agent::{AgentHandoffInbox, AgentObservationClient, AgentRunObservatio
 use ptrack_core::{
     CheckpointView, Commit, Issue, IssueStatus, Milestone, MilestoneStatus, Note, NoteTarget, Plan,
     PlanStatus, ProjectRef, ProjectSnapshot, Scratchpad, ScratchpadSnippet, Severity, Task,
-    TaskStatus, Timestamp, Validate, check_summary, checkpoint, id_list, render_guide,
+    TaskStatus, Timestamp, Validate, check_summary, check_title, checkpoint, id_list, render_guide,
 };
 use ptrack_store::{
     ActiveBinding, ActorIdentity, Clock, GlobalStore, PinnedProjectDirectory, PlanDeleteSummary,
@@ -724,6 +724,14 @@ fn expect_notes_result(result: MutationResult) -> AppResult<Vec<Note>> {
     }
 }
 
+/// Refuses a typed title that is not one line of plain text.
+///
+/// Runs only where a title is typed (create, rename, copy under a new name),
+/// so a record stored before the rule existed still loads and updates.
+fn typed_title(title: &str) -> AppResult<()> {
+    check_title(title).map_err(AppError::Message)
+}
+
 /// Title prefix shared by both forms of the integration task.
 const INTEGRATION_TASK_PREFIX: &str = "Integrate and verify against";
 
@@ -731,6 +739,20 @@ const INTEGRATION_TASK_PREFIX: &str = "Integrate and verify against";
 /// plan, so the creator and [`integration_task_id`] share one spelling.
 #[must_use]
 pub fn integration_task_title(goal: &str) -> String {
+    // A goal may span lines, but a title may not: fold every character the
+    // title rule refuses, and the runs of whitespace around it, into one space.
+    let mut buffer = [0; 4];
+    let goal = goal
+        .chars()
+        .map(|c| {
+            if check_title(c.encode_utf8(&mut buffer)).is_ok() {
+                c
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>();
+    let goal = goal.split_whitespace().collect::<Vec<_>>().join(" ");
     if goal.is_empty() {
         format!("{INTEGRATION_TASK_PREFIX} the project goal")
     } else {
@@ -1226,6 +1248,9 @@ impl LocalApplication {
                 )?,
             )
         };
+        if let Some(title) = &rename {
+            typed_title(title)?;
+        }
         let actor = self.actor()?;
         let writer_version = self.bindings.writer_version.clone();
         let source_label = project_label(&source.root);
@@ -1415,6 +1440,7 @@ impl ApplicationPort for LocalApplication {
                     MutationResult::None
                 }
                 Mutation::AddMilestone { title, due } => {
+                    typed_title(&title)?;
                     let value = store.add_milestone(title)?;
                     if !due.is_zero() {
                         store.set_milestone_due(value.id, due)?;
@@ -1430,13 +1456,17 @@ impl ApplicationPort for LocalApplication {
                     MutationResult::None
                 }
                 Mutation::SetMilestoneTitle { id, title } => {
+                    typed_title(&title)?;
                     store.set_milestone_title(id, title)?;
                     MutationResult::None
                 }
                 Mutation::AddPlan {
                     title,
                     milestone_id,
-                } => MutationResult::Plan(store.add_plan(title, milestone_id)?),
+                } => {
+                    typed_title(&title)?;
+                    MutationResult::Plan(store.add_plan(title, milestone_id)?)
+                }
                 Mutation::SetPlanStatus { id, status } => {
                     store.set_plan_status(id, status)?;
                     MutationResult::None
@@ -1470,6 +1500,7 @@ impl ApplicationPort for LocalApplication {
                     MutationResult::None
                 }
                 Mutation::SetPlanTitle { id, title } => {
+                    typed_title(&title)?;
                     store.set_plan_title(id, title)?;
                     MutationResult::None
                 }
@@ -1482,6 +1513,7 @@ impl ApplicationPort for LocalApplication {
                     MutationResult::None
                 }
                 Mutation::AddTask { plan_id, title } => {
+                    typed_title(&title)?;
                     MutationResult::Task(store.add_task(plan_id, title)?)
                 }
                 Mutation::SetTaskStatus { id, status } => {
@@ -1498,6 +1530,7 @@ impl ApplicationPort for LocalApplication {
                     MutationResult::None
                 }
                 Mutation::SetTaskTitle { id, title } => {
+                    typed_title(&title)?;
                     store.set_task_title(id, title)?;
                     MutationResult::None
                 }
@@ -1521,7 +1554,10 @@ impl ApplicationPort for LocalApplication {
                     body,
                     severity,
                     task_id,
-                } => MutationResult::Issue(store.add_issue(title, body, severity, task_id)?),
+                } => {
+                    typed_title(&title)?;
+                    MutationResult::Issue(store.add_issue(title, body, severity, task_id)?)
+                }
                 Mutation::SetIssueStatus { id, status } => {
                     store.set_issue_status(id, status)?;
                     MutationResult::None
@@ -1531,6 +1567,7 @@ impl ApplicationPort for LocalApplication {
                     MutationResult::None
                 }
                 Mutation::SetIssueTitle { id, title } => {
+                    typed_title(&title)?;
                     store.set_issue_title(id, title)?;
                     MutationResult::None
                 }
@@ -1541,14 +1578,22 @@ impl ApplicationPort for LocalApplication {
                     body,
                     severity,
                     status,
-                } => MutationResult::Issue(store.update_issue(
-                    id,
-                    expected_updated_at,
-                    title,
-                    body,
-                    severity,
-                    status,
-                )?),
+                } => {
+                    // The edit form always resends the (trimmed) title; an
+                    // unchanged title stored before the rule existed must
+                    // not block an edit of the body, severity, or status.
+                    if store.issue(id)?.title.trim() != title.trim() {
+                        typed_title(&title)?;
+                    }
+                    MutationResult::Issue(store.update_issue(
+                        id,
+                        expected_updated_at,
+                        title,
+                        body,
+                        severity,
+                        status,
+                    )?)
+                }
                 Mutation::SetIssueTask {
                     id,
                     expected_task_id,
@@ -1570,6 +1615,7 @@ impl ApplicationPort for LocalApplication {
                     plan_id,
                     task_title,
                 } => {
+                    typed_title(&task_title)?;
                     let (issue, task) = store.schedule_issue(id, plan_id, task_title)?;
                     MutationResult::ScheduledIssue { issue, task }
                 }
