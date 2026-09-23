@@ -203,9 +203,10 @@ function quarantineRows(value: unknown): DiagnosticsRow[] {
     const row = fields(entry);
     const count = row.count;
     const counted = row.status !== "unavailable" && typeof count === "number";
+    const database = text(row.database) === "project" ? "project" : "global";
     return {
       group: "Global",
-      label: `Quarantine · ${humanize(text(row.database) || "unknown")}`,
+      label: `Quarantined records (${database} database)`,
       value: counted
         ? `${count} record${count === 1 ? "" : "s"}`
         : "Not available",

@@ -210,13 +210,13 @@ describe("diagnostics rows", () => {
 
     expect(rows).toContainEqual({
       group: "Global",
-      label: "Quarantine · Global",
+      label: "Quarantined records (global database)",
       value: "0 records",
       copy: null,
     });
     expect(rows).toContainEqual({
       group: "Global",
-      label: "Quarantine · Project",
+      label: "Quarantined records (project database)",
       value: "3 records",
       copy: null,
     });
@@ -262,7 +262,7 @@ describe("diagnostics rows", () => {
         receipts: [],
       },
     })).toEqual([
-      { group: "Global", label: "Quarantine · Project", value: "Not available", copy: null },
+      { group: "Global", label: "Quarantined records (project database)", value: "Not available", copy: null },
       { group: "Global", label: "Migration receipts", value: "None recorded", copy: null },
     ]);
   });
