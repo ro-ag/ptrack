@@ -172,7 +172,7 @@
           >
             <svg viewBox="0 0 16 16" aria-hidden="true">
               <rect x="1.5" y="2" width="13" height="12" rx="2"></rect>
-              <path d="M5.5 2v12"></path>
+              <path d="M5.5 2v12M3.3 5h0.4M3.3 7h0.4"></path>
             </svg>
           </button>
           <button
@@ -180,7 +180,7 @@
             class="panel-toggle"
             type="button"
             aria-controls="board"
-            aria-pressed="false"
+            aria-expanded="true"
             aria-label="Hide board panel"
             title="Hide board panel"
             disabled
@@ -188,7 +188,7 @@
           >
             <svg viewBox="0 0 16 16" aria-hidden="true">
               <rect x="1.5" y="2" width="13" height="12" rx="2"></rect>
-              <path d="M1.5 7h13"></path>
+              <path d="M5.8 4.5v5M8 4.5v7M10.2 4.5v3.5"></path>
             </svg>
           </button>
           <button
@@ -196,7 +196,7 @@
             class="panel-toggle"
             type="button"
             aria-controls="terminal-dock"
-            aria-pressed="false"
+            aria-expanded="true"
             aria-label="Hide terminal panel"
             title="Hide terminal panel"
             disabled
@@ -204,7 +204,7 @@
           >
             <svg viewBox="0 0 16 16" aria-hidden="true">
               <rect x="1.5" y="2" width="13" height="12" rx="2"></rect>
-              <path d="M1.5 9h13"></path>
+              <path d="M4.5 6l2 2-2 2M8.5 10.5h3"></path>
             </svg>
           </button>
           <button
@@ -1236,6 +1236,103 @@
         </div>
       </header>
       <p id="terminal-window-status" class="terminal-window-status" role="status" aria-live="polite" aria-atomic="true">Connecting…</p>
+      <!-- The dock's header facts for the active tab, read-only here: shell
+           state, profile, working directory, and the linked plan or task. -->
+      <div
+        id="terminal-window-info"
+        class="terminal-toolbar terminal-window-info"
+        role="group"
+        aria-label="Active terminal"
+        hidden
+      >
+        <span class="terminal-mark" aria-hidden="true">&gt;_</span>
+        <span
+          id="terminal-window-state"
+          class="terminal-status terminal-window-state"
+          aria-live="polite"
+        >Connecting…</span>
+        <span class="terminal-window-fact terminal-window-profile-fact">
+          <span class="terminal-window-fact-label">Profile</span>
+          <span id="terminal-window-profile" class="terminal-window-fact-value"></span>
+        </span>
+        <span class="terminal-window-fact terminal-window-cwd-fact">
+          <span class="terminal-window-fact-label">Working directory</span>
+          <span id="terminal-window-cwd" class="terminal-window-fact-value terminal-window-cwd"></span>
+        </span>
+        <span id="terminal-window-association" class="terminal-window-association" hidden>
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M6.25 10.25 4.9 11.6a2.45 2.45 0 0 1-3.5-3.45l2.05-2.1A2.45 2.45 0 0 1 6.9 6"></path>
+            <path d="m9.75 5.75 1.35-1.35a2.45 2.45 0 0 1 3.5 3.45l-2.05 2.1A2.45 2.45 0 0 1 9.1 10"></path>
+            <path d="m5.75 10.25 4.5-4.5"></path>
+          </svg>
+          <span id="terminal-window-association-label"></span>
+        </span>
+        <div class="terminal-actions terminal-window-info-actions" role="group" aria-label="Terminal utilities">
+          <button
+            id="terminal-window-scratchpad-toggle"
+            class="terminal-action-button"
+            type="button"
+            aria-label="Show scratchpad"
+            title="Show scratchpad"
+            aria-pressed="false"
+            aria-controls="terminal-window-scratchpad"
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M4 2.5h8.5v11H4z"></path>
+              <path d="M2.5 5h1.5M2.5 8h1.5M2.5 11h1.5M6.5 6h4M6.5 8.5h4"></path>
+            </svg>
+          </button>
+          <button
+            id="terminal-window-diagnostics-toggle"
+            class="terminal-action-button"
+            type="button"
+            aria-label="Show terminal diagnostics"
+            title="Show terminal diagnostics"
+            aria-controls="terminal-window-diagnostics"
+            aria-expanded="false"
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <circle cx="8" cy="8" r="5.75"></circle>
+              <path d="M8 7v4M8 4.5v.25"></path>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <section
+        id="terminal-window-diagnostics"
+        class="terminal-diagnostics"
+        aria-label="Terminal diagnostics"
+        aria-live="polite"
+        aria-atomic="true"
+        tabindex="-1"
+        hidden
+      >
+        <div class="terminal-diagnostics-header">
+          <p class="eyebrow">Diagnostics</p>
+          <button
+            id="terminal-window-diagnostics-close"
+            class="terminal-diagnostics-close"
+            type="button"
+            aria-label="Hide terminal diagnostics"
+            title="Hide terminal diagnostics"
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="m4 4 8 8M12 4l-8 8"></path>
+            </svg>
+          </button>
+        </div>
+        <dl>
+          <div><dt>Process</dt><dd id="terminal-window-diagnostic-process">Stopped</dd></div>
+          <div><dt>Stream</dt><dd id="terminal-window-diagnostic-stream">Idle</dd></div>
+          <div><dt>Renderer</dt><dd id="terminal-window-diagnostic-renderer">Not created</dd></div>
+          <div><dt>Layout</dt><dd id="terminal-window-diagnostic-layout">Default</dd></div>
+          <div><dt>Updated</dt><dd id="terminal-window-diagnostic-updated">Not recorded</dd></div>
+        </dl>
+        <p class="terminal-diagnostics-help">
+          Content-free state only. A stream lost on its own is claimed back for
+          the same session.
+        </p>
+      </section>
       <div class="canvas terminal-window-canvas">
       <p id="terminal-window-return" class="terminal-window-return">
         Closing this window returns the original tab to p-track. Tabs opened here close with this window. Any tab but the last can be closed here.
@@ -1270,11 +1367,77 @@
         <strong>Scrollback gap.</strong>
         <span id="terminal-window-gap-detail"></span>
       </p>
-      <div
-        id="terminal-window-host"
-        class="terminal-window-host"
-        aria-label="Terminal session"
-      ></div>
+      <div id="terminal-window-body" class="terminal-body terminal-window-body">
+        <div
+          id="terminal-window-host"
+          class="terminal-window-host"
+          aria-label="Terminal session"
+        ></div>
+        <div
+          id="terminal-window-scratchpad-splitter"
+          class="terminal-scratchpad-splitter"
+          role="separator"
+          tabindex="0"
+          aria-label="Resize scratchpad"
+          aria-orientation="vertical"
+          aria-valuemin="240"
+          aria-valuenow="320"
+          hidden
+        ></div>
+        <aside
+          id="terminal-window-scratchpad"
+          class="terminal-scratchpad"
+          aria-label="Scratchpad"
+          hidden
+        >
+          <div class="terminal-scratchpad-header">
+            <p class="eyebrow">Scratchpad</p>
+            <span
+              id="terminal-window-scratchpad-state"
+              class="terminal-scratchpad-state"
+              role="status"
+              aria-live="polite"
+            >Saved</span>
+            <button
+              id="terminal-window-scratchpad-close"
+              class="terminal-scratchpad-close"
+              type="button"
+              aria-label="Hide scratchpad"
+              title="Hide scratchpad"
+            >
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="m4 4 8 8M12 4l-8 8"></path>
+              </svg>
+            </button>
+          </div>
+          <textarea
+            id="terminal-window-scratchpad-text"
+            class="terminal-scratchpad-text"
+            aria-label="Project scratchpad"
+            aria-describedby="terminal-window-scratchpad-state"
+            spellcheck="false"
+            placeholder="Notes for this project…"
+          ></textarea>
+          <div class="terminal-scratchpad-strip-header">
+            <p class="eyebrow">Clipboard</p>
+            <button
+              id="terminal-window-scratchpad-add"
+              class="terminal-scratchpad-add"
+              type="button"
+              disabled
+            >Add selection</button>
+          </div>
+          <ul
+            id="terminal-window-scratchpad-snippets"
+            class="terminal-scratchpad-snippets"
+            aria-label="Copied snippets"
+          ></ul>
+          <p
+            id="terminal-window-scratchpad-empty"
+            class="terminal-scratchpad-empty"
+          >Copy from a pane, or add a selection.</p>
+        </aside>
+      </div>
       </div>
     </section>
 

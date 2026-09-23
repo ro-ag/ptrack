@@ -107,6 +107,7 @@ describe("scratchpad limits", () => {
       tooLarge: "Selection is larger than 4 KB; not added to the scratchpad.",
       allPinned: "All 50 snippets are pinned; unpin one to add more.",
       reloaded: "Scratchpad changed elsewhere and was reloaded.",
+      reloadedCopied: "Changed elsewhere and reloaded; your text is on the clipboard.",
       saveFailed: "Save failed",
       unavailable: "Scratchpad is unavailable; the copy was not added.",
     });
@@ -720,7 +721,7 @@ describe("ScratchpadSaver", () => {
     expect(h.saver.record.text).toBe("what the other window wrote");
     expect(h.saver.record.revision).toBe(8);
     expect(h.applied.at(-1)?.replaceLocalText).toBe(true);
-    expect(h.statuses.at(-1)).toBe(scratchpadNotices.reloaded);
+    expect(h.statuses.at(-1)).toBe(scratchpadNotices.reloadedCopied);
   });
 
   it("re-reads when the conflict payload did not survive the transport", async () => {
@@ -734,7 +735,7 @@ describe("ScratchpadSaver", () => {
     expect(h.clipboard).toEqual(["my unsaved note"]);
     expect(h.gets).toEqual([7, 7]);
     expect(h.saver.record.text).toBe("reloaded text");
-    expect(h.statuses.at(-1)).toBe(scratchpadNotices.reloaded);
+    expect(h.statuses.at(-1)).toBe(scratchpadNotices.reloadedCopied);
   });
 
   it("reloads even when the clipboard is unavailable", async () => {
@@ -747,6 +748,8 @@ describe("ScratchpadSaver", () => {
     await settle();
     expect(h.saver.record.text).toBe("remote");
     expect(h.errors).toEqual([]);
+    // Without a clipboard the notice claims nothing about where the text went.
+    expect(h.statuses.at(-1)).toBe(scratchpadNotices.reloaded);
   });
 
   it("keeps the edit dirty when a save fails, and retries on the next edit", async () => {
@@ -827,6 +830,81 @@ describe("ScratchpadSaver", () => {
     h.saver.markText("changed while the write was in flight");
     expect(sent.text).toBe("note");
     await settle();
+  });
+});
+
+describe("ScratchpadSaver.refresh", () => {
+  it("re-reads a newer revision written elsewhere and replaces the note", async () => {
+    const h = saverHarness({ record: stored("dock note", 2) });
+    await h.saver.ensureLoaded();
+    h.setStored(stored("typed in the terminal window", 3));
+    expect(await h.saver.refresh(3)).toBe(true);
+    expect(h.gets).toEqual([7, 7]);
+    expect(h.saver.record.text).toBe("typed in the terminal window");
+    expect(h.saver.record.revision).toBe(3);
+    // Nothing was typed here, so the incoming text replaces the field.
+    expect(h.applied.at(-1)?.replaceLocalText).toBe(true);
+    expect(h.saver.dirty).toBe(false);
+    expect(h.sets).toHaveLength(0);
+  });
+
+  it("ignores its own write and anything not newer than what it holds", async () => {
+    const h = saverHarness({ record: stored("note", 4) });
+    await h.saver.ensureLoaded();
+    h.saver.markText("note, edited");
+    h.saver.flush();
+    await settle();
+    expect(h.saver.record.revision).toBe(5);
+    expect(await h.saver.refresh(5)).toBe(false);
+    expect(await h.saver.refresh(3)).toBe(false);
+    expect(await h.saver.refresh(Number.NaN)).toBe(false);
+    expect(h.gets).toEqual([7]);
+  });
+
+  it("does not read before the panel ever loaded the record", async () => {
+    const h = saverHarness({ record: stored("note", 1) });
+    expect(await h.saver.refresh(2)).toBe(false);
+    expect(h.gets).toEqual([]);
+  });
+
+  it("keeps a dirty note and lets its write meet the revision check", async () => {
+    const h = saverHarness({ record: stored("stored", 2) });
+    await h.saver.ensureLoaded();
+    h.saver.markText("typed here, not saved yet");
+    expect(await h.saver.refresh(3)).toBe(false);
+    expect(h.gets).toEqual([7]);
+    expect(h.saver.record.text).toBe("typed here, not saved yet");
+    // The write goes out at the old revision; the conflict keeps the text on
+    // the clipboard and says so.
+    h.failSet(conflict(stored("written elsewhere", 3)));
+    h.saver.flush();
+    await settle();
+    expect(h.sets[0].revision).toBe(2);
+    expect(h.clipboard).toEqual(["typed here, not saved yet"]);
+    expect(h.saver.record.text).toBe("written elsewhere");
+    expect(h.statuses.at(-1)).toBe(scratchpadNotices.reloadedCopied);
+  });
+
+  it("drops the read when typing starts while it is in flight", async () => {
+    const h = saverHarness({ record: stored("stored", 2) });
+    await h.saver.ensureLoaded();
+    h.setStored(stored("written elsewhere", 3));
+    const refreshed = h.saver.refresh(3);
+    h.saver.markText("typed during the read");
+    expect(await refreshed).toBe(false);
+    expect(h.saver.record.text).toBe("typed during the read");
+    expect(h.saver.record.revision).toBe(2);
+    expect(h.saver.dirty).toBe(true);
+  });
+
+  it("reports a failed read and keeps the record it had", async () => {
+    const h = saverHarness({ record: stored("stored", 2) });
+    await h.saver.ensureLoaded();
+    const failure = new Error("runtime is unavailable");
+    h.failGet(failure);
+    expect(await h.saver.refresh(3)).toBe(false);
+    expect(h.errors).toEqual([failure]);
+    expect(h.saver.record.text).toBe("stored");
   });
 });
 

@@ -6,6 +6,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- A detached terminal window shows the dock's facts for its active tab on one
+  line: the shell state (such as *Prompt · last 0*), the profile, the working
+  directory (shortened from its start, full path in the tooltip), and a badge
+  for a linked plan or task. Its **ⓘ** control opens the same content-free
+  diagnostics as the dock.
+- A detached terminal window has the scratchpad panel too: the project note
+  with its byte counter and save state, and the clipboard strip that keeps
+  copies from the window's panes, screened for secrets as in the dock. A note
+  saved in the dock or in a window appears in the other within seconds; an
+  edit still being typed is kept, and a conflicting save puts your text on the
+  clipboard and says so.
+
+### Changed
+- The top-right layout controls now light up while their panel shows, use
+  distinct icons for the sidebar, Board, and terminal, and set the theme
+  control apart. A dimmed Board control says why it cannot hide the Board yet.
+
 ## [0.41.1] - 2026-09-23
 
 ### Fixed

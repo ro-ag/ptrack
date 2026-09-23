@@ -98,8 +98,8 @@ export function createLayoutController(ctx: AppContext) {
       !event.target.closest("#board-panel-toggle, #terminal-panel-toggle")
     ) return;
     const next = {
-      boardHidden: elements.boardPanelToggle.getAttribute("aria-pressed") === "true",
-      terminalHidden: elements.terminalPanelToggle.getAttribute("aria-pressed") === "true",
+      boardHidden: elements.boardPanelToggle.getAttribute("aria-expanded") === "false",
+      terminalHidden: elements.terminalPanelToggle.getAttribute("aria-expanded") === "false",
     };
     if (
       next.boardHidden === layoutState.panels.boardHidden &&
@@ -121,7 +121,7 @@ export function createLayoutController(ctx: AppContext) {
     ];
     for (const [toggle, hidden] of toggles) {
       if (toggle.disabled) continue;
-      if ((toggle.getAttribute("aria-pressed") === "true") !== hidden) toggle.click();
+      if ((toggle.getAttribute("aria-expanded") === "false") !== hidden) toggle.click();
     }
     // The clicks above dispatch synchronously, so the guard has done its whole
     // job by the time the loop ends: every click after this one is the user's,

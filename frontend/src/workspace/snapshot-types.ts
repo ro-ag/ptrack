@@ -426,6 +426,7 @@ export interface TerminalSessionReply {
   streamUrl: string;
   associationRevision?: number;
   linkedLaunch?: boolean;
+  shellIntegration?: { quality?: "none" | "basic" | "rich"; nonce?: string };
 }
 
 export interface TerminalStreamClaim {

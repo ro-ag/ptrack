@@ -24,6 +24,8 @@ import {
 } from "../workspace/tab-controller";
 import { TerminalStreamClient, type StreamState } from "./client";
 import { terminalControlIcon } from "./control-icon";
+import { terminalDiagnosticView } from "./diagnostics";
+import { TerminalDiagnosticsPopover } from "./diagnostics-popover";
 import type { DiscoveredTerminalProfile } from "./linked-launch";
 import {
   binaryStringToBytes,
@@ -61,8 +63,26 @@ import {
 } from "./profile-settings";
 import { applyTerminalTheme, createTerminalRenderer, paintTerminalBackground } from "./renderer";
 import { TerminalResizeDispatcher } from "./resize-dispatch";
+import {
+  detachedScratchpadStorage,
+  scratchpadChangedEventName,
+  type ScratchpadChangedEvent,
+} from "./scratchpad";
+import { ScratchpadPanel, type ScratchpadPanelElements } from "./scratchpad-panel";
 import { terminalSearchOptions, terminalSearchResultLabel } from "./search";
+import {
+  applyShellSignal,
+  initialShellState,
+  parseShellOSC,
+  type ShellState,
+} from "./shell-integration";
 import { readModernUnicodeSetting } from "./unicode";
+import {
+  detachedDiagnosticInput,
+  TerminalWindowInfo,
+  type DetachedPaneFacts,
+  type TerminalWindowInfoElements,
+} from "./window-info";
 
 /** The detached window's page: everything outside the dock it reuses. */
 interface TerminalWindowView {
@@ -78,9 +98,15 @@ interface TerminalWindowView {
   searchClose: HTMLButtonElement;
   tabs: HTMLDivElement;
   controls: HTMLDivElement;
+  info: HTMLElement;
+  facts: TerminalWindowInfoElements;
+  diagnostics: ConstructorParameters<typeof TerminalDiagnosticsPopover>[0];
+  scratchpad: ScratchpadPanelElements;
 }
 
 function terminalWindowView(): TerminalWindowView {
+  const info = element("#terminal-window-info", HTMLElement);
+  const body = element("#terminal-window-body", HTMLElement);
   return {
     section: element("#terminal-window", HTMLElement),
     status: element("#terminal-window-status", HTMLParagraphElement),
@@ -94,7 +120,57 @@ function terminalWindowView(): TerminalWindowView {
     searchClose: element("#terminal-window-search-close", HTMLButtonElement),
     tabs: element("#terminal-window-tabs", HTMLDivElement),
     controls: element("#terminal-window-controls", HTMLDivElement),
+    info,
+    facts: {
+      state: element("#terminal-window-state", HTMLElement),
+      profile: element("#terminal-window-profile", HTMLElement),
+      cwd: element("#terminal-window-cwd", HTMLElement),
+      association: element("#terminal-window-association", HTMLElement),
+      associationLabel: element("#terminal-window-association-label", HTMLElement),
+    },
+    diagnostics: {
+      toggle: element("#terminal-window-diagnostics-toggle", HTMLButtonElement),
+      popover: element("#terminal-window-diagnostics", HTMLElement),
+      close: element("#terminal-window-diagnostics-close", HTMLButtonElement),
+      process: element("#terminal-window-diagnostic-process", HTMLElement),
+      stream: element("#terminal-window-diagnostic-stream", HTMLElement),
+      renderer: element("#terminal-window-diagnostic-renderer", HTMLElement),
+      layout: element("#terminal-window-diagnostic-layout", HTMLElement),
+      updated: element("#terminal-window-diagnostic-updated", HTMLElement),
+      header: info,
+      surface: element("#terminal-window", HTMLElement),
+    },
+    scratchpad: {
+      toggle: element("#terminal-window-scratchpad-toggle", HTMLButtonElement),
+      panel: element("#terminal-window-scratchpad", HTMLElement),
+      splitter: element("#terminal-window-scratchpad-splitter", HTMLElement),
+      state: element("#terminal-window-scratchpad-state", HTMLElement),
+      close: element("#terminal-window-scratchpad-close", HTMLButtonElement),
+      text: element("#terminal-window-scratchpad-text", HTMLTextAreaElement),
+      add: element("#terminal-window-scratchpad-add", HTMLButtonElement),
+      list: element("#terminal-window-scratchpad-snippets", HTMLElement),
+      empty: element("#terminal-window-scratchpad-empty", HTMLElement),
+      body,
+    },
   };
+}
+
+/**
+ * The system clipboard this window can write to: the bridge's native
+ * clipboard where it is installed, the WebView's otherwise, or null.
+ */
+function windowClipboard(): ((text: string) => Promise<void>) | null {
+  const write = window.runtime?.ClipboardSetText;
+  if (typeof write === "function") {
+    return async (text) => {
+      if ((await write(text)) !== true) throw new Error("Native clipboard copy failed");
+    };
+  }
+  const clipboard = typeof navigator === "undefined" ? undefined : navigator.clipboard;
+  if (clipboard && typeof clipboard.writeText === "function") {
+    return (text) => clipboard.writeText(text);
+  }
+  return null;
 }
 
 type PaneStreamState = StreamState;
@@ -109,6 +185,13 @@ class WindowPane {
   ended = false;
   sessionEnded = false;
   exitStatus = "";
+  /** The exit carried an error rather than an exit code. */
+  failed = false;
+  /** Advisory shell-integration state, for the info row only. */
+  shellState: ShellState = initialShellState;
+  /** Known only for a session this window started itself. */
+  shellNonce = "";
+  changedAt = Date.now();
   client: TerminalStreamClient | null = null;
 
   constructor(
@@ -156,6 +239,10 @@ class DetachedTerminalWindow {
   #assignmentWrites: Promise<void> = Promise.resolve();
   #resizeFrame = 0;
   #busy = false;
+  readonly #info: TerminalWindowInfo;
+  readonly #diagnostics: TerminalDiagnosticsPopover;
+  #scratchpad: ScratchpadPanel | null = null;
+  #clipboardWrite: Promise<void> = Promise.resolve();
   // Read once when the window opens, as the main window's dock does.
   readonly #overrides = readTerminalPreferenceOverrides(localStorage);
 
@@ -171,6 +258,11 @@ class DetachedTerminalWindow {
   ) {
     this.#controller = controller;
     this.#originalTab = originalTab;
+    this.#info = new TerminalWindowInfo(view.facts);
+    this.#diagnostics = new TerminalDiagnosticsPopover(
+      view.diagnostics,
+      () => terminalDiagnosticView(this.diagnosticInput()),
+    );
   }
 
   setStatus(message: string): void {
@@ -230,6 +322,7 @@ class DetachedTerminalWindow {
     });
     terminal.open(paneHost);
     paintTerminalBackground(terminal);
+    const agent = this.profiles.find((candidate) => candidate.id === profileId)?.kind === "agent";
     terminal.textarea?.setAttribute(
       "aria-label",
       `Terminal session — ${owner?.title}`,
@@ -251,6 +344,25 @@ class DetachedTerminalWindow {
       },
     );
     this.#panes.set(paneId, pane);
+    // The dock's shell-integration markers, read for the info row only. A
+    // claimed session's nonce stays with the main window, so only the
+    // standard markers speak for it; an agent's output is never read as a
+    // shell's.
+    if (!agent) {
+      for (const identifier of [7, 133, 633] as const) {
+        terminal.parser.registerOscHandler(identifier, (payload) => {
+          const signal = parseShellOSC(identifier, payload, pane.shellNonce);
+          if (signal && !pane.ended) {
+            pane.shellState = applyShellSignal(pane.shellState, signal, performance.now());
+            if (pane === this.activePane()) this.renderInfo();
+          }
+          return true;
+        });
+      }
+    }
+    terminal.onSelectionChange(() => {
+      if (pane === this.activePane()) this.#scratchpad?.renderSelection();
+    });
     return pane;
   }
 
@@ -263,6 +375,118 @@ class DetachedTerminalWindow {
       states.includes(candidate),
     ) ?? "open";
     this.setStatus(terminalWindowStatusLabel(aggregate));
+    this.renderInfo();
+  }
+
+  // ------------------------------------------------------------ info row
+  // The dock's header facts for the active pane, the ⓘ diagnostics, and the
+  // linked plan or task — read-only here; editing stays in the main window.
+
+  #paneFacts(pane: WindowPane | undefined): DetachedPaneFacts | null {
+    if (!pane) return null;
+    return {
+      stream: pane.state,
+      ended: pane.ended,
+      failed: pane.failed,
+      shell: pane.shellState,
+      changedAt: pane.changedAt,
+    };
+  }
+
+  diagnosticInput() {
+    return detachedDiagnosticInput({
+      pane: this.#paneFacts(this.activePane()),
+      linked: this.currentTab()?.association !== undefined,
+      visible: document.visibilityState === "visible",
+    });
+  }
+
+  renderInfo(): void {
+    const tab = this.currentTab();
+    const pane = this.activePane();
+    const descriptor = tab ? findTerminalPane(tab.root, tab.activePaneId) : undefined;
+    const profileId = pane?.profileId || descriptor?.profileId || "";
+    const profile = this.profiles.find((candidate) => candidate.id === profileId);
+    this.#info.render({
+      pane: this.#paneFacts(pane),
+      profileName: profile?.name || profileId || "Default profile",
+      cwd: descriptor?.cwd || this.projectRoot,
+      association: tab?.association,
+    });
+    if (this.#diagnostics.open) {
+      this.#diagnostics.render(terminalDiagnosticView(this.diagnosticInput()));
+    }
+    this.#scratchpad?.renderSelection();
+  }
+
+  // ---------------------------------------------------------- scratchpad
+  // The dock's panel over this window's markup: the same project record,
+  // generation-fenced; a write from either surface re-reads in the other.
+
+  async writeClipboard(text: string): Promise<void> {
+    const write = windowClipboard();
+    if (!write) throw new Error("Clipboard access is unavailable");
+    const pending = this.#clipboardWrite.then(() => write(text));
+    this.#clipboardWrite = pending.catch(() => {});
+    await pending;
+  }
+
+  mountScratchpad(): void {
+    const panel = new ScratchpadPanel(this.view.scratchpad, {
+      generation: this.generation,
+      backend: {
+        get: (generation) => this.#api().GetScratchpadV1(generation),
+        set: (generation, revision, scratchpad) =>
+          this.#api().SetScratchpadV1(generation, revision, scratchpad),
+      },
+      storage: detachedScratchpadStorage(localStorage),
+      bodyWidth: () => this.view.scratchpad.body.clientWidth,
+      hasSelection: () => this.activePane()?.terminal.hasSelection() ?? false,
+      selection: () => this.activePane()?.terminal.getSelection() ?? null,
+      pasteReady: () => {
+        const pane = this.activePane();
+        return Boolean(pane && pane.state === "open" && !pane.ended);
+      },
+      paste: async (text) => {
+        const pane = this.activePane();
+        if (pane && pane.state === "open" && !pane.ended) await this.pasteText(pane, text);
+      },
+      clipboardAvailable: () => windowClipboard() !== null,
+      setClipboardText: (text) => this.writeClipboard(text),
+      openChanged: () => this.scheduleFit(),
+      resized: () => this.scheduleFit(),
+      reportError: (error) => this.reportError(error),
+      setTimeout: (callback, delay) => window.setTimeout(callback, delay),
+      clearTimeout: (handle) => window.clearTimeout(handle as number),
+    });
+    this.#scratchpad = panel;
+    panel.mount();
+    window.runtime?.EventsOnMultiple?.(scratchpadChangedEventName, (payload) => {
+      const change = payload as Partial<ScratchpadChangedEvent> | null;
+      if (change?.generation !== this.generation) return;
+      void panel.refresh(Number(change.revision));
+    }, -1);
+    // The note is written before the window goes: closing it is the most
+    // common way to leave the panel, and a closing window may never get to
+    // run the debounce.
+    window.addEventListener("beforeunload", () => panel.flush());
+    window.addEventListener("blur", () => panel.flush());
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") panel.flush();
+    });
+  }
+
+  async copySelection(pane: WindowPane): Promise<void> {
+    const selection = pane.terminal.getSelection();
+    if (!selection) return;
+    try {
+      await this.writeClipboard(selection);
+      // Only an explicit copy reaches the scratchpad, and only the text the
+      // user selected; a copy that looks like a secret stays on the clipboard.
+      this.#scratchpad?.capture(selection);
+    } catch (error) {
+      this.reportError(error);
+    }
   }
 
   fitPane(pane: WindowPane): void {
@@ -302,9 +526,9 @@ class DetachedTerminalWindow {
   }
 
   // ------------------------------------------------- per-session surfaces
-  // The same search, paste guard, and zoom the dock offers (§4); project
-  // chrome — writeback, diagnostics, the association editor — stays in the
-  // window that owns the tab.
+  // The same search, paste guard, and zoom the dock offers (§4). Project
+  // chrome that changes the project — writeback and the association editor —
+  // stays in the main window; the info row above only states it.
   runSearch(incremental: boolean, backwards = false): void {
     const pane = this.activePane();
     if (!pane) return;
@@ -384,9 +608,7 @@ class DetachedTerminalWindow {
           this.zoomPane(pane, terminalZoomFontSize(action, pane.fontSize, pane.baseFontSize));
           break;
         case "copy":
-          void navigator.clipboard
-            ?.writeText(pane.terminal.getSelection())
-            .catch(() => {});
+          void this.copySelection(pane);
           break;
         case "select-all":
           pane.terminal.selectAll();
@@ -410,18 +632,23 @@ class DetachedTerminalWindow {
     pane.terminal.textarea?.addEventListener("paste", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      const request = prepareClipboardPaste(
-        event.clipboardData?.getData("text") ?? "",
-        { alternateScreen: pane.terminal.buffer.active.type === "alternate" },
-      );
-      void commitClipboardPaste(
-        request,
-        (pending) => Promise.resolve(window.confirm(
-          `Paste into the terminal? ${pasteReviewSummary(pending)}.`,
-        )),
-        (text) => pane.terminal.paste(text),
-      );
+      void this.pasteText(pane, event.clipboardData?.getData("text") ?? "");
     });
+  }
+
+  /** The one paste path: the clipboard's payload and a scratchpad snippet alike. */
+  async pasteText(pane: WindowPane, text: string): Promise<void> {
+    const request = prepareClipboardPaste(
+      text,
+      { alternateScreen: pane.terminal.buffer.active.type === "alternate" },
+    );
+    await commitClipboardPaste(
+      request,
+      (pending) => Promise.resolve(window.confirm(
+        `Paste into the terminal? ${pasteReviewSummary(pending)}.`,
+      )),
+      (pending) => pane.terminal.paste(pending),
+    );
   }
 
   bindPaneInput(pane: WindowPane): void {
@@ -441,6 +668,7 @@ class DetachedTerminalWindow {
   onStreamState(pane: WindowPane, next: TerminalStreamClient, state: StreamState): void {
     if (pane.client !== next) return;
     pane.state = state;
+    pane.changedAt = Date.now();
     this.renderStatus();
     // Only a stream that opened earns a fresh re-claim budget.
     if (state === "open") {
@@ -461,6 +689,7 @@ class DetachedTerminalWindow {
     if (disposition === "ended") {
       pane.ended = true;
       this.setStatus(pane.exitStatus || streamOutputEndedNotice);
+      this.renderInfo();
     } else if (disposition === "reclaim") {
       this.scheduleReclaim(pane);
     }
@@ -544,8 +773,11 @@ class DetachedTerminalWindow {
         if (exit?.sessionId !== pane.sessionId) continue;
         pane.ended = true;
         pane.state = "closed";
+        pane.failed = typeof exit.error === "string" && exit.error !== "";
+        pane.changedAt = Date.now();
         pane.exitStatus = (typeof exit.error === "string" && exit.error) || `Exited (${exit.exitCode})`;
         this.setStatus(pane.exitStatus);
+        this.renderInfo();
       }
     }, -1);
   }
@@ -574,6 +806,9 @@ class DetachedTerminalWindow {
       if (this.view.searchBar.hidden) this.activePane()?.terminal.focus();
     });
     window.addEventListener("pagehide", () => {
+      // Flushes the note: the write is issued before anything is torn down.
+      this.#scratchpad?.dispose();
+      this.#diagnostics.dispose();
       resizeObserver.disconnect();
       cancelAnimationFrame(this.#resizeFrame);
       for (const pane of this.#panes.values()) pane.dispose();
@@ -654,6 +889,7 @@ class DetachedTerminalWindow {
       added = this.currentTab();
       if (!added) throw new Error("Could not create a terminal tab");
       const pane = this.createPane(added.activePaneId, created.sessionId);
+      pane.shellNonce = created.shellIntegration?.nonce ?? "";
       this.#splitView?.refresh(this.workspace);
       this.#splitView?.mountForPane(added.activePaneId)?.append(pane.host);
       await this.saveWindow();
@@ -790,6 +1026,9 @@ class DetachedTerminalWindow {
       },
     });
     this.bindSearch();
+    this.view.info.hidden = false;
+    this.#diagnostics.mount();
+    this.mountScratchpad();
     this.listenForExits();
     for (const pane of this.#panes.values()) await this.connectPane(pane);
     this.bindWindowEvents();

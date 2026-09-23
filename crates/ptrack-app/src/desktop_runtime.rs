@@ -48,9 +48,9 @@ pub use wire::{
     RecentProjectAvailabilityV1, RecentProjectLanguageV1, RecentProjectOpenAuthorizationV1,
     RecentProjectRegistryCommitV1, RecentProjectRegistryStatusV1, RecentProjectResolutionV1,
     RecentProjectStackV1, RecentProjectV1, RecentProjectsV1, ResetApplicationStateResultV1,
-    ResolvedRecentProjectV1, ShutdownOutcome, WorkspaceChangeResult, WorkspaceProject,
-    WorkspaceState, WorkspaceStatus, allowed_desktop_commands, allowed_terminal_window_commands,
-    scope_request_to_window,
+    ResolvedRecentProjectV1, ScratchpadChangedV1, ShutdownOutcome, WorkspaceChangeResult,
+    WorkspaceProject, WorkspaceState, WorkspaceStatus, allowed_desktop_commands,
+    allowed_terminal_window_commands, scope_request_to_window,
 };
 pub use workspace::{BoundDesktopWorkspace, DesktopAgentRuntime};
 
