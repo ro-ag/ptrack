@@ -1,154 +1,220 @@
-# p-track capability threat model
+# p-track threat model
 
 ## Executive summary
 
-Plan 4 adds a privileged host broker that can make HTTP requests and invoke Git, SSH, and scp for an agent. The dominant risks are authorization confusion across profiles or projects, scope escapes through redirects and paths, subprocess argument injection, bearer-token replay, and secret-bearing audit data. The implementation reduces these risks with host-minted generation-bound identities, exact normalized approval digests, authorization immediately before execution, fixed command shapes, canonical project paths, bounded output and concurrency, and metadata-only audits. The important residual boundary is explicit: p-track capabilities govern broker tools only; ordinary terminal processes are not an OS-level network sandbox. Interactive SSH shells are not exposed because the JSON/MCP broker transport cannot safely carry a terminal; attempted interactive-shell grants are rejected during normalization.
+p-track is a single-user, local-first application: one Rust binary provides the
+CLI, the terminal dashboard, and a Tauri desktop app that share a per-project
+redb database. Its dominant risks are a hostile WebView script reaching
+privileged IPC, a hostile project or agent smuggling options or control bytes
+into subprocesses and terminals, secrets leaking into persistent project data,
+agent-facing text being read as instructions, and a compromised release
+channel installing a malicious binary.
+
+Plan 4's capability broker, which let agents make brokered HTTP, Git, SSH, and
+scp calls, has been retired. Capability brokering moved to the companion
+project pam. p-track no longer starts a broker, injects capability tokens into
+terminals, exposes capability IPC commands, or serves `ptrack capability call`
+or `ptrack capability mcp`; `ptrack capability` only prints a pointer to pam.
+The `ptrack-capability` and `ptrack-capability-policy` crates are deleted.
+Capability grant and audit records that earlier releases wrote stay in the
+project store so those databases still open, but nothing reads them as
+authority, and Reset Application State revokes leftover grants in the open
+project. The broker-specific threats are kept below as retired entries so
+their IDs stay traceable.
+
+The residual boundary is explicit: p-track is not a sandbox. Agent and shell
+processes launched in its terminals are ordinary user processes and can use
+the network, Git, and SSH directly.
 
 ## Scope and assumptions
 
-- In scope: `ptrack-capability`, capability records in `ptrack-core` and `ptrack-store`, the `ptrack capability` bridge and cwd-bound project `ptrack mcp` server in `ptrack-cli`, terminal identity injection and workspace fencing in `ptrack-app` and `ptrack-terminal`, and the capability Settings UI in `frontend`.
-- Runtime model: a single-user local desktop/CLI application launches agent profiles as child processes and exposes a random-port loopback broker for the active canonical project generation.
-- Data sensitivity: remote repository contents, HTTP request and response data, filesystem transfers, Git credential-helper access, and current ssh-agent identities may be sensitive.
-- Authentication expectation: a host-minted opaque bearer token represents one launched terminal's immutable project, generation, profile ID, and session. Caller-supplied profile names are not identity.
-- Out of scope: ordinary shell/agent processes invoking network tools directly, OS firewall/sandbox enforcement, remote multi-user hosting, and application features unrelated to broker authority.
-- The active plan and user instructions supply the service context, so no material deployment questions remain open. If p-track becomes a remote or multi-user service, token storage, process isolation, tenant separation, and loopback assumptions require a new threat model.
+- In scope: the desktop IPC surface and WebView (`src-tauri`,
+  `crates/ptrack-app/src/desktop_runtime`), detached terminal windows, the
+  terminal host and paste/clipboard handling (`crates/ptrack-terminal`,
+  `frontend/src/terminal`), Git subprocesses (`crates/ptrack-git`,
+  `crates/ptrack-app/src/service.rs`), the cwd-bound project MCP server
+  (`crates/ptrack-app/src/project_mcp.rs`, `mcp_transport.rs`), the agent
+  integration loopback server (`crates/ptrack-agent`), agent-facing digests
+  (`crates/ptrack-core/src/report.rs`, `secrets.rs`), and the updater
+  (`crates/ptrack-updater`).
+- Runtime model: one local user runs p-track; agents run as child processes of
+  the terminal host or as independent processes in the project directory.
+- Data sensitivity: project records, terminal output, clipboard captures, and
+  repository metadata can contain credentials or private code.
+- Out of scope: OS-level network or filesystem sandboxing of agent processes,
+  multi-user or remote hosting, and release-workflow permission design beyond
+  the signing step.
 
 ## System model
 
 ### Primary components
 
-- The app Settings service previews, stores, enables, disables, expires, and removes project-local grants (`crates/ptrack-app/src/desktop_runtime.rs`).
-- The per-project redb store holds normalized grants and bounded audit metadata (`crates/ptrack-store/src/project.rs`).
-- The workspace owns a generation-scoped loopback broker and shuts it down with other project resources (`crates/ptrack-app/src/production.rs`).
-- The host injects a fresh capability token before an agent profile starts and binds it to the resulting terminal session (`crates/ptrack-app/src/terminal_runtime.rs`; `crates/ptrack-terminal/src/manager.rs`).
-- CLI and MCP clients discover the active project's private descriptor and forward typed tool calls to one broker dispatcher (`crates/ptrack-cli`; `crates/ptrack-capability/src/mcp.rs`; `broker.rs`).
-- HTTP, Git, and SSH executors repeat authorization at use time and invoke host networking or direct subprocesses (`crates/ptrack-capability/src/http.rs`, `git.rs`, and `ssh.rs`).
+- The desktop runtime parses every IPC request once into a typed command and
+  checks it against a fixed allowlist, the calling window, and the current
+  workspace generation (`crates/ptrack-app/src/desktop_runtime/command.rs`,
+  `wire.rs`).
+- The project store holds plans, tasks, notes, issues, commits, the scratchpad,
+  and inert capability records (`crates/ptrack-store/src/project.rs`).
+- The terminal host runs PTY sessions for shells and agent profiles and injects
+  only the agent-event endpoint and token (`crates/ptrack-app/src/terminal_runtime.rs`).
+- Git inspection and `commit show` run Git through one hardened command
+  builder (`crates/ptrack-git/src/runner.rs`).
+- The updater discovers, verifies, stages, and hands off releases
+  (`crates/ptrack-updater`).
 
 ### Data flows and trust boundaries
 
-- Operator → Settings API: grant drafts and approval intent cross the deny-by-default Tauri command bridge. Normalization produces the displayed effective scope and digest; enabling requires that exact digest. The API is generation-fenced.
-- Host → agent child: an opaque token plus canonical project, generation, and immutable profile ID cross the process environment. The terminal manager validates environment keys and values before launch.
-- Agent/MCP client → loopback broker: JSON or JSON-RPC tool name, capability ID, and typed arguments cross authenticated loopback HTTP or stdio. The broker rejects origins, non-POST requests, unknown fields, oversized frames, invalid or unbound tokens, and unknown tools.
-- Agent/MCP client → project database: the local `ptrack mcp` stdio child discovers its project only from its working directory. Closed schemas and bounded text limit its four tools, but the launching process is the authority boundary: `complete_task` and `add_note` intentionally mutate that project without a capability token or shell subprocess.
-- Broker → project database: capability IDs select project-local grants; the broker reopens the active project's database and does not accept a database path from the caller.
-- Broker → HTTP network: transient URL, headers, and body cross the system proxy and CA trust path. Authorization checks method, exact normalized origin, segment-bounded path, request size, redirects, timeout, response size, and concurrency.
-- Broker → Git/SSH/scp: typed operation fields become fixed executable/argument vectors without a local shell. Git re-reads repository and remote identity, then invokes the exact approved URL and head refs. SSH uses a pinned host key, ssh-agent-only authentication, exact commands/roots, bounded streamed downloads, and independently approved forwarding directions.
-- Executors → audit store: allowlisted operation, sanitized target, outcome class, counts, and duration cross into persistent storage. Bodies, headers, tokens, raw stderr, credentials, and raw command arguments are absent from the audit type.
-
-#### Diagram
-
-```mermaid
-flowchart LR
-  U["Operator"] --> S["Settings UI and API"]
-  S --> D["Project capability store"]
-  H["Workspace host"] --> A["Agent terminal"]
-  A --> C["CLI or MCP bridge"]
-  C --> B["Loopback capability broker"]
-  B --> D
-  B --> N["HTTP network"]
-  B --> G["Git executable"]
-  B --> X["SSH and scp executables"]
-  B --> L["Bounded audit metadata"]
-```
+- WebView → IPC: typed commands cross the Tauri bridge. The CSP allows scripts
+  only from the app itself; the main window and detached terminal windows have
+  different command allowlists.
+- Host → agent child: `PTRACK_AGENT_EVENT_ENDPOINT_V1`,
+  `PTRACK_AGENT_EVENT_TOKEN_V1`, and for linked launches `PTRACK_LAUNCH_CONTEXT_V1`
+  cross the process environment. Launch context is redacted with the shared
+  credential detector. No capability variable is set.
+- Agent → integration server: structured events cross authenticated loopback
+  HTTP with a run-bound token; bodies are closed schemas without prompts,
+  output, or credentials.
+- Agent → project database: `ptrack mcp` and the CLI read and write the project
+  selected by the working directory. Closing gates apply to both.
+- Project data → agent: `ptrack context` and MCP `get_context` return a capped,
+  redacted digest that begins with an untrusted-data notice.
+- Project data → Git: stored commit SHAs and hook arguments reach Git
+  subprocesses.
+- Clipboard and paste: terminal copies can be saved to the scratchpad; pasted
+  text is written into a PTY.
+- Release → updater: `checksums.txt`, its signature, and the package cross from
+  GitHub into a private stage.
 
 ## Assets and security objectives
 
 | Asset | Why it matters | Security objective (C/I/A) |
 | --- | --- | --- |
-| Capability grants and approval state | Defines the exact authority delegated to an agent | I, A |
-| Session bearer token | Possession permits use of grants for one agent session | C, I |
-| Project files and Git working tree | Pull, push, upload, and download can change or disclose project data | C, I, A |
-| Remote HTTP services and data | Requests may carry sensitive transient headers or bodies and cause writes | C, I |
-| ssh-agent and Git credential helpers | Delegate external identity without p-track storing credentials | C, I |
-| Audit metadata | Supports accountability but must not become a secret store | C, I, A |
-| Broker and terminal availability | Unbounded work could exhaust the local application | A |
+| Project records and scratchpad | Durable plans, notes, and snippets; may hold sensitive text | C, I, A |
+| User's shell startup files and home directory | Overwriting them yields code execution at next login | I |
+| Installed `ptrack` binary | Replacing it runs attacker code with the user's authority | I |
+| Terminal sessions | Keystrokes written to a PTY execute as the user | I |
+| Desktop IPC | Every privileged action flows through it | I, A |
+| Agent event token | Lets a process report events for one run | I |
+| Agents' reading context | Text that agents treat as instructions steers their actions | I |
 
 ## Attacker model
 
 ### Capabilities
 
-- A launched agent can control tool names and all typed request fields and can make concurrent, malformed, oversized, stale, or replayed requests.
-- An approved remote HTTP service can return redirects, large or slow responses, and hostile headers or payloads.
-- A project can contain hostile Git configuration, refs, symlinks, and paths; a remote Git/SSH endpoint can return hostile diagnostics.
-- Another process running as the same OS user may try to read descriptors, copy a child token, or race project transitions. This is a meaningful residual risk because there is no same-user OS isolation.
+- A hostile repository can contain crafted commit subjects, paths, author
+  names, remote URLs, Git configuration, and hook files.
+- A launched agent or another same-user process can write arbitrary text into
+  project records through the CLI or MCP, and can race lifecycle transitions.
+- Script injected into the WebView (for example through a rendering bug) can
+  call any IPC command that window is allowed to call.
+- A compromised release account or Actions run can publish arbitrary release
+  assets.
+- Text copied from a web page or a hostile file can reach the paste path.
 
 ### Non-capabilities
 
-- There is no internet-facing inbound listener; the broker binds IPv4 loopback on a random port (`internal/capability/broker_server.go`, `StartBrokerServer`).
-- A remote network attacker cannot directly read local process environments or the private runtime directory without another local compromise.
-- The model does not treat the agent child as contained from invoking `curl`, `git`, or `ssh` itself. Such direct host operations are outside the capability enforcement boundary.
+- There is no internet-facing listener; loopback servers bind to 127.0.0.1.
+- A remote attacker cannot read process environments or the private runtime
+  directory without another local compromise.
 
 ## Entry points and attack surfaces
 
 | Surface | How reached | Trust boundary | Notes | Evidence (repo path / symbol) |
 | --- | --- | --- | --- | --- |
-| Settings mutations | Tauri GUI commands | Operator → host | Preview digest and generation required | `crates/ptrack-app/src/desktop_runtime.rs` |
-| OS notifications | Rust-only Tauri notification plugin | Host → OS shell | Three explicit opt-ins; background-only; identifier-only copy; no WebView notification permission | `src-tauri/src/notification_runtime.rs` |
-| CLI helper | `ptrack capability call` | Agent → broker | Requires injected token and matching project descriptor | `crates/ptrack-cli/src/dispatch.rs` |
-| MCP stdio | `ptrack capability mcp` | Provider → bridge | Bounded newline JSON-RPC and known tools only | `crates/ptrack-capability/src/mcp.rs` |
-| Project MCP stdio | `ptrack mcp` | Provider → project database | Cwd-bound; four closed, bounded tools; task closeout gates preserved | `crates/ptrack-app/src/project_mcp.rs` |
-| Loopback HTTP | `/v1/tools/list`, `/v1/tools/call` | Local process → broker | POST, no Origin, bearer auth, bounded strict JSON | `crates/ptrack-capability/src/server.rs` |
-| HTTP executor | `ptrack_http_request` | Broker → network | Per-hop origin/path reauthorization and response bounds | `crates/ptrack-capability/src/http.rs` |
-| Git executor | `ptrack_git` | Broker → Git process | Fresh root/remote/rewrite checks and fixed operations | `crates/ptrack-capability/src/git.rs` |
-| SSH/scp executor | `ptrack_ssh` | Broker → SSH process | Pinned key, agent-only auth, separate grants | `crates/ptrack-capability/src/ssh.rs` |
-| Project path resolution | upload/download fields | Project data → filesystem | Canonical root and nearest-existing-ancestor symlink checks | `crates/ptrack-capability-policy/src/lib.rs` |
-| Audit persistence | executor outcomes | Broker → database | Allowlisted, truncated, bounded metadata only | `crates/ptrack-capability/src/audit.rs` |
+| Main-window IPC | Tauri invoke | WebView → host | Typed allowlist, exact generation on mutations | `crates/ptrack-app/src/desktop_runtime/command.rs` |
+| Terminal-window IPC | Tauri invoke from `terminal-*` windows | WebView → host | Nine terminal commands only; window label taken from the caller | `crates/ptrack-app/src/desktop_runtime/wire.rs`, `scope_request_to_window` |
+| Content security policy | WebView load | Page → script execution | `script-src 'self'`; inline theme script hashed at build time | `src-tauri/tauri.conf.json` |
+| OS notifications | Rust-only notification plugin | Host → OS shell | Opt-in, background-only, identifier-only copy | `src-tauri/src/notification_runtime.rs` |
+| Project MCP stdio | `ptrack mcp` | Provider → project database | Cwd-bound; four closed, bounded tools; closing gates preserved | `crates/ptrack-app/src/project_mcp.rs` |
+| Agent integration HTTP | `/v1/runs/<id>/events` | Local process → host | Run-bound bearer token, closed event schemas | `crates/ptrack-agent/src/integration.rs` |
+| Context digest | `ptrack context`, MCP `get_context` | Project data → agent | Byte caps, redaction, untrusted-data notice | `crates/ptrack-core/src/report.rs` |
+| Commit show | `ptrack commit show`, desktop | Stored SHA → Git | SHA validated as hex; `--end-of-options` | `crates/ptrack-app/src/service.rs`, `check_commit_sha` |
+| Git snapshot | Opening a project | Repository → host | Lossy decoding, credential-free remote URLs | `crates/ptrack-git/src/snapshot.rs` |
+| Hook install | `ptrack hook install` | CLI → hooks directory | Honors `core.hooksPath`; refuses foreign interpreters | `crates/ptrack-app/src/service.rs`, `hook` |
+| Paste | Terminal paste | Clipboard → PTY | Control bytes stripped; multi-line review | `frontend/src/terminal/paste.ts` |
+| Clipboard capture | Terminal copy | PTY output → project store | Secret screening before save | `frontend/src/terminal/secrets.ts` |
+| Updater | Check, download, install | GitHub → installed binary | Ed25519-signed manifest, pinned key | `crates/ptrack-updater/src/signature.rs` |
 
 ## Top abuse paths
 
-1. Agent supplies another profile's capability ID → broker resolves identity from its host-minted token → exact profile mismatch denies before transport.
-2. Agent replays a token after project switch → old broker is shut down and descriptor removed → new generation's token map rejects the token.
-3. Approved HTTP server redirects to another host or path → redirect callback repeats authorization → second request is never sent outside scope.
-4. Agent uses encoded traversal or a segment-prefix collision in a URL → canonical URL/path validation rejects the ambiguous request.
-5. Hostile Git config changes a remote or adds `insteadOf` → executor re-reads configuration and denies before fetch/pull/push.
-6. Agent injects shell syntax or leading options into Git/SSH fields → exact grant checks and fixed argument positions prevent unapproved data from reaching a runner.
-7. Project symlink points an approved transfer root outside the project → canonical ancestor resolution detects the escape and denies before scp.
-8. Agent races disable, expiry, session close, or project switch against an in-flight call → broker cancellation stops tracked work and subsequent authorization re-reads current grant state.
-9. Remote response includes credentials or hostile diagnostics → only bounded transient output returns to the caller; audit persistence stores sanitized target and class only.
-10. Retained coordination state reaches the notification observer → startup, opt-in, and project-generation baselines consume it without delivery; stable IDs suppress repeats.
+1. An agent stores `--output=$HOME/.zshrc` as a commit SHA, and a later
+   `commit show` passes it to `git show`, which overwrites the file → SHAs are
+   validated as 4 to 64 hex digits on write and again before show, and Git
+   receives `--end-of-options`, `--no-ext-diff`, and `--no-textconv` through the
+   hardened runner.
+2. A compromised release run publishes a trojaned Linux tarball with a matching
+   `checksums.txt` → the updater refuses any manifest whose `checksums.txt.sig`
+   does not verify against the Ed25519 public key compiled into the binary.
+3. Injected script in a detached terminal window calls project mutations → the
+   window may call only its terminal commands, and tab state is keyed by the
+   caller's own window label.
+4. An inline `<script>` injected into the page runs → the CSP no longer allows
+   inline scripts.
+5. A pasted line carries `ESC[201~` followed by control characters to escape
+   bracketed paste and execute before review → C0 controls and bracketed-paste
+   markers are stripped, and multi-line text always goes through the review
+   dialog unless rich shell integration reports a running command.
+6. A user copies terminal output containing an API key and it is saved to the
+   scratchpad in the project database → captures that look like credentials
+   are refused with "Not saved: looks like a secret".
+7. A note or title contains "ignore previous instructions" or a forged
+   heading and an agent follows it → titles are flattened to one line, fields
+   are capped and redacted, and the digest begins with a notice that its
+   contents are untrusted data.
+8. A crafted commit subject containing separator bytes blanks the Git panel →
+   the log format is NUL-delimited and malformed records are skipped.
+9. A stale frontend issues a mutation against the previous project →
+   mutations require the exact workspace generation.
 
 ## Threat model table
 
 | Threat ID | Threat source | Prerequisites | Threat action | Impact | Impacted assets | Existing controls (evidence) | Gaps | Recommended mitigations | Detection ideas | Likelihood | Impact severity | Priority |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| TM-001 | Malicious agent or same-user process | Access to a live child token | Replay token from another process or after lifecycle change | Use approved remote authority | Token, remote data, project files | Random token hash, required binding, session/generation/project lifecycle revocation (`broker.go`, `IssueSessionToken`, `authenticate`) | A stolen live token is bearer authority; same-user processes are not isolated | Keep tokens per launch, short-lived through session lifecycle, never persist; revisit OS credential channels if multi-user | Count rejected tokens and calls after revocation without logging token material | Medium | High | Medium |
-| TM-002 | Malicious agent | Knows another capability ID or project path | Spoof profile, cross project, or cross generation | Authorization bypass | Grants, project data | Immutable token identity, project-local DB, canonical descriptor, generation fencing (`broker.go`, `SessionIdentity`; `broker_server.go`, `ReadBrokerDescriptor`) | None within the stated local model | Preserve fail-closed profile discovery and add regression tests for every new client | Audit denied profile/class and stale-generation counts | Low | High | Medium |
-| TM-003 | Agent plus hostile HTTP service | Operator approves a hostname and method | Redirect, encoded path, credentialed URL, oversized body/response, or DNS manipulation | SSRF-like access, data disclosure, local exhaustion | HTTP data, local availability | Exact normalized origin/path, no userinfo, per-hop authorization, system CA/proxy, byte/time/concurrency bounds (`normalize.go`; `http.go`, `Execute`) | Hostnames intentionally trust the host resolver; no IP-range pinning is claimed | For deployments with hostile DNS, add optional approved CIDR/resolved-IP constraints without breaking VPN/proxy use | Audit sanitized origin only, redirect count, denial class, and limits | Medium | High | High |
-| TM-004 | Malicious project or agent | Git capability exists | Change remote/rewrite config or inject ref/options to widen Git action | Push to wrong remote, destructive ref update, hooks | Git tree, remote repository, credentials | Fresh canonical root/remote checks, rewrite rejection, empty hooks dir, fixed argv, prompt disabled, exact branch/ref/force/delete/tag grants (`git.go`, `Execute`) | Host Git and credential-helper security remain dependencies | Keep new operations typed; never add arbitrary argv or inherit repository hooks | Audit operation, remote name, stable result class | Low | High | Medium |
-| TM-005 | Malicious project or agent | SSH capability exists | Inject command/options, escape transfer roots, abuse forwarding, or accept changed host key | Remote execution, file disclosure/write, network pivot | Project files, remote host, ssh-agent | Exact command allowlist, direct argv, pinned key, password off, project/symlink confinement, independent upload/download/forward grants, and rejection of unsupported interactive shells (`ssh.go`; `policy.go`) | Explicitly approved remote commands run through the remote shell by design | Keep command grants exact and forwarding loopback-only; do not infer one SSH grant from another | Audit operation, host/port, stable failure class | Low | High | Medium |
-| TM-006 | Malicious agent | Live grant while operator edits or revokes | Race an operation against disable, expiry, token revocation, or project switch | Operation continues beyond intended window | Grants, remote/project integrity | Authorization at use, scope digest, expiry, tracked cancellation, workspace close fencing (`policy.go`, `Authorize`; `broker.go`, `RevokeCapability`; `workspace_context.go`) | A remote may have committed an action just before cancellation | Keep high-risk operations idempotent where possible and display current state clearly | Audit timestamps around disable/expiry and cancellation class | Medium | Medium | Medium |
-| TM-007 | Remote service or agent | Causes secret-bearing inputs or diagnostics | Smuggle tokens, headers, bodies, query strings, stderr, or paths into persistent audit | Secret disclosure through project DB/UI | Credentials, audit store | Narrow audit type, sanitizer/allowlists, count bounds, raw-database canary tests (`model.go`, `CapabilityAudit`; `audit.go`) | Transient responses remain visible to the requesting agent | Keep audit schema additive-only for safe fields; require canary tests for every new field | Scan serialized audits for canary secrets in tests | Low | High | Medium |
-| TM-008 | Malicious agent or remote | Can issue many slow/large operations | Exhaust goroutines, memory, subprocesses, or output buffers | Local denial of service | Broker availability | Request/frame/output/time/redirect/concurrency limits, process contexts, bounded store retention (`normalize.go`; `process.go`; `broker.go`, `track`) | Limits are per capability; multiple enabled grants can consume aggregate resources | Consider an additional broker-wide concurrency ceiling if real workloads show pressure | Track limit denials and concurrent active-operation high-water mark | Medium | Medium | Medium |
-| TM-009 | User expectation mismatch | Agent terminal is launched normally | Agent bypasses broker and invokes host network tools directly | Operations occur without capability audit or scope checks | Remote/project data | UI and plan explicitly state broker-only boundary (`frontend/index.html`; p-track plan note) | No OS-level enforcement exists | Do not describe capabilities as a sandbox; pursue firewall/process isolation only as a separate feature | None reliable at broker layer for direct process networking | High | High | High |
+| TM-001 to TM-008 | — | — | Retired with the capability broker (token replay, profile spoofing, HTTP/Git/SSH scope escapes, grant races, audit secret leakage, broker exhaustion) | — | — | No broker, token, or executor exists; stored grants authorize nothing and can be revoked by Reset Application State | None | Keep the capability tables read-only until a schema change can drop them; never reintroduce a reader that treats them as authority | Tests assert no `PTRACK_CAPABILITY_*` variable is injected and no capability IPC command exists | — | — | Retired |
+| TM-009 | User expectation mismatch | Agent terminal launched normally | Agent invokes network tools, Git, or SSH directly | Actions happen without p-track oversight | Remote and project data | Documentation states p-track is not a sandbox; pam owns scoped capabilities | No OS-level enforcement | Do not describe p-track as a sandbox; point users to pam | None reliable in p-track | High | High | High |
+| TM-010 | Malicious agent or project | Can write commit records | Store option-shaped SHAs that `git show` later interprets | Overwrite arbitrary user files; escape project-local mode | Home directory, shell startup files | Hex validation on add and show; hardened Git runner with scrubbed environment, `--end-of-options`, `--no-ext-diff`, `--no-textconv` (`check_commit_sha`, `hardened_git_command`) | Records written before this build are validated only at show time | Keep every Git call on the hardened runner | Count refused SHAs | Low | High | Medium |
+| TM-011 | Compromised release channel | Release token or Actions run | Publish a malicious package with a matching checksum | Malicious binary installed by the updater | Installed binary | Ed25519 signature over `checksums.txt` verified against a compiled-in key on every platform before any digest is trusted; macOS adds Developer ID team pin and Gatekeeper (`signature.rs`, `staging.rs`) | Key compromise requires an app release to rotate | Keep the private key only in the release secret; document rotation | Release job verifies its own signature before publishing | Low | Critical | High |
+| TM-012 | Script in a detached terminal window | Code execution in that WebView | Call project, plan, settings, or update commands | Unauthorized mutation from a less trusted surface | Project records, IPC | Terminal windows reach only nine terminal commands; window label replaced by the caller's; main window cannot call terminal-window tab commands (`scope_request_to_window`, `allowed_terminal_window_commands`) | None known | Keep new commands off the terminal-window allowlist by default | Security contract test enumerates the allowlist | Low | Medium | Medium |
+| TM-013 | Injected markup | HTML injection in the WebView | Run inline script | Full IPC access for that window | Desktop IPC | `script-src 'self'` without `'unsafe-inline'`; build-time hash for the one inline theme script; `ws://localhost:*` dropped from `connect-src` (`tauri.conf.json`, `security_contract.rs`) | Styles still allow `'unsafe-inline'` | Move remaining inline styles to stylesheets, then drop `'unsafe-inline'` from `style-src` | Contract test pins the CSP string | Low | High | Medium |
+| TM-014 | Hostile clipboard content | User pastes into a terminal | Smuggle control bytes or end bracketed paste early to run commands | Command execution without review | Terminal sessions | C0 controls and bracketed-paste markers stripped; multi-line review forced, and output-entered alternate screen alone no longer bypasses it (`paste.ts`) | Single-line pastes without controls are sent directly by design | Keep the strip list in tests | Paste guard tests | Medium | High | Medium |
+| TM-015 | Secrets in terminal output | User copies text holding a credential | Capture is persisted in the project database | Credential stored in project data and backups | Scratchpad | Captures matching the credential patterns are refused (`secrets.ts`, `looksLikeSecret`) | Pattern-based; novel formats pass | Extend patterns with the shared Rust detector's cases | Tests for each pattern family | Medium | Medium | Medium |
+| TM-016 | Malicious agent or collaborator | Can write records the next agent reads | Plant instructions or forged sections in titles and notes | Next agent is steered off task or into harmful actions | Agents' reading context | One-line titles on write; per-field and 32 KiB total caps; shared credential redaction; untrusted-data notice in Markdown, JSON, and MCP (`report.rs`, `secrets.rs`, `validation.rs`) | Agents may still follow instructions in bodies | Keep the notice first in every agent-facing digest | Truncation flags in output | Medium | Medium | Medium |
+| TM-017 | Hostile repository | Crafted subjects, paths, or remotes | Break or spoof the Git panel, or leak remote credentials into the UI | Availability loss or credential display | Desktop, credentials | NUL-delimited log, lossy decoding, malformed records skipped, userinfo stripped from remote URLs, process group killed on timeout (`snapshot.rs`, `status.rs`, `runner.rs`) | None known | Keep Git output parsing total | Snapshot tests with hostile fixtures | Low | Medium | Low |
+| TM-018 | Hook managers or foreign hooks | `core.hooksPath` set, or a non-shell hook | Append shell to a Python/Node hook or install where Git never runs it | Broken hooks or silent audit gaps | Git hooks | Hooks directory resolved through Git and refused outside the project; non-shell interpreters refused; block inserted before a final `exec` (`service.rs`, `hook`) | None known | Keep refusals explicit | `hook status` reports the effective path | Low | Low | Low |
+| TM-019 | Stale frontend or racing window | Project switch in progress | Apply a mutation to the wrong workspace | Writes land in another project | Project records | Mutations require the exact generation; legacy generation-free commands removed; initialization re-checks under the transition lock | None known | Keep new mutations on the exact-generation check | Desktop runtime tests | Low | Medium | Low |
 
 ## Criticality calibration
 
-- Critical: unauthenticated remote code execution in the host, cross-user/tenant authorization bypass in a future remote deployment, or silent extraction of credential material without a prior local compromise.
-- High: broker authorization bypass that enables unapproved HTTP/Git/SSH writes; project-root escape that reads or overwrites arbitrary host files; persistent credential/token leakage to audits.
-- Medium: attacks requiring a malicious launched agent or same-user process that can use only already-approved authority; bounded local denial of service; lifecycle races with narrow timing and existing cancellation.
-- Low: disclosure of non-secret tool schemas, noisy invalid-request failures, or denial paths requiring operator-approved exact hostile input with no scope expansion.
+- Critical: installing attacker code through the updater, or remote code
+  execution in the host without a prior local compromise.
+- High: writing outside the project from stored data (TM-010), IPC escalation
+  from injected script, or command execution through paste without review.
+- Medium: persistence of secrets in project data, steering an agent through
+  planted text, or mutations from a less trusted window.
+- Low: availability loss in read-only panels, or misleading diagnostics.
 
 ## Focus paths for security review
 
 | Path | Why it matters | Related Threat IDs |
 | --- | --- | --- |
-| `internal/capability/normalize.go` | Defines canonical scope and approval digest inputs | TM-003, TM-004, TM-005 |
-| `internal/capability/policy.go` | Central deny-by-default authorization and path confinement | TM-002, TM-003, TM-005, TM-006 |
-| `internal/capability/broker.go` | Token authentication, dispatch, concurrency, and revocation | TM-001, TM-002, TM-006, TM-008 |
-| `internal/capability/broker_server.go` | Loopback listener, descriptor validation, request bounds | TM-001, TM-002, TM-008 |
-| `internal/capability/http.go` | Redirect, header, proxy, TLS, and response handling | TM-003, TM-007, TM-008 |
-| `internal/capability/git.go` | Host subprocess shape and fresh repository identity | TM-004, TM-006, TM-008 |
-| `internal/capability/ssh.go` | Host key/auth policy, file paths, commands, forwarding | TM-005, TM-006, TM-008 |
-| `internal/capability/audit.go` | Persistent secret-exclusion boundary | TM-007 |
-| `internal/gui/terminal.go` | Host-minted identity injection and session revocation | TM-001, TM-002, TM-006 |
-| `internal/gui/workspace_context.go` | Project-generation cancellation and resource fencing | TM-002, TM-006 |
-| `internal/store/capabilities.go` | Approval update semantics and bounded audit retention | TM-006, TM-007 |
-| `src-tauri/src/notification_runtime.rs` | OS-facing copy, opt-in, focus suppression, baselines, and stable deduplication | TM-007 |
+| `crates/ptrack-app/src/desktop_runtime/command.rs` | Typed IPC parsing and allowlist | TM-012, TM-019 |
+| `crates/ptrack-app/src/desktop_runtime/wire.rs` | Window scoping of IPC requests | TM-012 |
+| `src-tauri/tauri.conf.json`, `src-tauri/tests/security_contract.rs` | CSP and Tauri permissions | TM-013 |
+| `crates/ptrack-app/src/service.rs` | Commit SHA validation, `git show`, hook install | TM-010, TM-018 |
+| `crates/ptrack-git/src/runner.rs`, `snapshot.rs`, `status.rs` | Hardened Git subprocesses and parsing | TM-010, TM-017 |
+| `crates/ptrack-updater/src/signature.rs`, `staging.rs`, `discovery.rs` | Release authenticity | TM-011 |
+| `frontend/src/terminal/paste.ts` | Paste guard | TM-014 |
+| `frontend/src/terminal/secrets.ts` | Clipboard capture screening | TM-015 |
+| `crates/ptrack-core/src/report.rs`, `secrets.rs` | Agent-facing digest bounds and redaction | TM-016 |
+| `crates/ptrack-app/src/terminal_runtime.rs` | Agent environment injection | TM-001 to TM-008 (retired), TM-009 |
+| `src-tauri/src/notification_runtime.rs` | OS-facing copy and opt-in | — |
 
 ## Quality check
 
-- Covered Settings, OS notifications, CLI, MCP, loopback HTTP, database, HTTP, Git, SSH/scp, filesystem, terminal identity, and audit entry points.
-- Represented every discovered runtime trust boundary in the abuse paths and threat table.
-- Kept runtime behavior separate from test/build/release tooling; release workflows are outside this feature threat model.
-- Reflected the user-supplied local deployment, explicit broker-only enforcement boundary, and excluded migration scope.
-- Recorded the resolver/DNS trust and same-user bearer-token model as residual assumptions rather than claiming stronger isolation.
+- Covered main-window and terminal-window IPC, the CSP, notifications, project
+  MCP, the agent integration server, agent-facing digests, Git subprocesses,
+  hooks, paste, clipboard capture, and the updater.
+- Recorded the capability broker's retirement and kept its threat IDs as
+  retired entries.
+- Stated the not-a-sandbox boundary as a residual risk rather than claiming
+  isolation.

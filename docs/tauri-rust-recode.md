@@ -6,7 +6,9 @@ and the final landing gate remain authoritative evidence for the cutover.
 ## Runtime invariant
 
 The shipped p-track CLI, TUI, desktop application, background services,
-terminal host, updater, and capability broker are one all-Rust runtime. The
+terminal host, and updater are one all-Rust runtime. (The capability broker
+that was once part of it has been retired; capability brokering moved to the
+companion project pam.) The
 runtime must not spawn, link, or call a Go sidecar.
 
 Go may remain after cutover only in a separately invoked, offline migration
@@ -28,7 +30,6 @@ ptrack TUI -----------+--> ptrack-app services --> ptrack-store --> redb
 Tauri WebView --> IPC-+          |       |
                                  |       +--> bounded git / agent / PTY
                                  |
-                                 +--> capability broker --> HTTP / Git / SSH
                                  +--> updater verifier --> platform handoff
 
 historical v0.23.0 offline cutover only (retired from the current tree):
@@ -52,7 +53,6 @@ crates/ptrack-store/       redb schema, typed transactions, paths, backups
 crates/ptrack-app/         use cases, workspace generations, authorization seams
 crates/ptrack-git/         bounded repository and worktree inspection
 crates/ptrack-agent/       run evidence, associations, handoffs, drift, proposals
-crates/ptrack-capability/  normalization, authorization, broker, audits, executors
 crates/ptrack-terminal/    PTYs, profiles, streams, shell integration, cleanup
 crates/ptrack-updater/     discovery, verified staging, recovery, native handoff
 crates/ptrack-cli/         command parsing, output and exit compatibility
@@ -60,11 +60,14 @@ crates/ptrack-tui/         terminal UI presentation and input flows
 ```
 
 The offline migration tool (`ptrack-db-import`) served the one-time bbolt
-cutover and was removed once no legacy databases remained in use.
+cutover and was removed once no legacy databases remained in use. The
+`ptrack-capability` and `ptrack-capability-policy` crates were deleted when
+capability brokering was retired; the project MCP stdio transport they used to
+host now lives in `ptrack-app`.
 
 Dependencies point inward. `ptrack-core` has no platform or storage authority.
 `ptrack-store` owns database handles and depends on the native record contract.
-The bounded Git, agent, capability, terminal, and updater crates expose narrow
+The bounded Git, agent, terminal, and updater crates expose narrow
 services to `ptrack-app`; they do not depend on a UI. CLI, TUI, and Tauri depend
 on `ptrack-app`, never directly on redb or an executor. Cross-cutting DTOs live
 at the narrowest owning boundary rather than in the desktop shell.
@@ -181,18 +184,23 @@ side effect.
 
 ## Capability and IPC boundaries
 
-All network and remote-process authority remains deny by default. A decoded or
-migrated capability is inert until Rust policy code normalizes its complete
-scope, recomputes the approval digest byte-for-byte, verifies profile,
-generation, revision, expiry, operation, target, and limits at the point of
-use, and obtains explicit approval. A mismatch disables the grant and produces
-only bounded audit metadata.
+p-track grants no network or remote-process authority to agents. Capability
+brokering has been retired: no broker starts, no terminal receives a capability
+token, and no IPC command or CLI command manages grants (`ptrack capability`
+only points at pam). Capability records that older releases wrote stay in the
+project store so those databases still open; they authorize nothing, and Reset
+Application State revokes leftover grants in the open project.
 
 The initial Tauri shell enables only the main application window and the IPC
 needed for its explicitly registered commands. It starts with no shell,
 filesystem, HTTP, process, dialog, or updater plugin authority. Each future
 command and plugin requires a reviewed permission entry and still calls the
-same Rust application service used by the CLI and TUI.
+same Rust application service used by the CLI and TUI. Detached terminal
+windows reach only the handful of terminal commands they need, with their own
+window label substituted for any label they pass, and every mutating command
+requires the exact current workspace generation. The content security policy
+allows scripts only from the app itself (`script-src 'self'`, no
+`'unsafe-inline'`).
 
 Loopback servers bind only to the loopback interface, use one-shot bounded
 tokens tied to the active workspace generation, and publish private descriptor
@@ -205,7 +213,7 @@ output limits, process-tree cleanup, and no credential values in diagnostics.
 2. Scaffold the Tauri shell around the unchanged frontend with no ambient
    authority.
 3. Complete core services and typed application storage.
-4. Port CLI, TUI, Git, agent, capability, PTY, GUI, updater, and packaging
+4. Port CLI, TUI, Git, agent, capability (since retired), PTY, GUI, updater, and packaging
    behavior behind the shared service boundaries.
 5. Produce complete automated, fixture, and native manual evidence for the
    parity matrix and its current-feature extension on every supported target.

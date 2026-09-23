@@ -6,6 +6,204 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Reopen plan** in the plan menu (sidebar and Board header) returns a done
+  plan to active, so a plan closed too early, including by the closeout
+  prompt, can be picked up again.
+- The current plan's sidebar card offers **All N tasks done · Close plan…**
+  once every task is done. When you are typing in a field or the terminal, or
+  the window is in the background, the closeout prompt waits as a small banner
+  with **Review plan closeout** and **Dismiss** instead of opening a dialog.
+- The rolling summary on the Overview shows how long ago it was written.
+- `ptrack task block <id> [reason]` records the optional reason as a task note
+  in the same write as the status change.
+- `ptrack plan list` shows each plan's open and done task counts, and its
+  `--json` rows carry `open_tasks` and `done_tasks`.
+- `ptrack context --json` carries the untrusted-data `notice`, a `truncated`
+  flag, and `open_tasks_more`, matching MCP `get_context`.
+- Each card's **⋯** menu (and right-click) offers **Open details** and
+  **Move to** every other status. A stopped terminal pane shows **Start shell**.
+- `⌘J` (`Ctrl+J` elsewhere) toggles the terminal panel from anywhere in an open
+  project, including from inside a terminal.
+- The Settings footer has **Reset all settings…**, with a confirmation, which
+  resets every section rather than only the one on screen.
+- The empty Issues inbox offers **Show N closed issues** when closed issues
+  exist.
+- Landing list rows show the project path, open tasks, open issues, and when
+  the project was last opened.
+- In the light theme the default terminal uses a light palette, and open panes
+  and detached windows repaint when the theme changes.
+- Every release now includes `checksums.txt.sig`, an Ed25519 signature over
+  `checksums.txt`.
+
+### Changed
+- Records are now written at payload schema 9, which adds the time the rolling
+  summary was last written as an additive field on the project's metadata
+  record. Databases written by this build cannot be opened by older builds:
+  0.40.1 and earlier refuse them fail-closed. Install this build everywhere you
+  use p-track, and never downgrade or rewrite a database to satisfy an older
+  binary.
+- Desktop has one current plan. The plan pinned at the top of the sidebar is
+  always the plan the Board shows, and choosing a plan makes it your current
+  plan exactly as `ptrack plan use` does: claim-gated, and a done or archived
+  plan cannot become current.
+- A held task no longer counts against the one-task-in-progress gate, so
+  `task hold` parks started work as documented. With an identity configured,
+  the gate counts a started task against its plan's claim owner.
+- `ptrack next` and MCP `get_next_task` hand out a plan's *Integrate and verify
+  against goal* task only after the plan's other open work is done.
+- Closing a task from the terminal dashboard or Desktop without a closeout
+  summary or linked commit is still allowed, and now records an override note
+  naming the surface and what was missing. Completing a plan with open tasks
+  from the terminal dashboard records the same kind of note. Closeout notes,
+  override notes, and the status change always commit together.
+- `ptrack checkpoint` reports the active plan's milestone progress.
+- A done or archived plan refuses new open work until it is reopened.
+- New and renamed titles must be one line without control characters, in the
+  CLI, MCP, and Desktop. Existing multi-line titles still load and update.
+- `ptrack search` prints nothing when nothing matches, and note matches show a
+  one-line snippet of at most 120 characters.
+- The macOS app menu now holds **Check for Updates…** and **Settings…** (`⌘,`).
+  On Windows and Linux they stay in the Help and Project menus.
+- View shortcuts follow the sidebar order: `⌘1` Overview, `⌘2` Board, `⌘3`
+  Issues. The command palette is named **Search Plans, Tasks, and Notes…**
+  (`⌘K`).
+- Clicking a card, or pressing Enter or Space on it, opens the task drawer. The
+  per-card status select and action footer are gone; move cards from the **⋯**
+  menu, the drawer, or by dragging. The drawer scrim no longer hides the Board.
+- The terminal dock stays in place on Overview, Board, and Issues, so switching
+  views no longer moves the layout.
+- Closing a detached terminal window returns every tab to the main window's
+  dock, including tabs created in the window, instead of stopping them.
+- **Settings → Terminal → Unicode mode** is the single Unicode control and
+  applies to open panes immediately.
+- Text and accent colors meet WCAG AA contrast in both themes, and body text is
+  at least 12px.
+- The Overview grid fills every row, Project status counts **Linked commits**
+  while Project history counts Git commits, repository chips show only
+  non-zero counters (a clean tree reads **Clean**), drift notices use an
+  informational color instead of error red, and full SHAs in the summary are
+  shortened to seven characters.
+- Board lanes share the width evenly, and card markers for holds, claims, and
+  dependencies explain themselves on hover.
+- "Record memory" is now **Add note**, and the start screen is called
+  **Projects** everywhere.
+- The landing page focuses project search on launch instead of **Initialize
+  Project**, uses one selection style, and drops the meaningless ordinals and
+  the separate summaries disclosure.
+- **Data & Diagnostics** groups its paths into Global and This project.
+- The terminal working-directory field is wider and shows the full path on
+  hover.
+- Desktop pauses its background refresh while the window is hidden and catches
+  up when it returns.
+
+### Fixed
+- Saving a note or launching an agent with a value ending in `://` no longer
+  crashes the request.
+- Cancel works during an update download, and opening a project, reading update
+  state, or closing the window no longer stalls until the download finishes.
+- Closing a shell that has a background job (for example `sleep 600 &`) no
+  longer hangs the tab, window close, or project switch. Force close never
+  signals a process group whose leader was already reaped.
+- One project can no longer block every other project: a project database with
+  loosened permissions is tightened back to owner-only, a missing
+  `.ptrack/ptrack.redb` (for example after `git clean -fdx`) makes only that
+  project unavailable, and a busy database affects only its own project.
+- A leftover `.active-generation.json.tmp` no longer blocks runtime marker
+  publication forever.
+- Parallel sandboxed agents in project-local mode wait briefly for a lock
+  instead of failing at once.
+- Moving or copying a plan into another project no longer attaches its
+  dependencies to unrelated records there; edges that point outside the plan
+  are dropped.
+- `⌘Q` now stops terminals, agents, and pending writes with a bounded wait
+  before quitting, and a refused window close leaves updates working.
+- Initializing a project while another opens no longer leaves an orphaned
+  workspace running.
+- A refused task close no longer leaves orphan notes behind, and notes can no
+  longer be written to a task that does not exist.
+- Pressing Enter twice in Add task no longer creates two tasks, and plan
+  dialogs can no longer be dismissed while their request is running.
+- The Git panel no longer fails on a branch without an upstream, a fresh clone
+  of an empty repository, non-UTF-8 paths or authors, or commit subjects
+  containing separator bytes.
+- `ptrack hook install` follows `core.hooksPath`, refuses hooks written for
+  another interpreter, inserts its block before a final `exec`, and
+  `hook status` reports the effective path.
+- `ptrack milestone due <id> -` clears the due date as documented.
+- `ptrack task convert` no longer claims the new plan when the parent plan was
+  unclaimed.
+- Commit messages ending in a pull-request suffix such as `(#154)` link to the
+  first task they name that exists, not to the suffix.
+- The stack profile is no longer rescanned on every open and after every
+  failure, and is refetched when HEAD moves.
+- A task waiting to open while you switch projects can no longer open another
+  project's task with the same number, and a layout change is no longer lost
+  when switching projects quickly.
+- zsh with `ZDOTDIR` set in `~/.zshenv` loads `.zshrc` and `.zprofile` again.
+- A shell that exits while its tab is popped out is recorded, and the stream no
+  longer reconnects forever.
+- The last scratchpad edit is saved before a project switch, the note limit
+  counts UTF-8 bytes like the server, and terminal replay no longer drifts
+  after an output gap.
+- Plan delete and move refuse while a live terminal or agent is linked to the
+  plan or its tasks, and a Desktop delete is bound to the preview it confirms.
+- An update download against a stale candidate no longer leaves every later
+  update action refused.
+- Desktop OS notifications are delivered in the packaged app; its workspace
+  had always reported an empty notification snapshot.
+- Errors from installing the shell command, opening links, and update actions
+  are shown instead of being swallowed.
+- Agent run history is written in the background instead of on every event.
+- A second backup through the same handle copies the whole database, new
+  records sort after the highest existing order, and a summary written through
+  memory write-back respects the summary cap.
+- The local-mode moved-root message names an escape that works, and the
+  relocate advice is correct for projects the CLI registered after launch.
+
+### Removed
+- Capability brokering, deprecated in 0.33.0, is gone: p-track no longer starts
+  a capability broker, injects `PTRACK_CAPABILITY_*` variables into terminals,
+  or exposes capability IPC commands, and `ptrack capability call` and
+  `ptrack capability mcp` are removed. `ptrack capability` now prints a pointer
+  to pam and exits with an error. Capability records in existing databases are
+  kept so those databases still open, but they authorize nothing, and
+  **Reset Application State** revokes leftover grants in the open project.
+  `ptrack mcp` is unaffected.
+- The terminal toolbar's **Modern Unicode** checkbox; use
+  **Settings → Terminal → Unicode mode**.
+- The desktop bridge's legacy unversioned and generation-free commands, which
+  no current caller used.
+
+### Security
+- The updater verifies the Ed25519 signature in `checksums.txt.sig` against a
+  public key built into p-track before it trusts any digest, on every platform,
+  and refuses a release without one before downloading its package. A leaked
+  release token or a tampered release run can no longer get a binary
+  installed. The release job fails when the signing key is missing.
+- Stored commit SHAs are validated as 4 to 64 hex digits, and `commit show`
+  runs Git through the hardened runner with `--end-of-options`,
+  `--no-ext-diff`, and `--no-textconv`, so a crafted SHA can no longer make
+  `git show` write files outside the project.
+- Detached terminal windows can call only their own terminal commands, and
+  every desktop mutation requires the exact current workspace generation.
+- The desktop content security policy no longer allows inline scripts
+  (`script-src 'self'`) or `ws://localhost` connections.
+- Pastes are stripped of control characters and bracketed-paste markers, any
+  paste that lost characters goes through review, and output that switches to
+  the alternate screen no longer disables multi-line paste review.
+- Terminal copies that look like credentials are not saved to the scratchpad.
+- One shared credential detector now redacts launch context, summaries, and the
+  context digest, and also catches JSON-quoted keys, `x-api-key`,
+  `Authorization: Basic` and `Token`, GitLab, Slack, Stripe, and Google keys,
+  and JWTs.
+- `ptrack context` and MCP `get_context` cap every field and the whole digest,
+  flatten titles to one line, and open with a notice that their contents are
+  untrusted project data rather than instructions.
+- Git remote URLs are shown without embedded user names or tokens, and Git and
+  updater helper processes run with time limits and are killed as a whole
+  process group on timeout.
+
 ## [0.40.1] - 2026-09-22
 
 0.40.0 was cut on `main` but never tagged or published. This is the first

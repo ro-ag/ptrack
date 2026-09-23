@@ -2,6 +2,12 @@
 
 Status: contract for tasks #118–#126. Frozen surface for implementation and review.
 
+Current state (2026-09-22): the Capabilities page was removed in 0.33.0 and capability brokering
+has since been retired (it moved to pam), so the capability rows below are historical. On macOS,
+Settings… (`⌘,`) and Check for Updates… now live in the p-track app menu; on Windows and Linux
+they stay in Project and Help. `⌘3` opens Issues. Settings has six sections (Startup, Appearance,
+Terminal, Notifications, Updates, Data & Diagnostics), and its footer carries Reset all settings….
+
 ## 1. Information architecture
 
 Three distinct surfaces. They do not duplicate each other.

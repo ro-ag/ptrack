@@ -56,10 +56,21 @@ The cold-start reload. Sections:
 Bounds (constants): `contextRecentNotes = 5`, `contextBlockedShown = 8`. When a
 bounded section truncates, it prints a `… +N more (use <cmd>)` pointer.
 
+As implemented, the digest is also bounded by bytes: every text field has its
+own cap and the whole digest is capped at 32 KiB, with open tasks past the cap
+counted in a trailing "more" pointer (`open_tasks_more` in JSON) and a
+`truncated` flag. Field text passes the shared credential detector, so likely
+secrets are redacted, and titles are flattened to one line so stored text
+cannot forge a heading. The digest opens with a notice that its contents are
+untrusted project data, not instructions; `--json` and MCP `get_context` carry
+the same `notice` and truncation fields.
+
 ### `ptrack next [--json]`
 
 The single most actionable task: within the active plan, the first `doing` task,
-else the first `todo` task. Prints the task (id, title, plan) or a clear "no
+else the first `todo` task. Held tasks and tasks waiting on open dependencies are
+skipped, and the plan's automatic *Integrate and verify against goal* task is
+handed out only after the plan's other open work is done. Prints the task (id, title, plan) or a clear "no
 actionable task" message. This is the agent's "what do I do right now".
 
 ### `ptrack plan show <id> [--json]`
@@ -74,7 +85,9 @@ to that task.
 
 ### `ptrack plan list [--json]`
 
-Unchanged shape, plus per-plan open/done task counts and a `--json` flag.
+Unchanged shape, plus per-plan open/done task counts and a `--json` flag. The
+text row reads `#id [status] * title (N open, M done)`, and each JSON row
+carries `open_tasks` and `done_tasks` after its existing fields.
 
 ### `ptrack task list [--status S[,S...]] [--plan N] [--json]`
 
@@ -92,8 +105,9 @@ decisions beyond `context`'s recent-5 were invisible.
 
 Case-insensitive substring match across plan titles, task titles, and note
 bodies. Returns, grouped by kind: `plan #id title`, `task #id title (plan N)`,
-`note #id (target) …snippet…`. Bounded snippet length. No matches → empty output,
-zero exit.
+`note #id (target) …snippet…`. A note snippet is one line of at most 120
+characters around the first match. No matches → empty output (nothing is
+printed), zero exit.
 
 ## Store additions
 

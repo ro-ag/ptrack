@@ -66,7 +66,7 @@
 
           <h2 id="update-consent">Choose when to check, download, and install</h2>
           <p>Manual update checks occur only when you select <strong>Check for updates</strong>. Automatic checks are off by default and persist only after explicit opt-in. They contact the stable releases for the fixed <code>ro-ag/ptrack</code> GitHub repository.</p>
-          <p>The <strong>About &amp; Updates</strong> dialog carries both surfaces: it identifies p-track, its version, its build, and its Apache-2.0 license, links to the project, license, Help Center, and issue tracker, and holds the check, download, and install actions. Open it from the version chip, <strong>Help ▸ Check for Updates…</strong>, or the native About item. The automatic-check opt-in is the same setting in that dialog and in <strong>Settings ▸ Updates</strong>.</p>
+          <p>The <strong>About &amp; Updates</strong> dialog carries both surfaces: it identifies p-track, its version, its build, and its Apache-2.0 license, links to the project, license, Help Center, and issue tracker, and holds the check, download, and install actions. Open it from the version chip, from <strong>p-track ▸ Check for Updates…</strong> in the macOS app menu (<strong>Help ▸ Check for Updates…</strong> on Windows and Linux), or from the native About item. The automatic-check opt-in is the same setting in that dialog and in <strong>Settings ▸ Updates</strong>.</p>
           <p>Consent is separated into three steps:</p>
           <ol>
             <li>A check discovers one newer stable release and the exact package for the running OS and CPU.</li>
@@ -76,14 +76,14 @@
           <p>A check never silently downloads or installs. Prereleases, drafts, development builds, downgrades, generated source archives, unexpected assets, and ambiguous candidates are rejected.</p>
 
           <h2 id="update-verification">Understand update verification</h2>
-          <p>Downloads are size-bounded and staged in a private directory under the global p-track home. p-track requires the expected archive layout, executable, platform machine type, and one exact SHA-256 entry from <code>checksums.txt</code>. It rejects links, extra or duplicate entries, path traversal, and digest mismatches, then reopens and rehashes staged files before use.</p>
+          <p>Downloads are size-bounded and staged in a private directory under the global p-track home. Every release publishes <code>checksums.txt</code> together with <code>checksums.txt.sig</code>, an Ed25519 signature made by the p-track release key. Before it trusts any digest, p-track verifies that signature against the public key built into the running app, on every platform; a release without a valid signature is refused before its package is downloaded. p-track then requires the expected archive layout, executable, platform machine type, and one exact SHA-256 entry from the signed <code>checksums.txt</code>. It rejects links, extra or duplicate entries, path traversal, and digest mismatches, then reopens and rehashes staged files before use.</p>
           <div class="callout">
-            <p><strong>The release checksum is not an independent publisher signature.</strong> The package and checksum are co-hosted in the same GitHub Release. On Windows and Linux, trust rests on the GitHub release account plus that checksum. On macOS, p-track additionally requires the pinned Developer ID identity and Gatekeeper acceptance for the whole DMG.</p>
+            <p><strong>The checksum manifest is signed with a key GitHub does not hold.</strong> Because the public key ships inside p-track rather than in the release, a leaked release token or a tampered release run can publish files but cannot get them installed. On macOS, p-track additionally requires the pinned Developer ID identity and Gatekeeper acceptance for the whole DMG.</p>
           </div>
           <ul>
             <li><strong>macOS:</strong> verifies and opens the complete DMG for installation; it never replaces one executable inside the signed app bundle.</li>
             <li><strong>Windows:</strong> revalidates the ZIP and reveals it in Explorer; close p-track and replace the executable manually.</li>
-            <li><strong>Linux:</strong> updates only a safely owned standalone executable, using a target lock, verified rollback link, durable recovery journal, atomic replacement, version probe, and rollback on failure. It never uses <code>sudo</code>.</li>
+            <li><strong>Linux:</strong> updates only a safely owned standalone executable, using a target lock, verified rollback link, durable recovery journal, atomic replacement, version probe, and rollback on failure. Every helper command has a time limit. It never uses <code>sudo</code>.</li>
           </ul>
 
           <h2 id="update-recovery">Preserve update recovery state</h2>
@@ -92,18 +92,19 @@
 
           <h2 id="local-security">Local-first security boundary</h2>
           <p>p-track has no cloud service account and does not send project planning data to a p-track-hosted service. Project records remain in local files. Desktop may expose private loopback endpoints for local agent-run integration while a project is active; their descriptors and session material are stored in the private per-project runtime directory.</p>
+          <p>Capability brokering has been retired, so p-track no longer runs a capability broker or hands capability tokens to agent terminals; see <a href="../agents-and-capabilities/#capability-model">Capability brokering moved to pam</a>. The desktop window's content security policy allows scripts only from the app itself, and a detached terminal window can call only the few terminal commands it needs.</p>
           <p>The updater does not accept project-supplied update URLs, store credentials, build from source, elevate privileges, or run unattended installation helpers. Update checks contact GitHub only through the manual or opted-in automatic flow.</p>
 
           <h2 id="privacy">Privacy and bounded diagnostics</h2>
           <p>Structured agent event collection is enabled by default; free-text summaries are disabled. The default policy retains the newest 128 accepted events and expires events older than 14 days. The closed event contract rejects raw prompts, messages, transcripts, tool payloads, command arguments or output, environment data, credentials, and hidden reasoning.</p>
-          <p>Terminal workspace persistence stores layout and descriptors, not terminal screen contents.</p>
+          <p>Terminal workspace persistence stores layout and descriptors, not terminal screen contents. The scratchpad keeps only the note you type and the snippets you explicitly copy, and a copy that looks like a credential is not saved. <code>ptrack context</code> and MCP <code>get_context</code> redact likely credentials from what they return. Git remote URLs are shown without embedded user names or tokens.</p>
 
           <h2 id="data-paths">Know where data lives</h2>
           <div class="table-wrap">
             <table>
               <thead><tr><th>Data</th><th>Default location</th><th>Contents</th></tr></thead>
               <tbody>
-                <tr><td>Project store</td><td><code>&lt;project&gt;/.ptrack/ptrack.redb</code></td><td>Goal, summary, plans, tasks, notes, milestones, issues, commits, and writeback records.</td></tr>
+                <tr><td>Project store</td><td><code>&lt;project&gt;/.ptrack/ptrack.redb</code></td><td>Goal, summary, plans, tasks, notes, milestones, issues, commits, the terminal scratchpad, and writeback records, plus inert capability records kept from older releases.</td></tr>
                 <tr><td>Global store</td><td><code>$PTRACK_HOME/global.redb</code> or <code>~/.ptrack/global.redb</code></td><td>Global preferences, known projects, and backup records.</td></tr>
                 <tr><td>Runtime routing</td><td><code>&lt;global-home&gt;/runtime/active-generation.json</code></td><td>The attested generation and exact global/project store bindings.</td></tr>
                 <tr><td>Runtime state</td><td><code>&lt;global-home&gt;/runtime/&lt;sha256(project-root)&gt;/</code></td><td>Private local service descriptors and bounded agent-run history.</td></tr>
@@ -133,7 +134,7 @@
           <ol>
             <li>Install only the package for the intended OS and CPU.</li>
             <li>Keep automatic update checks off unless GitHub checks are wanted.</li>
-            <li>Treat co-hosted checksums as corruption detection, not an independent signature.</li>
+            <li>Let the updater verify the signed checksum manifest; when installing by hand, verify <code>checksums.txt.sig</code> before trusting <code>checksums.txt</code>.</li>
             <li>Preserve update journals and rollback artifacts during recovery.</li>
             <li>Back up and stop writers before manual database replacement.</li>
           </ol>
