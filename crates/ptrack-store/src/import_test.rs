@@ -125,6 +125,7 @@ fn record(collection: Collection, key: OwnedRecordKey, payload: &[u8]) -> Import
             actors: Vec::new(),
             stack: None,
             scratchpad: None,
+            summary_updated_at: None,
         }))
         .unwrap(),
         Collection::Tasks => {

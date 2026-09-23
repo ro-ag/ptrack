@@ -8,9 +8,9 @@ use std::time::Instant;
 use ptrack_core::{
     Capability, CapabilityAuditPolicy, CapabilityKind, CapabilityLimits, Digest32, GitScope,
     LanguageId, MIN_NATIVE_PAYLOAD_SCHEMA, MemoryKind, NativeRecord, NoteTarget, Plan, PlanStatus,
-    RecordKind, SCRATCHPAD_PAYLOAD_SCHEMA, SCRATCHPAD_TEXT_MAX_BYTES, Scratchpad,
-    ScratchpadSnippet, StackProfile, StackProject, StackSummary, TaskStatus, Timestamp,
-    decode_record, encode_record_at_schema,
+    RecordKind, SCRATCHPAD_PAYLOAD_SCHEMA, SCRATCHPAD_TEXT_MAX_BYTES,
+    SUMMARY_UPDATED_PAYLOAD_SCHEMA, Scratchpad, ScratchpadSnippet, StackProfile, StackProject,
+    StackSummary, TaskStatus, Timestamp, decode_record, encode_record_at_schema,
 };
 
 use crate::typed;
@@ -3217,6 +3217,102 @@ fn new_records_order_after_the_highest_order_not_the_count() {
         .map(|task| task.title)
         .collect();
     assert_eq!(titles, ["a", "c", "d"]);
+}
+
+#[test]
+fn every_summary_write_stamps_its_time_and_a_schema_8_database_accepts_the_first() {
+    let temp = Temp::new();
+    let path = temp.path("summary-time.redb");
+    let store = ProjectStore::create_new_with_clock(
+        &path,
+        binding(&path, StoreKind::Project, "summary-time"),
+        "test",
+        SteppingClock::new(1_700_000_000),
+    )
+    .unwrap();
+
+    // Rewrite the meta singleton exactly as the build before payload schema 9
+    // wrote it: a schema-8 envelope with no summary write time at all.
+    let before = store.meta().unwrap();
+    assert_eq!(before.summary_updated_at, None);
+    let previous = SUMMARY_UPDATED_PAYLOAD_SCHEMA - 1;
+    let legacy_payload =
+        encode_record_at_schema(&NativeRecord::Meta(before.clone()), previous).unwrap();
+    store
+        .write(|transaction| {
+            transaction.put(
+                Collection::ProjectMeta,
+                RecordKey::Singleton,
+                &RecordEnvelope::new(NATIVE_CODEC, previous, legacy_payload.clone()),
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let stored_schema = |store: &ProjectStore| {
+        store
+            .read(|transaction| transaction.get(Collection::ProjectMeta, RecordKey::Singleton))
+            .unwrap()
+            .expect("stored meta")
+            .payload_schema()
+    };
+    assert_eq!(stored_schema(&store), previous);
+    drop(store);
+
+    // The older database opens under this build and reads with no time.
+    let reopened = ProjectStore::open_existing(
+        &path,
+        &binding(&path, StoreKind::Project, "summary-time"),
+        "test",
+    )
+    .unwrap();
+    assert_eq!(reopened.meta().unwrap().summary_updated_at, None);
+    assert_eq!(reopened.meta().unwrap(), before);
+
+    // Its first write is accepted, stamps the time with the meta stamp, and
+    // upgrades the record lazily to the native schema.
+    reopened.set_summary("first").unwrap();
+    let first = reopened.meta().unwrap();
+    assert_eq!(first.summary, "first");
+    assert_eq!(first.summary_updated_at, Some(first.updated_at));
+    assert_eq!(stored_schema(&reopened), NATIVE_PAYLOAD_SCHEMA);
+    drop(reopened);
+
+    let store = ProjectStore::create_new_with_clock(
+        temp.path("summary-time-2.redb"),
+        binding(
+            &temp.path("summary-time-2.redb"),
+            StoreKind::Project,
+            "summary-time-2",
+        ),
+        "test",
+        SteppingClock::new(1_700_000_000),
+    )
+    .unwrap();
+    store.set_summary("cli").unwrap();
+    let cli = store.meta().unwrap().summary_updated_at.expect("cli stamp");
+    // A write that is not a summary write leaves the summary time alone.
+    store.set_goal("elsewhere").unwrap();
+    let after_goal = store.meta().unwrap();
+    assert_ne!(after_goal.updated_at, cli);
+    assert_eq!(after_goal.summary_updated_at, Some(cli));
+    // Memory write-back (the terminal and agent path) stamps it too.
+    store
+        .write_memory(MemoryWriteRequest {
+            request_id: "summary-time".to_owned(),
+            kind: MemoryKind::Summary,
+            body: "from a session".to_owned(),
+            target: NoteTarget::Project,
+            target_id: 0,
+            plan_id: 0,
+            workspace_generation: 7,
+            session_id: "session".to_owned(),
+            association_revision: 1,
+        })
+        .unwrap();
+    let written = store.meta().unwrap();
+    assert_eq!(written.summary, "from a session");
+    assert_eq!(written.summary_updated_at, Some(written.updated_at));
+    assert_ne!(written.summary_updated_at, Some(cli));
 }
 
 #[test]

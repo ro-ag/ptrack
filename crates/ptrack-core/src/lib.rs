@@ -18,8 +18,8 @@ mod views;
 
 pub use codec::{
     CodecError, MAX_LIST_ITEMS, MAX_PAYLOAD_BYTES, MAX_STRING_BYTES, MIN_NATIVE_PAYLOAD_SCHEMA,
-    NATIVE_CODEC, NATIVE_PAYLOAD_SCHEMA, SCRATCHPAD_PAYLOAD_SCHEMA, decode_record,
-    decode_record_at_schema, encode_record, encode_record_at_schema,
+    NATIVE_CODEC, NATIVE_PAYLOAD_SCHEMA, SCRATCHPAD_PAYLOAD_SCHEMA, SUMMARY_UPDATED_PAYLOAD_SCHEMA,
+    decode_record, decode_record_at_schema, encode_record, encode_record_at_schema,
 };
 pub use deps::would_create_cycle;
 pub use guide::{GUIDE_BEGIN, GUIDE_END, guide_block, guide_body, render_guide, upsert_guide};

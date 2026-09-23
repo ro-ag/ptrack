@@ -126,6 +126,7 @@ fn legacy_zero_format_meta_is_preserved_but_newer_formats_fail() {
         actors: Vec::new(),
         stack: None,
         scratchpad: None,
+        summary_updated_at: None,
     };
     meta.validate().expect("legacy v0 is preserved");
     meta.format_version = 6;
@@ -326,6 +327,7 @@ fn the_rolling_summary_is_bounded_on_write_only() {
         actors: Vec::new(),
         stack: None,
         scratchpad: None,
+        summary_updated_at: None,
     };
     assert!(meta.validate().is_ok());
 }

@@ -55,6 +55,7 @@ fn empty_go_nil_slices_encode_as_null_while_derived_rows_can_remain_arrays() {
             actors: Vec::new(),
             stack: None,
             scratchpad: None,
+            summary_updated_at: None,
         },
         Vec::new(),
         Vec::new(),
@@ -127,6 +128,7 @@ fn a_scanned_project_encodes_its_stack_as_structured_rows() {
         actors: Vec::new(),
         stack: None,
         scratchpad: None,
+        summary_updated_at: None,
     };
     meta.stack = Some(ptrack_core::StackProfile {
         projects: vec![ptrack_core::StackProject {
@@ -177,6 +179,7 @@ fn context_json_carries_the_mcp_notice_and_truncation_fields_last() {
             actors: Vec::new(),
             stack: None,
             scratchpad: None,
+            summary_updated_at: None,
         },
         Vec::new(),
         Vec::new(),

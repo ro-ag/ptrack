@@ -298,6 +298,10 @@ pub struct Meta {
     /// database an earlier build wrote. Persistence stays additive at the
     /// payload-schema level, exactly as the stack profile was.
     pub scratchpad: Option<Scratchpad>,
+    /// When [`Meta::summary`] was last written. `None` for records written
+    /// before payload schema 9 and for projects whose summary was never
+    /// written since; every summary write stamps it, whatever surface made it.
+    pub summary_updated_at: Option<Timestamp>,
 }
 
 impl Meta {

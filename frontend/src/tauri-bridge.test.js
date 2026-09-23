@@ -23,7 +23,8 @@ describe("Tauri compatibility bridge", () => {
       "RefreshGlobalOverviewV1", "RenamePlanV1", "RenameTaskV2", "ReopenPlanV1",
       "ResetApplicationState", "ResetPreferences", "ResetWindowLayout", "ResizeTerminalV2",
       "ResolveRecentProjectV1", "ResumePlanV1", "RollbackLinkedAgentLaunchV2", "ScheduleIssueV1",
-      "SearchV2", "SendAgentHandoffV2", "SetAgentTaskOwnershipV2", "SetAgentWorktreeV2",
+      "SearchV2", "SendAgentHandoffV2", "SetActivePlanV1", "SetAgentTaskOwnershipV2",
+      "SetAgentWorktreeV2",
       "SetAutomaticUpdateChecks", "SetIssueTaskV1", "SetLayoutState", "SetPreferences",
       "SetScratchpadV1", "SetTerminalWindowTab", "StartFirstTaskV1", "UpdateIssueV1",
       "ValidateProjectTargetV1", "ValidateTerminalCWDsV2", "WriteTerminalMemoryV2",
@@ -55,7 +56,7 @@ describe("Tauri compatibility bridge", () => {
     }
   });
 
-  it("routes plan reopen and the preview-bound delete with their exact arguments", async () => {
+  it("routes plan reopen, the preview-bound delete, and set-active with their exact arguments", async () => {
     const calls = [];
     const target = { __TAURI_INTERNALS__: {}, navigator: { clipboard: {} } };
     installTauriBridge(target, {
@@ -68,11 +69,13 @@ describe("Tauri compatibility bridge", () => {
     });
     await target.go.gui.App.ReopenPlanV1(7, 3);
     await target.go.gui.App.DeletePlanV1(7, 3, true, "0123456789abcdef");
+    await target.go.gui.App.SetActivePlanV1(7, 0);
     expect(calls).toEqual([
       ["gui_invoke", { request: { method: "ReopenPlanV1", arguments: [7, 3] } }],
       ["gui_invoke", {
         request: { method: "DeletePlanV1", arguments: [7, 3, true, "0123456789abcdef"] },
       }],
+      ["gui_invoke", { request: { method: "SetActivePlanV1", arguments: [7, 0] } }],
     ]);
   });
 

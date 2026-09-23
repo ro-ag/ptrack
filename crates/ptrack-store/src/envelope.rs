@@ -12,7 +12,7 @@ pub const LEGACY_CODEC_RAW: u16 = 2;
 /// Stable codec identifier for canonical native ptrack positional records.
 pub const NATIVE_CODEC: u16 = 3;
 /// Current payload schema for canonical native ptrack positional records.
-pub const NATIVE_PAYLOAD_SCHEMA: u32 = 8;
+pub const NATIVE_PAYLOAD_SCHEMA: u32 = 9;
 /// Oldest native payload schema this build still reads, imports, and stores.
 ///
 /// Databases written before the plan and task hold reason carry schema-1
@@ -23,6 +23,7 @@ pub const NATIVE_PAYLOAD_SCHEMA: u32 = 8;
 /// records; databases written before that profile's line counts carry schema-5
 /// records; databases written before the framed stack layout carry schema-6
 /// records; databases written before the project scratchpad carry schema-7
+/// records; databases written before the summary write time carry schema-8
 /// records. All stay readable and upgrade lazily on their next write; nothing
 /// rewrites them on open, and the table catalog never changes.
 pub const MIN_NATIVE_PAYLOAD_SCHEMA: u32 = 1;

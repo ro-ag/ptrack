@@ -68,6 +68,7 @@ fn json_stage_with_format(
         actors: Vec::new(),
         stack: None,
         scratchpad: None,
+        summary_updated_at: None,
     });
     collections[0].records.push(ImportRecord {
         key: OwnedRecordKey::Singleton,

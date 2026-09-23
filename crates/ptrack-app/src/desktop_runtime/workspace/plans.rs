@@ -58,6 +58,44 @@ impl BoundDesktopWorkspace {
                 self.require_exact_generation(generation)?;
                 self.complete_plan_v1(plan_id)
             }
+            command @ (PlanCommand::Hold { .. }
+            | PlanCommand::Resume { .. }
+            | PlanCommand::Reopen { .. }
+            | PlanCommand::SetActive { .. }) => self.plan_state_command(command),
+            PlanCommand::Delete {
+                generation,
+                plan_id,
+                confirm,
+                preview_revision,
+            } => {
+                self.require_exact_generation(generation)?;
+                self.delete_plan_v1(plan_id, confirm, preview_revision)
+            }
+            PlanCommand::Move {
+                generation,
+                plan_id,
+                to,
+                rename,
+            } => {
+                self.require_exact_generation(generation)?;
+                self.move_plan_v1(plan_id, to, optional_string(rename))
+            }
+            PlanCommand::Copy {
+                generation,
+                plan_id,
+                to,
+                rename,
+            } => {
+                self.require_exact_generation(generation)?;
+                self.copy_plan_v1(plan_id, optional_string(to), optional_string(rename))
+            }
+        }
+    }
+
+    /// Holds, resumes, reopens, or makes a plan current: the plan commands
+    /// that change only its state, never its contents.
+    fn plan_state_command(&self, command: PlanCommand<'_>) -> AppResult<Value> {
+        match command {
             PlanCommand::Hold {
                 generation,
                 plan_id,
@@ -82,24 +120,6 @@ impl BoundDesktopWorkspace {
                 })?;
                 Ok(json!({ "generation": self.generation }))
             }
-            PlanCommand::Delete {
-                generation,
-                plan_id,
-                confirm,
-                preview_revision,
-            } => {
-                self.require_exact_generation(generation)?;
-                self.delete_plan_v1(plan_id, confirm, preview_revision)
-            }
-            PlanCommand::Move {
-                generation,
-                plan_id,
-                to,
-                rename,
-            } => {
-                self.require_exact_generation(generation)?;
-                self.move_plan_v1(plan_id, to, optional_string(rename))
-            }
             PlanCommand::Reopen {
                 generation,
                 plan_id,
@@ -107,15 +127,14 @@ impl BoundDesktopWorkspace {
                 self.require_exact_generation(generation)?;
                 self.reopen_plan_v1(plan_id)
             }
-            PlanCommand::Copy {
+            PlanCommand::SetActive {
                 generation,
                 plan_id,
-                to,
-                rename,
             } => {
                 self.require_exact_generation(generation)?;
-                self.copy_plan_v1(plan_id, optional_string(to), optional_string(rename))
+                self.set_active_plan_v1(plan_id)
             }
+            _ => Err(unavailable("plan state command")),
         }
     }
 
@@ -263,6 +282,36 @@ impl BoundDesktopWorkspace {
             status: PlanStatus::Active,
         })?;
         Ok(json!({ "generation": self.generation, "planId": plan_id, "status": "active" }))
+    }
+
+    /// Makes one plan the caller's current plan, or clears it with `0`.
+    ///
+    /// This is the exact mutation `ptrack plan use` runs, so the desktop and
+    /// the CLI agree on what "current" means: with a configured identity it
+    /// claims the plan and sets that identity's entry in the per-actor map,
+    /// and a plan someone else holds is refused by the store's claim gate.
+    /// A done or archived plan takes no new work, so it is refused here
+    /// rather than pinned as current.
+    fn set_active_plan_v1(&self, plan_id: u64) -> AppResult<Value> {
+        if plan_id != 0 {
+            let plan = self
+                .project_store()?
+                .plan(plan_id)
+                .map_err(|error| match error {
+                    ptrack_store::StoreError::NotFound => {
+                        AppError::Message(format!("plan #{plan_id} not found"))
+                    }
+                    other => AppError::from(other),
+                })?;
+            if matches!(plan.status, PlanStatus::Done | PlanStatus::Archived) {
+                return Err(AppError::Message(format!(
+                    "plan #{plan_id} is {} and cannot be the current plan",
+                    plan.status.as_str()
+                )));
+            }
+        }
+        lock(&self.application).mutate(Mutation::SetActivePlan(plan_id))?;
+        Ok(json!({ "generation": self.generation }))
     }
 }
 

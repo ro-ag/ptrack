@@ -1025,6 +1025,7 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "ScheduleIssueV1",
             "SearchV2",
             "SendAgentHandoffV2",
+            "SetActivePlanV1",
             "SetAgentTaskOwnershipV2",
             "SetAgentWorktreeV2",
             "SetAutomaticUpdateChecks",
@@ -1319,6 +1320,7 @@ fn heatmap_buckets_instants_in_the_host_local_calendar_day() {
             actors: Vec::new(),
             stack: None,
             scratchpad: None,
+            summary_updated_at: None,
         },
         Vec::new(),
         Vec::new(),
@@ -1403,6 +1405,7 @@ fn board_view_carries_dep_edges_and_their_computed_open_subset() {
             actors: Vec::new(),
             stack: None,
             scratchpad: None,
+            summary_updated_at: None,
         },
         Vec::new(),
         vec![
@@ -1515,6 +1518,7 @@ fn activity_snapshot() -> ProjectSnapshot {
             actors: Vec::new(),
             stack: None,
             scratchpad: None,
+            summary_updated_at: None,
         },
         Vec::new(),
         vec![activity_plan(1), activity_plan(2)],
@@ -4508,6 +4512,7 @@ fn legacy_generation_free_commands_are_gone_and_mutations_need_the_exact_generat
         ("DeletePlanV1", vec![json!(0), json!(1), json!(true)]),
         ("CompletePlanV1", vec![json!(0), json!(1)]),
         ("ReopenPlanV1", vec![json!(0), json!(1)]),
+        ("SetActivePlanV1", vec![json!(0), json!(1)]),
         ("SetScratchpadV1", vec![json!(0), json!(0), json!({})]),
         (
             "CloseTerminalV2",
@@ -4578,6 +4583,185 @@ fn a_done_plan_can_be_reopened_and_only_a_done_plan() {
             .to_string(),
         "plan #99 not found"
     );
+}
+
+/// The snapshot board carries the rolling summary's last write time in the
+/// same RFC 3339 shape as every other snapshot time, and `null` until the
+/// summary is written by a build that records it.
+#[test]
+fn the_snapshot_board_reports_when_the_summary_was_last_written() {
+    let directory = TestDirectory::new("summary-updated-at");
+    let (bindings, _task_id) = bound_bindings(&directory);
+    let project = bindings.project.as_ref().unwrap();
+    let workspace = BoundDesktopWorkspace::new(
+        7,
+        0,
+        bindings.clone(),
+        Box::new(LocalApplication::new(bindings.clone())),
+        None,
+        None,
+    );
+    let board = |workspace: &BoundDesktopWorkspace| {
+        workspace
+            .invoke("GetWorkspaceSnapshot", &[json!(7), json!(0)])
+            .unwrap()["tracking"]["board"]
+            .clone()
+    };
+    let before = board(&workspace);
+    assert!(before["summaryUpdatedAt"].is_null(), "{before}");
+    assert_eq!(
+        workspace.board_v2(7, 0).unwrap()["board"]["summaryUpdatedAt"],
+        Value::Null
+    );
+
+    let store = ProjectStore::open_existing(&project.database, &project.binding, "test").unwrap();
+    store.set_summary("Rolling summary").unwrap();
+    let written = store.meta().unwrap();
+    drop(store);
+    let after = board(&workspace);
+    assert_eq!(after["summary"], "Rolling summary");
+    let stamp = after["summaryUpdatedAt"]
+        .as_str()
+        .expect("an RFC 3339 time");
+    assert_eq!(
+        stamp,
+        timestamp_rfc3339(written.summary_updated_at.expect("stamped"))
+    );
+    assert_eq!(
+        stamp,
+        timestamp_rfc3339(written.updated_at),
+        "the summary stamp is the meta stamp of the same write"
+    );
+}
+
+/// Renders a stored time the way every snapshot time is rendered: RFC 3339
+/// in UTC.
+fn timestamp_rfc3339(value: Timestamp) -> String {
+    let Timestamp::Fixed {
+        seconds,
+        nanoseconds,
+        ..
+    } = value
+    else {
+        panic!("expected a fixed time");
+    };
+    time::OffsetDateTime::from_unix_timestamp(seconds)
+        .unwrap()
+        .replace_nanosecond(nanoseconds)
+        .unwrap()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap()
+}
+
+/// The desktop's current-plan command runs the exact mutation `ptrack plan
+/// use` runs: it claims for the configured identity, moves that identity's
+/// entry in the per-actor map, is refused by someone else's claim, and clears
+/// with plan `0`. Finished plans take no new work, so they are refused.
+#[test]
+fn set_active_plan_matches_plan_use_and_refuses_finished_plans() {
+    let directory = TestDirectory::new("plan-set-active");
+    let (bindings, _task_id) = bound_bindings(&directory);
+    let project = bindings.project.as_ref().unwrap();
+    let global =
+        GlobalStore::open_existing(&bindings.global_database, &bindings.global_binding).unwrap();
+    let alice = set_identity_name(&global, "Alice").unwrap();
+    drop(global);
+    let bob = ProjectStore::open_existing(&project.database, &project.binding, "test")
+        .unwrap()
+        .with_actor(Some(ptrack_store::ActorIdentity {
+            id: "0123456789abcdefghjkmnpqrs".to_owned(),
+            name: "Bob".to_owned(),
+        }));
+    let first_plan = bob.meta().unwrap().active_plan;
+    let bobs_plan = bob.add_plan("Bob's plan", 0).unwrap().id;
+    bob.use_plan(bobs_plan, false).unwrap();
+    let done_plan = bob.add_plan("Shipped", 0).unwrap().id;
+    bob.set_plan_status(done_plan, PlanStatus::Done).unwrap();
+    let archived_plan = bob.add_plan("Shelved", 0).unwrap().id;
+    bob.set_plan_status(archived_plan, PlanStatus::Archived)
+        .unwrap();
+    let next_plan = bob.add_plan("Next", 0).unwrap().id;
+    drop(bob);
+    let workspace = BoundDesktopWorkspace::new(
+        7,
+        0,
+        bindings.clone(),
+        Box::new(LocalApplication::new(bindings.clone())),
+        None,
+        None,
+    );
+    let reader = || {
+        ProjectStore::open_existing(&project.database, &project.binding, "test")
+            .unwrap()
+            .meta()
+            .unwrap()
+    };
+
+    assert_eq!(
+        workspace
+            .invoke("SetActivePlanV1", &[json!(7), json!(next_plan)])
+            .unwrap(),
+        json!({ "generation": 7 })
+    );
+    let meta = reader();
+    assert_eq!(meta.active_plan_for(Some(alice.id.as_str())), next_plan);
+    // Only Alice's pointer moved; the legacy singleton stays where it was.
+    assert_eq!(meta.active_plan, first_plan);
+    let claimed = ProjectStore::open_existing(&project.database, &project.binding, "test")
+        .unwrap()
+        .plan(next_plan)
+        .unwrap();
+    assert_eq!(claimed.claim_owner.as_deref(), Some(alice.id.as_str()));
+    let snapshot = workspace
+        .invoke("GetWorkspaceSnapshot", &[json!(7), json!(0)])
+        .unwrap();
+    let board = &snapshot["tracking"]["board"];
+    assert_eq!(board["planId"], next_plan);
+    let plans = board["plans"].as_array().unwrap();
+    assert!(
+        plans
+            .iter()
+            .all(|plan| plan["isActive"] == json!(plan["id"] == json!(next_plan)))
+    );
+
+    for (plan_id, status) in [(done_plan, "done"), (archived_plan, "archived")] {
+        assert_eq!(
+            workspace
+                .invoke("SetActivePlanV1", &[json!(7), json!(plan_id)])
+                .unwrap_err()
+                .to_string(),
+            format!("plan #{plan_id} is {status} and cannot be the current plan")
+        );
+    }
+    let taken = workspace
+        .invoke("SetActivePlanV1", &[json!(7), json!(bobs_plan)])
+        .unwrap_err()
+        .to_string();
+    assert!(
+        taken.contains(&format!("plan #{bobs_plan} is claimed by Bob")),
+        "{taken}"
+    );
+    assert_eq!(
+        workspace
+            .invoke("SetActivePlanV1", &[json!(7), json!(99)])
+            .unwrap_err()
+            .to_string(),
+        "plan #99 not found"
+    );
+    // Refusals leave the current plan where it was.
+    assert_eq!(reader().active_plan_for(Some(alice.id.as_str())), next_plan);
+
+    assert_eq!(
+        workspace
+            .invoke("SetActivePlanV1", &[json!(7), json!(0)])
+            .unwrap(),
+        json!({ "generation": 7 })
+    );
+    assert_eq!(reader().active_plan_for(Some(alice.id.as_str())), 0);
+    let snapshot = workspace
+        .invoke("GetWorkspaceSnapshot", &[json!(7), json!(0)])
+        .unwrap();
+    assert_eq!(snapshot["tracking"]["board"]["planId"], 0);
 }
 
 /// A delete preview names a revision of what it counted, and a delete that

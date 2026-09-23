@@ -8,7 +8,7 @@ use serde_json::Value;
 use super::MAX_COMMAND_BYTES;
 use crate::{AppError, AppResult};
 
-const COMMANDS: [&str; 87] = [
+const COMMANDS: [&str; 88] = [
     "AcknowledgeAgentHandoffV2",
     "AddIssueV1",
     "AddPlanV1",
@@ -83,6 +83,7 @@ const COMMANDS: [&str; 87] = [
     "ScheduleIssueV1",
     "SearchV2",
     "SendAgentHandoffV2",
+    "SetActivePlanV1",
     "SetAgentTaskOwnershipV2",
     "SetAgentWorktreeV2",
     "SetAutomaticUpdateChecks",

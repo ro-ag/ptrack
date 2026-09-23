@@ -78,6 +78,7 @@ const COMMANDS = Object.freeze([
   "ScheduleIssueV1",
   "SearchV2",
   "SendAgentHandoffV2",
+  "SetActivePlanV1",
   "SetAgentTaskOwnershipV2",
   "SetAgentWorktreeV2",
   "SetAutomaticUpdateChecks",

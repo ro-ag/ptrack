@@ -4,8 +4,8 @@ use serde_json::{Value, json};
 
 use super::allowed_desktop_commands;
 use super::command::{
-    AgentCommand, DesktopCommand, LinkedAgentCommand, RecentCommand, TaskCommand, TerminalCommand,
-    WorkspaceCommand,
+    AgentCommand, DesktopCommand, LinkedAgentCommand, PlanCommand, RecentCommand, TaskCommand,
+    TerminalCommand, WorkspaceCommand,
 };
 
 /// A 43-byte recent-project identifier, the only shape the registry accepts.
@@ -181,6 +181,7 @@ fn well_formed() -> Vec<(&'static str, Vec<Value>)> {
                 json!(2),
             ],
         ),
+        ("SetActivePlanV1", vec![json!(7), json!(1)]),
         (
             "SetAgentTaskOwnershipV2",
             vec![json!(7), json!("run"), json!(1), json!(true)],
@@ -322,6 +323,7 @@ fn exact_arity_commands_report_the_historical_count_error() {
         ("AddPlanV1", 2),
         ("RenamePlanV1", 3),
         ("CopyPlanV1", 4),
+        ("SetActivePlanV1", 2),
         ("CreateFirstTaskV1", 3),
         ("GetIssuesV1", 3),
         ("UpdateIssueV1", 7),
@@ -500,6 +502,13 @@ fn twin_profile_commands_share_one_typed_command() {
 
 #[test]
 fn typed_fields_carry_the_positional_values() {
+    assert!(matches!(
+        WorkspaceCommand::parse("SetActivePlanV1", &[json!(7), json!(0)]).unwrap(),
+        WorkspaceCommand::Plan(PlanCommand::SetActive {
+            generation: 7,
+            plan_id: 0,
+        })
+    ));
     assert!(matches!(
         WorkspaceCommand::parse(
             "MoveTaskV3",

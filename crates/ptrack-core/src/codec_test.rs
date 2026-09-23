@@ -8,9 +8,9 @@ use crate::{
     GitScope, HttpScope, IssueStatus, LanguageId, MAX_LIST_ITEMS, MAX_PAYLOAD_BYTES,
     MIN_NATIVE_PAYLOAD_SCHEMA, MemoryKind, Meta, MilestoneStatus, NATIVE_PAYLOAD_SCHEMA,
     NativeRecord, Note, NoteTarget, Plan, PlanStatus, ProjectRef, RecordKind,
-    SCRATCHPAD_PAYLOAD_SCHEMA, Scratchpad, ScratchpadSnippet, Severity, SshScope, StackProfile,
-    StackProject, StackSummary, Task, TaskStatus, Timestamp, decode_record,
-    decode_record_at_schema, encode_record, encode_record_at_schema,
+    SCRATCHPAD_PAYLOAD_SCHEMA, SUMMARY_UPDATED_PAYLOAD_SCHEMA, Scratchpad, ScratchpadSnippet,
+    Severity, SshScope, StackProfile, StackProject, StackSummary, Task, TaskStatus, Timestamp,
+    decode_record, decode_record_at_schema, encode_record, encode_record_at_schema,
 };
 
 fn fixed_time() -> Timestamp {
@@ -120,9 +120,21 @@ fn golden_meta_bytes_cover_zero_and_fixed_offset_times() {
     // Schema 8 appends exactly one byte to it: the absent-scratchpad flag.
     let mut eight = expected.to_vec();
     eight.push(0);
-    assert_eq!(encode_record(&record).expect("encode"), eight);
     assert_eq!(
-        decode_record(RecordKind::Meta, &eight).expect("decode"),
+        encode_record_at_schema(&record, SCRATCHPAD_PAYLOAD_SCHEMA).expect("encode at 8"),
+        eight
+    );
+    assert_eq!(
+        decode_record_at_schema(RecordKind::Meta, SCRATCHPAD_PAYLOAD_SCHEMA, &eight)
+            .expect("decode at 8"),
+        record
+    );
+    // Schema 9 appends one more: the absent summary-write-time flag.
+    let mut nine = eight;
+    nine.push(0);
+    assert_eq!(encode_record(&record).expect("encode"), nine);
+    assert_eq!(
+        decode_record(RecordKind::Meta, &nine).expect("decode"),
         record
     );
 }
@@ -1044,7 +1056,8 @@ fn meta_scratchpad_round_trips_and_is_absent_below_its_own_schema() {
         };
         assert_eq!(decoded.scratchpad, None, "schema {schema}");
     }
-    assert_eq!(SCRATCHPAD_PAYLOAD_SCHEMA, NATIVE_PAYLOAD_SCHEMA);
+    // An absolute schema number: later bumps never move it.
+    assert_eq!(SCRATCHPAD_PAYLOAD_SCHEMA, 8);
 }
 
 #[test]
@@ -1087,11 +1100,20 @@ fn scratchpad_golden_bytes_pin_the_framed_meta_field() {
         1,    // pinned
         0,    // zero created at
     ];
-    assert_eq!(encode_record(&record).expect("encode"), expected);
+    // Schema 8 shipped with this layout, so the vector above never moves.
     assert_eq!(
-        decode_record(RecordKind::Meta, &expected).expect("decode"),
+        encode_record_at_schema(&record, SCRATCHPAD_PAYLOAD_SCHEMA).expect("encode at 8"),
+        expected
+    );
+    assert_eq!(
+        decode_record_at_schema(RecordKind::Meta, SCRATCHPAD_PAYLOAD_SCHEMA, &expected)
+            .expect("decode at 8"),
         record
     );
+    // The native schema only appends the absent summary-write-time flag.
+    let mut native = expected.to_vec();
+    native.push(0);
+    assert_eq!(encode_record(&record).expect("encode"), native);
 }
 
 #[test]
@@ -1120,13 +1142,18 @@ fn every_other_record_kind_is_byte_identical_at_schemas_seven_and_eight() {
     for record in &records {
         let seven = encode_record_at_schema(record, STACK_FRAMED_PAYLOAD_SCHEMA)
             .expect("encode at schema 7");
-        let eight = encode_record(record).expect("encode at schema 8");
+        let eight =
+            encode_record_at_schema(record, SCRATCHPAD_PAYLOAD_SCHEMA).expect("encode at schema 8");
         assert_eq!(seven, eight, "{:?}", record.kind());
         assert_eq!(
             decode_record_at_schema(record.kind(), STACK_FRAMED_PAYLOAD_SCHEMA, &seven)
                 .expect("decode at schema 7"),
             *record
         );
+        // Schema 9 changed `Meta` alone as well.
+        let nine = encode_record_at_schema(record, SUMMARY_UPDATED_PAYLOAD_SCHEMA)
+            .expect("encode at schema 9");
+        assert_eq!(eight, nine, "{:?}", record.kind());
     }
 }
 
@@ -1143,7 +1170,12 @@ fn scratchpad_frames_reject_bytes_a_newer_layout_would_append() {
         revision: 0,
         updated_at: Timestamp::Zero,
     })));
-    let encoded = encode_record(&record).expect("encode");
+    // Pinned at schema 8, where the framed scratchpad body is the last thing
+    // in the payload.
+    let encoded = encode_record_at_schema(&record, SCRATCHPAD_PAYLOAD_SCHEMA).expect("encode");
+    let decode = |payload: &[u8]| {
+        decode_record_at_schema(RecordKind::Meta, SCRATCHPAD_PAYLOAD_SCHEMA, payload)
+    };
     // The framed scratchpad body is the last thing in the payload, so growing
     // its declared length by one and appending a byte gives the body a
     // trailing byte no field in this layout claims.
@@ -1152,13 +1184,10 @@ fn scratchpad_frames_reject_bytes_a_newer_layout_would_append() {
     let length = u32::from_be_bytes(grown[frame_start..frame_start + 4].try_into().unwrap());
     grown[frame_start..frame_start + 4].copy_from_slice(&(length + 1).to_be_bytes());
     grown.push(0);
-    assert_eq!(
-        decode_record(RecordKind::Meta, &grown),
-        Err(CodecError::TrailingBytes(1))
-    );
+    assert_eq!(decode(&grown), Err(CodecError::TrailingBytes(1)));
     // A truncated frame is a structural error, never a silent short read.
     assert!(matches!(
-        decode_record(RecordKind::Meta, &encoded[..encoded.len() - 1]),
+        decode(&encoded[..encoded.len() - 1]),
         Err(CodecError::Truncated { .. })
     ));
 }
@@ -1188,6 +1217,86 @@ fn a_scratchpad_snippet_with_invalid_utf8_is_rejected() {
     );
 }
 
+#[test]
+fn summary_write_time_round_trips_and_is_absent_below_its_own_schema() {
+    let mut meta = meta_with_scratchpad(None);
+    meta.summary = "rolling".to_owned();
+    meta.summary_updated_at = Some(fixed_time());
+    assert_round_trip(&NativeRecord::Meta(meta.clone()));
+
+    // No older schema has a canonical form for the time, so encoding one
+    // there is refused rather than silently dropped.
+    for schema in MIN_NATIVE_PAYLOAD_SCHEMA..SUMMARY_UPDATED_PAYLOAD_SCHEMA {
+        assert_eq!(
+            encode_record_at_schema(&NativeRecord::Meta(meta.clone()), schema),
+            Err(CodecError::NonCanonical),
+            "encode at schema {schema}"
+        );
+    }
+    // Without it the record encodes at every older schema, and every one of
+    // those payloads decodes with no time.
+    meta.summary_updated_at = None;
+    let record = NativeRecord::Meta(meta);
+    for schema in MIN_NATIVE_PAYLOAD_SCHEMA..SUMMARY_UPDATED_PAYLOAD_SCHEMA {
+        let payload = encode_record_at_schema(&record, schema).expect("encode without a time");
+        let NativeRecord::Meta(decoded) =
+            decode_record_at_schema(RecordKind::Meta, schema, &payload).expect("decode")
+        else {
+            panic!("expected meta");
+        };
+        assert_eq!(decoded.summary_updated_at, None, "schema {schema}");
+    }
+    assert_eq!(SUMMARY_UPDATED_PAYLOAD_SCHEMA, 9);
+    assert_eq!(SUMMARY_UPDATED_PAYLOAD_SCHEMA, NATIVE_PAYLOAD_SCHEMA);
+}
+
+#[test]
+fn summary_write_time_golden_bytes_pin_the_framed_meta_field() {
+    let mut meta = meta_with_scratchpad(None);
+    meta.summary_updated_at = Some(Timestamp::Fixed {
+        seconds: 1,
+        nanoseconds: 2,
+        offset_seconds: -3,
+    });
+    let record = NativeRecord::Meta(meta);
+    let expected = [
+        0, 0, 0, 1, b'g', // goal
+        0, 0, 0, 0, // summary
+        0, 0, 0, 0, 0, 0, 0, 9, // active plan
+        0, // zero created time
+        1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 2, 0xff, 0xff, 0xff, 0xfd, // updated time
+        0, 0, 0, 0, 0, 0, 0, 5, // format version
+        0, 0, 0, 2, b'v', b'1', // last write version
+        0, 0, 0, 0, // empty per-actor active plans
+        0, 0, 0, 0, // empty actor directory
+        0, // absent stack profile
+        0, // absent scratchpad
+        1, // summary write time present
+        0, 0, 0, 17, // framed body length
+        1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 2, 0xff, 0xff, 0xff, 0xfd, // written at
+    ];
+    assert_eq!(encode_record(&record).expect("encode"), expected);
+    assert_eq!(
+        decode_record(RecordKind::Meta, &expected).expect("decode"),
+        record
+    );
+
+    // The frame must be consumed exactly: a byte a newer layout appended
+    // inside it fails closed, and a truncated frame is a structural error.
+    let frame_start = expected.len() - 17 - 4;
+    let mut grown = expected.to_vec();
+    grown[frame_start..frame_start + 4].copy_from_slice(&18_u32.to_be_bytes());
+    grown.push(0);
+    assert_eq!(
+        decode_record(RecordKind::Meta, &grown),
+        Err(CodecError::TrailingBytes(1))
+    );
+    assert!(matches!(
+        decode_record(RecordKind::Meta, &expected[..expected.len() - 1]),
+        Err(CodecError::Truncated { .. })
+    ));
+}
+
 /// The bytes a one-snippet scratchpad occupies after its frame's `u32` length:
 /// an empty note, a revision, a zero time, the snippet count, and one framed
 /// snippet holding `id`, a one-byte text, `pinned`, and a zero time.
@@ -1212,5 +1321,6 @@ fn meta_with_scratchpad(scratchpad: Option<Scratchpad>) -> Meta {
         actors: Vec::new(),
         stack: None,
         scratchpad,
+        summary_updated_at: None,
     }
 }

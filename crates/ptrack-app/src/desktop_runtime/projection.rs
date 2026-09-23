@@ -183,6 +183,9 @@ pub(crate) struct BoardView {
     pub(super) project_name: String,
     pub(super) goal: String,
     pub(super) summary: String,
+    /// When the rolling summary was last written, as RFC 3339; `null` when
+    /// unknown (a summary written before payload schema 9, or never written).
+    pub(super) summary_updated_at: Option<String>,
     pub(super) plans: Vec<PlanSummaryView>,
     pub(super) plan_id: u64,
     pub(super) plan_title: String,
@@ -312,6 +315,7 @@ pub(crate) fn board_view(
         project_name,
         goal: snapshot.meta.goal.clone(),
         summary: snapshot.meta.summary.clone(),
+        summary_updated_at: snapshot.meta.summary_updated_at.map(timestamp),
         plans,
         plan_id,
         plan_title: selected.title.clone(),
@@ -378,6 +382,7 @@ pub(crate) fn snapshot_board_view(
         project_name,
         goal: snapshot.meta.goal.clone(),
         summary: snapshot.meta.summary.clone(),
+        summary_updated_at: snapshot.meta.summary_updated_at.map(timestamp),
         plans,
         plan_id: 0,
         plan_title: String::new(),

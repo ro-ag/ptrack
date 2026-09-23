@@ -41,6 +41,7 @@ fn fixture() -> (ProjectSnapshot, ProjectRef, ActiveGenerationProject) {
             actors: vec![],
             stack: None,
             scratchpad: None,
+            summary_updated_at: None,
         },
         vec![],
         vec![],

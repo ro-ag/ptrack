@@ -413,6 +413,11 @@ pub(super) enum PlanCommand<'a> {
         generation: u64,
         plan_id: u64,
     },
+    /// Makes `plan_id` the caller's current plan; `0` clears it.
+    SetActive {
+        generation: u64,
+        plan_id: u64,
+    },
     Copy {
         generation: u64,
         plan_id: u64,
@@ -775,6 +780,13 @@ impl<'a> PlanCommand<'a> {
             "ReopenPlanV1" => {
                 args.exact(2)?;
                 Self::Reopen {
+                    generation: args.u64(0)?,
+                    plan_id: args.u64(1)?,
+                }
+            }
+            "SetActivePlanV1" => {
+                args.exact(2)?;
+                Self::SetActive {
                     generation: args.u64(0)?,
                     plan_id: args.u64(1)?,
                 }

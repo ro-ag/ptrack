@@ -202,6 +202,7 @@ impl ProjectStore {
                     actors: Vec::new(),
                     stack: None,
                     scratchpad: None,
+                    summary_updated_at: None,
                 },
             )?;
             Ok(())
@@ -471,9 +472,20 @@ impl ProjectStore {
         self.update_meta(|meta| meta.goal = goal)
     }
 
+    /// Replaces the rolling summary and stamps its write time with the same
+    /// clock reading that stamps `Meta.updated_at`.
     pub fn set_summary(&self, summary: impl Into<String>) -> StoreResult<()> {
         let summary = summary.into();
-        self.update_meta(|meta| meta.summary = summary)
+        let now = self.clock.now_local();
+        let writer = self.writer_version.clone();
+        self.write(|transaction| {
+            let mut meta = required_write::<Meta>(transaction, RecordKey::Singleton)?;
+            meta.summary = summary;
+            meta.summary_updated_at = Some(now);
+            stamp_meta(&mut meta, now, writer);
+            typed::put(transaction, RecordKey::Singleton, &meta)?;
+            Ok(())
+        })
     }
 
     /// Claims a plan for the configured identity and makes it that identity's
@@ -2227,6 +2239,7 @@ impl ProjectStore {
             let result = if request.kind == MemoryKind::Summary {
                 let mut meta = required_write::<Meta>(transaction, RecordKey::Singleton)?;
                 meta.summary.clone_from(&request.body);
+                meta.summary_updated_at = Some(now);
                 stamp_meta(&mut meta, now, writer);
                 typed::put(transaction, RecordKey::Singleton, &meta)?;
                 MemoryWriteResult {

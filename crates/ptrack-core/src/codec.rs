@@ -14,7 +14,7 @@ use crate::{
 /// Stable envelope codec ID for native ptrack positional records.
 pub const NATIVE_CODEC: u16 = 3;
 /// Current schema of native ptrack positional record payloads.
-pub const NATIVE_PAYLOAD_SCHEMA: u32 = 8;
+pub const NATIVE_PAYLOAD_SCHEMA: u32 = 9;
 /// Oldest native payload schema this build still decodes.
 ///
 /// Schema 1 predates the plan and task hold reason, which schema 2 added.
@@ -24,7 +24,10 @@ pub const NATIVE_PAYLOAD_SCHEMA: u32 = 8;
 /// `ProjectRef`. Schema 6 adds that profile's line counts; schema 7 length-
 /// frames the profile and summary so later fields cost no bump. Schema 8 adds
 /// the project scratchpad as one more length-framed trailing `Meta` field;
-/// every other record kind is byte-identical at schemas 7 and 8.
+/// every other record kind is byte-identical at schemas 7 and 8. Schema 9
+/// adds the rolling summary's last write time as another length-framed
+/// trailing `Meta` field; every other record kind is byte-identical at
+/// schemas 8 and 9.
 /// Payloads at any older schema decode with all of those fields empty and are
 /// re-encoded at [`NATIVE_PAYLOAD_SCHEMA`] on their next write, so stored
 /// records upgrade lazily and no database is rewritten on open.
@@ -527,7 +530,8 @@ fn encode_meta(writer: &mut Writer, value: &Meta, payload_schema: u32) -> Result
     writer.string(&value.last_write_version)?;
     encode_meta_maps(writer, value, payload_schema)?;
     encode_stack_profile(writer, value.stack.as_ref(), payload_schema)?;
-    encode_meta_scratchpad(writer, value.scratchpad.as_ref(), payload_schema)
+    encode_meta_scratchpad(writer, value.scratchpad.as_ref(), payload_schema)?;
+    encode_meta_summary_updated_at(writer, value.summary_updated_at, payload_schema)
 }
 
 fn decode_meta(reader: &mut Reader<'_>, payload_schema: u32) -> Result<Meta, CodecError> {
@@ -543,10 +547,12 @@ fn decode_meta(reader: &mut Reader<'_>, payload_schema: u32) -> Result<Meta, Cod
         actors: Vec::new(),
         stack: None,
         scratchpad: None,
+        summary_updated_at: None,
     };
     decode_meta_maps(reader, &mut meta, payload_schema)?;
     meta.stack = decode_stack_profile(reader, payload_schema)?;
     meta.scratchpad = decode_meta_scratchpad(reader, payload_schema)?;
+    meta.summary_updated_at = decode_meta_summary_updated_at(reader, payload_schema)?;
     Ok(meta)
 }
 
@@ -765,6 +771,56 @@ fn decode_meta_scratchpad(
         revision,
         updated_at,
     }))
+}
+
+/// The payload schema that introduced [`Meta::summary_updated_at`].
+///
+/// It rides on `Meta` for the reason the scratchpad does: the table catalog is
+/// exact and has no in-place upgrade, so persistence stays additive at the
+/// payload-schema level. Like every other field gate here this is an absolute
+/// schema number; a `Meta` decoded below it carries no time, and encoding one
+/// at an older schema is refused rather than silently dropped.
+pub const SUMMARY_UPDATED_PAYLOAD_SCHEMA: u32 = 9;
+
+/// Writes the trailing summary write time, which exists only from payload
+/// schema 9: a presence flag, then a length-framed body holding the time, the
+/// same self-delimiting shape as the scratchpad.
+fn encode_meta_summary_updated_at(
+    writer: &mut Writer,
+    value: Option<Timestamp>,
+    payload_schema: u32,
+) -> Result<(), CodecError> {
+    if payload_schema < SUMMARY_UPDATED_PAYLOAD_SCHEMA {
+        return if value.is_some() {
+            Err(CodecError::NonCanonical)
+        } else {
+            Ok(())
+        };
+    }
+    let Some(updated_at) = value else {
+        return writer.bool(false);
+    };
+    writer.bool(true)?;
+    let mut body = Writer::default();
+    body.timestamp(updated_at)?;
+    frame(writer, &body.bytes)
+}
+
+/// Reads the trailing summary write time, absent before payload schema 9.
+/// The frame must be consumed exactly, as every other `Meta` frame is.
+fn decode_meta_summary_updated_at(
+    reader: &mut Reader<'_>,
+    payload_schema: u32,
+) -> Result<Option<Timestamp>, CodecError> {
+    if payload_schema < SUMMARY_UPDATED_PAYLOAD_SCHEMA || !reader.bool()? {
+        return Ok(None);
+    }
+    let mut body = unframe(reader)?;
+    let updated_at = body.timestamp()?;
+    if body.remaining() != 0 {
+        return Err(CodecError::TrailingBytes(body.remaining()));
+    }
+    Ok(Some(updated_at))
 }
 
 /// The fewest bytes one framed snippet can occupy: the frame's own `u32`

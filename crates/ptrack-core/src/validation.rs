@@ -383,6 +383,9 @@ fn validate_times(values: &[Timestamp]) -> Result<(), ValidationError> {
 impl Validate for Meta {
     fn validate(&self) -> Result<(), ValidationError> {
         validate_times(&[self.created_at, self.updated_at])?;
+        if let Some(summary_updated_at) = self.summary_updated_at {
+            summary_updated_at.validate()?;
+        }
         if self.format_version > 5 {
             return Err(ValidationError::new(
                 "meta.format_version",

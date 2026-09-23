@@ -33,6 +33,7 @@ fn model() -> Model {
                 actors: Vec::new(),
                 stack: None,
                 scratchpad: None,
+                summary_updated_at: None,
             },
             vec![],
             vec![],
@@ -139,6 +140,7 @@ fn populated_model() -> Model {
             actors: Vec::new(),
             stack: None,
             scratchpad: None,
+            summary_updated_at: None,
         },
         vec![Milestone {
             id: 7,
