@@ -131,3 +131,35 @@ pub(crate) fn native_path(value: &str) -> String {
 pub(crate) fn sha(character: char) -> String {
     std::iter::repeat_n(character, 40).collect()
 }
+
+/// Writes an executable `#!/bin/sh` script and waits until it can be exec'd.
+///
+/// On Linux, exec'ing a file this process just wrote can fail with
+/// `ExecutableFileBusy` while another test thread's forked-but-not-yet-exec'd
+/// child still holds the write descriptor. A probe line lets the script be
+/// run once, harmlessly, until that race has passed; the runner under test
+/// never sets the probe variable.
+#[cfg(unix)]
+pub(crate) fn write_executable_script(path: &Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let script = body.strip_prefix("#!/bin/sh\n").unwrap_or(body);
+    std::fs::write(
+        path,
+        format!("#!/bin/sh\n[ -n \"$PTRACK_TEST_SCRIPT_PROBE\" ] && exit 0\n{script}"),
+    )
+    .expect("write test script");
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+        .expect("make test script executable");
+    for _ in 0..50 {
+        match Command::new(path)
+            .env("PTRACK_TEST_SCRIPT_PROBE", "1")
+            .status()
+        {
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            _ => return,
+        }
+    }
+}
