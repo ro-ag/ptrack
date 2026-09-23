@@ -21,6 +21,7 @@ export interface NativeMenuActions {
   toggleTerminalPanel(): void;
   toggleCommandPalette(): void;
   installShellCommand(): void;
+  showAbout(): void;
   checkForUpdates(): void;
 }
 
@@ -60,6 +61,7 @@ export function nativeMenuCommandAllowed(
     command === "openProject" ||
     command === "installShellCommand" ||
     command === "checkForUpdates" ||
+    command === "showAbout" ||
     command === "showSettings"
   ) {
     return ["welcome", "open", "error", "closed"].includes(state.workspaceStatus);
@@ -80,6 +82,7 @@ const nativeMenuBindings: ReadonlyArray<
   ["workspace:terminal-panel-toggle-requested", "toggleTerminalPanel"],
   ["workspace:command-palette-requested", "toggleCommandPalette"],
   ["workspace:install-shell-command-requested", "installShellCommand"],
+  ["about:open-requested", "showAbout"],
   ["update:open-requested", "checkForUpdates"],
 ];
 
@@ -197,6 +200,11 @@ export function createNativeMenuController(ctx: AppContext) {
             void Promise.resolve().then(() => api().InstallShellCommand()).catch((error: unknown) => {
               showError(new Error(`Could not install the shell command: ${messageFrom(error)}`));
             });
+          }
+        },
+        showAbout: () => {
+          if (nativeCommandAllowed("showAbout")) {
+            ctx.updates.openAboutUpdates(elements.appVersion);
           }
         },
         checkForUpdates: () => {
