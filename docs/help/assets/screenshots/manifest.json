@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "productVersion": "0.40.1",
+  "productVersion": "0.41.0",
   "capturedAt": "2026-09-22",
   "capture": {
     "app": "Packaged macOS app for board, overview, search, task drawer, and terminal; retained packaged macOS captures for the unchanged Open Project dialog",

@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-09-22
+
+This minor release lands the full UI and code review: correctness, security,
+and lifecycle fixes across the store, terminal, desktop, CLI, and updater; a
+redesigned, accessible workspace; the retirement of the deprecated capability
+broker; and signed release checksums. It writes payload schema 9, so
+databases it opens cannot be opened by older builds.
+
 ### Added
 - **Reopen plan** in the plan menu (sidebar and Board header) returns a done
   plan to active, so a plan closed too early, including by the closeout
