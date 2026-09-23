@@ -779,6 +779,7 @@ fn hook_install_refuses_a_foreign_interpreter_and_respects_a_final_exec() {
     assert!(content.starts_with("#!/bin/bash\nset -e\n"), "{content}");
 }
 
+#[cfg(unix)]
 #[test]
 fn hook_reports_a_directory_that_is_not_a_git_repository() {
     let directory = TestDirectory::new("hook-no-git");

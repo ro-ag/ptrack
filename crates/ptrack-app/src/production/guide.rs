@@ -12,9 +12,11 @@ use serde::{Deserialize, Serialize};
 #[cfg(unix)]
 use super::pinned_guide::PinnedGuideRoot;
 use super::{
-    GUIDE_DIFF_LIMIT, GUIDE_FILE_LIMIT, GUIDE_FILES, GUIDE_OUTPUT_LIMIT, GUIDE_PARTIALLY_APPLIED,
-    GUIDE_PREVIEW_STALE, content_digest, path_is_present, recovery, validate_operation_id,
+    GUIDE_DIFF_LIMIT, GUIDE_FILE_LIMIT, GUIDE_FILES, GUIDE_PREVIEW_STALE, path_is_present,
+    recovery, validate_operation_id,
 };
+#[cfg(unix)]
+use super::{GUIDE_OUTPUT_LIMIT, GUIDE_PARTIALLY_APPLIED, content_digest};
 use crate::{AppError, AppResult, ProjectGuideChoiceV1, ProjectGuideFileActionV1};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

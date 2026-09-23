@@ -4,6 +4,8 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+#[cfg(not(unix))]
+use crate::production::GUIDE_UNAVAILABLE;
 #[cfg(unix)]
 use ptrack_core::upsert_guide;
 use ptrack_store::{PinnedProjectDirectory, PrivatePathIdentity};

@@ -139,7 +139,7 @@ impl ExecRunner {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn with_reader_counter_for_test(
         git_path: impl Into<OsString>,
         timeout: Duration,
