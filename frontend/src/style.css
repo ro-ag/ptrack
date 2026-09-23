@@ -1051,8 +1051,9 @@ h1 {
   box-shadow: none;
 }
 
-.panel-toggle[aria-pressed="true"],
-.panel-toggle[aria-expanded="false"] {
+/* A layout toggle is lit while its panel shows, the way editors mark visible
+   panes; a hidden panel's toggle falls back to the plain icon. */
+.panel-toggle[aria-expanded="true"] {
   color: var(--accent-text);
   background: rgba(var(--accent-rgb), 0.12);
 }
@@ -1065,8 +1066,21 @@ h1 {
 /* The theme control is a glyph, not an svg: keep it optically matched with
    its icon neighbours in the compact topbar cluster. */
 #theme-toggle {
+  position: relative;
+  margin-left: 5px;
   font-size: 0.85rem;
   line-height: 1;
+}
+
+/* The theme control is not a layout toggle; a hairline sets it apart. */
+#theme-toggle::before {
+  content: "";
+  position: absolute;
+  left: -4px;
+  top: 5px;
+  bottom: 5px;
+  width: 1px;
+  background: var(--line);
 }
 
 .panel-toggle svg {

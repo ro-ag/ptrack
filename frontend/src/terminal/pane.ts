@@ -3283,6 +3283,7 @@ class TerminalDock {
     this.#forceStop.hidden = !diagnosticInput.hasSession ||
       !["starting", "running", "failed"].includes(diagnosticInput.process);
     this.#boardToggle.disabled = this.#layoutLocked || !dockInteractionEligible;
+    this.#syncBoardToggleHint();
     const terminalActionsDisabled = !resources;
     this.#searchOpen.disabled = terminalActionsDisabled;
     this.#zoomReset.disabled = terminalActionsDisabled;
@@ -3802,18 +3803,27 @@ class TerminalDock {
     this.#renderPanelVisibility();
   }
 
+  // A dimmed board toggle says why: the board cannot be hidden while there is
+  // no terminal to fill the space.
+  #syncBoardToggleHint(): void {
+    this.#boardToggle.title = this.#boardToggle.disabled && !this.#layoutLocked
+      ? "Start a terminal to hide the board"
+      : this.#boardToggle.getAttribute("aria-label") ?? "";
+  }
+
   #renderPanelVisibility(focusTerminal = true): void {
     const revision = ++this.#panelVisibilityRevision;
     this.#workArea.dataset.boardHidden = String(this.#boardHidden);
     this.#workArea.dataset.terminalHidden = String(this.#terminalHidden);
-    this.#boardToggle.setAttribute("aria-pressed", String(this.#boardHidden));
-    this.#terminalToggle.setAttribute("aria-pressed", String(this.#terminalHidden));
+    // Disclosure state, like the sidebar toggle: "true" while the panel shows.
+    this.#boardToggle.setAttribute("aria-expanded", String(!this.#boardHidden));
+    this.#terminalToggle.setAttribute("aria-expanded", String(!this.#terminalHidden));
     const boardLabel = this.#boardHidden ? "Show board panel" : "Hide board panel";
     const terminalLabel = this.#terminalHidden
       ? "Show terminal panel"
       : "Hide terminal panel";
     this.#boardToggle.setAttribute("aria-label", boardLabel);
-    this.#boardToggle.title = boardLabel;
+    this.#syncBoardToggleHint();
     this.#terminalToggle.setAttribute("aria-label", terminalLabel);
     this.#terminalToggle.title = terminalLabel;
     this.#separator.tabIndex = this.#boardHidden || this.#terminalHidden ? -1 : 0;
@@ -4299,6 +4309,7 @@ class TerminalDock {
     this.#layoutLocked = locked;
     this.#terminalToggle.disabled = locked;
     this.#boardToggle.disabled = locked || !this.#dockInteractionEligible();
+    this.#syncBoardToggleHint();
   }
 
   setApplicationOverlayOpen(open: boolean, focusTerminal: false): void {

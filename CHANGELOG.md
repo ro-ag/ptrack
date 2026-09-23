@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- The top-right layout controls now light up while their panel shows, use
+  distinct icons for the sidebar, Board, and terminal, and set the theme
+  control apart. A dimmed Board control says why it cannot hide the Board yet.
+
 ## [0.41.0] - 2026-09-22
 
 This minor release lands the full UI and code review: correctness, security,

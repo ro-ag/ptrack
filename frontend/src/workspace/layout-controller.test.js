@@ -76,9 +76,24 @@ describe("window layout", () => {
     flushDebounce(timers);
     const [patch] = harness.backend.callsTo("SetLayoutState").at(-1);
     expect(patch.panels).toEqual({
-      boardHidden: harness.$("#board-panel-toggle").getAttribute("aria-pressed") === "true",
+      boardHidden: harness.$("#board-panel-toggle").getAttribute("aria-expanded") === "false",
       terminalHidden: true,
     });
+  });
+
+  it("marks each layout toggle by whether its panel shows, and explains a dimmed board toggle", async () => {
+    harness = await bootProject(layout());
+    const terminal = harness.$("#terminal-panel-toggle");
+    const boardToggle = harness.$("#board-panel-toggle");
+    expect(harness.$("#sidebar-toggle").getAttribute("aria-expanded")).toBe("true");
+    expect(terminal.getAttribute("aria-expanded")).toBe("true");
+    expect(terminal.hasAttribute("aria-pressed")).toBe(false);
+    await harness.click(terminal);
+    expect(terminal.getAttribute("aria-expanded")).toBe("false");
+    expect(terminal.getAttribute("aria-label")).toBe("Show terminal panel");
+    // No terminal is running in the harness, so the board cannot be hidden.
+    expect(boardToggle.disabled).toBe(true);
+    expect(boardToggle.title).toBe("Start a terminal to hide the board");
   });
 
   it("saves a pending change right away when the workspace is about to change", async () => {
