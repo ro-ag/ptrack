@@ -48,7 +48,7 @@ code in that audit checkout. A `v0.21.0:` prefix locates tag-specific source
 where later commits changed the behavior. Contract values always describe
 the tag, regardless of reference form.
 
-There are **766 contract rows**: 726 from the nine subsystem
+There are **770 contract rows**: 730 from the nine subsystem
 inventories, 26 updater rows, and 14 packaging/release rows.
 A row can overlap another subsystem's boundary; every row still requires its
 own evidence because the producer and consumer may fail independently.
