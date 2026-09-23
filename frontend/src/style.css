@@ -5982,12 +5982,138 @@ html[data-window-mode="terminal"] #app {
 }
 
 .terminal-window {
+  position: relative;
   display: flex;
   flex-direction: column;
   width: 100%;
   height: 100%;
   min-width: 0;
   background: var(--canvas-bg);
+}
+
+/* The dock's header facts for the active tab, on one line at any window
+   width: every fact shrinks and truncates instead of wrapping, and the
+   working directory gives way first, from its start. */
+.terminal-window .terminal-window-info {
+  min-height: 40px;
+  flex-wrap: nowrap;
+  overflow: hidden;
+  margin: 0 var(--space-100);
+  border: 1px solid var(--line);
+  border-bottom-color: var(--line-subtle);
+  border-radius: 10px 10px 0 0;
+  padding: 4px var(--space-150);
+}
+
+.terminal-window-info > * {
+  flex: 0 0 auto;
+}
+
+.terminal-window-info .terminal-window-state {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 200px;
+  margin-right: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-window-fact {
+  min-width: 0;
+  height: 28px;
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: var(--space-050);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  padding: 0 var(--space-100);
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.terminal-window-fact-label {
+  flex: 0 0 auto;
+}
+
+.terminal-window-fact-value {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-window-profile-fact {
+  max-width: 220px;
+}
+
+.terminal-window-cwd-fact {
+  flex: 1 1 120px;
+  max-width: 760px;
+}
+
+/* Truncates from the start: the end of a path is the part worth reading. */
+.terminal-window-cwd {
+  flex: 1 1 auto;
+  direction: rtl;
+  text-align: left;
+}
+
+.terminal-window-association {
+  min-width: 0;
+  max-width: 240px;
+  height: 28px;
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: var(--space-050);
+  overflow: hidden;
+  border: 1px solid rgba(var(--accent-rgb), 0.45);
+  border-radius: 8px;
+  color: var(--accent-text);
+  background: rgba(var(--accent-rgb), 0.08);
+  padding: 0 var(--space-100);
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.terminal-window-association[hidden] {
+  display: none;
+}
+
+.terminal-window-association > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.terminal-window-association svg {
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.35;
+}
+
+.terminal-window-info-actions {
+  margin-left: auto;
+}
+
+/* Panes, then the scratchpad splitter and panel, as in the dock body. */
+.terminal-window .terminal-window-body {
+  min-height: 0;
 }
 
 .terminal-window-bar {
@@ -6005,6 +6131,9 @@ html[data-window-mode="terminal"] #app {
   height: auto;
   flex: 1 1 auto;
   margin: 0 var(--space-100) var(--space-100);
+  /* Joined to the info row above it. */
+  border-top: 0;
+  border-radius: 0 0 10px 10px;
 }
 
 .terminal-window-tools {
@@ -6107,6 +6236,7 @@ html[data-window-mode="terminal"] #app {
   background: var(--terminal-bg);
   min-height: 0;
   flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   padding: 4px;
 }

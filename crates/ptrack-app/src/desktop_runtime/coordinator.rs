@@ -30,8 +30,8 @@ use super::ports::{
 use super::support::{lock, unavailable, value};
 use super::wire::{
     ActiveResourceSummary, DesktopCommandRequest, DesktopEvent, DesktopNotificationSnapshotV1,
-    InitializeProjectRequestV1, InitializeProjectResultV1, ShutdownOutcome, WorkspaceState,
-    WorkspaceStatus, validate_request,
+    InitializeProjectRequestV1, InitializeProjectResultV1, ScratchpadChangedV1, ShutdownOutcome,
+    WorkspaceState, WorkspaceStatus, validate_request,
 };
 use super::{DEFAULT_CONFIRMATION_TTL, RUNTIME_CALL_TIMEOUT, SHUTDOWN_RETRY_INTERVAL};
 use crate::terminal_windows::{OpenedTerminalWindow, TerminalWindowTab, TerminalWindows};
@@ -179,7 +179,17 @@ impl DesktopRuntime {
             DesktopCommand::Update(command) => self.update_command(command),
             DesktopCommand::Native(command) => self.native_command(command),
             DesktopCommand::Recent(command) => self.recent_command(command),
-            DesktopCommand::Workspace => self.with_workspace(&request.method, &request.arguments),
+            DesktopCommand::Workspace => {
+                let reply = self.with_workspace(&request.method, &request.arguments)?;
+                if request.method == "SetScratchpadV1"
+                    && let Some(change) = ScratchpadChangedV1::from_reply(&reply)
+                {
+                    // Only a write that landed: a refused or conflicting one
+                    // changed nothing another window needs to re-read.
+                    self.emit(DesktopEvent::ScratchpadChanged(change));
+                }
+                Ok(reply)
+            }
         }
     }
 

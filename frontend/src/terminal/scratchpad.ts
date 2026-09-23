@@ -38,6 +38,7 @@ export const scratchpadNotices = {
   tooLarge: "Selection is larger than 4 KB; not added to the scratchpad.",
   allPinned: "All 50 snippets are pinned; unpin one to add more.",
   reloaded: "Scratchpad changed elsewhere and was reloaded.",
+  reloadedCopied: "Changed elsewhere and reloaded; your text is on the clipboard.",
   saveFailed: "Save failed",
   unavailable: "Scratchpad is unavailable; the copy was not added.",
 } as const;
@@ -47,6 +48,19 @@ export const scratchpadStatus = {
   saving: "Saving\u2026",
   saved: "Saved",
 } as const;
+
+/**
+ * The `scratchpad:changed` desktop event: a write landed at `revision` for the
+ * workspace at `generation`. Content-free; the record is re-read through the
+ * fenced command.
+ */
+export interface ScratchpadChangedEvent {
+  generation: number;
+  revision: number;
+}
+
+/** The desktop event every surface showing the scratchpad listens to. */
+export const scratchpadChangedEventName = "scratchpad:changed";
 
 /** The runtime's Display message for a stale-revision write. */
 export const scratchpadConflictMessage = "scratchpad revision conflict";
@@ -240,6 +254,20 @@ export function terminalBodyVisible(input: {
 }): boolean {
   if (input.scratchpadOpen) return true;
   return !(input.state === "closed" && !input.poppedOut && input.singlePane);
+}
+
+/**
+ * A detached terminal window keeps its own panel state: opening the
+ * scratchpad there must not open the dock's on the next launch, nor the other
+ * way round. The record itself is shared; only these view mirrors are not.
+ */
+export function detachedScratchpadStorage(
+  storage: Pick<Storage, "getItem" | "setItem">,
+): Pick<Storage, "getItem" | "setItem"> {
+  return {
+    getItem: (key) => storage.getItem(`${key}-window`),
+    setItem: (key, value) => storage.setItem(`${key}-window`, value),
+  };
 }
 
 export function readScratchpadOpen(storage: Pick<Storage, "getItem">): boolean {
@@ -531,16 +559,46 @@ export class ScratchpadSaver {
 
   async #recoverConflict(error: unknown): Promise<void> {
     // Nothing typed is lost: the local note reaches the clipboard before the
-    // stored record replaces it.
+    // stored record replaces it, and the notice says where it went.
+    let copied = false;
     try {
       await this.#host.setText(this.#record.text);
+      copied = true;
     } catch {
       // A missing native clipboard must not block the reload.
     }
     const stored = scratchpadConflictRecord(error);
     if (stored === null) await this.load(true);
     else this.#install(stored, true);
-    this.#status(scratchpadNotices.reloaded);
+    this.#status(copied ? scratchpadNotices.reloadedCopied : scratchpadNotices.reloaded);
+  }
+
+  /**
+   * Another surface — the dock or a terminal window — wrote the record at
+   * `revision`. A clean instance re-reads it, so both show the same note. One
+   * holding an edit keeps its text: its own write then meets the revision
+   * check, and the conflict path keeps the typed note on the clipboard and
+   * says so, so nothing typed is ever dropped in silence. Resolves true when
+   * the stored record replaced the local one.
+   */
+  async refresh(revision: number): Promise<boolean> {
+    if (!this.enabled || this.#disposed || !this.#loaded) return false;
+    if (!Number.isFinite(revision) || revision <= this.#record.revision) return false;
+    if (this.#dirty || this.#saving) return false;
+    const edits = this.#edits;
+    try {
+      const result = await this.#host.backend.get(this.#host.generation);
+      if (result.generation !== this.#host.generation || this.#disposed) return false;
+      // Typed while the read was in flight: that text stays and is written
+      // at the old revision, where the conflict path takes over.
+      if (this.#edits !== edits || this.#dirty || this.#saving) return false;
+      if (result.scratchpad.revision <= this.#record.revision) return false;
+      this.#install(result.scratchpad, true);
+      return true;
+    } catch (error) {
+      this.#host.reportError(error);
+      return false;
+    }
   }
 
   /** Writes any pending edit now. Returns true when a write was started. */

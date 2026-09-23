@@ -103,17 +103,21 @@ const COMMANDS: [&str; 88] = [
 /// terminal window renders one tab of sessions and nothing else, so every
 /// project, plan, task, and update mutation stays reachable from the main
 /// window only.
-const TERMINAL_WINDOW_COMMANDS: [&str; 10] = [
+const TERMINAL_WINDOW_COMMANDS: [&str; 12] = [
     "ClaimTerminalStream",
     "CloseTerminalV2",
     "CreateTerminalV2",
     "GetPreferences",
+    // The window's scratchpad panel reads and writes the project's one
+    // scratchpad, generation- and revision-fenced exactly as the dock's is.
+    "GetScratchpadV1",
     "GetTerminalProfiles",
     "GetTerminalWindowTab",
     "GetWorkspaceState",
     "ResizeTerminalV2",
     // The terminal window's own theme toggle writes the shared preference.
     "SetPreferences",
+    "SetScratchpadV1",
     "SetTerminalWindowTab",
 ];
 
@@ -577,6 +581,31 @@ pub enum DesktopEvent {
     TerminalStatus(crate::TerminalStatusV2),
     #[serde(rename = "terminal:exit")]
     TerminalExit(crate::TerminalExitV2),
+    #[serde(rename = "scratchpad:changed")]
+    ScratchpadChanged(ScratchpadChangedV1),
+}
+
+/// A scratchpad write that reached the store. Every window showing the
+/// project's scratchpad (the dock and any terminal window) re-reads it unless
+/// it holds an unsaved edit of its own, which then meets the revision check.
+/// Content-free: the record itself is fetched through the fenced read.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScratchpadChangedV1 {
+    pub generation: u64,
+    pub revision: u64,
+}
+
+impl ScratchpadChangedV1 {
+    /// The change a successful `SetScratchpadV1` reply describes, or `None`
+    /// for any other reply shape.
+    #[must_use]
+    pub fn from_reply(reply: &Value) -> Option<Self> {
+        Some(Self {
+            generation: reply.get("generation")?.as_u64()?,
+            revision: reply.get("revision")?.as_u64()?,
+        })
+    }
 }
 
 pub(super) fn validate_request(request: &DesktopCommandRequest) -> AppResult<()> {

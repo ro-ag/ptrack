@@ -225,6 +225,45 @@ fn terminal_windows_are_label_scoped_and_independent() {
     assert!(!source.contains("app.get_webview_window(\"main\")"));
 }
 
+/// What a terminal window may call is the runtime's exact allowlist: the
+/// terminal surface, its own assignment, the shared theme preference, and the
+/// project scratchpad its side panel edits. Nothing that changes plans, tasks,
+/// associations, or project memory is reachable from a popped-out window.
+#[test]
+fn terminal_windows_reach_only_the_terminal_and_scratchpad_commands() {
+    assert_eq!(
+        ptrack_app::allowed_terminal_window_commands(),
+        [
+            "ClaimTerminalStream",
+            "CloseTerminalV2",
+            "CreateTerminalV2",
+            "GetPreferences",
+            "GetScratchpadV1",
+            "GetTerminalProfiles",
+            "GetTerminalWindowTab",
+            "GetWorkspaceState",
+            "ResizeTerminalV2",
+            "SetPreferences",
+            "SetScratchpadV1",
+            "SetTerminalWindowTab",
+        ]
+    );
+    for refused in [
+        "MutateTerminalAssociationV2",
+        "WriteTerminalMemoryV2",
+        "OpenTerminalWindow",
+    ] {
+        assert!(!ptrack_app::allowed_terminal_window_commands().contains(&refused));
+    }
+    // A scratchpad write is announced to every window, not only the main one:
+    // the dock and each terminal window re-read the same project scratchpad.
+    let source = shell_source();
+    assert!(source.contains(
+        "DesktopEvent::ScratchpadChanged(change) => self.app.emit(\"scratchpad:changed\", change)"
+    ));
+    assert!(!source.contains("emit_to(MAIN_WINDOW_LABEL, \"scratchpad:changed\""));
+}
+
 /// Windows checks the tree out with CRLF. A scan spanning a newline finds
 /// nothing there, and the empty slice it falls back to satisfies every claim
 /// made against it — which is exactly how the builder claims above passed on

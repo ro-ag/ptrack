@@ -53,6 +53,9 @@ impl DesktopEventSink for TauriEventSink {
             DesktopEvent::UpdateStateChanged(state) => self.app.emit("update:state-changed", state),
             DesktopEvent::TerminalStatus(status) => self.app.emit("terminal:status", status),
             DesktopEvent::TerminalExit(exit) => self.app.emit("terminal:exit", exit),
+            // Broadcast: the dock and every terminal window show the same
+            // project scratchpad and each re-reads it on its own.
+            DesktopEvent::ScratchpadChanged(change) => self.app.emit("scratchpad:changed", change),
         };
         let _ = result;
         if refresh_notifications {

@@ -33,8 +33,9 @@ use crate::{
     AppError, AppResult, DesktopEvent, DesktopEventSink, DesktopInitializationService,
     DesktopUpdateService, InitializationCheckpointV1, InitializationOutcomeV1,
     InitializationStatusV1, InitializeProjectRequestV1, LocalApplication, ProjectEndpoint,
-    ProjectTargetKindV1, ProjectTargetValidationV1, TerminalRuntime, TerminalRuntimeConfig,
-    UnavailableUpdateService, UpdatePhase, UpdateState, WorkspaceBindings, set_identity_name,
+    ProjectTargetKindV1, ProjectTargetValidationV1, ScratchpadChangedV1, TerminalRuntime,
+    TerminalRuntimeConfig, UnavailableUpdateService, UpdatePhase, UpdateState, WorkspaceBindings,
+    set_identity_name,
 };
 
 use super::terminal_runtime_test::{TestEvents, TestFactory, TestIdentity, profile};
@@ -4196,6 +4197,91 @@ fn a_scratchpad_conflict_reaches_the_runtime_boundary_with_its_stored_record() {
     );
 }
 
+/// Every window that shows the scratchpad re-reads it after a write lands
+/// elsewhere, so the runtime announces each landed write once — and only a
+/// landed one: a read, a stale revision, and a refused note change nothing.
+#[test]
+fn a_landed_scratchpad_write_is_announced_once_with_its_revision() {
+    let directory = TestDirectory::new("scratchpad-event");
+    let workspace: Arc<dyn DesktopWorkspace> = Arc::new(bound_workspace(&directory));
+    let events = Arc::new(Events::default());
+    let runtime = DesktopRuntime::new(DesktopRuntimeConfig {
+        version: "test".to_owned(),
+        factory: Arc::new(FakeFactory::default()),
+        event_sink: Some(events.clone()),
+        initial_workspace: Some(workspace),
+        recent_projects: Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+        initialization: Arc::new(super::desktop_runtime::NoDesktopInitializationService),
+        update_service: super::update_runtime::UnavailableUpdateService::new("test"),
+        confirmation_ttl: Duration::from_secs(60),
+    });
+    let scratchpad_events = || {
+        events
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| matches!(event, DesktopEvent::ScratchpadChanged(_)))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let payload = json!({
+        "text": "typed in a terminal window",
+        "snippets": [],
+        "revision": 0,
+        "updatedAt": 0,
+    });
+
+    runtime
+        .invoke(request("GetScratchpadV1", vec![json!(7)]))
+        .unwrap();
+    assert!(scratchpad_events().is_empty());
+
+    runtime
+        .invoke(request(
+            "SetScratchpadV1",
+            vec![json!(7), json!(0), payload.clone()],
+        ))
+        .unwrap();
+    assert_eq!(
+        scratchpad_events(),
+        vec![DesktopEvent::ScratchpadChanged(ScratchpadChangedV1 {
+            generation: 7,
+            revision: 1,
+        })]
+    );
+
+    // A stale revision, a stale generation, and an oversized note all fail
+    // without announcing anything.
+    let oversized = json!({
+        "text": "x".repeat(65_537),
+        "snippets": [],
+        "revision": 1,
+        "updatedAt": 0,
+    });
+    for arguments in [
+        vec![json!(7), json!(0), payload.clone()],
+        vec![json!(8), json!(1), payload],
+        vec![json!(7), json!(1), oversized],
+    ] {
+        assert!(
+            runtime
+                .invoke(request("SetScratchpadV1", arguments))
+                .is_err()
+        );
+    }
+    assert_eq!(scratchpad_events().len(), 1);
+
+    // The wire shape the windows subscribe to.
+    assert_eq!(
+        serde_json::to_value(&scratchpad_events()[0]).unwrap(),
+        json!({
+            "name": "scratchpad:changed",
+            "payload": { "generation": 7, "revision": 1 },
+        })
+    );
+}
+
 /// A workspace whose teardown takes longer than any close may wait.
 struct SlowShutdownWorkspace {
     inner: Arc<FakeWorkspace>,
@@ -4440,6 +4526,38 @@ fn terminal_windows_reach_only_their_own_commands_and_assignment() {
     };
     let commands = allowed_terminal_window_commands();
     assert!(commands.windows(2).all(|pair| pair[0] < pair[1]));
+    // Exact: widening what a terminal window may call is a reviewed change.
+    assert_eq!(
+        commands,
+        [
+            "ClaimTerminalStream",
+            "CloseTerminalV2",
+            "CreateTerminalV2",
+            "GetPreferences",
+            "GetScratchpadV1",
+            "GetTerminalProfiles",
+            "GetTerminalWindowTab",
+            "GetWorkspaceState",
+            "ResizeTerminalV2",
+            "SetPreferences",
+            "SetScratchpadV1",
+            "SetTerminalWindowTab",
+        ]
+    );
+    // The scratchpad commands reach the runtime untouched: the generation and
+    // revision fences are theirs, and nothing is rewritten on the way.
+    let scratchpad = json!({ "text": "", "snippets": [], "revision": 0, "updatedAt": 0 });
+    for (method, arguments) in [
+        ("GetScratchpadV1", vec![json!(7)]),
+        (
+            "SetScratchpadV1",
+            vec![json!(7), json!(3), scratchpad.clone()],
+        ),
+    ] {
+        let scoped = terminal(method, arguments.clone()).unwrap();
+        assert_eq!(scoped.method, method);
+        assert_eq!(scoped.arguments, arguments);
+    }
     for method in commands {
         assert!(allowed_desktop_commands().contains(method), "{method}");
         assert!(
@@ -4453,6 +4571,8 @@ fn terminal_windows_reach_only_their_own_commands_and_assignment() {
         "OpenProject",
         "ApplyUpdate",
         "OpenTerminalWindow",
+        "MutateTerminalAssociationV2",
+        "WriteTerminalMemoryV2",
     ] {
         assert_eq!(
             terminal(method, Vec::new()).unwrap_err().to_string(),
