@@ -5522,10 +5522,11 @@ button.modal-backdrop:active {
   height: 100%;
 }
 
-/* xterm's stylesheet paints the viewport black; the renderer element carries
-   the active terminal theme's background instead (see applyTerminalTheme). */
-.terminal-host .xterm-viewport,
-.terminal-window-host .xterm-viewport {
+/* xterm's stylesheet (loaded after this one, hence the extra class) paints the
+   viewport black; the renderer element carries the active terminal theme's
+   background instead (see applyTerminalTheme). */
+.terminal-host .xterm .xterm-viewport,
+.terminal-window-host .xterm .xterm-viewport {
   background-color: transparent;
 }
 
