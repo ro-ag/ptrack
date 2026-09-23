@@ -54,7 +54,7 @@ pub use import::{
 pub use project::{
     ActorIdentity, CAPABILITY_AUDIT_GLOBAL_LIMIT, CURRENT_PROJECT_FORMAT,
     FIRST_RUN_TITLE_MAX_BYTES, MEMORY_WRITEBACK_REPLAY_LIMIT, MemoryWriteRequest,
-    MemoryWriteResult, PlanDeleteSummary, PlanSubtree, ProjectStore,
+    MemoryWriteResult, PlanCloseout, PlanDeleteSummary, PlanSubtree, ProjectStore, TaskCloseout,
 };
 pub use quarantine::{QuarantineReason, QuarantinedLegacyRecord};
 pub use runtime_binding::{

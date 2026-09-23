@@ -2288,7 +2288,8 @@ fn delete_plan_for_move_deletes_linked_issues_instead_of_detaching() {
         .unwrap();
     let unrelated = store.add_issue("stays", "", None, 0).unwrap();
 
-    let summary = store.delete_plan_for_move(plan.id).unwrap();
+    let exported = store.export_plan_subtree(plan.id).unwrap();
+    let summary = store.delete_plan_for_move(&exported).unwrap();
     assert_eq!(
         summary.issues,
         vec![(issue.id, "follows its task".to_owned())]
@@ -3476,4 +3477,404 @@ fn scratchpad_is_not_a_collection_of_its_own() {
         Collection::for_store(StoreKind::Project)
             .all(|collection| collection.name() != "scratchpad")
     );
+}
+
+#[test]
+fn cross_store_import_into_a_nonempty_target_drops_every_external_edge() {
+    let temp = Temp::new();
+    let source = dep_store(&temp, "edges-source.redb");
+    let outside_plan = source.add_plan("Outside", 0).unwrap();
+    let outside_task = source.add_task(outside_plan.id, "outside").unwrap();
+    let plan = source.add_plan("Travelling", 0).unwrap();
+    let t1 = source.add_task(plan.id, "t1").unwrap();
+    let t2 = source.add_task(plan.id, "t2").unwrap();
+    source.add_plan_dep(plan.id, outside_plan.id).unwrap();
+    source.add_task_dep(t1.id, outside_task.id).unwrap();
+    source.add_task_dep(t2.id, t1.id).unwrap();
+    let subtree = source.export_plan_subtree(plan.id).unwrap();
+
+    // The target already holds plans and tasks under the very IDs the
+    // external edges name, so a remap by "exists here" would land on them.
+    let target = dep_store(&temp, "edges-target.redb");
+    for index in 0..3 {
+        let decoy = target.add_plan(format!("decoy {index}"), 0).unwrap();
+        target
+            .add_task(decoy.id, format!("decoy task {index}"))
+            .unwrap();
+    }
+    assert!(target.plan(outside_plan.id).is_ok());
+    assert!(target.task(outside_task.id).is_ok());
+
+    let landed = target.import_plan_subtree(&subtree, None).unwrap();
+    assert!(landed.deps.is_empty());
+    let tasks = target.snapshot().unwrap().tasks;
+    let landed_t1 = tasks
+        .iter()
+        .find(|task| task.plan_id == landed.id && task.title == "t1")
+        .unwrap();
+    let landed_t2 = tasks
+        .iter()
+        .find(|task| task.plan_id == landed.id && task.title == "t2")
+        .unwrap();
+    assert!(landed_t1.deps.is_empty());
+    assert_eq!(landed_t2.deps, vec![landed_t1.id]);
+}
+
+#[test]
+fn move_delete_removes_exactly_the_exported_records_or_nothing() {
+    let temp = Temp::new();
+    let store = dep_store(&temp, "move-exact.redb");
+    let plan = store.add_plan("Moving", 0).unwrap();
+    store.add_task(plan.id, "exported").unwrap();
+    let exported = store.export_plan_subtree(plan.id).unwrap();
+    // Work lands on the plan between the copy and the delete.
+    let late = store.add_task(plan.id, "added after the copy").unwrap();
+    assert!(matches!(
+        store.delete_plan_for_move(&exported),
+        Err(StoreError::InvalidPlanState(_))
+    ));
+    assert!(store.plan(plan.id).is_ok());
+    assert!(store.task(late.id).is_ok());
+
+    // A subtree exported from another store can never delete here.
+    let other = dep_store(&temp, "move-exact-other.redb");
+    let foreign_plan = other.add_plan("Foreign", 0).unwrap();
+    let foreign = other.export_plan_subtree(foreign_plan.id).unwrap();
+    assert!(matches!(
+        store.delete_plan_for_move(&foreign),
+        Err(StoreError::InvalidPlanState(_))
+    ));
+
+    let exported = store.export_plan_subtree(plan.id).unwrap();
+    let summary = store.delete_plan_for_move(&exported).unwrap();
+    assert_eq!(summary.tasks, 2);
+    assert!(store.snapshot().unwrap().tasks.is_empty());
+}
+
+#[test]
+fn new_records_order_after_the_highest_order_not_the_count() {
+    let temp = Temp::new();
+    let store = dep_store(&temp, "order.redb");
+    let first = store.add_plan("first", 0).unwrap();
+    let middle = store.add_plan("middle", 0).unwrap();
+    let last = store.add_plan("last", 0).unwrap();
+    store.delete_plan(middle.id).unwrap();
+    let appended = store.add_plan("appended", 0).unwrap();
+    assert!(appended.order > last.order);
+
+    let a = store.add_task(first.id, "a").unwrap();
+    let b = store.add_task(first.id, "b").unwrap();
+    let c = store.add_task(first.id, "c").unwrap();
+    store.convert_task_to_plan(b.id).unwrap();
+    let d = store.add_task(first.id, "d").unwrap();
+    assert!(d.order > c.order);
+    assert!(c.order > a.order);
+    let titles: Vec<_> = store
+        .tasks()
+        .unwrap()
+        .into_iter()
+        .map(|task| task.title)
+        .collect();
+    assert_eq!(titles, ["a", "c", "d"]);
+}
+
+#[test]
+fn a_summary_memory_write_respects_the_summary_cap() {
+    let temp = Temp::new();
+    let store = dep_store(&temp, "memory-summary-cap.redb");
+    let request = MemoryWriteRequest {
+        request_id: "summary-1".to_owned(),
+        kind: MemoryKind::Summary,
+        body: "x".repeat(ptrack_core::MAX_SUMMARY_BYTES + 1),
+        target: NoteTarget::Project,
+        target_id: 0,
+        plan_id: 0,
+        workspace_generation: 7,
+        session_id: "session".to_owned(),
+        association_revision: 1,
+    };
+    assert!(matches!(
+        store.write_memory(request.clone()),
+        Err(StoreError::InvalidMemoryWriteback(_))
+    ));
+    assert!(store.meta().unwrap().summary.is_empty());
+    let within = MemoryWriteRequest {
+        body: "x".repeat(ptrack_core::MAX_SUMMARY_BYTES),
+        ..request
+    };
+    assert!(!store.write_memory(within).unwrap().replayed);
+}
+
+#[test]
+fn notes_require_an_existing_target() {
+    let temp = Temp::new();
+    let store = dep_store(&temp, "note-targets.redb");
+    let plan = store.add_plan("P", 0).unwrap();
+    let task = store.add_task(plan.id, "t").unwrap();
+    assert!(matches!(
+        store.add_note(NoteTarget::Task, 999, "orphan"),
+        Err(StoreError::NotFound)
+    ));
+    assert!(matches!(
+        store.add_note(NoteTarget::Plan, 999, "orphan"),
+        Err(StoreError::NotFound)
+    ));
+    assert!(store.notes().unwrap().is_empty());
+    store.add_note(NoteTarget::Task, task.id, "ok").unwrap();
+    store.add_note(NoteTarget::Plan, plan.id, "ok").unwrap();
+    store.add_note(NoteTarget::Project, 0, "ok").unwrap();
+    assert_eq!(store.notes().unwrap().len(), 3);
+}
+
+#[test]
+fn task_closeout_writes_notes_and_status_all_or_nothing() {
+    let temp = Temp::new();
+    let path = temp.path("closeout.redb");
+    let store = ProjectStore::create_new_with_clock(
+        &path,
+        binding(&path, StoreKind::Project, "closeout"),
+        "test",
+        clock(),
+    )
+    .unwrap();
+    let plan = store.add_plan("claimed", 0).unwrap();
+    let task = store.add_task(plan.id, "work").unwrap();
+    store
+        .add_commit("abc123", "work", plan.id, task.id)
+        .unwrap();
+    drop(store);
+    let alice = reopen_as(&path, "closeout", Some(actor_a()));
+    alice.use_plan(plan.id, false).unwrap();
+    drop(alice);
+
+    let notes = vec!["closeout: done".to_owned(), "override: forced".to_owned()];
+    let bob = reopen_as(&path, "closeout", Some(actor_b()));
+    assert!(matches!(
+        bob.complete_task_with_notes(task.id, &notes),
+        Err(StoreError::InvalidClaim(_))
+    ));
+    assert!(matches!(
+        bob.complete_task_with_notes(999, &notes),
+        Err(StoreError::NotFound)
+    ));
+    assert!(bob.notes().unwrap().is_empty());
+    assert_eq!(bob.task(task.id).unwrap().status, TaskStatus::Todo);
+    drop(bob);
+
+    let alice = reopen_as(&path, "closeout", Some(actor_a()));
+    let closed = alice.complete_task_with_notes(task.id, &notes).unwrap();
+    assert_eq!(closed.task.status, TaskStatus::Done);
+    assert_eq!(closed.linked_commits, 1);
+    assert_eq!(closed.notes.len(), 2);
+    assert!(
+        closed
+            .notes
+            .iter()
+            .all(|note| note.target == NoteTarget::Task && note.target_id == task.id)
+    );
+    assert_eq!(alice.task(task.id).unwrap().status, TaskStatus::Done);
+    assert_eq!(alice.notes().unwrap(), closed.notes);
+}
+
+#[test]
+fn plan_closeout_checks_open_tasks_in_its_own_transaction() {
+    let temp = Temp::new();
+    let path = temp.path("plan-closeout.redb");
+    let store = ProjectStore::create_new_with_clock(
+        &path,
+        binding(&path, StoreKind::Project, "plan-closeout"),
+        "test",
+        clock(),
+    )
+    .unwrap();
+    let plan = store.add_plan("P", 0).unwrap();
+    let open = store.add_task(plan.id, "open").unwrap();
+    let done = store.add_task(plan.id, "done").unwrap();
+    store.set_task_status(done.id, TaskStatus::Done).unwrap();
+    drop(store);
+    let alice = reopen_as(&path, "plan-closeout", Some(actor_a()));
+    alice.use_plan(plan.id, false).unwrap();
+
+    assert!(matches!(
+        alice.complete_plan(plan.id, false),
+        Err(StoreError::InvalidPlanState(_))
+    ));
+    assert_eq!(alice.plan(plan.id).unwrap().status, PlanStatus::Active);
+    assert!(alice.notes().unwrap().is_empty());
+    drop(alice);
+    let bob = reopen_as(&path, "plan-closeout", Some(actor_b()));
+    assert!(matches!(
+        bob.complete_plan(plan.id, true),
+        Err(StoreError::InvalidClaim(_))
+    ));
+    drop(bob);
+
+    let alice = reopen_as(&path, "plan-closeout", Some(actor_a()));
+    let closed = alice.complete_plan(plan.id, true).unwrap();
+    assert_eq!(closed.open_tasks, vec![open.id]);
+    assert_eq!(closed.plan.status, PlanStatus::Done);
+    assert_eq!(closed.plan.claim_owner, None);
+    let note = closed.override_note.unwrap();
+    assert_eq!(note.target, NoteTarget::Plan);
+    assert_eq!(note.target_id, plan.id);
+    assert_eq!(
+        note.body,
+        format!("override: closed via --force with open tasks #{}", open.id)
+    );
+    assert_eq!(alice.plan(plan.id).unwrap().status, PlanStatus::Done);
+}
+
+#[test]
+fn finished_plans_refuse_new_open_work() {
+    let temp = Temp::new();
+    let store = dep_store(&temp, "finished-plans.redb");
+    let active = store.add_plan("active", 0).unwrap();
+    let done = store.add_plan("done", 0).unwrap();
+    let archived = store.add_plan("archived", 0).unwrap();
+    let open = store.add_task(active.id, "open").unwrap();
+    let finished = store.add_task(active.id, "finished").unwrap();
+    store
+        .set_task_status(finished.id, TaskStatus::Done)
+        .unwrap();
+    store.set_plan_status(done.id, PlanStatus::Done).unwrap();
+    store
+        .set_plan_status(archived.id, PlanStatus::Archived)
+        .unwrap();
+
+    for plan_id in [done.id, archived.id] {
+        assert!(matches!(
+            store.add_task(plan_id, "late"),
+            Err(StoreError::InvalidPlanState(_))
+        ));
+        assert!(matches!(
+            store.set_task_plan(open.id, plan_id),
+            Err(StoreError::InvalidPlanState(_))
+        ));
+    }
+    assert_eq!(store.task(open.id).unwrap().plan_id, active.id);
+    // Finished work may still be filed under a finished plan.
+    store.set_task_plan(finished.id, done.id).unwrap();
+    assert_eq!(store.task(finished.id).unwrap().plan_id, done.id);
+}
+
+#[test]
+fn convert_leaves_the_new_plan_unclaimed_when_the_parent_was_unclaimed() {
+    let temp = Temp::new();
+    let path = temp.path("convert-unclaimed.redb");
+    let store = ProjectStore::create_new_with_clock(
+        &path,
+        binding(&path, StoreKind::Project, "convert-unclaimed"),
+        "test",
+        clock(),
+    )
+    .unwrap();
+    let plan = store.add_plan("parent", 0).unwrap();
+    let task = store.add_task(plan.id, "promote me").unwrap();
+    drop(store);
+
+    let store = reopen_as(&path, "convert-unclaimed", Some(actor_a()));
+    assert_eq!(store.plan(plan.id).unwrap().claim_owner, None);
+    let born = store.convert_task_to_plan(task.id).unwrap();
+    assert_eq!(born.claim_owner, None);
+    assert_eq!(born.claim_epoch, 0);
+}
+
+/// A clock that registers a stack summary through a second handle the
+/// moment the registry asks for the time on a re-registration — the window a
+/// read outside the write transaction used to lose.
+struct ScanRacingClock {
+    path: PathBuf,
+    binding: ActiveBinding,
+    project: PathBuf,
+    summary: StackSummary,
+    calls: AtomicU64,
+}
+
+impl Clock for ScanRacingClock {
+    fn now_local(&self) -> Timestamp {
+        if self.calls.fetch_add(1, Ordering::Relaxed) == 1 {
+            GlobalStore::open_existing(&self.path, &self.binding)
+                .unwrap()
+                .set_project_stack(&self.project, self.summary.clone())
+                .unwrap();
+        }
+        timestamp(1_700_000_000 + i64::try_from(self.calls.load(Ordering::Relaxed)).unwrap())
+    }
+
+    fn now_utc(&self) -> Timestamp {
+        self.now_local()
+    }
+}
+
+#[test]
+fn re_registration_keeps_a_stack_summary_written_concurrently() {
+    let temp = Temp::new();
+    let global_path = temp.path("registry-race.redb");
+    let global_binding = binding(&global_path, StoreKind::Global, "registry-race");
+    let root = temp.path("race-project");
+    fs::create_dir(&root).unwrap();
+    let summary = StackSummary {
+        languages: vec![(LanguageId::Rust, 3)],
+        tracked_files: 3,
+        scanned_head: "cafebabe".to_owned(),
+        incomplete: false,
+        future_fields: Vec::new(),
+    };
+    let global = GlobalStore::create_new_with_clock(
+        &global_path,
+        global_binding.clone(),
+        ScanRacingClock {
+            path: global_path.clone(),
+            binding: global_binding,
+            project: root.clone(),
+            summary: summary.clone(),
+            calls: AtomicU64::new(0),
+        },
+    )
+    .unwrap();
+    global.register_project("race", &root).unwrap();
+    let registered = global.register_project("race", &root).unwrap();
+    assert_eq!(registered.stack, Some(summary.clone()));
+    assert_eq!(global.project(&root).unwrap().unwrap().stack, Some(summary));
+}
+
+#[test]
+fn repeated_backups_through_one_handle_copy_the_whole_store() {
+    let temp = Temp::new();
+    let store = dep_store(&temp, "repeat-backup.redb");
+    store.add_plan("durable", 0).unwrap();
+    let first = temp.path("backups/first.redb");
+    let second = temp.path("backups/second.redb");
+    store.backup_to(&first).unwrap();
+    store.backup_to(&second).unwrap();
+    let first_bytes = fs::read(&first).unwrap();
+    assert!(!first_bytes.is_empty());
+    assert_eq!(fs::read(&second).unwrap().len(), first_bytes.len());
+    let copy = Store::open_existing(&second, StoreKind::Project).unwrap();
+    assert!(copy.active_binding().unwrap().is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_write_that_committed_before_its_path_changed_reports_a_distinct_error() {
+    let temp = Temp::new();
+    let path = temp.path("committed-path.redb");
+    let store = dep_store(&temp, "committed-path.redb");
+    let moved = temp.path("moved-away.redb");
+    let result = store.write(|transaction| {
+        let id = transaction.next_id(Collection::Plans)?;
+        fs::rename(&path, &moved)?;
+        fs::write(&path, b"replacement")?;
+        Ok(id)
+    });
+    assert!(matches!(
+        result,
+        Err(StoreError::WriteCommittedPathChanged { .. })
+    ));
+    assert!(result.unwrap_err().to_string().contains("do not retry"));
+    // The write is durable in the database that moved.
+    let high_water = store
+        .read(|transaction| transaction.sequence_high_water(Collection::Plans))
+        .unwrap();
+    assert_eq!(high_water, 1);
 }

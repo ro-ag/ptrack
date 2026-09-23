@@ -97,6 +97,10 @@ pub enum StoreError {
     ImportCommittedVerificationFailed { path: PathBuf, detail: String },
     /// The engine could not prove whether the final ready transaction committed.
     ImportCommitOutcomeUnknown { path: PathBuf, detail: String },
+    /// An application write committed, but the database path no longer names
+    /// the handle it committed through. The write is durable: retrying it would
+    /// apply it twice, so callers must reopen and inspect instead.
+    WriteCommittedPathChanged { path: PathBuf, detail: String },
     /// A Rust destination was pointed at a reserved legacy bbolt filename.
     LegacyPathForbidden { path: PathBuf },
     /// A database file exposes project data to group or other users.
@@ -194,6 +198,10 @@ pub enum StoreError {
     /// A dependency-edge mutation named a missing record, a self-dependency,
     /// a duplicate or absent edge, or an edge that would close a cycle.
     InvalidDependency(String),
+    /// A plan mutation conflicts with the plan's lifecycle state: open work
+    /// added to a finished plan, a plan closed over open tasks, or a plan that
+    /// changed between the two phases of a move.
+    InvalidPlanState(String),
     /// A stored record envelope was invalid.
     Envelope(EnvelopeError),
     /// A filesystem operation failed.
@@ -259,6 +267,11 @@ impl fmt::Display for StoreError {
             Self::ImportCommitOutcomeUnknown { path, detail } => write!(
                 formatter,
                 "database import commit outcome is unknown for {}: {detail}",
+                path.display()
+            ),
+            Self::WriteCommittedPathChanged { path, detail } => write!(
+                formatter,
+                "database write committed, but its path changed afterward (do not retry; reopen and inspect): {}: {detail}",
                 path.display()
             ),
             Self::LegacyPathForbidden { path } => write!(
@@ -383,6 +396,9 @@ impl fmt::Display for StoreError {
             }
             Self::InvalidDependency(detail) => {
                 write!(formatter, "invalid dependency mutation: {detail}")
+            }
+            Self::InvalidPlanState(detail) => {
+                write!(formatter, "invalid plan state: {detail}")
             }
             Self::Envelope(error) => error.fmt(formatter),
             Self::Io(error) => error.fmt(formatter),

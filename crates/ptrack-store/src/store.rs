@@ -430,17 +430,13 @@ impl Store {
         let identity = FileIdentity::from_file(&file)?;
         pinned.verify()?;
         ensure_path_identity(path, identity)?;
-        match file.try_lock_shared() {
-            Ok(()) => {}
-            Err(TryLockError::WouldBlock) => return Err(StoreError::Busy),
-            Err(TryLockError::Error(error)) => return Err(error.into()),
-        }
+        lock_shared_with_retry(&file)?;
         let snapshot = read_file_snapshot(&file)?;
         let probe = Database::builder().create_with_backend(MemoryProbeBackend::new(snapshot))?;
         validate_database(&probe, expected)?;
         drop(probe);
         file.unlock()?;
-        let shared = ProcessDatabase::new(file)?;
+        let shared = open_pinned_writable_with_retry(pinned, identity, file)?;
         pinned.verify()?;
         ensure_path_identity(path, identity)?;
         validate_database(&shared.database, expected)?;
@@ -523,7 +519,14 @@ impl Store {
             ));
         }
         let result = self.write_inner(true, operation)?;
-        self.ensure_current_path()?;
+        // The transaction is durable from here on. A failed identity recheck
+        // must not read as an ordinary failure, or a caller that retries would
+        // apply the same write twice.
+        self.ensure_current_path()
+            .map_err(|error| StoreError::WriteCommittedPathChanged {
+                path: self.path.clone(),
+                detail: error.to_string(),
+            })?;
         Ok(result)
     }
 
@@ -1574,18 +1577,25 @@ fn probe_existing_with_retry(path: &Path, kind: StoreKind) -> StoreResult<(File,
     }
 }
 
+/// Reports whether a failed open is a transient conflict with another writer.
+///
+/// Only Windows reports a live writer's share mode as an open failure (a
+/// sharing violation, or access denied while a handle is pending deletion). A
+/// Unix permission denial is a real access failure: retrying it and then
+/// reporting `Busy` would hide the actual cause from the caller.
 fn open_conflicts_with_writer(error: &io::Error) -> bool {
-    if error.kind() == io::ErrorKind::PermissionDenied {
-        return true;
-    }
     #[cfg(windows)]
     {
         use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
 
-        error.raw_os_error() == Some(ERROR_SHARING_VIOLATION as i32)
+        error.kind() == io::ErrorKind::PermissionDenied
+            || error.raw_os_error() == Some(ERROR_SHARING_VIOLATION as i32)
     }
     #[cfg(not(windows))]
-    false
+    {
+        let _ = error;
+        false
+    }
 }
 
 fn open_writable_with_retry(
@@ -1613,6 +1623,51 @@ fn open_writable_with_retry(
                 ensure_path_identity(path, expected)?;
                 return Ok(shared);
             }
+            Err(StoreError::Busy) if start.elapsed() < LOCK_TIMEOUT => {
+                thread::sleep(LOCK_RETRY_INTERVAL);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// Takes the shared probe lock with the same bounded wait as a writer open.
+fn lock_shared_with_retry(file: &File) -> StoreResult<()> {
+    let start = Instant::now();
+    loop {
+        match file.try_lock_shared() {
+            Ok(()) => return Ok(()),
+            Err(TryLockError::WouldBlock) if start.elapsed() < LOCK_TIMEOUT => {
+                thread::sleep(LOCK_RETRY_INTERVAL);
+            }
+            Err(TryLockError::WouldBlock) => return Err(StoreError::Busy),
+            Err(TryLockError::Error(error)) => return Err(error.into()),
+        }
+    }
+}
+
+/// The pinned counterpart of [`open_writable_with_retry`]: every reopen goes
+/// through the retained `.ptrack` handle and must name the probed file.
+fn open_pinned_writable_with_retry(
+    pinned: &crate::PinnedProjectDirectory,
+    expected: FileIdentity,
+    file: File,
+) -> StoreResult<ProcessDatabase> {
+    let path = pinned.database_path();
+    let start = Instant::now();
+    let mut file = Some(file);
+    loop {
+        let candidate = match file.take() {
+            Some(file) => file,
+            None => pinned.open_database_file()?,
+        };
+        if FileIdentity::from_file(&candidate)? != expected {
+            return Err(StoreError::PathChanged {
+                path: path.to_path_buf(),
+            });
+        }
+        match ProcessDatabase::new(candidate) {
+            Ok(shared) => return Ok(shared),
             Err(StoreError::Busy) if start.elapsed() < LOCK_TIMEOUT => {
                 thread::sleep(LOCK_RETRY_INTERVAL);
             }
@@ -2041,13 +2096,25 @@ impl DestinationParent {
         &self,
     ) -> StoreResult<ProjectRootPublicationLease> {
         let directory = self.directory.try_clone()?;
-        match rustix::fs::flock(
-            &directory,
-            rustix::fs::FlockOperation::NonBlockingLockExclusive,
-        ) {
-            Ok(()) => Ok(ProjectRootPublicationLease { directory }),
-            Err(error) if error == rustix::io::Errno::WOULDBLOCK => Err(StoreError::Busy),
-            Err(error) => Err(io::Error::from(error).into()),
+        // Parallel project-local sessions each pin the root for one command;
+        // wait the same bounded interval a database writer lock does.
+        let start = Instant::now();
+        loop {
+            match rustix::fs::flock(
+                &directory,
+                rustix::fs::FlockOperation::NonBlockingLockExclusive,
+            ) {
+                Ok(()) => return Ok(ProjectRootPublicationLease { directory }),
+                Err(error)
+                    if error == rustix::io::Errno::WOULDBLOCK && start.elapsed() < LOCK_TIMEOUT =>
+                {
+                    thread::sleep(LOCK_RETRY_INTERVAL);
+                }
+                Err(error) if error == rustix::io::Errno::WOULDBLOCK => {
+                    return Err(StoreError::Busy);
+                }
+                Err(error) => return Err(io::Error::from(error).into()),
+            }
         }
     }
 

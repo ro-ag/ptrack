@@ -282,3 +282,43 @@ fn project_binding(path: &std::path::Path) -> ActiveBinding {
         canonical_path: path.to_path_buf(),
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn project_local_opens_wait_out_a_briefly_held_root_or_database_lock() {
+    use std::time::Duration;
+
+    let temp = Temp::new();
+    let root = temp.0.join("project");
+    fs::create_dir(&root).unwrap();
+    let root = root.canonicalize().unwrap();
+    let pinned = PinnedProjectDirectory::prepare(&root).unwrap();
+    let binding = project_binding(pinned.database_path());
+    drop(ProjectStore::create_new_pinned(&pinned, binding.clone(), "test").unwrap());
+
+    // A parallel session holds the root lock for one short command.
+    let holder = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        drop(pinned);
+    });
+    let pinned = PinnedProjectDirectory::prepare(&root).unwrap();
+    holder.join().unwrap();
+    drop(pinned);
+
+    // Another process holds the database writer lock just as briefly.
+    let database = root.join(".ptrack/ptrack.redb");
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&database)
+        .unwrap();
+    held.lock().unwrap();
+    let releaser = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        held.unlock().unwrap();
+    });
+    let pinned = PinnedProjectDirectory::prepare(&root).unwrap();
+    let store = ProjectStore::open_existing_pinned(&pinned, &binding, "test").unwrap();
+    releaser.join().unwrap();
+    store.add_plan("parallel", 0).unwrap();
+}

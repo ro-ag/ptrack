@@ -8,7 +8,7 @@ use ptrack_core::{
     CAPABILITY_MODEL_VERSION, Capability, CapabilityAudit, Commit, Counts, Digest32, Issue,
     IssueStatus, MemoryKind, MemoryWritebackRecord, Meta, Milestone, MilestoneStatus, Note,
     NoteTarget, Plan, PlanStatus, ProjectSnapshot, Scratchpad, Severity, StackProfile, Task,
-    TaskStatus, Timestamp, Validate, would_create_cycle,
+    TaskStatus, Timestamp, Validate, check_summary, would_create_cycle,
 };
 
 use crate::typed::{self, StoredRecord};
@@ -72,11 +72,34 @@ pub struct PlanDeleteSummary {
 /// record shape — a carrier between two stores in one process.
 #[derive(Clone, Debug)]
 pub struct PlanSubtree {
+    /// Database ID of the store the subtree was exported from. Its record IDs
+    /// only mean something there: an import into any other store must drop
+    /// every dependency edge pointing outside the subtree.
+    pub source_database_id: String,
     pub plan: Plan,
     pub tasks: Vec<Task>,
     pub notes: Vec<Note>,
     pub issues: Vec<Issue>,
     pub commits: Vec<Commit>,
+}
+
+/// What [`ProjectStore::complete_task_with_notes`] committed: the done task,
+/// the commit links it had when it closed, and the notes written with it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskCloseout {
+    pub task: Task,
+    pub linked_commits: usize,
+    pub notes: Vec<Note>,
+}
+
+/// What [`ProjectStore::complete_plan`] committed: the done plan, the open
+/// task IDs (by board order) a forced close left open, and the override note
+/// that records them.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlanCloseout {
+    pub plan: Plan,
+    pub open_tasks: Vec<u64>,
+    pub override_note: Option<Note>,
 }
 
 /// Typed, activation-bound project storage.
@@ -582,7 +605,7 @@ impl ProjectStore {
         let title = title.into();
         let now = self.clock.now_local();
         self.write(|transaction| {
-            let order = count_write::<Milestone>(transaction)?;
+            let order = next_order_write::<Milestone>(transaction)?;
             let id = transaction.next_id(Collection::Milestones)?;
             let value = Milestone {
                 id,
@@ -640,7 +663,7 @@ impl ProjectStore {
             {
                 return Err(StoreError::NotFound);
             }
-            let order = count_write::<Plan>(transaction)?;
+            let order = next_order_write::<Plan>(transaction)?;
             let id = transaction.next_id(Collection::Plans)?;
             let value = Plan {
                 id,
@@ -878,21 +901,34 @@ impl ProjectStore {
     /// the plan is reset to 0. Claim-gated: deleting a plan claimed by someone
     /// else is refused; the deleter's own claim dies with the plan.
     pub fn delete_plan(&self, plan_id: u64) -> StoreResult<PlanDeleteSummary> {
-        self.delete_plan_inner(plan_id, true)
+        self.delete_plan_inner(plan_id, None)
     }
 
     /// The move-phase variant of the delete cascade: identical, except linked
     /// issues are deleted rather than detached — the move already duplicated
     /// them into the target, and an issue follows its task.
-    pub fn delete_plan_for_move(&self, plan_id: u64) -> StoreResult<PlanDeleteSummary> {
-        self.delete_plan_inner(plan_id, false)
+    ///
+    /// It deletes exactly the records `exported` carried into the target. When
+    /// the cascade recomputed now differs (a task, note, issue, or commit was
+    /// added to or removed from the plan after the export), nothing is deleted
+    /// and [`StoreError::InvalidPlanState`] is returned: deleting the new set
+    /// would destroy work the target never received.
+    pub fn delete_plan_for_move(&self, exported: &PlanSubtree) -> StoreResult<PlanDeleteSummary> {
+        if exported.source_database_id != self.binding().database_id {
+            return Err(StoreError::InvalidPlanState(format!(
+                "plan #{} was exported from another project store",
+                exported.plan.id
+            )));
+        }
+        self.delete_plan_inner(exported.plan.id, Some(exported))
     }
 
     fn delete_plan_inner(
         &self,
         plan_id: u64,
-        detach_issues: bool,
+        moved: Option<&PlanSubtree>,
     ) -> StoreResult<PlanDeleteSummary> {
+        let detach_issues = moved.is_none();
         let now = self.clock.now_local();
         let writer = self.writer_version.clone();
         let actor = self.actor_id().map(str::to_owned);
@@ -904,6 +940,9 @@ impl ProjectStore {
             let issues = typed::scan_write::<Issue>(transaction)?;
             let commits = typed::scan_write::<Commit>(transaction)?;
             let cascade = compute_cascade(&plan, &tasks, &notes, &issues, &commits);
+            if let Some(exported) = moved {
+                require_exported_cascade(&cascade, exported)?;
+            }
 
             for &task_id in &cascade.tasks {
                 transaction.delete(Collection::Tasks, RecordKey::Id(task_id))?;
@@ -1015,6 +1054,7 @@ impl ProjectStore {
             let commits = typed::scan_write::<Commit>(transaction)?;
             let cascade = compute_cascade(&plan, &tasks, &notes, &issues, &commits);
             Ok(PlanSubtree {
+                source_database_id: self.binding().database_id.clone(),
                 plan,
                 tasks: pick(tasks, &cascade.tasks, |task| task.id),
                 notes: pick(notes, &cascade.notes, |note| note.id),
@@ -1028,9 +1068,12 @@ impl ProjectStore {
     /// reminting sequential IDs and remapping every reference. The plan arrives
     /// unclaimed (owner `None`, epoch 0), its milestone link is dropped (a
     /// milestone is a source-project grouping), hold reasons travel, and `title`
-    /// replaces the plan title at insert time. A commit whose sha this store
-    /// already holds is left alone rather than duplicated — a sha is a commit's
-    /// natural key, so a same-store copy shares the source's commit records.
+    /// replaces the plan title at insert time. Dependency edges to records
+    /// outside the subtree survive only a copy back into the store the subtree
+    /// came from ([`PlanSubtree::source_database_id`]). A commit whose sha this
+    /// store already holds is left alone rather than duplicated — a sha is a
+    /// commit's natural key, so a same-store copy shares the source's commit
+    /// records.
     pub fn import_plan_subtree(
         &self,
         subtree: &PlanSubtree,
@@ -1038,19 +1081,29 @@ impl ProjectStore {
     ) -> StoreResult<Plan> {
         let now = self.clock.now_local();
         let actor = self.actor_id().map(str::to_owned);
+        // Source IDs name records only in the store they came from. A
+        // same-store copy keeps edges to records that still exist; any other
+        // import drops every edge pointing outside the subtree, since a small
+        // sequential ID here would name an unrelated record.
+        let same_store = subtree.source_database_id == self.binding().database_id;
         self.write(|transaction| {
-            // Dependency targets are kept only when they exist in this store
-            // before the import: a same-store copy keeps its edges, while a
-            // cross-store move drops every edge pointing outside the subtree.
-            let known_plans: BTreeSet<u64> = typed::scan_write::<Plan>(transaction)?
-                .into_iter()
-                .map(|plan| plan.id)
-                .collect();
-            let known_tasks: BTreeSet<u64> = typed::scan_write::<Task>(transaction)?
-                .into_iter()
-                .map(|task| task.id)
-                .collect();
-            let order = count_write::<Plan>(transaction)?;
+            let known_plans: BTreeSet<u64> = if same_store {
+                typed::scan_write::<Plan>(transaction)?
+                    .into_iter()
+                    .map(|plan| plan.id)
+                    .collect()
+            } else {
+                BTreeSet::new()
+            };
+            let known_tasks: BTreeSet<u64> = if same_store {
+                typed::scan_write::<Task>(transaction)?
+                    .into_iter()
+                    .map(|task| task.id)
+                    .collect()
+            } else {
+                BTreeSet::new()
+            };
+            let order = next_order_write::<Plan>(transaction)?;
             let plan_id = transaction.next_id(Collection::Plans)?;
             let plan = Plan {
                 id: plan_id,
@@ -1075,7 +1128,7 @@ impl ProjectStore {
                     .collect(),
             };
             typed::put(transaction, RecordKey::Id(plan_id), &plan)?;
-            let first_task_order = count_write::<Task>(transaction)?;
+            let first_task_order = next_order_write::<Task>(transaction)?;
             // IDs are minted for the whole subtree first so a task dependency
             // on a later subtree task still remaps.
             let mut task_map = BTreeMap::new();
@@ -1171,7 +1224,8 @@ impl ProjectStore {
         self.write(|transaction| {
             let plan = required_write::<Plan>(transaction, RecordKey::Id(plan_id))?;
             require_claim_access(transaction, &plan, self.actor_id())?;
-            let order = count_write::<Task>(transaction)?;
+            require_plan_accepts_open_work(&plan)?;
+            let order = next_order_write::<Task>(transaction)?;
             let id = transaction.next_id(Collection::Tasks)?;
             let value = Task {
                 id,
@@ -1390,7 +1444,8 @@ impl ProjectStore {
     }
 
     /// Moves a task between plans. Both the source and the target plan must be
-    /// free of someone else's claim.
+    /// free of someone else's claim, and an open task never moves into a done
+    /// or archived plan.
     pub fn set_task_plan(&self, id: u64, plan_id: u64) -> StoreResult<()> {
         let now = self.clock.now_local();
         self.write(|transaction| {
@@ -1399,6 +1454,9 @@ impl ProjectStore {
             let mut task = required_write::<Task>(transaction, RecordKey::Id(id))?;
             let source = required_write::<Plan>(transaction, RecordKey::Id(task.plan_id))?;
             require_claim_access(transaction, &source, self.actor_id())?;
+            if task.status.is_open() && task.plan_id != plan_id {
+                require_plan_accepts_open_work(&target)?;
+            }
             task.plan_id = plan_id;
             task.updated_at = now;
             task.stamp_actor(self.actor_id());
@@ -1476,13 +1534,16 @@ impl ProjectStore {
             let task = required_write::<Task>(transaction, RecordKey::Id(id))?;
             let parent = required_write::<Plan>(transaction, RecordKey::Id(task.plan_id))?;
             require_claim_access(transaction, &parent, self.actor_id())?;
-            let order = count_write::<Plan>(transaction)?;
+            let order = next_order_write::<Plan>(transaction)?;
             let plan_id = transaction.next_id(Collection::Plans)?;
             let status = if task.status == TaskStatus::Done {
                 PlanStatus::Done
             } else {
                 PlanStatus::Active
             };
+            let claims_new_plan = plan_status_can_hold(status)
+                && parent.claim_owner.is_some()
+                && self.actor_id().is_some();
             let plan = Plan {
                 id: plan_id,
                 title: task.title,
@@ -1496,13 +1557,15 @@ impl ProjectStore {
                 hold_reason: plan_status_can_hold(status)
                     .then_some(task.hold_reason)
                     .flatten(),
-                // The new plan is born claimed by the converting actor, not
-                // inherited from the task it replaces — but a done task births
-                // a done plan, and a terminal plan never holds a claim.
+                // The new plan inherits the parent's claim state: a claimed
+                // parent (which the gate above proved is the converting
+                // actor's) births a plan that actor claims, and an unclaimed
+                // parent births an unclaimed plan. A done task births a done
+                // plan, and a terminal plan never holds a claim.
                 actor: self.actor_id().map(str::to_owned),
                 claim_conflict: false,
-                claim_epoch: u64::from(plan_status_can_hold(status) && self.actor_id().is_some()),
-                claim_owner: plan_status_can_hold(status)
+                claim_epoch: u64::from(claims_new_plan),
+                claim_owner: claims_new_plan
                     .then(|| self.actor_id().map(str::to_owned))
                     .flatten(),
                 ulid: None,
@@ -1553,19 +1616,118 @@ impl ProjectStore {
         let body = body.into();
         let now = self.clock.now_local();
         self.write(|transaction| {
-            let id = transaction.next_id(Collection::Notes)?;
-            let note = Note {
-                id,
-                target,
-                target_id,
-                kind: MemoryKind::Legacy,
-                body,
-                created_at: now,
-                actor: self.actor_id().map(str::to_owned),
-                ulid: None,
+            require_note_target(transaction, target, target_id)?;
+            insert_note(transaction, target, target_id, body, now, self.actor_id())
+        })
+    }
+
+    /// Closes a task and records its audit notes in one claim-gated write
+    /// transaction: either every note and the done status commit, or nothing
+    /// does. A refused claim, a missing task, or a failed note leaves no
+    /// orphan notes behind, so a retry cannot duplicate them.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::NotFound`] for a missing task or plan and
+    /// [`StoreError::InvalidClaim`] when someone else claims the task's plan.
+    pub fn complete_task_with_notes(
+        &self,
+        task_id: u64,
+        notes: &[String],
+    ) -> StoreResult<TaskCloseout> {
+        let now = self.clock.now_local();
+        let actor = self.actor_id().map(str::to_owned);
+        self.write(|transaction| {
+            let mut task = required_write::<Task>(transaction, RecordKey::Id(task_id))?;
+            let plan = required_write::<Plan>(transaction, RecordKey::Id(task.plan_id))?;
+            require_claim_access(transaction, &plan, actor.as_deref())?;
+            let linked_commits = typed::scan_write::<Commit>(transaction)?
+                .iter()
+                .filter(|commit| commit.task_id == task_id)
+                .count();
+            let written = notes
+                .iter()
+                .map(|body| {
+                    insert_note(
+                        transaction,
+                        NoteTarget::Task,
+                        task_id,
+                        body.clone(),
+                        now,
+                        actor.as_deref(),
+                    )
+                })
+                .collect::<StoreResult<Vec<_>>>()?;
+            task.status = TaskStatus::Done;
+            task.hold_reason = None;
+            task.updated_at = now;
+            task.actor.clone_from(&actor);
+            typed::put(transaction, RecordKey::Id(task_id), &task)?;
+            Ok(TaskCloseout {
+                task,
+                linked_commits,
+                notes: written,
+            })
+        })
+    }
+
+    /// Marks a plan done in one claim-gated write transaction whose open-task
+    /// check reads the same snapshot the status change commits against.
+    ///
+    /// Without `force`, open tasks refuse the close. With `force`, the exact
+    /// open task IDs are recorded in an override note in the same
+    /// transaction. The claim is released as [`ProjectStore::set_plan_status`]
+    /// releases it.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::NotFound`] for a missing plan,
+    /// [`StoreError::InvalidClaim`] when someone else claims it, and
+    /// [`StoreError::InvalidPlanState`] when open tasks remain without `force`.
+    pub fn complete_plan(&self, plan_id: u64, force: bool) -> StoreResult<PlanCloseout> {
+        let now = self.clock.now_local();
+        let actor = self.actor_id().map(str::to_owned);
+        self.write(|transaction| {
+            let mut plan = required_write::<Plan>(transaction, RecordKey::Id(plan_id))?;
+            require_claim_access(transaction, &plan, actor.as_deref())?;
+            let mut open_tasks = typed::scan_write::<Task>(transaction)?
+                .into_iter()
+                .filter(|task| task.plan_id == plan_id && task.status.is_open())
+                .map(|task| (task.order, task.id))
+                .collect::<Vec<_>>();
+            open_tasks.sort_unstable();
+            let open_tasks = open_tasks.into_iter().map(|(_, id)| id).collect::<Vec<_>>();
+            if !open_tasks.is_empty() && !force {
+                return Err(StoreError::InvalidPlanState(format!(
+                    "cannot close plan #{plan_id}: open tasks remain ({}); finish them or pass --force",
+                    ptrack_core::id_list(&open_tasks)
+                )));
+            }
+            let override_note = if open_tasks.is_empty() {
+                None
+            } else {
+                Some(insert_note(
+                    transaction,
+                    NoteTarget::Plan,
+                    plan_id,
+                    format!(
+                        "override: closed via --force with open tasks {}",
+                        ptrack_core::id_list(&open_tasks)
+                    ),
+                    now,
+                    actor.as_deref(),
+                )?)
             };
-            typed::put(transaction, RecordKey::Id(id), &note)?;
-            Ok(note)
+            plan.status = PlanStatus::Done;
+            plan.hold_reason = None;
+            plan.claim_owner = None;
+            plan.claim_conflict = false;
+            plan.updated_at = now;
+            plan.actor.clone_from(&actor);
+            typed::put(transaction, RecordKey::Id(plan_id), &plan)?;
+            Ok(PlanCloseout {
+                plan,
+                open_tasks,
+                override_note,
+            })
         })
     }
 
@@ -1784,7 +1946,7 @@ impl ProjectStore {
                 plan_id,
                 title: task_title,
                 status: TaskStatus::Todo,
-                order: count_write::<Task>(transaction)?,
+                order: next_order_write::<Task>(transaction)?,
                 created_at: now,
                 updated_at: now,
                 hold_reason: None,
@@ -2414,9 +2576,69 @@ fn require_dep_record<R: StoredRecord>(
         .ok_or_else(|| StoreError::InvalidDependency(format!("{kind} #{id} does not exist")))
 }
 
-fn count_write<R: StoredRecord>(transaction: &WriteTransaction) -> StoreResult<i64> {
-    i64::try_from(typed::scan_write::<R>(transaction)?.len())
-        .map_err(|_| StoreError::InvalidManifest("record count exceeds i64".to_owned()))
+/// The order a new record takes: one past the highest stored order, so it
+/// sorts last even after deletions left the count below the largest order.
+fn next_order_write<R: StoredRecord + Ordered>(transaction: &WriteTransaction) -> StoreResult<i64> {
+    typed::scan_write::<R>(transaction)?
+        .iter()
+        .map(Ordered::order)
+        .max()
+        .map_or(Ok(0), |order| {
+            order
+                .checked_add(1)
+                .ok_or_else(|| StoreError::InvalidManifest("record order exceeds i64".to_owned()))
+        })
+}
+
+/// Verifies inside the write transaction that a note's target still exists,
+/// so a note can never attach to a deleted or never-created plan or task.
+fn require_note_target(
+    transaction: &WriteTransaction,
+    target: NoteTarget,
+    target_id: u64,
+) -> StoreResult<()> {
+    match target {
+        NoteTarget::Project => Ok(()),
+        NoteTarget::Plan => require_id_write::<Plan>(transaction, target_id),
+        NoteTarget::Task => require_id_write::<Task>(transaction, target_id),
+    }
+}
+
+fn insert_note(
+    transaction: &mut WriteTransaction,
+    target: NoteTarget,
+    target_id: u64,
+    body: String,
+    now: Timestamp,
+    actor: Option<&str>,
+) -> StoreResult<Note> {
+    let id = transaction.next_id(Collection::Notes)?;
+    let note = Note {
+        id,
+        target,
+        target_id,
+        kind: MemoryKind::Legacy,
+        body,
+        created_at: now,
+        actor: actor.map(str::to_owned),
+        ulid: None,
+    };
+    typed::put(transaction, RecordKey::Id(id), &note)?;
+    Ok(note)
+}
+
+/// Refuses to give a done or archived plan open work: a finished plan must
+/// be reopened first, or it would read as finished while work remains.
+fn require_plan_accepts_open_work(plan: &Plan) -> StoreResult<()> {
+    if plan.status == PlanStatus::Active {
+        Ok(())
+    } else {
+        Err(StoreError::InvalidPlanState(format!(
+            "plan #{} is {} and cannot receive open tasks; reopen it first",
+            plan.id,
+            plan.status.as_str()
+        )))
+    }
 }
 
 fn first_run_title(title: String, kind: &str) -> StoreResult<String> {
@@ -2507,6 +2729,30 @@ fn compute_cascade(
 
 /// Keeps exactly the records a [`Cascade`] chose, so the subtree export selects
 /// through the same predicates the preview and the delete already agreed on.
+/// Refuses a move-phase delete whose recomputed cascade is not exactly the
+/// exported subtree, so the delete can never destroy a record the target did
+/// not receive.
+fn require_exported_cascade(cascade: &Cascade, exported: &PlanSubtree) -> StoreResult<()> {
+    fn ids<R>(records: &[R], id: impl Fn(&R) -> u64) -> BTreeSet<u64> {
+        records.iter().map(id).collect()
+    }
+    fn set(ids: &[u64]) -> BTreeSet<u64> {
+        ids.iter().copied().collect()
+    }
+    let matches = set(&cascade.tasks) == ids(&exported.tasks, |task| task.id)
+        && set(&cascade.notes) == ids(&exported.notes, |note| note.id)
+        && set(&cascade.issues) == ids(&exported.issues, |issue| issue.id)
+        && set(&cascade.commits) == ids(&exported.commits, |commit| commit.id);
+    if matches {
+        Ok(())
+    } else {
+        Err(StoreError::InvalidPlanState(format!(
+            "plan #{} changed after it was copied; nothing was deleted",
+            exported.plan.id
+        )))
+    }
+}
+
 fn pick<R>(records: Vec<R>, chosen: &[u64], id: impl Fn(&R) -> u64) -> Vec<R> {
     let chosen: BTreeSet<u64> = chosen.iter().copied().collect();
     records
@@ -2677,6 +2923,9 @@ fn validate_memory_request(request: &MemoryWriteRequest) -> StoreResult<()> {
         return Err(StoreError::InvalidMemoryWriteback(
             "source association is required".to_owned(),
         ));
+    }
+    if request.kind == MemoryKind::Summary {
+        check_summary(&request.body).map_err(StoreError::InvalidMemoryWriteback)?;
     }
     if !matches!(
         request.kind,

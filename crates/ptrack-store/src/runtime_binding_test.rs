@@ -492,18 +492,109 @@ fn runtime_load_defers_project_permission_but_publication_remains_strict() {
 }
 
 #[test]
-fn runtime_load_still_rejects_invalid_marker_and_corrupt_stores() {
+fn runtime_load_rejects_invalid_marker_and_corrupt_global_but_defers_projects() {
     let temp = Temp::new();
     let world = append_world(&temp);
     let mut invalid = world.previous.clone();
     invalid.version = "unsupported".into();
     assert!(crate::validate_active_generation_for_load(&temp.0, &invalid, "test").is_err());
-    let project_before = fs::read(&world.previous.projects[0].path).unwrap();
-    fs::write(&world.previous.projects[0].path, b"corrupt project").unwrap();
-    assert!(crate::validate_active_generation_for_load(&temp.0, &world.previous, "test").is_err());
-    fs::write(&world.previous.projects[0].path, project_before).unwrap();
+    // A corrupt project database fails the command that resolves it, never
+    // the runtime load every other project shares.
+    let project = &world.previous.projects[0];
+    let project_before = fs::read(&project.path).unwrap();
+    fs::write(&project.path, b"corrupt project").unwrap();
+    crate::validate_active_generation_for_load(&temp.0, &world.previous, "test").unwrap();
+    assert!(validate_active_generation(&temp.0, &world.previous, "test").is_err());
+    assert!(
+        ProjectStore::open_existing(
+            &project.path,
+            &world.previous.project_binding(project).unwrap(),
+            "test"
+        )
+        .is_err()
+    );
+    fs::write(&project.path, project_before).unwrap();
     fs::write(&world.previous.global.path, b"corrupt global").unwrap();
     assert!(crate::validate_active_generation_for_load(&temp.0, &world.previous, "test").is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn runtime_load_heals_a_group_readable_project_database() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = Temp::new();
+    let world = append_world(&temp);
+    let path = Path::new(&world.previous.projects[0].path);
+    fs::set_permissions(path, fs::Permissions::from_mode(0o644)).unwrap();
+    crate::validate_active_generation_for_load(&temp.0, &world.previous, "test").unwrap();
+    assert_eq!(
+        fs::metadata(path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    validate_active_generation(&temp.0, &world.previous, "test").unwrap();
+}
+
+#[test]
+fn runtime_load_treats_a_missing_project_database_as_unavailable() {
+    let temp = Temp::new();
+    let world = append_world(&temp);
+    let project = &world.previous.projects[0];
+    fs::remove_file(&project.path).unwrap();
+    crate::validate_active_generation_for_load(&temp.0, &world.previous, "test").unwrap();
+    // A deleted `.ptrack` directory (git clean -fdx) is the same case.
+    fs::remove_dir_all(Path::new(&project.root).join(".ptrack")).unwrap();
+    crate::validate_active_generation_for_load(&temp.0, &world.previous, "test").unwrap();
+    assert!(validate_active_generation(&temp.0, &world.previous, "test").is_err());
+    // A vanished root is still reported, so the caller can prune it.
+    fs::remove_dir_all(&project.root).unwrap();
+    assert!(crate::validate_active_generation_for_load(&temp.0, &world.previous, "test").is_err());
+}
+
+#[test]
+fn runtime_load_ignores_a_busy_project_and_other_projects_stay_usable() {
+    let temp = Temp::new();
+    let world = append_world(&temp);
+    let busy = &world.appended.projects[0];
+    let free = &world.appended.projects[1];
+    let exclusive = acquire_cutover_lock(&temp.0, CutoverLockMode::Exclusive).unwrap();
+    install_active_generation(&temp.0, &exclusive, &world.appended, "test").unwrap();
+    drop(exclusive);
+    // Another process's writer lock on one project database.
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&busy.path)
+        .unwrap();
+    held.lock().unwrap();
+    let start = std::time::Instant::now();
+    crate::validate_active_generation_for_load(&temp.0, &world.appended, "test").unwrap();
+    assert!(start.elapsed() < std::time::Duration::from_millis(500));
+    let store = ProjectStore::open_existing(
+        &free.path,
+        &world.appended.project_binding(free).unwrap(),
+        "test",
+    )
+    .unwrap();
+    store.add_plan("still works", 0).unwrap();
+    drop(store);
+    held.unlock().unwrap();
+}
+
+#[test]
+fn a_leftover_marker_temporary_file_does_not_block_publication() {
+    let temp = Temp::new();
+    let world = append_world(&temp);
+    let temporary = temp.0.join("runtime/.active-generation.json.tmp");
+    fs::write(&temporary, b"interrupted publication").unwrap();
+    let exclusive = acquire_cutover_lock(&temp.0, CutoverLockMode::Exclusive).unwrap();
+    install_active_generation(&temp.0, &exclusive, &world.appended, "test").unwrap();
+    assert!(!temporary.exists());
+    drop(exclusive);
+    let shared = acquire_cutover_lock(&temp.0, CutoverLockMode::Shared).unwrap();
+    assert_eq!(
+        load_active_generation(&temp.0, &shared).unwrap(),
+        Some(world.appended)
+    );
 }
 
 #[cfg(unix)]
