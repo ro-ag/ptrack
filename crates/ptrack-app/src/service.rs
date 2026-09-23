@@ -1526,7 +1526,9 @@ impl ApplicationPort for LocalApplication {
                         .collect(),
                 ),
                 Mutation::SetPlanStatusWithNotes { id, status, notes } => {
-                    MutationResult::Notes(plan_status_with_notes(store, id, status, notes)?)
+                    // Status and notes commit in one claim-gated store transaction,
+                    // so a refused change leaves no orphan notes.
+                    MutationResult::Notes(store.set_plan_status_with_notes(id, status, &notes)?)
                 }
                 Mutation::SetPlanHold { id, reason } => {
                     store.set_plan_hold(id, reason)?;
@@ -1564,7 +1566,9 @@ impl ApplicationPort for LocalApplication {
                     MutationResult::None
                 }
                 Mutation::SetTaskStatusWithNotes { id, status, notes } => {
-                    MutationResult::Notes(task_status_with_notes(store, id, status, notes)?)
+                    // Status and notes commit in one claim-gated store transaction,
+                    // so a refused change leaves no orphan notes.
+                    MutationResult::Notes(store.set_task_status_with_notes(id, status, &notes)?)
                 }
                 Mutation::SetTaskHold { id, reason } => {
                     store.set_task_hold(id, reason)?;
@@ -1884,43 +1888,6 @@ impl ApplicationPort for LocalApplication {
             McpServeOutcome::Cancelled => CapabilityMcpOutcome::Cancelled,
         })
     }
-}
-
-/// A done transition and its notes commit in the store's single closeout
-/// transaction.
-// PENDING-WP1: other statuses wait on a generic single-transaction
-// status-with-notes store API; until then the status is written first so a
-// refused change still leaves no notes.
-fn task_status_with_notes(
-    store: &ProjectStore,
-    id: u64,
-    status: TaskStatus,
-    notes: Vec<String>,
-) -> AppResult<Vec<Note>> {
-    if status == TaskStatus::Done {
-        return Ok(store.complete_task_with_notes(id, &notes)?.notes);
-    }
-    store.set_task_status(id, status)?;
-    notes
-        .into_iter()
-        .map(|body| Ok(store.add_note(NoteTarget::Task, id, body)?))
-        .collect()
-}
-
-// PENDING-WP1: waits on a generic single-transaction status-with-notes store
-// API; until then the status is written first so a refused change still
-// leaves no notes.
-fn plan_status_with_notes(
-    store: &ProjectStore,
-    id: u64,
-    status: PlanStatus,
-    notes: Vec<String>,
-) -> AppResult<Vec<Note>> {
-    store.set_plan_status(id, status)?;
-    notes
-        .into_iter()
-        .map(|body| Ok(store.add_note(NoteTarget::Plan, id, body)?))
-        .collect()
 }
 
 #[derive(Clone)]

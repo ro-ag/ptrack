@@ -768,6 +768,44 @@ impl ProjectStore {
         })
     }
 
+    /// [`ProjectStore::set_plan_status`] plus plan notes, in one claim-gated
+    /// write transaction: the status (with its claim release) and every note
+    /// commit together or not at all.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::NotFound`] or [`StoreError::InvalidClaim`] with
+    /// nothing written.
+    pub fn set_plan_status_with_notes(
+        &self,
+        id: u64,
+        status: PlanStatus,
+        notes: &[String],
+    ) -> StoreResult<Vec<Note>> {
+        let now = self.clock.now_local();
+        let actor = self.actor_id().map(str::to_owned);
+        self.write(|transaction| {
+            let mut plan = required_write::<Plan>(transaction, RecordKey::Id(id))?;
+            require_claim_access(transaction, &plan, actor.as_deref())?;
+            plan.status = status;
+            if !plan_status_can_hold(status) {
+                plan.hold_reason = None;
+                plan.claim_owner = None;
+                plan.claim_conflict = false;
+            }
+            plan.updated_at = now;
+            plan.actor.clone_from(&actor);
+            typed::put(transaction, RecordKey::Id(id), &plan)?;
+            insert_notes(
+                transaction,
+                NoteTarget::Plan,
+                id,
+                notes,
+                now,
+                actor.as_deref(),
+            )
+        })
+    }
+
     /// Holds a plan with a reason, or resumes it with `None`.
     ///
     /// A plan that is done or archived cannot be put on hold; resuming is
@@ -1381,6 +1419,33 @@ impl ProjectStore {
         expected_updated_at: Timestamp,
         status: TaskStatus,
     ) -> StoreResult<Task> {
+        self.compare_and_set_task_status_with_notes(
+            id,
+            expected_plan_id,
+            expected_status,
+            expected_updated_at,
+            status,
+            &[],
+        )
+        .map(|(task, _)| task)
+    }
+
+    /// [`ProjectStore::compare_and_set_task_status`] plus task notes, in one
+    /// claim-gated write transaction: the fence, the status change, and every
+    /// note commit together or not at all.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::NotFound`], [`StoreError::InvalidClaim`], or
+    /// [`StoreError::TaskStatusChanged`] with nothing written.
+    pub fn compare_and_set_task_status_with_notes(
+        &self,
+        id: u64,
+        expected_plan_id: u64,
+        expected_status: TaskStatus,
+        expected_updated_at: Timestamp,
+        status: TaskStatus,
+        notes: &[String],
+    ) -> StoreResult<(Task, Vec<Note>)> {
         let now = self.clock.now_local();
         self.write(|transaction| {
             let mut task = required_write::<Task>(transaction, RecordKey::Id(id))?;
@@ -1409,7 +1474,53 @@ impl ProjectStore {
                 task.stamp_actor(self.actor_id());
                 typed::put(transaction, RecordKey::Id(id), &task)?;
             }
-            Ok(task)
+            let written = insert_notes(
+                transaction,
+                NoteTarget::Task,
+                id,
+                notes,
+                now,
+                self.actor_id(),
+            )?;
+            Ok((task, written))
+        })
+    }
+
+    /// [`ProjectStore::set_task_status`] plus task notes, in one claim-gated
+    /// write transaction: the status and every note commit together or not at
+    /// all, so a refused change leaves no orphan notes and a retry cannot
+    /// duplicate them.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::NotFound`] or [`StoreError::InvalidClaim`] with
+    /// nothing written.
+    pub fn set_task_status_with_notes(
+        &self,
+        id: u64,
+        status: TaskStatus,
+        notes: &[String],
+    ) -> StoreResult<Vec<Note>> {
+        let now = self.clock.now_local();
+        let actor = self.actor_id().map(str::to_owned);
+        self.write(|transaction| {
+            let mut task = required_write::<Task>(transaction, RecordKey::Id(id))?;
+            let plan = required_write::<Plan>(transaction, RecordKey::Id(task.plan_id))?;
+            require_claim_access(transaction, &plan, actor.as_deref())?;
+            task.status = status;
+            if !task_status_can_hold(status) {
+                task.hold_reason = None;
+            }
+            task.updated_at = now;
+            task.actor.clone_from(&actor);
+            typed::put(transaction, RecordKey::Id(id), &task)?;
+            insert_notes(
+                transaction,
+                NoteTarget::Task,
+                id,
+                notes,
+                now,
+                actor.as_deref(),
+            )
         })
     }
 
@@ -1644,19 +1755,14 @@ impl ProjectStore {
                 .iter()
                 .filter(|commit| commit.task_id == task_id)
                 .count();
-            let written = notes
-                .iter()
-                .map(|body| {
-                    insert_note(
-                        transaction,
-                        NoteTarget::Task,
-                        task_id,
-                        body.clone(),
-                        now,
-                        actor.as_deref(),
-                    )
-                })
-                .collect::<StoreResult<Vec<_>>>()?;
+            let written = insert_notes(
+                transaction,
+                NoteTarget::Task,
+                task_id,
+                notes,
+                now,
+                actor.as_deref(),
+            )?;
             task.status = TaskStatus::Done;
             task.hold_reason = None;
             task.updated_at = now;
@@ -2625,6 +2731,20 @@ fn insert_note(
     };
     typed::put(transaction, RecordKey::Id(id), &note)?;
     Ok(note)
+}
+
+fn insert_notes(
+    transaction: &mut WriteTransaction,
+    target: NoteTarget,
+    target_id: u64,
+    bodies: &[String],
+    now: Timestamp,
+    actor: Option<&str>,
+) -> StoreResult<Vec<Note>> {
+    bodies
+        .iter()
+        .map(|body| insert_note(transaction, target, target_id, body.clone(), now, actor))
+        .collect()
 }
 
 /// Refuses to give a done or archived plan open work: a finished plan must

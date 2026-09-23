@@ -3878,3 +3878,85 @@ fn a_write_that_committed_before_its_path_changed_reports_a_distinct_error() {
         .unwrap();
     assert_eq!(high_water, 1);
 }
+
+#[test]
+fn status_changes_with_notes_commit_together_or_not_at_all() {
+    let temp = Temp::new();
+    let path = temp.path("status-notes.redb");
+    let store = ProjectStore::create_new_with_clock(
+        &path,
+        binding(&path, StoreKind::Project, "status-notes"),
+        "test",
+        clock(),
+    )
+    .unwrap();
+    let plan = store.add_plan("claimed", 0).unwrap();
+    let task = store.add_task(plan.id, "work").unwrap();
+    drop(store);
+    let alice = reopen_as(&path, "status-notes", Some(actor_a()));
+    alice.use_plan(plan.id, false).unwrap();
+    drop(alice);
+
+    let notes = vec!["override: started anyway".to_owned()];
+    let bob = reopen_as(&path, "status-notes", Some(actor_b()));
+    assert!(matches!(
+        bob.set_task_status_with_notes(task.id, TaskStatus::Doing, &notes),
+        Err(StoreError::InvalidClaim(_))
+    ));
+    assert!(matches!(
+        bob.set_plan_status_with_notes(plan.id, PlanStatus::Done, &notes),
+        Err(StoreError::InvalidClaim(_))
+    ));
+    assert!(matches!(
+        bob.set_task_status_with_notes(999, TaskStatus::Doing, &notes),
+        Err(StoreError::NotFound)
+    ));
+    assert!(bob.notes().unwrap().is_empty());
+    assert_eq!(bob.task(task.id).unwrap().status, TaskStatus::Todo);
+    drop(bob);
+
+    let alice = reopen_as(&path, "status-notes", Some(actor_a()));
+    let written = alice
+        .set_task_status_with_notes(task.id, TaskStatus::Doing, &notes)
+        .unwrap();
+    assert_eq!(written.len(), 1);
+    assert_eq!(written[0].target, NoteTarget::Task);
+    assert_eq!(written[0].target_id, task.id);
+    assert_eq!(alice.task(task.id).unwrap().status, TaskStatus::Doing);
+
+    // A stale compare-and-set fence writes neither the status nor the notes.
+    let current = alice.task(task.id).unwrap();
+    assert!(matches!(
+        alice.compare_and_set_task_status_with_notes(
+            task.id,
+            plan.id,
+            TaskStatus::Todo,
+            current.updated_at,
+            TaskStatus::Done,
+            &notes,
+        ),
+        Err(StoreError::TaskStatusChanged(_))
+    ));
+    assert_eq!(alice.notes().unwrap().len(), 1);
+    let (moved, cas_notes) = alice
+        .compare_and_set_task_status_with_notes(
+            task.id,
+            plan.id,
+            TaskStatus::Doing,
+            current.updated_at,
+            TaskStatus::Done,
+            &["closeout: done".to_owned()],
+        )
+        .unwrap();
+    assert_eq!(moved.status, TaskStatus::Done);
+    assert_eq!(cas_notes.len(), 1);
+
+    let plan_notes = alice
+        .set_plan_status_with_notes(plan.id, PlanStatus::Done, &notes)
+        .unwrap();
+    assert_eq!(plan_notes[0].target, NoteTarget::Plan);
+    let done = alice.plan(plan.id).unwrap();
+    assert_eq!(done.status, PlanStatus::Done);
+    assert_eq!(done.claim_owner, None);
+    assert_eq!(alice.notes().unwrap().len(), 3);
+}
