@@ -210,11 +210,6 @@ pub fn root() -> Command {
         .subcommand(leaf("projects").arg(flag("json")))
         .subcommand(leaf("backup"))
         .subcommand(leaf("mcp"))
-        .subcommand(
-            group("capability", &["call", "mcp"]).mut_subcommand("call", |c| {
-                c.arg(positional("tool", 1)).arg(option("arguments"))
-            }),
-        )
         .subcommand(leaf("version"))
 }
 

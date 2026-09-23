@@ -1,15 +1,13 @@
-use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use ptrack_app::{
     ActivityState, ActorIdentity, AgentHandoffInbox, AgentIntelligenceDetail,
     AgentRunObservationV1, AgentRunsV2, AgentRuntimeSummary, AppError, AppResult, ApplicationPort,
-    BoundedSnapshot, CapabilityCancellation, CapabilityMcpOutcome, GuideAction, HookAction,
-    HookResult, INVALID_CLAIM_PREFIX, INVALID_HOLD_PREFIX, InitRequest, InitResult,
-    IntelligenceConfidence, IntelligenceState, LeaseState, Mutation, MutationResult,
-    PlanDeleteSummary, PlanLifecycleOutcome, PlanLifecycleRequest, PlanTransferSummary,
-    ProcessOutput, ProcessState, RegistrationKind, RelocateRequest, RelocateResult, RunState,
-    RuntimeAssociation,
+    BoundedSnapshot, GuideAction, HookAction, HookResult, INVALID_CLAIM_PREFIX,
+    INVALID_HOLD_PREFIX, InitRequest, InitResult, IntelligenceConfidence, IntelligenceState,
+    LeaseState, Mutation, MutationResult, PlanDeleteSummary, PlanLifecycleOutcome,
+    PlanLifecycleRequest, PlanTransferSummary, ProcessOutput, ProcessState, RegistrationKind,
+    RelocateRequest, RelocateResult, RunState, RuntimeAssociation,
 };
 use ptrack_core::{
     Commit, MemoryKind, Meta, Milestone, MilestoneStatus, Note, Plan, PlanStatus, ProjectRef,
@@ -21,9 +19,6 @@ use crate::{Io, RunOutcome, run};
 struct FakeApplication {
     snapshot: ProjectSnapshot,
     git_output: Option<ProcessOutput>,
-    capability_result: Option<AppResult<Vec<u8>>>,
-    capability_calls: Vec<(String, String)>,
-    mcp_input: Vec<u8>,
     identity: Option<ActorIdentity>,
     claim_owner: Option<&'static str>,
     lifecycle_requests: Vec<PlanLifecycleRequest>,
@@ -60,9 +55,6 @@ impl Default for FakeApplication {
                 Vec::new(),
             ),
             git_output: None,
-            capability_result: None,
-            capability_calls: Vec::new(),
-            mcp_input: Vec::new(),
             identity: None,
             claim_owner: None,
             lifecycle_requests: Vec::new(),
@@ -447,24 +439,6 @@ impl ApplicationPort for FakeApplication {
             .ok_or(AppError::NotImplemented("test git"))
     }
 
-    fn capability_call(&mut self, tool: &str, arguments: &str) -> AppResult<Vec<u8>> {
-        self.capability_calls
-            .push((tool.to_owned(), arguments.to_owned()));
-        self.capability_result
-            .take()
-            .unwrap_or(Err(AppError::NotImplemented("test capability")))
-    }
-
-    fn capability_mcp(
-        &mut self,
-        mut input: Box<dyn Read + Send>,
-        _output: &mut dyn Write,
-        _cancellation: &CapabilityCancellation,
-    ) -> AppResult<CapabilityMcpOutcome> {
-        input.read_to_end(&mut self.mcp_input)?;
-        Ok(CapabilityMcpOutcome::Complete)
-    }
-
     fn agent_runs(&mut self) -> AppResult<AgentRunsV2> {
         Ok(AgentRunsV2 {
             generation: 7,
@@ -578,75 +552,32 @@ fn add_dep_refusal(
 }
 
 #[test]
-fn capability_call_requires_one_object_forwards_exactly_and_adds_one_raw_newline() {
-    let mut application = FakeApplication {
-        capability_result: Some(Ok(br#"{"ok":true}"#.to_vec())),
-        ..FakeApplication::default()
-    };
-    let (result, stdout, stderr) = invoke_with(
-        &mut application,
+fn the_retired_capability_group_points_old_scripts_at_pam() {
+    for args in [
+        &["ptrack", "capability"][..],
+        &["ptrack", "capability", "mcp"],
+        &["ptrack", "capability", "--help"],
         &[
             "ptrack",
             "capability",
             "call",
             "ptrack_http_request",
             "--arguments",
-            r#"{"capability_id":1}"#,
+            "{}",
         ],
-    );
-    assert_eq!(result.unwrap(), RunOutcome::ExitSuccess);
-    assert_eq!(stdout, "{\"ok\":true}\n");
-    assert!(stderr.is_empty());
-    assert_eq!(
-        application.capability_calls,
-        [(
-            "ptrack_http_request".to_owned(),
-            r#"{"capability_id":1}"#.to_owned()
-        )]
-    );
-
-    for arguments in ["null", "[]", "1", "true", "{\"x\":1} trailing"] {
-        let (error, stdout, stderr) = invoke(&[
-            "ptrack",
-            "capability",
-            "call",
-            "ptrack_http_request",
-            "--arguments",
-            arguments,
-        ]);
-        assert_eq!(
-            error.unwrap_err().to_string(),
-            "--arguments must be one JSON object"
-        );
+    ] {
+        let mut application = FakeApplication::default();
+        let (result, stdout, stderr) = invoke_with(&mut application, args);
+        let error = result.unwrap_err().to_string();
+        assert_eq!(error, crate::parse::CAPABILITY_MOVED, "{args:?}");
+        assert!(error.contains("pam"));
+        assert!(error.contains(
+            "https://ro-ag.github.io/ptrack/help/agents-and-capabilities/#capability-model"
+        ));
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
+        assert!(application.mutations.is_empty());
     }
-}
-
-#[test]
-fn capability_mcp_uses_stdin_as_sole_protocol_input_and_emits_no_cli_text() {
-    let mut application = FakeApplication::default();
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    let result = run(
-        ["ptrack", "capability", "mcp"].map(str::to_owned),
-        &mut application,
-        Io {
-            stdin: Box::new(std::io::Cursor::new(
-                b"{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":1}\n".to_vec(),
-            )),
-            stdout: &mut stdout,
-            stderr: &mut stderr,
-            cancellation: CapabilityCancellation::new(),
-        },
-    );
-    assert_eq!(result.unwrap(), RunOutcome::ExitSuccess);
-    assert_eq!(
-        application.mcp_input,
-        b"{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":1}\n"
-    );
-    assert!(stdout.is_empty());
-    assert!(stderr.is_empty());
 }
 
 #[test]
@@ -665,7 +596,7 @@ fn project_mcp_is_a_top_level_protocol_only_stdio_command() {
             stdin: Box::new(std::io::Cursor::new(input.as_bytes().to_vec())),
             stdout: &mut stdout,
             stderr: &mut stderr,
-            cancellation: CapabilityCancellation::new(),
+            cancellation: ptrack_app::McpCancellation::new(),
         },
     );
     assert_eq!(result.unwrap(), RunOutcome::ExitSuccess);
@@ -1354,7 +1285,7 @@ fn invoke_with(
             stdin: Box::new(std::io::empty()),
             stdout: &mut stdout,
             stderr: &mut stderr,
-            cancellation: CapabilityCancellation::new(),
+            cancellation: ptrack_app::McpCancellation::new(),
         },
     );
     (

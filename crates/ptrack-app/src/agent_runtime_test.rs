@@ -11,7 +11,6 @@ use ptrack_agent::{
     IntegrationConfig, PROVIDER_EVENT_MODEL_VERSION, ProviderEvent, Registration, Registry,
     WorktreeIdentity,
 };
-use ptrack_capability::{Broker, BrokerConfig};
 use ptrack_git::{
     Branch, Commit, Divergence, ExistingWorktree, PathBounds, RepositoryState, Snapshot, Status,
     WorktreeBounds,
@@ -33,7 +32,7 @@ struct TestDirectory(PathBuf);
 
 struct CapturingProductionIdentity {
     inner: ProductionTerminalIdentityAuthority,
-    tokens: Mutex<(String, String)>,
+    tokens: Mutex<(String, Vec<String>)>,
 }
 
 impl TerminalIdentityAuthority for CapturingProductionIdentity {
@@ -46,7 +45,7 @@ impl TerminalIdentityAuthority for CapturingProductionIdentity {
         let identity = self.inner.prepare(generation, project_root, profile)?;
         *self.tokens.lock().unwrap() = (
             identity.event_token().to_owned(),
-            identity.capability_token().to_owned(),
+            identity.environment().keys().cloned().collect(),
         );
         Ok(identity)
     }
@@ -166,6 +165,7 @@ impl CoordinationGit for BlockingGit {
                 .wait_timeout(released, Duration::from_millis(5))
                 .expect("blocking Git wait");
         }
+        drop(released);
         if self.cancellation.is_cancelled() {
             Err(CoordinationError::Message("Git cancelled".to_owned()))
         } else {
@@ -531,7 +531,6 @@ fn workspace_and_task_rows_share_structured_waiting_intelligence() {
         Box::new(LocalApplication::new(bindings)),
         None,
         Some(runtime.clone()),
-        None,
     );
     let snapshot = workspace
         .invoke(
@@ -946,16 +945,6 @@ async fn linked_bind_failure_revokes_production_pending_identities() {
         endpoint.clone(),
         Arc::new(FakeIntegrationFactory::default()),
     ));
-    let broker = Arc::new(
-        Broker::new(BrokerConfig {
-            project_root: endpoint.root.clone(),
-            database: endpoint.database.clone(),
-            binding: endpoint.binding.clone(),
-            writer_version: "test".to_owned(),
-            generation,
-        })
-        .unwrap(),
-    );
     let mut agent_profile = profile(&endpoint.root);
     agent_profile.id = "agent-test".to_owned();
     agent_profile.kind = ProfileKind::Agent;
@@ -964,11 +953,10 @@ async fn linked_bind_failure_revokes_production_pending_identities() {
         .await
         .unwrap();
     let identity = Arc::new(CapturingProductionIdentity {
-        inner: ProductionTerminalIdentityAuthority::new(
-            Some(Arc::clone(&broker)),
-            Some(Arc::clone(&agent) as Arc<dyn crate::TerminalAgentAuthority>),
-        ),
-        tokens: Mutex::new((String::new(), String::new())),
+        inner: ProductionTerminalIdentityAuthority::new(Some(
+            Arc::clone(&agent) as Arc<dyn crate::TerminalAgentAuthority>
+        )),
+        tokens: Mutex::new((String::new(), Vec::new())),
     });
     let terminal = TerminalRuntime::new(TerminalRuntimeConfig {
         generation,
@@ -996,13 +984,18 @@ async fn linked_bind_failure_revokes_production_pending_identities() {
         )
         .unwrap_err();
     assert!(error.to_string().contains("association"));
-    let (event_token, capability_token) = identity.tokens.lock().unwrap().clone();
+    let (event_token, environment) = identity.tokens.lock().unwrap().clone();
     assert!(!event_token.is_empty());
-    assert!(!capability_token.is_empty());
     assert!(
-        broker
-            .bind_session(&capability_token, "leak-check")
-            .is_err()
+        environment
+            .iter()
+            .any(|key| key == "PTRACK_AGENT_EVENT_TOKEN_V1")
+    );
+    assert!(
+        environment
+            .iter()
+            .all(|key| !key.starts_with("PTRACK_CAPABILITY")),
+        "capability brokering is retired; an agent terminal carries no capability token"
     );
     assert!(
         !agent

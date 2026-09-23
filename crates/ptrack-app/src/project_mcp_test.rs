@@ -1,13 +1,12 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use ptrack_capability::McpCancellation;
 use ptrack_core::{NoteTarget, TaskStatus};
 use ptrack_store::{ActiveBinding, GlobalStore, ProjectStore, StoreKind};
 use serde_json::{Value, json};
 
 use crate::{
-    ApplicationPort, LocalApplication, Mutation, MutationResult, ProjectEndpoint,
+    ApplicationPort, LocalApplication, McpCancellation, Mutation, MutationResult, ProjectEndpoint,
     WorkspaceBindings, serve_project_mcp,
 };
 

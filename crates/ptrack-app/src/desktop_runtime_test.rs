@@ -970,15 +970,10 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "CreateFirstTaskV1",
             "CreateTerminalV2",
             "DeletePlanV1",
-            "DisableCapabilityV2",
             "DismissAgentWorkflowV2",
             "DownloadUpdate",
-            "EnableCapabilityV2",
-            "ExpireCapabilityV2",
             "ForgetRecentProjectV1",
             "GetActivityHeatmapV2",
-            "GetCapabilitiesV2",
-            "GetCapabilityAuditsV2",
             "GetDiagnosticsReport",
             "GetGlobalOverviewV1",
             "GetInitializationStatusV1",
@@ -1014,11 +1009,9 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "PickProjectDirectory",
             "PrepareAgentWorkflowV2",
             "PreviewAgentHandoffV2",
-            "PreviewCapabilityV2",
             "PreviewProjectGuideV1",
             "PreviewTerminalWritebackV2",
             "RefreshGlobalOverviewV1",
-            "RemoveCapabilityV2",
             "RenamePlanV1",
             "RenameTaskV2",
             "ReopenPlanV1",
@@ -1029,7 +1022,6 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "ResolveRecentProjectV1",
             "ResumePlanV1",
             "RollbackLinkedAgentLaunchV2",
-            "SaveCapabilityV2",
             "ScheduleIssueV1",
             "SearchV2",
             "SendAgentHandoffV2",
@@ -1042,7 +1034,6 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "SetScratchpadV1",
             "SetTerminalWindowTab",
             "StartFirstTaskV1",
-            "TestCapabilityV2",
             "UpdateIssueV1",
             "ValidateProjectTargetV1",
             "ValidateTerminalCWDsV2",
@@ -2377,7 +2368,6 @@ fn bound_workspace(directory: &TestDirectory) -> BoundDesktopWorkspace {
         Box::new(LocalApplication::new(bindings.clone())),
         None,
         None,
-        None,
     )
 }
 
@@ -2410,7 +2400,6 @@ fn empty_bound_workspace(directory: &TestDirectory) -> (BoundDesktopWorkspace, W
             0,
             bindings.clone(),
             Box::new(LocalApplication::new(bindings.clone())),
-            None,
             None,
             None,
         ),
@@ -2605,7 +2594,7 @@ fn first_run_workspace_mutations_are_exact_fenced_and_idempotent() {
 
 #[test]
 #[allow(clippy::too_many_lines)] // One end-to-end bounded workspace projection contract.
-fn bound_workspace_projects_board_search_mutations_and_capability_preview() {
+fn bound_workspace_projects_board_search_and_mutations() {
     let directory = TestDirectory::new("bound");
     let workspace = bound_workspace(&directory);
     let board = workspace.board_v2(7, 0).unwrap();
@@ -2632,75 +2621,6 @@ fn bound_workspace_projects_board_search_mutations_and_capability_preview() {
         .invoke("AddTaskV2", &[json!(7), json!(1), json!("  Audit menus  ")])
         .unwrap();
     assert_eq!(added["task"]["title"], "Audit menus");
-
-    let preview = workspace
-        .invoke(
-            "PreviewCapabilityV2",
-            &[
-                json!(7),
-                json!({
-                    "name": "Docs",
-                    "kind": "http",
-                    "agent_profile": "agent-codex",
-                    "http": {
-                        "base_url": "https://example.com/docs/",
-                        "methods": ["GET"],
-                        "path_prefixes": ["/docs"]
-                    }
-                }),
-            ],
-        )
-        .unwrap();
-    assert_eq!(preview["generation"], 7);
-    assert_eq!(preview["view"]["state"], "draft");
-    assert_eq!(preview["view"]["capability"]["enabled"], false);
-    assert!(
-        preview["view"]["effective_scope"]
-            .as_str()
-            .is_some_and(|scope| scope.contains("example.com"))
-    );
-
-    let saved = workspace
-        .invoke(
-            "SaveCapabilityV2",
-            &[
-                json!(7),
-                json!({
-                    "name": "Docs",
-                    "kind": "http",
-                    "agent_profile": "agent-codex",
-                    "http": {
-                        "base_url": "https://example.com/docs/",
-                        "methods": ["GET"],
-                        "path_prefixes": ["/docs"]
-                    }
-                }),
-            ],
-        )
-        .unwrap();
-    let id = saved["view"]["capability"]["id"].as_u64().unwrap();
-    let updated = workspace
-        .invoke(
-            "SaveCapabilityV2",
-            &[
-                json!(7),
-                json!({
-                    "id": id,
-                    "revision": 0,
-                    "name": "Renamed docs",
-                    "kind": "http",
-                    "agent_profile": "agent-codex",
-                    "http": {
-                        "base_url": "https://example.com/docs/",
-                        "methods": ["GET"],
-                        "path_prefixes": ["/docs"]
-                    }
-                }),
-            ],
-        )
-        .unwrap();
-    assert_eq!(updated["view"]["capability"]["revision"], 2);
-    assert_eq!(updated["view"]["capability"]["name"], "Renamed docs");
 
     let snapshot = workspace
         .invoke("GetWorkspaceSnapshot", &[json!(7), json!(1)])
@@ -2756,7 +2676,6 @@ fn workspace_snapshot_uses_bounded_store_reads_and_open_issue_rows() {
         0,
         bindings.clone(),
         Box::new(LocalApplication::new(bindings)),
-        None,
         None,
         None,
     );
@@ -2827,7 +2746,6 @@ fn issue_desktop_workflow_fences_generation_and_persists_all_fields() {
         0,
         bindings.clone(),
         Box::new(LocalApplication::new(bindings)),
-        None,
         None,
         None,
     );
@@ -2927,7 +2845,6 @@ fn issue_targets_can_be_found_beyond_default_bounds() {
         Box::new(LocalApplication::new(bindings)),
         None,
         None,
-        None,
     );
     let defaults = workspace
         .invoke("GetIssueDetailV1", &[json!(7), json!(issue.id)])
@@ -2963,7 +2880,6 @@ fn issue_inbox_pages_after_filtering_and_rejects_stale_generations() {
         0,
         bindings.clone(),
         Box::new(LocalApplication::new(bindings)),
-        None,
         None,
         None,
     );
@@ -3003,7 +2919,6 @@ fn workspace_snapshot_allows_no_active_plan_and_reports_missing_storage() {
         0,
         bindings.clone(),
         Box::new(LocalApplication::new(bindings.clone())),
-        None,
         None,
         None,
     );
@@ -3221,7 +3136,6 @@ fn linked_launch_cwd_preserves_a_verified_worktree_subdirectory() {
         Box::new(LocalApplication::new(bindings)),
         None,
         None,
-        None,
     );
     assert_eq!(
         workspace
@@ -3283,7 +3197,6 @@ async fn task_transition_challenge_is_opaque_single_use_and_resource_revision_fe
         bindings.clone(),
         Box::new(LocalApplication::new(bindings)),
         Some(terminal.clone()),
-        None,
         None,
     );
 
@@ -3471,7 +3384,6 @@ async fn first_task_start_refuses_resource_confirmation_and_preserves_todo() {
         Box::new(LocalApplication::new(bindings.clone())),
         Some(terminal.clone()),
         None,
-        None,
     );
 
     assert_eq!(
@@ -3529,7 +3441,6 @@ async fn linked_launch_preflight_requires_an_exact_installed_agent_profile() {
         bindings.clone(),
         Box::new(LocalApplication::new(bindings)),
         Some(terminal.clone()),
-        None,
         None,
     );
     let pointer = json!({"version":1,"planId":1,"taskId":task_id});
@@ -3617,7 +3528,6 @@ async fn workspace_confirmation_owns_and_expires_the_resource_admission_fence() 
         Box::new(LocalApplication::new(bindings)),
         None,
         None,
-        None,
     ));
     let pending_admission = workspace.begin_resource_admission().unwrap();
     let runtime = DesktopRuntime::new(DesktopRuntimeConfig {
@@ -3662,42 +3572,67 @@ async fn workspace_confirmation_owns_and_expires_the_resource_admission_fence() 
 }
 
 #[test]
-fn every_allowlisted_capability_method_routes_to_the_broker() {
-    // GetCapabilitiesV2 pluralizes, so a "Capability" stem skipped it and left
-    // its handler unreachable: the Capabilities page could not load, the
-    // diagnostics report always read the counts as absent, and a full reset
-    // reported revoking no grants because it never listed any.
-    let capability: Vec<&str> = allowed_desktop_commands()
-        .iter()
-        .copied()
-        .filter(|method| method.contains("Capabilit"))
-        .collect();
-    assert_eq!(
-        capability,
-        [
-            "DisableCapabilityV2",
-            "EnableCapabilityV2",
-            "ExpireCapabilityV2",
-            "GetCapabilitiesV2",
-            "GetCapabilityAuditsV2",
-            "PreviewCapabilityV2",
-            "RemoveCapabilityV2",
-            "SaveCapabilityV2",
-            "TestCapabilityV2",
-        ]
+fn capability_commands_are_retired_from_the_ipc_surface() {
+    // Capability brokering moved to pam: no allowlisted command manages or
+    // tests a capability, and a workspace no longer answers the old names.
+    assert!(
+        allowed_desktop_commands()
+            .iter()
+            .all(|method| !method.contains("Capabilit")),
+        "a capability command is still allowlisted"
     );
-    for method in capability {
-        assert!(
-            crate::desktop_runtime::routes_to_capability(method),
-            "{method}"
+    let directory = TestDirectory::new("retired-capability-ipc");
+    let workspace = bound_workspace(&directory);
+    for method in [
+        "DisableCapabilityV2",
+        "EnableCapabilityV2",
+        "ExpireCapabilityV2",
+        "GetCapabilitiesV2",
+        "GetCapabilityAuditsV2",
+        "PreviewCapabilityV2",
+        "RemoveCapabilityV2",
+        "SaveCapabilityV2",
+        "TestCapabilityV2",
+    ] {
+        assert_eq!(
+            workspace
+                .invoke(method, &[json!(7), json!(1)])
+                .unwrap_err()
+                .to_string(),
+            format!("{method} is unavailable")
         );
     }
-    for method in ["GetPreferences", "CreateTerminalV2", "LaunchLinkedAgentV2"] {
-        assert!(
-            !crate::desktop_runtime::routes_to_capability(method),
-            "{method}"
-        );
-    }
+}
+
+#[test]
+fn clearing_app_data_revokes_leftover_grants_and_the_retired_broker_descriptor() {
+    let directory = TestDirectory::new("retired-capability-reset");
+    let workspace = bound_workspace(&directory);
+    let root = directory.0.join("project");
+    let home = directory.0.join("home");
+    let descriptor = ptrack_agent::publish_runtime_json(
+        &home,
+        &root,
+        "capability-broker.json",
+        &json!({"version": 1, "pid": 1}),
+    )
+    .unwrap();
+    assert!(descriptor.exists());
+
+    assert_eq!(
+        workspace.capability_counts(),
+        Some(crate::diagnostics_report::CapabilityCountsV1 {
+            granted: 0,
+            total: 0,
+        })
+    );
+    assert_eq!(workspace.revoke_capability_grants().unwrap(), 0);
+    assert!(
+        !descriptor.exists(),
+        "the retired broker descriptor survived"
+    );
+    // A second reset finds nothing and still succeeds.
+    assert_eq!(workspace.revoke_capability_grants().unwrap(), 0);
 }
 
 #[test]
@@ -3723,7 +3658,6 @@ fn held_plans_and_tasks_reach_the_board_payload_without_leaving_their_column() {
         0,
         bindings.clone(),
         Box::new(LocalApplication::new(bindings)),
-        None,
         None,
         None,
     );
@@ -3772,7 +3706,6 @@ fn claimed_plans_reach_the_board_and_snapshot_payload_with_the_resolved_name() {
         Box::new(LocalApplication::new(bindings)),
         None,
         None,
-        None,
     );
 
     let board = workspace.board_v2(7, 0).unwrap();
@@ -3796,7 +3729,6 @@ fn unclaimed_plans_omit_claimed_by_from_the_board_payload() {
         0,
         bindings.clone(),
         Box::new(LocalApplication::new(bindings)),
-        None,
         None,
         None,
     );
@@ -3835,7 +3767,6 @@ fn bounded_workspace_snapshot_follows_the_per_actor_active_plan() {
         Box::new(LocalApplication::new(bindings)),
         None,
         None,
-        None,
     );
     let snapshot = workspace
         .invoke("GetWorkspaceSnapshot", &[json!(7), json!(0)])
@@ -3863,7 +3794,6 @@ fn desktop_plan_lifecycle_commands_rename_preview_delete_and_copy_within() {
         0,
         bindings.clone(),
         Box::new(LocalApplication::new(bindings)),
-        None,
         None,
         None,
     );
@@ -3951,7 +3881,6 @@ fn desktop_plan_completion_hold_and_resume_preserve_cli_lifecycle_rules() {
         0,
         bindings.clone(),
         Box::new(LocalApplication::new(bindings)),
-        None,
         None,
         None,
     );
@@ -4611,7 +4540,6 @@ fn a_done_plan_can_be_reopened_and_only_a_done_plan() {
         Box::new(LocalApplication::new(bindings)),
         None,
         None,
-        None,
     );
     assert_eq!(
         workspace
@@ -4742,7 +4670,6 @@ async fn plan_delete_and_move_refuse_while_a_linked_terminal_runs() {
         Box::new(LocalApplication::new(bindings)),
         Some(terminal),
         None,
-        None,
     );
     for confirm in [false, true] {
         assert_eq!(
@@ -4833,7 +4760,6 @@ fn a_board_close_without_evidence_records_the_desktop_override() {
         0,
         bindings.clone(),
         Box::new(LocalApplication::new(bindings)),
-        None,
         None,
         None,
     );

@@ -95,8 +95,6 @@ pub const LEAVES: &[LeafSpec] = &[
     leaf(&["projects"], ArgCount::None),
     leaf(&["backup"], ArgCount::None),
     leaf(&["mcp"], ArgCount::None),
-    leaf(&["capability", "call"], ArgCount::Exact(1)),
-    leaf(&["capability", "mcp"], ArgCount::None),
     leaf(&["version"], ArgCount::None),
 ];
 

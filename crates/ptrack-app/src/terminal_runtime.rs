@@ -6,7 +6,6 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 
 use ptrack_agent::{Association, AssociationPointer, Registration};
-use ptrack_capability::Broker;
 use ptrack_terminal::{
     CwdPolicy, ExitResult, MAX_RUNTIME_SESSION_CANDIDATES, Manager, ManagerErrorKind, Profile,
     ProfileKind, Session, SessionInfo, SessionState, ShellIntegrationDescriptor, StreamTicket,
@@ -142,7 +141,6 @@ impl<T> TerminalAgentAuthority for T where
 
 pub struct PreparedTerminalIdentity {
     environment: BTreeMap<String, String>,
-    capability_token: String,
     event_token: String,
     agent: bool,
 }
@@ -151,7 +149,6 @@ impl PreparedTerminalIdentity {
     pub(crate) fn empty(agent: bool) -> Self {
         Self {
             environment: BTreeMap::new(),
-            capability_token: String::new(),
             event_token: String::new(),
             agent,
         }
@@ -161,10 +158,12 @@ impl PreparedTerminalIdentity {
         self.environment.insert(key.to_owned(), value);
     }
 
-    pub(crate) fn capability_token(&self) -> &str {
-        &self.capability_token
+    #[cfg(test)]
+    pub(crate) const fn environment(&self) -> &BTreeMap<String, String> {
+        &self.environment
     }
 
+    #[cfg(test)]
     pub(crate) fn event_token(&self) -> &str {
         &self.event_token
     }
@@ -208,18 +207,20 @@ pub trait TerminalIdentityAuthority: Send + Sync {
     fn record_exit(&self, generation: u64, session_id: &str, result: &ExitResult);
 }
 
+/// Mints the per-launch agent identity of a terminal: the agent event
+/// endpoint and a launched-event token, nothing else.
+///
+/// Capability brokering was retired (it moved to pam), so no terminal receives
+/// a `PTRACK_CAPABILITY_*` variable and no broker answers for one; an enabled
+/// capability grant left in an older project database authorizes nothing.
 pub struct ProductionTerminalIdentityAuthority {
-    broker: Option<Arc<Broker>>,
     agents: Option<Arc<dyn TerminalAgentAuthority>>,
 }
 
 impl ProductionTerminalIdentityAuthority {
     #[must_use]
-    pub fn new(
-        broker: Option<Arc<Broker>>,
-        agents: Option<Arc<dyn TerminalAgentAuthority>>,
-    ) -> Self {
-        Self { broker, agents }
+    pub fn new(agents: Option<Arc<dyn TerminalAgentAuthority>>) -> Self {
+        Self { agents }
     }
 }
 
@@ -227,7 +228,7 @@ impl TerminalIdentityAuthority for ProductionTerminalIdentityAuthority {
     fn prepare(
         &self,
         generation: u64,
-        project_root: &Path,
+        _project_root: &Path,
         profile: &Profile,
     ) -> AppResult<PreparedTerminalIdentity> {
         let agent = profile.kind == ProfileKind::Agent;
@@ -251,30 +252,6 @@ impl TerminalIdentityAuthority for ProductionTerminalIdentityAuthority {
                 .insert("PTRACK_AGENT_EVENT_TOKEN_V1".to_owned(), token.clone());
             identity.event_token = token;
         }
-        if let Some(broker) = &self.broker {
-            let token = match broker.issue_session_token(&profile.id) {
-                Ok(token) => token,
-                Err(error) => {
-                    self.revoke_pending(generation, &identity);
-                    return Err(AppError::Message(error.to_string()));
-                }
-            };
-            identity.environment.insert(
-                "PTRACK_CAPABILITY_PROJECT".to_owned(),
-                project_root.to_string_lossy().into_owned(),
-            );
-            identity.environment.insert(
-                "PTRACK_CAPABILITY_GENERATION".to_owned(),
-                generation.to_string(),
-            );
-            identity
-                .environment
-                .insert("PTRACK_CAPABILITY_PROFILE".to_owned(), profile.id.clone());
-            identity
-                .environment
-                .insert("PTRACK_CAPABILITY_TOKEN".to_owned(), token.clone());
-            identity.capability_token = token;
-        }
         Ok(identity)
     }
 
@@ -286,13 +263,6 @@ impl TerminalIdentityAuthority for ProductionTerminalIdentityAuthority {
     ) -> AppResult<()> {
         if !identity.agent {
             return Ok(());
-        }
-        if let Some(broker) = &self.broker
-            && !identity.capability_token.is_empty()
-        {
-            broker
-                .bind_session(&identity.capability_token, &session.id)
-                .map_err(|error| AppError::Message(error.to_string()))?;
         }
         let Some(agents) = &self.agents else {
             return Ok(());
@@ -366,12 +336,6 @@ impl TerminalIdentityAuthority for ProductionTerminalIdentityAuthority {
         {
             return Err(error);
         }
-        if let Some(broker) = &self.broker
-            && !identity.capability_token.is_empty()
-            && let Err(error) = broker.bind_session(&identity.capability_token, &session.id)
-        {
-            return Err(AppError::Message(error.to_string()));
-        }
         Ok(association)
     }
 
@@ -380,20 +344,11 @@ impl TerminalIdentityAuthority for ProductionTerminalIdentityAuthority {
             .agents
             .as_ref()
             .and_then(|agents| agents.suppress_runtime_event(generation).ok());
-        revoke_prepared_tokens(
-            identity.event_token(),
-            identity.capability_token(),
-            |token| {
-                if let Some(agents) = &self.agents {
-                    let _ = agents.revoke_launched_event_token(generation, token);
-                }
-            },
-            |token| {
-                if let Some(broker) = &self.broker {
-                    broker.revoke_token(token);
-                }
-            },
-        );
+        if let Some(agents) = &self.agents
+            && !identity.event_token.is_empty()
+        {
+            let _ = agents.revoke_launched_event_token(generation, &identity.event_token);
+        }
     }
 
     fn revoke_session(&self, generation: u64, session_id: &str) {
@@ -401,24 +356,8 @@ impl TerminalIdentityAuthority for ProductionTerminalIdentityAuthority {
             .agents
             .as_ref()
             .and_then(|agents| agents.suppress_runtime_event(generation).ok());
-        if let Some(broker) = &self.broker {
-            broker.revoke_session(session_id);
-        }
         if let Some(agents) = &self.agents {
             let _ = agents.revoke_terminal_event_tokens(generation, session_id);
-        }
-    }
-
-    fn revoke_failed_session(&self, generation: u64, session_id: &str) {
-        let _event_suppression = self
-            .agents
-            .as_ref()
-            .and_then(|agents| agents.suppress_runtime_event(generation).ok());
-        if let Some(agents) = &self.agents {
-            let _ = agents.revoke_terminal_event_tokens(generation, session_id);
-        }
-        if let Some(broker) = &self.broker {
-            broker.revoke_session(session_id);
         }
     }
 
@@ -449,20 +388,6 @@ impl TerminalIdentityAuthority for ProductionTerminalIdentityAuthority {
             };
             let _ = agents.record_terminal_exit(generation, session_id, result.exit_code, class);
         }
-    }
-}
-
-pub(super) fn revoke_prepared_tokens(
-    event_token: &str,
-    capability_token: &str,
-    mut revoke_event: impl FnMut(&str),
-    mut revoke_capability: impl FnMut(&str),
-) {
-    if !event_token.is_empty() {
-        revoke_event(event_token);
-    }
-    if !capability_token.is_empty() {
-        revoke_capability(capability_token);
     }
 }
 
@@ -574,6 +499,7 @@ impl TerminalRuntime {
             ));
         }
         state.operations += 1;
+        drop(state);
         Ok(RuntimeOperation(Arc::clone(&self.gate)))
     }
 
@@ -1024,8 +950,8 @@ impl TerminalRuntime {
     }
 
     /// Cleans a linked launch that failed after publication. Unlike a user
-    /// rollback, failure cleanup revokes event authority before capability
-    /// authority and force-closes before reporting any teardown error.
+    /// rollback, failure cleanup revokes event authority and force-closes
+    /// before reporting any teardown error.
     pub fn rollback_failed_linked(&self, generation: u64, session_id: &str) -> AppResult<()> {
         let _operation = self.begin(generation)?;
         self.identity
@@ -1244,6 +1170,7 @@ impl TerminalRuntime {
                     .wait(state)
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
             }
+            drop(state);
         }
         self.cancellation.cancel();
         for session_id in self.manager.lifecycle_session_ids() {

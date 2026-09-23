@@ -1,17 +1,16 @@
 use std::io::{Read, Write};
 
-use ptrack_capability::{
-    McpCancellation, McpServeOutcome, ToolCall, ToolDefinition, serve_mcp_with_tools,
-};
 use ptrack_core::{
     Digest, IssueLine, NextView, NoteTarget, TaskLine, UNTRUSTED_DATA_NOTICE, context,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::mcp_transport::{
+    McpCancellation, McpOutcome, ToolCall, ToolDefinition, serve_mcp_with_tools,
+};
 use crate::{
-    AppError, AppResult, ApplicationPort, CapabilityMcpOutcome, Mutation, MutationResult,
-    complete_task, next_task,
+    AppError, AppResult, ApplicationPort, Mutation, MutationResult, complete_task, next_task,
 };
 
 const TOOL_GET_CONTEXT: &str = "get_context";
@@ -30,9 +29,9 @@ pub fn serve_project_mcp(
     input: Box<dyn Read + Send>,
     output: &mut dyn Write,
     cancellation: &McpCancellation,
-) -> AppResult<CapabilityMcpOutcome> {
+) -> AppResult<McpOutcome> {
     let tools = project_tool_definitions();
-    let outcome = serve_mcp_with_tools(
+    serve_mcp_with_tools(
         input,
         output,
         cancellation,
@@ -41,11 +40,7 @@ pub fn serve_project_mcp(
         &tools,
         |_, call| dispatch_tool(application, call),
     )
-    .map_err(|error| AppError::Message(error.to_string()))?;
-    Ok(match outcome {
-        McpServeOutcome::Complete => CapabilityMcpOutcome::Complete,
-        McpServeOutcome::Cancelled => CapabilityMcpOutcome::Cancelled,
-    })
+    .map_err(|error| AppError::Message(error.to_string()))
 }
 
 fn project_tool_definitions() -> Vec<ToolDefinition> {

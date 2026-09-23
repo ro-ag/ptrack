@@ -14,9 +14,9 @@ use ptrack_terminal::{
 
 use super::terminal_runtime::{
     PreparedTerminalIdentity, TerminalEventSink, TerminalExitV2, TerminalIdentityAuthority,
-    TerminalRuntime, TerminalRuntimeConfig, TerminalStatusV2, revoke_prepared_tokens,
+    TerminalRuntime, TerminalRuntimeConfig, TerminalStatusV2,
 };
-use crate::AppResult;
+use crate::{AppResult, ProductionTerminalIdentityAuthority};
 
 struct TempDirectory(PathBuf);
 
@@ -63,6 +63,7 @@ impl PtyProcess for TestProcess {
         while !state.exited && !state.closed {
             state = self.changed.wait(state).unwrap();
         }
+        drop(state);
         Ok(0)
     }
 
@@ -85,6 +86,7 @@ impl PtyProcess for TestProcess {
     fn terminate(&self) -> io::Result<()> {
         let mut state = self.state.lock().unwrap();
         state.exited = true;
+        drop(state);
         self.changed.notify_all();
         Ok(())
     }
@@ -93,6 +95,7 @@ impl PtyProcess for TestProcess {
         let mut state = self.state.lock().unwrap();
         state.exited = true;
         state.killed = true;
+        drop(state);
         self.changed.notify_all();
         Ok(())
     }
@@ -100,6 +103,7 @@ impl PtyProcess for TestProcess {
     fn close(&self) -> io::Result<()> {
         let mut state = self.state.lock().unwrap();
         state.closed = true;
+        drop(state);
         self.changed.notify_all();
         Ok(())
     }
@@ -396,17 +400,17 @@ fn agent_profile(root: &Path) -> Profile {
 }
 
 #[test]
-fn prepared_failure_authority_is_revoked_event_before_capability() {
-    let order = Mutex::new(Vec::new());
-    revoke_prepared_tokens(
-        "event-token",
-        "capability-token",
-        |token| order.lock().unwrap().push(format!("event:{token}")),
-        |token| order.lock().unwrap().push(format!("capability:{token}")),
-    );
-    assert_eq!(
-        order.into_inner().unwrap(),
-        ["event:event-token", "capability:capability-token"]
+fn an_agent_terminal_is_prepared_without_capability_authority() {
+    let root = TempDirectory::new();
+    let identity = ProductionTerminalIdentityAuthority::new(None)
+        .prepare(1, &root.0, &agent_profile(&root.0))
+        .unwrap();
+    assert!(
+        identity
+            .environment()
+            .keys()
+            .all(|key| !key.starts_with("PTRACK_CAPABILITY")),
+        "capability brokering is retired; no terminal may carry its variables"
     );
 }
 

@@ -1,3 +1,10 @@
+//! Newline-delimited MCP stdio transport for the project planning server.
+//!
+//! The transport owns framing, the initialize handshake, and the JSON-RPC
+//! envelope; the caller supplies the tool surface and the handler that runs a
+//! call. It moved here from the retired capability broker crate, which no
+//! longer exists, with its protocol behavior unchanged.
+
 use std::fmt;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
@@ -6,9 +13,10 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-
-use crate::{ToolCall, tool_definitions};
 use tokio_util::sync::CancellationToken;
+
+/// Cooperative cancellation for one MCP serve loop.
+pub type McpCancellation = CancellationToken;
 
 pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 const MCP_PREVIOUS_PROTOCOL: &str = "2025-06-18";
@@ -16,40 +24,41 @@ const MAX_MCP_MESSAGE_BYTES: usize = 48 << 20;
 
 const MCP_CANCEL_POLL: Duration = Duration::from_millis(20);
 
+/// How an MCP serve loop ended.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum McpServeOutcome {
+pub enum McpOutcome {
     Complete,
     Cancelled,
 }
 
-/// Serves newline-delimited provider-compatible MCP until EOF or cancellation.
+/// One provider-facing MCP tool definition, serialized into `tools/list`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ToolDefinition {
+    pub name: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    pub description: String,
+    #[serde(rename = "inputSchema")]
+    pub input_schema: Value,
+    #[serde(skip_serializing_if = "Value::is_null")]
+    pub annotations: Value,
+}
+
+/// One `tools/call` request handed to the caller's handler.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolCall {
+    pub name: String,
+    pub arguments: Value,
+}
+
+/// Serves a caller-supplied MCP tool surface over newline-delimited stdio
+/// until EOF or cancellation.
 ///
 /// One process-wide reader slot bounds an input that cannot be interrupted by
 /// portable synchronous I/O. Cancellation returns promptly even while the
 /// owned reader remains blocked; that worker retains the sole slot until its
 /// input closes, so repeated cancellation cannot accumulate reader threads.
-///
-/// # Errors
-/// Returns only framing or output errors. Tool failures are encoded inside the
-/// `tools/call` result as required by MCP.
-pub fn serve_mcp<E: fmt::Display>(
-    input: Box<dyn Read + Send>,
-    output: &mut dyn Write,
-    cancellation: &CancellationToken,
-    call: impl FnMut(&CancellationToken, ToolCall) -> Result<Value, E>,
-) -> Result<McpServeOutcome, McpError> {
-    serve_mcp_with_tools(
-        input,
-        output,
-        cancellation,
-        "p-track-capabilities",
-        "1",
-        &tool_definitions(),
-        call,
-    )
-}
-
-/// Serves a caller-supplied MCP tool surface over newline-delimited stdio.
 ///
 /// # Errors
 /// Returns only framing or output errors. Tool failures are encoded inside the
@@ -60,24 +69,24 @@ pub fn serve_mcp_with_tools<E: fmt::Display>(
     cancellation: &CancellationToken,
     server_name: &str,
     server_version: &str,
-    tools: &[crate::ToolDefinition],
+    tools: &[ToolDefinition],
     mut call: impl FnMut(&CancellationToken, ToolCall) -> Result<Value, E>,
-) -> Result<McpServeOutcome, McpError> {
+) -> Result<McpOutcome, McpError> {
     let Some(reader_slot) = acquire_reader_slot(cancellation) else {
-        return Ok(McpServeOutcome::Cancelled);
+        return Ok(McpOutcome::Cancelled);
     };
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     std::thread::Builder::new()
-        .name("ptrack-capability-mcp-reader".to_owned())
+        .name("ptrack-mcp-reader".to_owned())
         .spawn(move || read_frames(input, &sender, reader_slot))
         .map_err(|_| McpError("MCP reader is unavailable".to_owned()))?;
     let mut initialized = false;
     loop {
         let Some(line) = next_frame(&receiver, cancellation)? else {
             return Ok(if cancellation.is_cancelled() {
-                McpServeOutcome::Cancelled
+                McpOutcome::Cancelled
             } else {
-                McpServeOutcome::Complete
+                McpOutcome::Complete
             });
         };
         if line.iter().all(u8::is_ascii_whitespace) {
@@ -99,7 +108,7 @@ pub fn serve_mcp_with_tools<E: fmt::Display>(
             _ => Some(McpResponse::error(None, -32700, "parse error")),
         };
         if cancellation.is_cancelled() {
-            return Ok(McpServeOutcome::Cancelled);
+            return Ok(McpOutcome::Cancelled);
         }
         if let Some(response) = response {
             serde_json::to_writer(&mut *output, &response)
@@ -167,7 +176,7 @@ fn handle_request<E: fmt::Display>(
     cancellation: &CancellationToken,
     server_name: &str,
     server_version: &str,
-    tools: &[crate::ToolDefinition],
+    tools: &[ToolDefinition],
     call: &mut impl FnMut(&CancellationToken, ToolCall) -> Result<Value, E>,
 ) -> Option<McpResponse> {
     let notification = request.id.is_none();
@@ -255,7 +264,7 @@ fn handle_tool_call<E: fmt::Display>(
     params: Option<Value>,
     initialized: bool,
     cancellation: &CancellationToken,
-    tools: &[crate::ToolDefinition],
+    tools: &[ToolDefinition],
     call: &mut impl FnMut(&CancellationToken, ToolCall) -> Result<Value, E>,
 ) -> Option<McpResponse> {
     if notification {
@@ -424,6 +433,7 @@ fn acquire_reader_slot(cancellation: &CancellationToken) -> Option<ReaderSlot> {
         return None;
     }
     *occupied = true;
+    drop(occupied);
     Some(ReaderSlot)
 }
 

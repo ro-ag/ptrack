@@ -8,8 +8,6 @@ rust-version.workspace = true
 
 [dependencies]
 ptrack-agent = { path = "../ptrack-agent" }
-ptrack-capability = { path = "../ptrack-capability" }
-ptrack-capability-policy = { path = "../ptrack-capability-policy" }
 ptrack-core = { path = "../ptrack-core" }
 ptrack-git = { path = "../ptrack-git" }
 ptrack-store = { path = "../ptrack-store" }

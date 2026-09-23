@@ -156,8 +156,6 @@ pub enum StoreError {
     NotFound,
     /// A compare-and-set task fence observed different state.
     TaskStatusChanged(String),
-    /// A capability draft or lifecycle mutation observed a stale revision.
-    CapabilityRevisionChanged { expected: u64, actual: u64 },
     /// A scratchpad write stated a revision other than the stored one. The
     /// refused write carries the stored record so the caller can reload and
     /// merge without a second round trip.
@@ -166,10 +164,6 @@ pub enum StoreError {
     /// a damaged database, so it never borrows [`StoreError::InvalidManifest`]
     /// and a presentation layer can tell the two apart.
     InvalidScratchpad(String),
-    /// Approval was attempted against a digest other than the stored preview.
-    CapabilityScopeChanged,
-    /// Expiry was requested for a capability which is not currently enabled.
-    CapabilityNotEnabled,
     /// A bounded read used an unsafe resource limit.
     InvalidBoundedLimit,
     /// A bounded aggregate would traverse more rows than its hard ceiling.
@@ -349,18 +343,8 @@ impl fmt::Display for StoreError {
             Self::TaskStatusChanged(detail) => {
                 write!(formatter, "task status changed: {detail}")
             }
-            Self::CapabilityRevisionChanged { expected, actual } => write!(
-                formatter,
-                "capability revision changed: expected {expected}, found {actual}"
-            ),
             Self::ScratchpadConflict { .. } => formatter.write_str("scratchpad revision conflict"),
             Self::InvalidScratchpad(detail) => write!(formatter, "invalid scratchpad: {detail}"),
-            Self::CapabilityScopeChanged => {
-                formatter.write_str("effective scope changed; preview again before enabling")
-            }
-            Self::CapabilityNotEnabled => {
-                formatter.write_str("only an enabled capability can be expired")
-            }
             Self::InvalidBoundedLimit => {
                 formatter.write_str("bounded read limit must be between 1 and 1000")
             }

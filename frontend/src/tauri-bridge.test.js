@@ -9,27 +9,38 @@ describe("Tauri compatibility bridge", () => {
       "ApplyUpdate", "ApproveAgentWorkflowV2", "CancelUpdateOperation", "CancelWorkspaceChange",
       "CheckForUpdates", "ClaimTerminalStream", "CloseProject", "CloseTerminalV2", "CompletePlanV1",
       "CopyPlanV1", "CreateFirstPlanV1", "CreateFirstTaskV1", "CreateTerminalV2", "DeletePlanV1",
-      "DisableCapabilityV2", "DismissAgentWorkflowV2", "DownloadUpdate", "EnableCapabilityV2",
-      "ExpireCapabilityV2", "ForgetRecentProjectV1", "GetActivityHeatmapV2", "GetCapabilitiesV2",
-      "GetCapabilityAuditsV2", "GetDiagnosticsReport", "GetGlobalOverviewV1",
-      "GetInitializationStatusV1", "GetIssueDetailV1", "GetIssuesV1", "GetLayoutState",
-      "GetPendingInitializationV1", "GetPreferences", "GetProjectTimelineV1", "GetRecentProjectsV1",
-      "GetScratchpadV1", "GetStackProfileV1", "GetTaskDetailV2", "GetTerminalProfiles",
-      "GetTerminalProfilesV2", "GetTerminalWindowTab", "GetUpdateState", "GetWorkspaceSnapshot",
-      "GetWorkspaceState", "HoldPlanV1", "InitializeProjectV1", "InstallShellCommand",
-      "LaunchLinkedAgentV2", "ListProjectsV1", "MoveIssueTaskV1", "MoveTaskV3", "MovePlanV1",
+      "DismissAgentWorkflowV2", "DownloadUpdate", "ForgetRecentProjectV1", "GetActivityHeatmapV2",
+      "GetDiagnosticsReport", "GetGlobalOverviewV1", "GetInitializationStatusV1",
+      "GetIssueDetailV1", "GetIssuesV1", "GetLayoutState", "GetPendingInitializationV1",
+      "GetPreferences", "GetProjectTimelineV1", "GetRecentProjectsV1", "GetScratchpadV1",
+      "GetStackProfileV1", "GetTaskDetailV2", "GetTerminalProfiles", "GetTerminalProfilesV2",
+      "GetTerminalWindowTab", "GetUpdateState", "GetWorkspaceSnapshot", "GetWorkspaceState",
+      "HoldPlanV1", "InitializeProjectV1", "InstallShellCommand", "LaunchLinkedAgentV2",
+      "ListProjectsV1", "MoveIssueTaskV1", "MoveTaskV3", "MovePlanV1",
       "MutateTerminalAssociationV2", "OpenHelpDestination", "OpenProject", "OpenRecentProjectV1",
       "OpenTerminalWindow", "PickProjectDirectory", "PrepareAgentWorkflowV2",
-      "PreviewAgentHandoffV2", "PreviewCapabilityV2", "PreviewProjectGuideV1",
-      "PreviewTerminalWritebackV2", "RefreshGlobalOverviewV1", "RemoveCapabilityV2", "RenamePlanV1",
-      "RenameTaskV2", "ReopenPlanV1", "ResetApplicationState", "ResetPreferences",
-      "ResetWindowLayout", "ResizeTerminalV2", "ResolveRecentProjectV1", "ResumePlanV1",
-      "RollbackLinkedAgentLaunchV2", "SaveCapabilityV2", "ScheduleIssueV1", "SearchV2",
-      "SendAgentHandoffV2", "SetAgentTaskOwnershipV2", "SetAgentWorktreeV2",
+      "PreviewAgentHandoffV2", "PreviewProjectGuideV1", "PreviewTerminalWritebackV2",
+      "RefreshGlobalOverviewV1", "RenamePlanV1", "RenameTaskV2", "ReopenPlanV1",
+      "ResetApplicationState", "ResetPreferences", "ResetWindowLayout", "ResizeTerminalV2",
+      "ResolveRecentProjectV1", "ResumePlanV1", "RollbackLinkedAgentLaunchV2", "ScheduleIssueV1",
+      "SearchV2", "SendAgentHandoffV2", "SetAgentTaskOwnershipV2", "SetAgentWorktreeV2",
       "SetAutomaticUpdateChecks", "SetIssueTaskV1", "SetLayoutState", "SetPreferences",
-      "SetScratchpadV1", "SetTerminalWindowTab", "StartFirstTaskV1", "TestCapabilityV2",
-      "UpdateIssueV1", "ValidateProjectTargetV1", "ValidateTerminalCWDsV2", "WriteTerminalMemoryV2",
+      "SetScratchpadV1", "SetTerminalWindowTab", "StartFirstTaskV1", "UpdateIssueV1",
+      "ValidateProjectTargetV1", "ValidateTerminalCWDsV2", "WriteTerminalMemoryV2",
     ]);
+  });
+
+  // Capability brokering moved to pam; the bridge must not route any of its
+  // old management or test commands.
+  it("no longer exposes the retired capability commands", () => {
+    for (const method of [
+      "DisableCapabilityV2", "EnableCapabilityV2", "ExpireCapabilityV2", "GetCapabilitiesV2",
+      "GetCapabilityAuditsV2", "PreviewCapabilityV2", "RemoveCapabilityV2", "SaveCapabilityV2",
+      "TestCapabilityV2",
+    ]) {
+      expect(COMMANDS).not.toContain(method);
+    }
+    expect(COMMANDS.filter((method) => method.includes("Capabilit"))).toEqual([]);
   });
 
   // The retired commands skipped the workspace generation fence (or had no

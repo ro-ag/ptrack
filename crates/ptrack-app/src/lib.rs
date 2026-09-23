@@ -11,6 +11,7 @@ mod diagnostics_report;
 mod identity;
 mod layout_state;
 mod local_mode;
+mod mcp_transport;
 pub mod overview;
 #[cfg(test)]
 mod overview_test;
@@ -53,6 +54,7 @@ pub use desktop_runtime::{
 };
 
 pub use identity::{IDENTITY_CONFIG_KEY, load_identity, set_identity_name};
+pub use mcp_transport::{McpCancellation, McpOutcome};
 pub use production::{
     ActiveRuntime, ProductionDesktopAuthority, ProductionDesktopWorkspaceFactory,
     ProductionRecentProjects, RoutedApplication, RuntimeBindingState, StartupProjectV1,
@@ -74,9 +76,8 @@ pub use ptrack_store::ActorIdentity;
 pub use ptrack_store::{INVALID_CLAIM_PREFIX, INVALID_HOLD_PREFIX};
 pub use ptrack_store::{PlanDeleteSummary, PlanSubtree};
 pub use service::{
-    AppError, AppResult, ApplicationPort, CapabilityCancellation, CapabilityMcpOutcome,
-    CapabilitySessionEnvironment, CompletePlanResult, CompleteTaskResult, GuideAction, HookAction,
-    HookResult, InitRequest, InitResult, LocalApplication, Mutation, MutationResult,
+    AppError, AppResult, ApplicationPort, CompletePlanResult, CompleteTaskResult, GuideAction,
+    HookAction, HookResult, InitRequest, InitResult, LocalApplication, Mutation, MutationResult,
     PlanLifecycleOutcome, PlanLifecycleRequest, PlanTransferSummary, ProcessOutput,
     ProjectEndpoint, RelocateRequest, RelocateResult, SCRATCHPAD_CONFLICT, ScratchpadSnippetV1,
     ScratchpadV1, UiSurface, UnavailableApplication, WorkspaceBindings, check_commit_sha,
@@ -109,6 +110,8 @@ mod identity_test;
 mod layout_state_test;
 #[cfg(test)]
 mod local_mode_test;
+#[cfg(test)]
+mod mcp_transport_test;
 #[cfg(test)]
 mod preferences_test;
 #[cfg(test)]

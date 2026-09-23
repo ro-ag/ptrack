@@ -2,8 +2,6 @@
 members = [
     "crates/ptrack-agent",
     "crates/ptrack-app",
-    "crates/ptrack-capability",
-    "crates/ptrack-capability-policy",
     "crates/ptrack-cli",
     "crates/ptrack-core",
     "crates/ptrack-git",
@@ -31,7 +29,6 @@ flate2 = { version = "=1.1.9", default-features = false, features = ["rust_backe
 http-body-util = { version = "=0.1.5", default-features = false }
 hyper = { version = "=1.11.0", default-features = false, features = ["http1", "server"] }
 hyper-util = { version = "=0.1.20", default-features = false, features = ["tokio"] }
-percent-encoding = "=2.3.2"
 portable-pty = { version = "=0.9.0", default-features = false }
 redb = "=4.1.0"
 ratatui = { version = "=0.30.2", default-features = false, features = ["crossterm_0_29"] }

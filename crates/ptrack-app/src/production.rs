@@ -9,7 +9,6 @@ use std::time::{Duration, Instant};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ptrack_agent::{Association, AssociationTarget, CoordinationSession, CoordinationSessions};
-use ptrack_capability::{BrokerConfig, BrokerServer, BrokerServerConfig};
 #[cfg(unix)]
 use ptrack_core::upsert_guide;
 use ptrack_core::{ProjectRef, ProjectSnapshot};
@@ -35,14 +34,13 @@ use time::format_description::well_known::Rfc3339;
 use crate::ProjectGuideFilePreviewV1;
 use crate::{
     AgentRuntime, AgentRuntimeConfig, AppError, AppResult, ApplicationPort, BoundDesktopWorkspace,
-    CapabilityCancellation, CapabilityMcpOutcome, DesktopAgentRuntime, DesktopEventSink,
-    DesktopInitializationService, DesktopRuntime, DesktopRuntimeConfig, DesktopTerminalEventSink,
-    DesktopUpdateEventSink, DesktopUpdateService, DesktopWorkspace, DesktopWorkspaceFactory,
-    ForgetRecentProjectResultV1, GuideAction, HookAction, HookResult, InitRequest, InitResult,
-    InitializationCheckpointV1, InitializationOutcomeV1, InitializationStatusV1,
-    InitializeProjectRequestV1, LocalApplication, Mutation, MutationResult,
-    PendingInitializationV1, PlanLifecycleOutcome, PlanLifecycleRequest, ProcessOutput,
-    ProductionTerminalIdentityAuthority, ProjectEndpoint, ProjectGuideChoiceV1,
+    DesktopAgentRuntime, DesktopEventSink, DesktopInitializationService, DesktopRuntime,
+    DesktopRuntimeConfig, DesktopTerminalEventSink, DesktopUpdateEventSink, DesktopUpdateService,
+    DesktopWorkspace, DesktopWorkspaceFactory, ForgetRecentProjectResultV1, GuideAction,
+    HookAction, HookResult, InitRequest, InitResult, InitializationCheckpointV1,
+    InitializationOutcomeV1, InitializationStatusV1, InitializeProjectRequestV1, LocalApplication,
+    Mutation, MutationResult, PendingInitializationV1, PlanLifecycleOutcome, PlanLifecycleRequest,
+    ProcessOutput, ProductionTerminalIdentityAuthority, ProjectEndpoint, ProjectGuideChoiceV1,
     ProjectGuideFileActionV1, ProjectGuidePreviewRequestV1, ProjectGuidePreviewV1,
     ProjectTargetKindV1, ProjectTargetValidationV1, RecentProjectAvailabilityV1,
     RecentProjectLanguageV1, RecentProjectOpenAuthorizationV1, RecentProjectRegistryCommitV1,
@@ -851,19 +849,6 @@ impl ApplicationPort for RoutedApplication {
     fn git_show(&mut self, reference: &str, stat: bool) -> AppResult<ProcessOutput> {
         self.local()?.git_show(reference, stat)
     }
-
-    fn capability_call(&mut self, tool: &str, arguments: &str) -> AppResult<Vec<u8>> {
-        self.local()?.capability_call(tool, arguments)
-    }
-
-    fn capability_mcp(
-        &mut self,
-        input: Box<dyn Read + Send>,
-        output: &mut dyn Write,
-        cancellation: &CapabilityCancellation,
-    ) -> AppResult<CapabilityMcpOutcome> {
-        self.local()?.capability_mcp(input, output, cancellation)
-    }
 }
 
 pub struct ProductionRecentProjects {
@@ -1440,22 +1425,10 @@ impl DesktopWorkspaceFactory for ProductionDesktopWorkspaceFactory {
             bindings.writer_version.clone(),
             sessions,
         ))?);
-        let server = Arc::new(BrokerServer::start(BrokerServerConfig {
-            global_home: bindings.global_home.clone(),
-            broker: BrokerConfig {
-                project_root: endpoint.root.clone(),
-                database: endpoint.database.clone(),
-                binding: endpoint.binding.clone(),
-                writer_version: bindings.writer_version.clone(),
-                generation,
-            },
-        })?);
         let terminal_agent: Arc<dyn TerminalAgentAuthority> = agent.clone();
-        let identity: Arc<dyn TerminalIdentityAuthority> =
-            Arc::new(ProductionTerminalIdentityAuthority::new(
-                Some(Arc::clone(server.broker())),
-                Some(terminal_agent),
-            ));
+        let identity: Arc<dyn TerminalIdentityAuthority> = Arc::new(
+            ProductionTerminalIdentityAuthority::new(Some(terminal_agent)),
+        );
         let terminal_events: Arc<dyn TerminalEventSink> = self.events.as_ref().map_or_else(
             || Arc::new(SilentTerminalEvents) as Arc<dyn TerminalEventSink>,
             |sink| DesktopTerminalEventSink::new(Arc::clone(sink)),
@@ -1476,11 +1449,9 @@ impl DesktopWorkspaceFactory for ProductionDesktopWorkspaceFactory {
             Box::new(LocalApplication::new(bindings)),
             Some(terminal),
             Some(desktop_agent),
-            Some(Arc::clone(server.broker())),
         );
         Ok(Arc::new(ProductionDesktopWorkspace {
             inner,
-            server,
             _runtime: runtime,
         }))
     }
@@ -3194,7 +3165,6 @@ impl TerminalEventSink for SilentTerminalEvents {
 
 struct ProductionDesktopWorkspace {
     inner: BoundDesktopWorkspace,
-    server: Arc<BrokerServer>,
     _runtime: Arc<ActiveRuntime>,
 }
 
@@ -3219,14 +3189,16 @@ impl DesktopWorkspace for ProductionDesktopWorkspace {
         self.inner.drain_runtime_invalidations()
     }
 
+    fn capability_counts(&self) -> Option<crate::diagnostics_report::CapabilityCountsV1> {
+        self.inner.capability_counts()
+    }
+
+    fn revoke_capability_grants(&self) -> AppResult<usize> {
+        self.inner.revoke_capability_grants()
+    }
+
     fn shutdown(&self) -> AppResult<()> {
-        let inner = self.inner.shutdown();
-        let server = self.server.shutdown().map_err(AppError::from);
-        match (inner, server) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
-            (Err(first), Err(second)) => Err(AppError::Message(format!("{first}\n{second}"))),
-        }
+        self.inner.shutdown()
     }
 }
 

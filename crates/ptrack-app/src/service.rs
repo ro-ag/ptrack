@@ -10,10 +10,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::os::unix::fs::PermissionsExt;
 
 use ptrack_agent::{AgentHandoffInbox, AgentObservationClient, AgentRunObservationV1, AgentRunsV2};
-use ptrack_capability::{
-    McpCancellation, McpServeOutcome, ToolCall, client_for_project, serve_mcp,
-    validate_session_environment,
-};
 use ptrack_core::{
     CheckpointView, Commit, Issue, IssueStatus, Milestone, MilestoneStatus, Note, NoteTarget, Plan,
     PlanStatus, ProjectRef, ProjectSnapshot, Scratchpad, ScratchpadSnippet, Severity, Task,
@@ -216,12 +212,6 @@ impl From<ptrack_store::StoreError> for AppError {
     }
 }
 
-impl From<ptrack_capability::ServerError> for AppError {
-    fn from(error: ptrack_capability::ServerError) -> Self {
-        Self::Message(error.to_string())
-    }
-}
-
 #[cfg(unix)]
 fn from_errno(error: rustix::io::Errno) -> AppError {
     AppError::Io(std::io::Error::from(error))
@@ -244,28 +234,6 @@ pub struct WorkspaceBindings {
     pub global_binding: ActiveBinding,
     pub global_home: PathBuf,
     pub writer_version: String,
-}
-
-/// Explicit capability authority injected by the session host.
-///
-/// The token intentionally has no `Debug` implementation so diagnostics
-/// cannot accidentally disclose it.
-#[derive(Clone, Eq, PartialEq)]
-pub struct CapabilitySessionEnvironment {
-    token: String,
-    project: Option<PathBuf>,
-    generation: Option<String>,
-}
-
-impl CapabilitySessionEnvironment {
-    #[must_use]
-    pub fn new(token: String, project: Option<PathBuf>, generation: Option<String>) -> Self {
-        Self {
-            token,
-            project,
-            generation,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -679,7 +647,20 @@ pub fn close_task_from_ui(
     surface: UiSurface,
     task_id: u64,
 ) -> AppResult<Option<Note>> {
-    let snapshot = application.snapshot()?;
+    let notes = ui_close_override_notes(&application.snapshot()?, surface, task_id);
+    Ok(set_task_status_with_notes(application, task_id, TaskStatus::Done, notes)?.pop())
+}
+
+/// The override note a human close of `task_id` from `surface` records: none
+/// when the task has both a closeout summary and a linked commit, otherwise
+/// one "override: closed from <surface> without evidence (…)" note naming what
+/// is missing. Shared by every UI close so the audit text has one spelling.
+#[must_use]
+pub fn ui_close_override_notes(
+    snapshot: &ProjectSnapshot,
+    surface: UiSurface,
+    task_id: u64,
+) -> Vec<String> {
     let mut missing = Vec::new();
     if !snapshot.notes.iter().any(|note| {
         note.target == NoteTarget::Task
@@ -695,7 +676,7 @@ pub fn close_task_from_ui(
     {
         missing.push("no linked commit");
     }
-    let notes = if missing.is_empty() {
+    if missing.is_empty() {
         Vec::new()
     } else {
         vec![format!(
@@ -703,8 +684,7 @@ pub fn close_task_from_ui(
             surface.as_str(),
             missing.join("; ")
         )]
-    };
-    Ok(set_task_status_with_notes(application, task_id, TaskStatus::Done, notes)?.pop())
+    }
 }
 
 /// Marks a plan done from a human surface. Allowed with open tasks; when any
@@ -916,14 +896,6 @@ pub struct ProcessOutput {
     pub exit_code: Option<i32>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CapabilityMcpOutcome {
-    Complete,
-    Cancelled,
-}
-
-pub type CapabilityCancellation = McpCancellation;
-
 /// The single use-case seam consumed by CLI, TUI, and Tauri adapters.
 #[allow(clippy::missing_errors_doc)]
 pub trait ApplicationPort {
@@ -952,13 +924,6 @@ pub trait ApplicationPort {
     fn guide(&mut self, action: GuideAction) -> AppResult<(String, Vec<PathBuf>)>;
     fn hook(&mut self, action: HookAction) -> AppResult<HookResult>;
     fn git_show(&mut self, reference: &str, stat: bool) -> AppResult<ProcessOutput>;
-    fn capability_call(&mut self, tool: &str, arguments: &str) -> AppResult<Vec<u8>>;
-    fn capability_mcp(
-        &mut self,
-        input: Box<dyn Read + Send>,
-        output: &mut dyn Write,
-        cancellation: &CapabilityCancellation,
-    ) -> AppResult<CapabilityMcpOutcome>;
     /// Returns the project scratchpad; a project that never wrote one reads as
     /// the empty scratchpad at revision zero.
     fn scratchpad(&mut self) -> AppResult<Scratchpad> {
@@ -1037,19 +1002,6 @@ impl ApplicationPort for UnavailableApplication {
     fn git_show(&mut self, _reference: &str, _stat: bool) -> AppResult<ProcessOutput> {
         Err(unavailable())
     }
-
-    fn capability_call(&mut self, _tool: &str, _arguments: &str) -> AppResult<Vec<u8>> {
-        Err(unavailable())
-    }
-
-    fn capability_mcp(
-        &mut self,
-        _input: Box<dyn Read + Send>,
-        _output: &mut dyn Write,
-        _cancellation: &CapabilityCancellation,
-    ) -> AppResult<CapabilityMcpOutcome> {
-        Err(unavailable())
-    }
 }
 
 fn unavailable() -> AppError {
@@ -1062,7 +1014,6 @@ fn no_coordination_host() -> AppError {
 
 pub struct LocalApplication {
     bindings: WorkspaceBindings,
-    capability_environment: Option<CapabilitySessionEnvironment>,
     local_metadata: Option<crate::local_mode::LocalMetadata>,
 }
 
@@ -1071,7 +1022,6 @@ impl LocalApplication {
     pub const fn new(bindings: WorkspaceBindings) -> Self {
         Self {
             bindings,
-            capability_environment: None,
             local_metadata: None,
         }
     }
@@ -1082,7 +1032,6 @@ impl LocalApplication {
     ) -> Self {
         Self {
             bindings,
-            capability_environment: None,
             local_metadata: Some(metadata),
         }
     }
@@ -1099,32 +1048,6 @@ impl LocalApplication {
             return Ok(metadata.actor());
         }
         self.with_global(crate::identity::load_identity)
-    }
-
-    #[must_use]
-    pub fn with_capability_environment(
-        mut self,
-        environment: CapabilitySessionEnvironment,
-    ) -> Self {
-        self.capability_environment = Some(environment);
-        self
-    }
-
-    fn capability_environment(&self) -> AppResult<CapabilitySessionEnvironment> {
-        if let Some(environment) = &self.capability_environment {
-            return Ok(environment.clone());
-        }
-        let token = std::env::var("PTRACK_CAPABILITY_TOKEN").map_err(|_| {
-            AppError::Message(
-                "capability broker token is unavailable; launch this command from an agent terminal in p-track"
-                    .to_owned(),
-            )
-        })?;
-        Ok(CapabilitySessionEnvironment {
-            token,
-            project: std::env::var_os("PTRACK_CAPABILITY_PROJECT").map(PathBuf::from),
-            generation: std::env::var("PTRACK_CAPABILITY_GENERATION").ok(),
-        })
     }
 
     fn project(&self) -> AppResult<&ProjectEndpoint> {
@@ -1824,68 +1747,6 @@ impl ApplicationPort for LocalApplication {
             stdout: output.stdout,
             stderr: output.stderr,
             exit_code: output.status.code(),
-        })
-    }
-
-    fn capability_call(&mut self, tool: &str, arguments: &str) -> AppResult<Vec<u8>> {
-        self.require_global()?;
-        let endpoint = self.project()?;
-        let environment = self.capability_environment()?;
-        let client = client_for_project(&self.bindings.global_home, &endpoint.root)?;
-        validate_session_environment(
-            client.descriptor(),
-            environment.project.as_deref(),
-            environment.generation.as_deref(),
-        )?;
-        let arguments = serde_json::from_str(arguments)
-            .map_err(|_| AppError::Message("tool arguments are invalid".to_owned()))?;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|_| {
-                AppError::Message("capability client runtime is unavailable".to_owned())
-            })?;
-        let result = runtime.block_on(client.call(
-            &environment.token,
-            &ToolCall {
-                name: tool.to_owned(),
-                arguments,
-            },
-        ))?;
-        serde_json::to_vec(&result)
-            .map_err(|_| AppError::Message("capability response could not be encoded".to_owned()))
-    }
-
-    fn capability_mcp(
-        &mut self,
-        input: Box<dyn Read + Send>,
-        output: &mut dyn Write,
-        cancellation: &CapabilityCancellation,
-    ) -> AppResult<CapabilityMcpOutcome> {
-        self.require_global()?;
-        let endpoint = self.project()?;
-        let environment = self.capability_environment()?;
-        let client = client_for_project(&self.bindings.global_home, &endpoint.root)?;
-        validate_session_environment(
-            client.descriptor(),
-            environment.project.as_deref(),
-            environment.generation.as_deref(),
-        )?;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|_| {
-                AppError::Message("capability client runtime is unavailable".to_owned())
-            })?;
-        let outcome = serve_mcp(input, output, cancellation, |cancellation, call| {
-            runtime
-                .block_on(client.call_cancellable(cancellation, &environment.token, &call))
-                .map_err(|error| error.to_string())
-        })
-        .map_err(|error| AppError::Message(error.to_string()))?;
-        Ok(match outcome {
-            McpServeOutcome::Complete => CapabilityMcpOutcome::Complete,
-            McpServeOutcome::Cancelled => CapabilityMcpOutcome::Cancelled,
         })
     }
 }

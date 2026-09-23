@@ -14,14 +14,10 @@ use ptrack_agent::{
     LaunchContextStore, LeaseState, ProcessState, RegistrationKind, Run, RunState,
     RuntimeAssociation, ScanBoundedItems, build_launch_context, contains_potential_credential,
 };
-use ptrack_capability::{Broker, ConnectionDiagnostic, ConnectionTester};
-use ptrack_capability_policy::{
-    CapabilityAuditWire, CapabilityDraftWire, CapabilityWire, confirm_approval, normalize,
-};
 use ptrack_core::{
-    Capability, CapabilityKind, Commit, Issue, IssueStatus, MemoryKind, Meta, Note, NoteTarget,
-    Plan, PlanStatus, ProjectSnapshot, Severity, StackProfile, Task, TaskStatus, Timestamp,
-    open_plan_deps, open_task_deps,
+    Commit, Issue, IssueStatus, MemoryKind, Meta, Note, NoteTarget, Plan, PlanStatus,
+    ProjectSnapshot, Severity, StackProfile, Task, TaskStatus, Timestamp, open_plan_deps,
+    open_task_deps,
 };
 use ptrack_store::{
     FIRST_RUN_TITLE_MAX_BYTES, GlobalStore, MemoryWriteRequest, ProjectStore, StoreError,
@@ -32,7 +28,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use time::format_description::well_known::Rfc3339;
 use time::{OffsetDateTime, UtcOffset};
-use tokio_util::sync::CancellationToken;
 
 use crate::diagnostics_report::{CapabilityCountsV1, DiagnosticsReportV1};
 use crate::layout_state::{layout_state, reset_window_layout, set_layout_state};
@@ -70,7 +65,7 @@ const SHUTDOWN_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 
 pub const FIRST_RUN_GOAL_MAX_BYTES: usize = 4_096;
 
-const COMMANDS: [&str; 96] = [
+const COMMANDS: [&str; 87] = [
     "AcknowledgeAgentHandoffV2",
     "AddIssueV1",
     "AddPlanV1",
@@ -90,15 +85,10 @@ const COMMANDS: [&str; 96] = [
     "CreateFirstTaskV1",
     "CreateTerminalV2",
     "DeletePlanV1",
-    "DisableCapabilityV2",
     "DismissAgentWorkflowV2",
     "DownloadUpdate",
-    "EnableCapabilityV2",
-    "ExpireCapabilityV2",
     "ForgetRecentProjectV1",
     "GetActivityHeatmapV2",
-    "GetCapabilitiesV2",
-    "GetCapabilityAuditsV2",
     "GetDiagnosticsReport",
     "GetGlobalOverviewV1",
     "GetInitializationStatusV1",
@@ -134,11 +124,9 @@ const COMMANDS: [&str; 96] = [
     "PickProjectDirectory",
     "PrepareAgentWorkflowV2",
     "PreviewAgentHandoffV2",
-    "PreviewCapabilityV2",
     "PreviewProjectGuideV1",
     "PreviewTerminalWritebackV2",
     "RefreshGlobalOverviewV1",
-    "RemoveCapabilityV2",
     "RenamePlanV1",
     "RenameTaskV2",
     "ReopenPlanV1",
@@ -149,7 +137,6 @@ const COMMANDS: [&str; 96] = [
     "ResolveRecentProjectV1",
     "ResumePlanV1",
     "RollbackLinkedAgentLaunchV2",
-    "SaveCapabilityV2",
     "ScheduleIssueV1",
     "SearchV2",
     "SendAgentHandoffV2",
@@ -162,7 +149,6 @@ const COMMANDS: [&str; 96] = [
     "SetScratchpadV1",
     "SetTerminalWindowTab",
     "StartFirstTaskV1",
-    "TestCapabilityV2",
     "UpdateIssueV1",
     "ValidateProjectTargetV1",
     "ValidateTerminalCWDsV2",
@@ -702,7 +688,7 @@ impl crate::UpdateEventSink for DesktopUpdateEventSink {
 }
 
 /// Generation-owned workspace service. Implementations own all database,
-/// terminal, agent, capability, and watcher authority; native shells receive
+/// terminal, agent, and watcher authority; native shells receive
 /// only this command surface.
 #[allow(clippy::missing_errors_doc)]
 pub trait DesktopWorkspace: Send + Sync {
@@ -717,6 +703,16 @@ pub trait DesktopWorkspace: Send + Sync {
     }
     fn notification_snapshot(&self) -> AppResult<DesktopNotificationSnapshotV1> {
         Ok(DesktopNotificationSnapshotV1::default())
+    }
+    /// Counts the capability records an older build left in the project.
+    /// Absent when the workspace cannot answer for them.
+    fn capability_counts(&self) -> Option<CapabilityCountsV1> {
+        None
+    }
+    /// Revokes every capability grant an older build left in the project and
+    /// removes its broker descriptor, returning how many grants went.
+    fn revoke_capability_grants(&self) -> AppResult<usize> {
+        Ok(0)
     }
     fn shutdown(&self) -> AppResult<()>;
 }
@@ -1346,44 +1342,30 @@ impl DesktopRuntime {
 
     /// Clears every app-scoped record and revokes every capability grant, and
     /// reports what went so the confirmation dialog can be honest. Grants live
-    /// in the project, so revoking them writes to the open project's store;
-    /// plans, tasks, notes, the recents registry, and capability definitions
-    /// are untouched. The store is opened and the records are deleted first: a
-    /// store that cannot be opened must not cost the user their grants for
-    /// nothing.
+    /// in the project, so revoking them writes to the open project's store
+    /// through the store itself; capability brokering is retired and no broker
+    /// exists to ask. Plans, tasks, notes, the recents registry, and capability
+    /// definitions are untouched. The store is opened and the records are
+    /// deleted first: a store that cannot be opened must not cost the user
+    /// their grants for nothing.
     fn reset_application_state(self: &Arc<Self>, arguments: &[Value]) -> AppResult<Value> {
         require_argument_count("ResetApplicationState", arguments, 0)?;
         let _lease = self.begin_native_action()?;
         let records = reset_application_records(&self.global_store()?)?;
         value(ResetApplicationStateResultV1 {
             records,
-            capability_grants: self.revoke_capability_grants(),
+            capability_grants: self.revoke_capability_grants()?,
         })
     }
 
-    /// Disables every enabled capability in the open workspace, which revokes
-    /// the grant without deleting the operator's capability definition. There
-    /// is nothing to revoke while no workspace is open.
-    fn revoke_capability_grants(self: &Arc<Self>) -> usize {
-        let generation = self.workspace_state().generation;
-        let Ok(listed) = self.with_workspace("GetCapabilitiesV2", &[json!(generation)]) else {
-            return 0;
-        };
-        let granted: Vec<u64> = listed["capabilities"]
-            .as_array()
-            .map_or_else(Vec::new, |rows| {
-                rows.iter()
-                    .filter(|row| row["state"] == "enabled")
-                    .filter_map(|row| row["capability"]["id"].as_u64())
-                    .collect()
-            });
-        granted
-            .into_iter()
-            .filter(|id| {
-                self.with_workspace("DisableCapabilityV2", &[json!(generation), json!(id)])
-                    .is_ok()
-            })
-            .count()
+    /// Revokes every leftover capability grant in the open workspace, which
+    /// keeps the operator's capability definitions. There is nothing to revoke
+    /// while no workspace is open.
+    fn revoke_capability_grants(&self) -> AppResult<usize> {
+        if self.workspace_state().status != WorkspaceStatus::Open {
+            return Ok(0);
+        }
+        self.with_open_workspace(|workspace| workspace.revoke_capability_grants())
     }
 
     fn get_diagnostics_report(self: &Arc<Self>, arguments: &[Value]) -> AppResult<Value> {
@@ -1434,21 +1416,16 @@ impl DesktopRuntime {
             &home,
             &self.version,
             state.project.as_ref(),
-            self.capability_counts(state.generation),
+            self.capability_counts(),
         ))
     }
 
-    /// Counts capability grants through the open workspace. Absent while no
-    /// project workspace can answer for them.
-    fn capability_counts(&self, generation: u64) -> Option<CapabilityCountsV1> {
-        let capabilities = self
-            .with_workspace("GetCapabilitiesV2", &[json!(generation)])
-            .ok()?;
-        let rows = capabilities.get("capabilities")?.as_array()?;
-        Some(CapabilityCountsV1 {
-            granted: rows.iter().filter(|row| row["state"] == "enabled").count(),
-            total: rows.len(),
-        })
+    /// Counts leftover capability grants through the open workspace. Absent
+    /// while no project workspace can answer for them.
+    fn capability_counts(&self) -> Option<CapabilityCountsV1> {
+        self.with_open_workspace(|workspace| Ok(workspace.capability_counts()))
+            .ok()
+            .flatten()
     }
 
     fn get_global_overview_v1(self: &Arc<Self>, arguments: &[Value]) -> AppResult<Value> {
@@ -1755,6 +1732,15 @@ impl DesktopRuntime {
     }
 
     fn with_workspace(&self, method: &str, arguments: &[Value]) -> AppResult<Value> {
+        self.with_open_workspace(|workspace| workspace.invoke(method, arguments))
+    }
+
+    /// Runs one call against the open workspace under the same admission and
+    /// call lease as an IPC command.
+    fn with_open_workspace<T>(
+        &self,
+        call: impl FnOnce(&dyn DesktopWorkspace) -> AppResult<T>,
+    ) -> AppResult<T> {
         let workspace = {
             let mut state = lock(&self.state);
             if state.shutting_down {
@@ -1776,7 +1762,7 @@ impl DesktopRuntime {
             workspace
         };
         let _lease = DesktopCallLease { runtime: self };
-        workspace.invoke(method, arguments)
+        call(workspace.as_ref())
     }
 
     #[allow(clippy::too_many_lines)] // One fenced authority transaction owns every recovery edge.
@@ -1853,8 +1839,8 @@ impl DesktopRuntime {
         let initialized = (|| -> AppResult<InitializeProjectResultV1> {
             // The drain above waited for calls admitted before the fence, and
             // an open admitted then may have published a workspace since the
-            // check. Building over it would orphan its terminals, agent
-            // server, and broker, so initialization refuses instead.
+            // check. Building over it would orphan its terminals and agent
+            // server, so initialization refuses instead.
             if lock(&self.state).workspace.is_some() {
                 return Err(AppError::Message(
                     "project initialization requires no open workspace".to_owned(),
@@ -2616,7 +2602,6 @@ pub struct BoundDesktopWorkspace {
     application: Mutex<Box<dyn ApplicationPort + Send>>,
     terminal: Option<Arc<TerminalRuntime>>,
     agent: Option<Arc<dyn DesktopAgentRuntime>>,
-    broker: Option<Arc<Broker>>,
     resource_transition: Mutex<()>,
     resource_admission: Arc<ResourceAdmissionGate>,
     workspace_calls: Arc<WorkspaceCallGate>,
@@ -2647,7 +2632,6 @@ impl BoundDesktopWorkspace {
         application: Box<dyn ApplicationPort + Send>,
         terminal: Option<Arc<TerminalRuntime>>,
         agent: Option<Arc<dyn DesktopAgentRuntime>>,
-        broker: Option<Arc<Broker>>,
     ) -> Self {
         let endpoint = bindings
             .project
@@ -2661,7 +2645,6 @@ impl BoundDesktopWorkspace {
             application: Mutex::new(application),
             terminal,
             agent,
-            broker,
             resource_transition: Mutex::new(()),
             resource_admission: Arc::new(ResourceAdmissionGate {
                 state: Mutex::new(ResourceAdmissionState {
@@ -3765,127 +3748,43 @@ impl BoundDesktopWorkspace {
             _ => Err(unavailable(method)),
         }
     }
-
-    #[allow(clippy::too_many_lines)]
-    fn invoke_capability(&self, method: &str, arguments: &[Value]) -> AppResult<Value> {
-        let generation = u64_arg(arguments, 0)?;
-        self.require_generation(generation)?;
-        match method {
-            "GetCapabilitiesV2" => {
-                let store = self.project_store()?;
-                let capabilities = store
-                    .capabilities()?
-                    .iter()
-                    .map(capability_view)
-                    .collect::<AppResult<Vec<_>>>()?;
-                Ok(json!({ "generation": self.generation, "capabilities": capabilities }))
-            }
-            "PreviewCapabilityV2" => {
-                let capability = capability_draft_arg(arguments, 1)?;
-                let preview = normalize(&capability).map_err(message)?;
-                Ok(json!({
-                    "generation": self.generation,
-                    "view": capability_preview_view(&preview.capability, &preview.effective_scope, "draft")?
-                }))
-            }
-            "SaveCapabilityV2" => {
-                let draft = capability_draft_arg(arguments, 1)?;
-                let preview = normalize(&draft).map_err(message)?;
-                let store = self.project_store()?;
-                let saved = if draft.id == 0 {
-                    store.add_capability(preview.capability)?
-                } else {
-                    let stored = store.capability(draft.id)?;
-                    let mut candidate = preview.capability;
-                    candidate.id = stored.id;
-                    candidate.revision = stored.revision;
-                    candidate.enabled = stored.enabled;
-                    candidate.approved_at = stored.approved_at;
-                    candidate.expires_at = stored.expires_at;
-                    store.update_capability(candidate)?
-                };
-                self.revoke_capability(saved.id);
-                Ok(json!({ "generation": self.generation, "view": capability_view(&saved)? }))
-            }
-            "EnableCapabilityV2" => {
-                let id = u64_arg(arguments, 1)?;
-                let expected = string_arg(arguments, 2)?;
-                let store = self.project_store()?;
-                let stored = store.capability(id)?;
-                let wire = CapabilityWire::try_from(&stored).map_err(message)?;
-                if wire.scope_digest != expected {
-                    return Err(AppError::Message(
-                        "effective scope changed; preview again before enabling".to_owned(),
-                    ));
-                }
-                let proof = confirm_approval(&stored, stored.scope_digest).map_err(message)?;
-                let saved = store.approve_capability(proof)?;
-                self.revoke_capability(id);
-                Ok(json!({ "generation": self.generation, "view": capability_view(&saved)? }))
-            }
-            "DisableCapabilityV2" | "ExpireCapabilityV2" | "RemoveCapabilityV2" => {
-                let id = u64_arg(arguments, 1)?;
-                let store = self.project_store()?;
-                let stored = store.capability(id)?;
-                let result = match method {
-                    "DisableCapabilityV2" => Some(store.disable_capability(id, stored.revision)?),
-                    "ExpireCapabilityV2" => Some(store.expire_capability(id, stored.revision)?),
-                    _ => {
-                        store.delete_capability(id, stored.revision)?;
-                        None
-                    }
-                };
-                self.revoke_capability(id);
-                result.map_or_else(
-                    || Ok(json!({ "generation": self.generation })),
-                    |saved| {
-                        Ok(json!({
-                            "generation": self.generation,
-                            "view": capability_view(&saved)?
-                        }))
-                    },
-                )
-            }
-            "GetCapabilityAuditsV2" => {
-                let id = u64_arg(arguments, 1)?;
-                let requested = i64_arg(arguments, 2)?;
-                let limit = if (1..=100).contains(&requested) {
-                    usize::try_from(requested).unwrap_or(25)
-                } else {
-                    25
-                };
-                let store = self.project_store()?;
-                let audits = store
-                    .capability_audits(id, limit)?
-                    .iter()
-                    .map(CapabilityAuditWire::try_from)
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(message)?;
-                Ok(json!({ "generation": self.generation, "audits": audits }))
-            }
-            "TestCapabilityV2" => {
-                let draft = capability_draft_arg(arguments, 1)?;
-                let ssh_id = u64_arg(arguments, 2)?;
-                let ssh = if ssh_id == 0 {
-                    None
-                } else {
-                    Some(self.project_store()?.capability(ssh_id)?)
-                };
-                let diagnostic = run_capability_diagnostic(draft, ssh, self.endpoint.root.clone())?;
-                Ok(json!({ "generation": self.generation, "diagnostic": diagnostic }))
-            }
-            _ => Err(unavailable(method)),
-        }
-    }
-
-    fn revoke_capability(&self, id: u64) {
-        if let Some(broker) = &self.broker {
-            broker.revoke_capability(id);
-        }
-    }
 }
 
+/// The descriptor the retired capability broker published per project.
+const RETIRED_CAPABILITY_DESCRIPTOR: &str = "capability-broker.json";
+
 impl DesktopWorkspace for BoundDesktopWorkspace {
+    fn capability_counts(&self) -> Option<CapabilityCountsV1> {
+        let _workspace_call = self.begin_workspace_call().ok()?;
+        let capabilities = self.project_store().ok()?.capabilities().ok()?;
+        Some(CapabilityCountsV1 {
+            granted: capabilities
+                .iter()
+                .filter(|capability| {
+                    capability.enabled && !timestamp_expired(capability.expires_at)
+                })
+                .count(),
+            total: capabilities.len(),
+        })
+    }
+
+    /// Capability brokering is retired (it moved to pam): no broker serves a
+    /// grant any more, so an enabled grant left by an older build authorizes
+    /// nothing. Clearing app data still disables those records and removes the
+    /// broker descriptor an older build published, so no stale grant or
+    /// descriptor outlives the reset.
+    fn revoke_capability_grants(&self) -> AppResult<usize> {
+        let _workspace_call = self.begin_workspace_call()?;
+        let revoked = self.project_store()?.revoke_capability_grants()?;
+        ptrack_agent::remove_runtime_file(
+            &self.bindings.global_home,
+            &self.endpoint.root,
+            RETIRED_CAPABILITY_DESCRIPTOR,
+        )
+        .map_err(message)?;
+        Ok(revoked)
+    }
+
     fn project(&self) -> WorkspaceProject {
         WorkspaceProject {
             name: self
@@ -4770,7 +4669,6 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
                     "replayed": result.replayed
                 }))
             }
-            method if routes_to_capability(method) => self.invoke_capability(method, arguments),
             method if method.contains("Agent") => self.invoke_agent(method, arguments),
             _ => Err(unavailable(method)),
         }
@@ -4840,9 +4738,6 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
         {
             errors.push(error.to_string());
         }
-        if let Some(broker) = &self.broker {
-            broker.shutdown();
-        }
         if errors.is_empty() {
             Ok(())
         } else {
@@ -4881,29 +4776,7 @@ fn desktop_close_override(
     if to != TaskStatus::Done || from == TaskStatus::Done {
         return Vec::new();
     }
-    let mut missing = Vec::new();
-    if !snapshot.notes.iter().any(|note| {
-        note.target == NoteTarget::Task
-            && note.target_id == task_id
-            && note.body.starts_with("closeout:")
-    }) {
-        missing.push("no closeout summary");
-    }
-    if !snapshot
-        .commits
-        .iter()
-        .any(|commit| commit.task_id == task_id)
-    {
-        missing.push("no linked commit");
-    }
-    if missing.is_empty() {
-        return Vec::new();
-    }
-    vec![format!(
-        "override: closed from {} without evidence ({})",
-        crate::UiSurface::Desktop.as_str(),
-        missing.join("; ")
-    )]
+    crate::service::ui_close_override_notes(snapshot, crate::UiSurface::Desktop, task_id)
 }
 
 /// Which linked resources one exact resource check covers.
@@ -6379,70 +6252,10 @@ fn bound(shown: usize, total: usize) -> Value {
     json!({ "shown": shown, "total": total, "more": total.saturating_sub(shown) })
 }
 
-fn capability_view(capability: &Capability) -> AppResult<Value> {
-    match normalize(capability) {
-        Ok(preview) => {
-            let state = if !preview.capability.enabled {
-                "disabled"
-            } else if timestamp_expired(preview.capability.expires_at) {
-                "expired"
-            } else {
-                "enabled"
-            };
-            capability_preview_view(&preview.capability, &preview.effective_scope, state)
-        }
-        Err(error) => Ok(json!({
-            "capability": CapabilityWire::try_from(capability).map_err(message)?,
-            "effective_scope": "",
-            "state": "invalid",
-            "error": error.to_string()
-        })),
-    }
-}
-
-fn capability_preview_view(capability: &Capability, scope: &str, state: &str) -> AppResult<Value> {
-    Ok(json!({
-        "capability": CapabilityWire::try_from(capability).map_err(message)?,
-        "effective_scope": scope,
-        "state": state
-    }))
-}
-
 fn timestamp_expired(timestamp: Timestamp) -> bool {
     timestamp
         .unix_nanoseconds()
         .is_some_and(|value| value <= OffsetDateTime::now_utc().unix_timestamp_nanos())
-}
-
-fn run_capability_diagnostic(
-    draft: Capability,
-    ssh: Option<Capability>,
-    project_root: PathBuf,
-) -> AppResult<ConnectionDiagnostic> {
-    std::thread::Builder::new()
-        .name("ptrack-capability-diagnostic".to_owned())
-        .spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(AppError::Io)?;
-            let cancellation = CancellationToken::new();
-            let tester = ConnectionTester;
-            Ok(runtime.block_on(async {
-                match draft.kind {
-                    CapabilityKind::Http => tester.test_http(&cancellation, &draft).await,
-                    CapabilityKind::Git => {
-                        tester
-                            .test_git(&cancellation, &draft, ssh.as_ref(), &project_root)
-                            .await
-                    }
-                    CapabilityKind::Ssh => tester.test_ssh(&cancellation, &draft).await,
-                }
-            }))
-        })
-        .map_err(AppError::Io)?
-        .join()
-        .map_err(|_| AppError::Message("capability diagnostic worker failed".to_owned()))?
 }
 
 /// Applies a preferences patch and, when the patch turns the startup opt-in
@@ -6819,17 +6632,6 @@ fn parse_workflow_kind(value: &str) -> AppResult<AgentWorkflowKind> {
     }
 }
 
-fn capability_draft_arg(arguments: &[Value], index: usize) -> AppResult<Capability> {
-    let wire: CapabilityDraftWire = serde_json::from_value(
-        arguments
-            .get(index)
-            .cloned()
-            .ok_or_else(|| missing_arg(index))?,
-    )
-    .map_err(|error| AppError::Message(error.to_string()))?;
-    wire.try_into().map_err(message)
-}
-
 fn value<T: Serialize>(value: T) -> AppResult<Value> {
     serde_json::to_value(value).map_err(|error| AppError::Message(error.to_string()))
 }
@@ -7041,15 +6843,6 @@ fn sanitize_recent_open_error(error: AppError) -> AppError {
         | AppError::ScratchpadConflict(_)
         | AppError::Message(_) => AppError::Message("recent-project-open-failed".to_owned()),
     }
-}
-
-/// Whether a workspace method is answered by the capability broker.
-///
-/// The stem is `Capabilit`, not `Capability`: `GetCapabilitiesV2` is the one
-/// method in the allowlist that pluralizes, and the longer stem skipped it into
-/// the unavailable arm, leaving its handler unreachable.
-pub(crate) fn routes_to_capability(method: &str) -> bool {
-    method.contains("Capabilit")
 }
 
 fn unavailable(feature: &str) -> AppError {

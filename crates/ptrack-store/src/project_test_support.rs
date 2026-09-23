@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use ptrack_core::{CapabilityAudit, CapabilityKind, NativeRecord, Timestamp, encode_record};
+use ptrack_core::{
+    Capability, CapabilityAudit, CapabilityKind, NativeRecord, Timestamp, encode_record,
+};
 use redb::Database;
 
 use crate::typed;
@@ -30,6 +32,18 @@ impl ProjectStore {
         before_open: impl FnOnce() -> StoreResult<()>,
     ) -> StoreResult<Self> {
         Self::open_existing_pinned_inner(pinned, binding, writer_version, before_open)
+    }
+
+    /// Writes capability records exactly as the retired broker's store API
+    /// left them, at the current payload schema. Production code can no
+    /// longer create one.
+    pub(crate) fn seed_capability_records(&self, records: &[Capability]) -> StoreResult<()> {
+        self.write(|transaction| {
+            for record in records {
+                typed::put(transaction, RecordKey::Id(record.id), record)?;
+            }
+            Ok(())
+        })
     }
 
     pub(crate) fn seed_capability_audits(&self, count: u64) -> StoreResult<()> {

@@ -152,12 +152,6 @@ fn dispatch(
             serve_project_mcp(application, input, io.stdout, &io.cancellation)?;
             Ok(RunOutcome::ExitSuccess)
         }
-        ["capability", "call"] => capability_call(leaf, application, io),
-        ["capability", "mcp"] => {
-            let input = std::mem::replace(&mut io.stdin, Box::new(std::io::empty()));
-            application.capability_mcp(input, io.stdout, &io.cancellation)?;
-            Ok(RunOutcome::ExitSuccess)
-        }
         ["version"] => {
             output::line(io.stdout, format_args!("ptrack {}", crate::version()))?;
             Ok(RunOutcome::ExitSuccess)
@@ -1916,23 +1910,6 @@ const fn confidence_name(value: ptrack_app::IntelligenceConfidence) -> &'static 
         ptrack_app::IntelligenceConfidence::Medium => "medium",
         ptrack_app::IntelligenceConfidence::High => "high",
     }
-}
-
-fn capability_call(
-    matches: &ArgMatches,
-    application: &mut dyn ApplicationPort,
-    io: &mut Io<'_>,
-) -> Result<RunOutcome, CliError> {
-    let arguments = option(matches, "arguments").map_or("{}", String::as_str);
-    let valid =
-        serde_json::from_str::<serde_json::Value>(arguments).is_ok_and(|value| value.is_object());
-    if !valid {
-        return Err(CliError::message("--arguments must be one JSON object"));
-    }
-    let result = application.capability_call(first(matches, "tool")?, arguments)?;
-    io.stdout.write_all(&result)?;
-    io.stdout.write_all(b"\n")?;
-    Ok(RunOutcome::ExitSuccess)
 }
 
 fn leaf_matches<'a>(root: &'a ArgMatches, path: &[String]) -> &'a ArgMatches {

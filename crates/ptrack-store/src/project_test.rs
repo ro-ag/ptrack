@@ -5,11 +5,10 @@ use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Barrier};
 use std::time::Instant;
 
-use ptrack_capability_policy::{AuditEvent, confirm_approval, normalize, sanitize_audit};
 use ptrack_core::{
-    Capability, CapabilityAudit, CapabilityAuditPolicy, CapabilityKind, CapabilityLimits, Digest32,
-    GitScope, LanguageId, MIN_NATIVE_PAYLOAD_SCHEMA, MemoryKind, NativeRecord, NoteTarget, Plan,
-    PlanStatus, RecordKind, SCRATCHPAD_PAYLOAD_SCHEMA, SCRATCHPAD_TEXT_MAX_BYTES, Scratchpad,
+    Capability, CapabilityAuditPolicy, CapabilityKind, CapabilityLimits, Digest32, GitScope,
+    LanguageId, MIN_NATIVE_PAYLOAD_SCHEMA, MemoryKind, NativeRecord, NoteTarget, Plan, PlanStatus,
+    RecordKind, SCRATCHPAD_PAYLOAD_SCHEMA, SCRATCHPAD_TEXT_MAX_BYTES, Scratchpad,
     ScratchpadSnippet, StackProfile, StackProject, StackSummary, TaskStatus, Timestamp,
     decode_record, encode_record_at_schema,
 };
@@ -670,68 +669,32 @@ fn memory_writeback_is_idempotent_validated_and_bounded_reads_are_exact() {
     ));
 }
 
-#[test]
-fn capability_audit_limits_match_unlimited_and_pruning_contracts() {
-    let temp = Temp::new();
-    let path = temp.path("audits.redb");
-    let store = ProjectStore::create_new_with_clock(
-        &path,
-        binding(&path, StoreKind::Project, "project-audits"),
-        "test",
-        clock(),
-    )
-    .unwrap();
-    let audit = |capability_id| CapabilityAudit {
-        id: 0,
-        capability_id,
-        agent_profile: "agent".to_owned(),
-        kind: CapabilityKind::Git,
-        operation: "fetch".to_owned(),
-        target: "origin".to_owned(),
-        success: true,
-        error_class: "none".to_owned(),
-        duration_millis: 1,
-        request_bytes: 0,
-        response_bytes: 0,
-        redirects: 0,
-        created_at: Timestamp::Zero,
+/// A grant as the retired broker left it: enabled, approved, and unexpired.
+fn leftover_grant(id: u64, enabled: bool) -> Capability {
+    let approved = Timestamp::Fixed {
+        seconds: 1_700_000_000,
+        nanoseconds: 0,
+        offset_seconds: 0,
     };
-    for capability_id in [1, 1, 1, 2] {
-        store
-            .add_capability_audit_bounded(audit(capability_id), 0, 0)
-            .unwrap();
-    }
-    assert_eq!(store.capability_audits(0, 0).unwrap().len(), 4);
-    store.add_capability_audit_bounded(audit(1), 2, 3).unwrap();
-    assert_eq!(store.capability_audits(0, 0).unwrap().len(), 3);
-    assert_eq!(store.capability_audits(1, 0).unwrap().len(), 2);
-    store.prune_capability_audits(1, -1).unwrap();
-    assert!(store.capability_audits(1, 0).unwrap().is_empty());
-    assert_eq!(store.capability_audits(2, 0).unwrap().len(), 1);
-}
-
-#[test]
-fn public_audit_api_prunes_to_fixed_global_ceiling() {
-    let temp = Temp::new();
-    let path = temp.path("public-audits.redb");
-    let store = ProjectStore::create_new_with_clock(
-        &path,
-        binding(&path, StoreKind::Project, "project-public-audits"),
-        "test",
-        clock(),
-    )
-    .unwrap();
-    let mut capability = Capability {
-        id: 42,
+    Capability {
+        id,
         model_version: 1,
-        revision: 1,
-        name: "audit".to_owned(),
+        revision: 3,
+        name: format!("grant-{id}"),
         kind: CapabilityKind::Git,
         agent_profile: "agent".to_owned(),
-        enabled: false,
+        enabled,
         approval_duration_seconds: 3_600,
-        approved_at: Timestamp::Zero,
-        expires_at: Timestamp::Zero,
+        approved_at: if enabled { approved } else { Timestamp::Zero },
+        expires_at: if enabled {
+            Timestamp::Fixed {
+                seconds: 1_700_003_600,
+                nanoseconds: 0,
+                offset_seconds: 0,
+            }
+        } else {
+            Timestamp::Zero
+        },
         scope_digest: Digest32([1; 32]),
         limits: CapabilityLimits {
             timeout_seconds: 30,
@@ -743,35 +706,23 @@ fn public_audit_api_prunes_to_fixed_global_ceiling() {
         },
         audit: CapabilityAuditPolicy {
             enabled: true,
-            retain_last: 1_000,
+            retain_last: 10,
         },
         http: None,
-        git: None,
+        git: Some(GitScope {
+            remote_name: "origin".to_owned(),
+            remote_url: "https://example.test/repo.git".to_owned(),
+            operations: vec!["fetch".to_owned()],
+            branches: vec!["main".to_owned()],
+            refspecs: Vec::new(),
+            allow_tags: false,
+            allow_force_push: false,
+            allow_delete_refs: false,
+        }),
         ssh: None,
-        created_at: Timestamp::Zero,
-        updated_at: Timestamp::Zero,
-    };
-    let event = AuditEvent {
-        operation: "fetch".to_owned(),
-        target: "origin".to_owned(),
-        success: true,
-        error_class: String::new(),
-        duration_millis: 0,
-        request_bytes: 0,
-        response_bytes: 0,
-        redirects: 0,
-    };
-    store.seed_capability_audits(5_000).unwrap();
-    capability.id = 10_000;
-    let appended = store
-        .record_capability_audit(sanitize_audit(&capability, &event).unwrap())
-        .unwrap();
-    assert_eq!(appended.id, 5_001);
-    let audits = store.capability_audits(0, 0).unwrap();
-    assert_eq!(audits.len(), 5_000);
-    assert_eq!(audits.first().unwrap().id, 5_001);
-    assert_eq!(audits.last().unwrap().id, 2);
-    assert!(!audits.iter().any(|audit| audit.id == 1));
+        created_at: approved,
+        updated_at: approved,
+    }
 }
 
 #[test]
@@ -781,385 +732,75 @@ fn raw_redb_secret_canary_is_rejected_on_reopen() {
     let expected = binding(&path, StoreKind::Project, "project-raw-secret");
     let store =
         ProjectStore::create_new_with_clock(&path, expected.clone(), "test", clock()).unwrap();
-    let mut capability = Capability {
-        id: 1,
-        model_version: 1,
-        revision: 1,
-        name: "audit".to_owned(),
-        kind: CapabilityKind::Git,
-        agent_profile: "agent".to_owned(),
-        enabled: false,
-        approval_duration_seconds: 3_600,
-        approved_at: Timestamp::Zero,
-        expires_at: Timestamp::Zero,
-        scope_digest: Digest32([1; 32]),
-        limits: CapabilityLimits {
-            timeout_seconds: 30,
-            max_request_bytes: 1_024,
-            max_response_bytes: 1_024,
-            max_output_bytes: 1_024,
-            max_redirects: 0,
-            max_concurrent: 1,
-        },
-        audit: CapabilityAuditPolicy {
-            enabled: true,
-            retain_last: 1,
-        },
-        http: None,
-        git: None,
-        ssh: None,
-        created_at: Timestamp::Zero,
-        updated_at: Timestamp::Zero,
-    };
-    let event = AuditEvent {
-        operation: "fetch".to_owned(),
-        target: "origin".to_owned(),
-        success: true,
-        error_class: String::new(),
-        duration_millis: 0,
-        request_bytes: 0,
-        response_bytes: 0,
-        redirects: 0,
-    };
-    store
-        .record_capability_audit(sanitize_audit(&capability, &event).unwrap())
-        .unwrap();
     drop(store);
     crate::project_test_support::inject_raw_audit_secret(&path);
     assert!(matches!(
         ProjectStore::open_existing(&path, &expected, "test"),
         Err(StoreError::InvalidManifest(_))
     ));
-    capability.audit.enabled = false;
-    assert!(sanitize_audit(&capability, &event).is_none());
 }
 
 #[test]
-fn public_audit_path_never_persists_secret_bearing_event_fields() {
-    const SECRET: &str = "super-secret-audit-canary-7c94";
+fn a_database_with_capability_grants_and_audits_still_opens_with_its_data_intact() {
     let temp = Temp::new();
-    let path = temp.path("sanitized-audit.redb");
-    let expected = binding(&path, StoreKind::Project, "project-sanitized-audit");
+    let path = temp.path("retired-capabilities.redb");
+    let expected = binding(&path, StoreKind::Project, "project-retired-capabilities");
     let store =
         ProjectStore::create_new_with_clock(&path, expected.clone(), "test", clock()).unwrap();
-    let capability = Capability {
-        id: 7,
-        model_version: 1,
-        revision: 1,
-        name: "audit".to_owned(),
-        kind: CapabilityKind::Http,
-        agent_profile: "agent".to_owned(),
-        enabled: false,
-        approval_duration_seconds: 3_600,
-        approved_at: Timestamp::Zero,
-        expires_at: Timestamp::Zero,
-        scope_digest: Digest32([1; 32]),
-        limits: CapabilityLimits {
-            timeout_seconds: 30,
-            max_request_bytes: 1_024,
-            max_response_bytes: 1_024,
-            max_output_bytes: 1_024,
-            max_redirects: 0,
-            max_concurrent: 1,
-        },
-        audit: CapabilityAuditPolicy {
-            enabled: true,
-            retain_last: 10,
-        },
-        http: None,
-        git: None,
-        ssh: None,
-        created_at: Timestamp::Zero,
-        updated_at: Timestamp::Zero,
-    };
-    let event = AuditEvent {
-        operation: "GET".to_owned(),
-        target: format!("https://example.com/private?token={SECRET}"),
-        success: false,
-        error_class: format!("raw stderr {SECRET}"),
-        duration_millis: 1,
-        request_bytes: 2,
-        response_bytes: 3,
-        redirects: 0,
-    };
-    let persisted = store
-        .record_capability_audit(sanitize_audit(&capability, &event).unwrap())
+    let plan = store.add_plan("keeps working", 0).unwrap();
+    let task = store.add_task(plan.id, "still here").unwrap();
+    store
+        .seed_capability_records(&[leftover_grant(1, true), leftover_grant(2, false)])
         .unwrap();
-    assert_eq!(persisted.target, "https://example.com");
-    assert_eq!(persisted.error_class, "internal");
-    let decoded = store.capability_audits(capability.id, 1).unwrap();
-    assert_eq!(decoded, [persisted]);
+    store.seed_capability_audits(3).unwrap();
     drop(store);
-    let raw = fs::read(&path).unwrap();
-    assert!(
-        !raw.windows(SECRET.len())
-            .any(|window| window == SECRET.as_bytes())
-    );
+
     let reopened = ProjectStore::open_existing(&path, &expected, "test").unwrap();
     assert_eq!(
-        reopened.capability_audits(capability.id, 1).unwrap(),
-        decoded
+        reopened.capabilities().unwrap(),
+        [leftover_grant(1, true), leftover_grant(2, false)]
     );
+    assert_eq!(reopened.capability_audits(0, 0).unwrap().len(), 3);
+    assert_eq!(reopened.plans().unwrap(), [plan]);
+    assert_eq!(reopened.tasks().unwrap(), [task]);
 }
 
 #[test]
-fn capability_crud_cannot_mint_or_edit_approval_state() {
+fn revoking_leftover_grants_disables_them_and_keeps_definitions_and_audits() {
     let temp = Temp::new();
-    let path = temp.path("capabilities.redb");
-    let store = ProjectStore::create_new_with_clock(
-        &path,
-        binding(&path, StoreKind::Project, "project-capabilities"),
-        "test",
-        clock(),
-    )
-    .unwrap();
-    let approval = clock().0;
-    let mut value = Capability {
-        id: 99,
-        model_version: 1,
-        revision: 99,
-        name: "git".to_owned(),
-        kind: CapabilityKind::Git,
-        agent_profile: "agent".to_owned(),
-        enabled: true,
-        approval_duration_seconds: 3600,
-        approved_at: approval,
-        expires_at: Timestamp::Fixed {
-            seconds: 1_700_003_600,
-            nanoseconds: 123,
-            offset_seconds: 0,
-        },
-        scope_digest: Digest32([1; 32]),
-        limits: CapabilityLimits {
-            timeout_seconds: 30,
-            max_request_bytes: 1024,
-            max_response_bytes: 1024,
-            max_output_bytes: 1024,
-            max_redirects: 0,
-            max_concurrent: 1,
-        },
-        audit: CapabilityAuditPolicy {
-            enabled: true,
-            retain_last: 10,
-        },
-        http: None,
-        git: Some(GitScope {
-            remote_name: "origin".to_owned(),
-            remote_url: "https://example.test/repo.git".to_owned(),
-            operations: vec!["fetch".to_owned()],
-            branches: vec!["main".to_owned()],
-            refspecs: Vec::new(),
-            allow_tags: false,
-            allow_force_push: false,
-            allow_delete_refs: false,
-        }),
-        ssh: None,
-        created_at: Timestamp::Zero,
-        updated_at: Timestamp::Zero,
-    };
-    value = store.add_capability(value).unwrap();
-    assert!(!value.enabled);
-    assert!(value.approved_at.is_zero());
-    assert!(value.expires_at.is_zero());
-
-    let illicit_approval = value.expires_at;
-    value.enabled = true;
-    value.approved_at = approval;
-    value.expires_at = illicit_approval;
-    store.update_capability(value.clone()).unwrap();
-    let persisted = store.capability(value.id).unwrap();
-    assert!(!persisted.enabled);
-    assert!(persisted.approved_at.is_zero());
-    assert!(persisted.expires_at.is_zero());
-}
-
-#[test]
-fn capability_revision_and_lifecycle_cas_are_fail_closed() {
-    let temp = Temp::new();
-    let path = temp.path("capability-cas.redb");
-    let store = ProjectStore::create_new_with_clock(
-        &path,
-        binding(&path, StoreKind::Project, "project-capability-cas"),
-        "test",
-        clock(),
-    )
-    .unwrap();
-    let mut capability = Capability {
-        id: 0,
-        model_version: 1,
-        revision: 0,
-        name: "git".to_owned(),
-        kind: CapabilityKind::Git,
-        agent_profile: "agent".to_owned(),
-        enabled: false,
-        approval_duration_seconds: 3_600,
-        approved_at: Timestamp::Zero,
-        expires_at: Timestamp::Zero,
-        scope_digest: Digest32::EMPTY,
-        limits: CapabilityLimits {
-            timeout_seconds: 30,
-            max_request_bytes: 1_024,
-            max_response_bytes: 1_024,
-            max_output_bytes: 1_024,
-            max_redirects: 0,
-            max_concurrent: 1,
-        },
-        audit: CapabilityAuditPolicy {
-            enabled: true,
-            retain_last: 10,
-        },
-        http: None,
-        git: Some(GitScope {
-            remote_name: "origin".to_owned(),
-            remote_url: "https://example.test/repo.git".to_owned(),
-            operations: vec!["fetch".to_owned()],
-            branches: vec!["main".to_owned()],
-            refspecs: Vec::new(),
-            allow_tags: false,
-            allow_force_push: false,
-            allow_delete_refs: false,
-        }),
-        ssh: None,
-        created_at: Timestamp::Zero,
-        updated_at: Timestamp::Zero,
-    };
-    capability = normalize(&capability).unwrap().capability;
-    capability = store.add_capability(capability).unwrap();
-    let stale = capability.clone();
-    capability.name = "renamed".to_owned();
-    capability = store.update_capability(capability).unwrap();
-    assert!(matches!(
-        store.update_capability(stale),
-        Err(StoreError::CapabilityRevisionChanged { .. })
-    ));
-    assert!(confirm_approval(&capability, Digest32([8; 32])).is_err());
-    let proof = confirm_approval(&capability, capability.scope_digest).unwrap();
-    capability = store.approve_capability(proof).unwrap();
-    assert_eq!(
-        capability.expires_at.unix_nanoseconds(),
-        clock()
-            .0
-            .unix_nanoseconds()
-            .map(|value| value + 3_600_000_000_000)
-    );
-    assert!(matches!(
-        store.delete_capability(capability.id, capability.revision - 1),
-        Err(StoreError::CapabilityRevisionChanged { .. })
-    ));
+    let path = temp.path("revoke-grants.redb");
+    let expected = binding(&path, StoreKind::Project, "project-revoke-grants");
+    let store =
+        ProjectStore::create_new_with_clock(&path, expected.clone(), "test", clock()).unwrap();
     store
-        .delete_capability(capability.id, capability.revision)
+        .seed_capability_records(&[
+            leftover_grant(1, true),
+            leftover_grant(2, false),
+            leftover_grant(3, true),
+        ])
         .unwrap();
-    assert!(matches!(
-        store.capability(capability.id),
-        Err(StoreError::NotFound)
-    ));
-}
+    store.seed_capability_audits(2).unwrap();
 
-#[test]
-fn executable_capability_store_contract_coverage() {
-    let checks: [fn(); 1] = [assert_cap_030_approved_security_edit_revokes];
-    for check in checks {
-        check();
+    assert_eq!(store.revoke_capability_grants().unwrap(), 2);
+    let revoked = store.capabilities().unwrap();
+    assert_eq!(revoked.len(), 3, "definitions are kept");
+    for capability in &revoked {
+        assert!(!capability.enabled);
+        assert!(capability.approved_at.is_zero());
+        assert!(capability.expires_at.is_zero());
     }
-}
-
-fn assert_cap_030_approved_security_edit_revokes() {
-    const START: i64 = 1_800_000_000;
-    let temp = Temp::new();
-    let path = temp.path("capability-security-edit.redb");
-    let store = ProjectStore::create_new_with_clock(
-        &path,
-        binding(
-            &path,
-            StoreKind::Project,
-            "project-capability-security-edit",
-        ),
-        "test",
-        SteppingClock::new(START),
-    )
-    .unwrap();
-    let mut draft = Capability {
-        id: 0,
-        model_version: 0,
-        revision: 0,
-        name: "repository".to_owned(),
-        kind: CapabilityKind::Git,
-        agent_profile: "agent".to_owned(),
-        enabled: false,
-        approval_duration_seconds: 0,
-        approved_at: Timestamp::Zero,
-        expires_at: Timestamp::Zero,
-        scope_digest: Digest32::EMPTY,
-        limits: CapabilityLimits {
-            timeout_seconds: 0,
-            max_request_bytes: 0,
-            max_response_bytes: 0,
-            max_output_bytes: 0,
-            max_redirects: 0,
-            max_concurrent: 0,
-        },
-        audit: CapabilityAuditPolicy {
-            enabled: false,
-            retain_last: 0,
-        },
-        http: None,
-        git: Some(GitScope {
-            remote_name: "origin".to_owned(),
-            remote_url: "https://example.com/repo.git".to_owned(),
-            operations: vec!["fetch".to_owned()],
-            branches: vec!["main".to_owned()],
-            refspecs: Vec::new(),
-            allow_tags: false,
-            allow_force_push: false,
-            allow_delete_refs: false,
-        }),
-        ssh: None,
-        created_at: Timestamp::Zero,
-        updated_at: Timestamp::Zero,
-    };
-    draft = normalize(&draft).unwrap().capability;
-    let stored = store.add_capability(draft).unwrap();
-    assert_eq!(stored.created_at, timestamp(START + 1));
-    assert_eq!(stored.updated_at, timestamp(START + 1));
-
-    let initial_proof = confirm_approval(&stored, stored.scope_digest).unwrap();
-    let approved = store.approve_capability(initial_proof).unwrap();
-    assert!(approved.enabled);
-    assert_eq!(approved.revision, stored.revision + 1);
-    assert_eq!(approved.approved_at, timestamp(START + 2));
-    assert_eq!(approved.updated_at, timestamp(START + 2));
-    let stale_proof = confirm_approval(&approved, approved.scope_digest).unwrap();
-
-    let mut edit = approved.clone();
-    edit.git
-        .as_mut()
-        .unwrap()
-        .operations
-        .push("push".to_owned());
-    edit = normalize(&edit).unwrap().capability;
-    assert_ne!(edit.scope_digest, approved.scope_digest);
-    let updated = store.update_capability(edit).unwrap();
-    assert_eq!(updated.id, approved.id);
-    assert_eq!(updated.created_at, approved.created_at);
-    assert_eq!(updated.revision, approved.revision + 1);
-    assert_eq!(updated.updated_at, timestamp(START + 3));
-    assert!(!updated.enabled);
-    assert!(updated.approved_at.is_zero());
-    assert!(updated.expires_at.is_zero());
-    assert_ne!(updated.scope_digest, approved.scope_digest);
-
-    assert!(matches!(
-        store.approve_capability(stale_proof),
-        Err(StoreError::CapabilityRevisionChanged {
-            expected,
-            actual,
-        }) if expected == approved.revision && actual == updated.revision
-    ));
-    let refreshed_proof = confirm_approval(&updated, updated.scope_digest).unwrap();
-    let reapproved = store.approve_capability(refreshed_proof).unwrap();
-    assert!(reapproved.enabled);
-    assert_eq!(reapproved.revision, updated.revision + 1);
-    assert_eq!(reapproved.approved_at, timestamp(START + 5));
+    assert_eq!(revoked[0].revision, 4);
+    assert_eq!(revoked[0].updated_at, clock().0);
+    assert_eq!(
+        revoked[1],
+        leftover_grant(2, false),
+        "a disabled draft is untouched"
+    );
+    assert_eq!(store.capability_audits(0, 0).unwrap().len(), 2);
+    assert_eq!(store.revoke_capability_grants().unwrap(), 0);
+    drop(store);
+    let reopened = ProjectStore::open_existing(&path, &expected, "test").unwrap();
+    assert_eq!(reopened.capabilities().unwrap(), revoked);
 }
 
 #[test]

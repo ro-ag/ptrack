@@ -568,6 +568,7 @@ impl AgentRuntime {
             return Err(AppError::Message("workspace is closing".to_owned()));
         }
         state.operations = state.operations.saturating_add(1);
+        drop(state);
         Ok(OperationGuard {
             gate: Arc::clone(&self.gate),
         })
@@ -816,18 +817,20 @@ impl AgentRuntimeService for AgentRuntime {
         if let Some(cancellation) = &self.git_cancellation {
             cancellation.cancel();
         }
-        let state = lock(&self.gate.state);
         let (state, timeout) = self
             .gate
             .wake
-            .wait_timeout_while(state, self.operation_shutdown_timeout, |current| {
-                current.operations != 0
-            })
+            .wait_timeout_while(
+                lock(&self.gate.state),
+                self.operation_shutdown_timeout,
+                |current| current.operations != 0,
+            )
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if timeout.timed_out() && state.operations != 0 {
+        let operations_timed_out = timeout.timed_out() && state.operations != 0;
+        drop(state);
+        if operations_timed_out {
             failures.push("wait for AgentRun operations: timeout".to_owned());
         }
-        drop(state);
         if let Err(error) = self.integration.shutdown(self.integration_shutdown_timeout) {
             failures.push(format!("AgentRun integration shutdown: {error}"));
         }
@@ -841,6 +844,7 @@ impl AgentRuntimeService for AgentRuntime {
         let mut state = lock(&self.gate.state);
         state.failure.clone_from(&failure);
         state.finished = true;
+        drop(state);
         self.gate.wake.notify_all();
         failure.map_or(Ok(()), |error| Err(AppError::Message(error)))
     }

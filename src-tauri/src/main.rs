@@ -433,7 +433,7 @@ fn main() {
             stdin: Box::new(std::io::stdin()),
             stdout: &mut stdout,
             stderr: &mut stderr,
-            cancellation: ptrack_app::CapabilityCancellation::new(),
+            cancellation: ptrack_app::McpCancellation::new(),
         },
     );
     match outcome {

@@ -1,14 +1,13 @@
 use std::cell::Cell;
-use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::rc::Rc;
 
 use ptrack_app::{
     ActivityState, ActorIdentity, AgentHandoffInbox, AgentRunObservationV1, AgentRunsV2,
-    AgentRuntimeSummary, AppError, AppResult, ApplicationPort, BoundedSnapshot,
-    CapabilityCancellation, CapabilityMcpOutcome, GuideAction, HookAction, HookResult, InitRequest,
-    InitResult, LeaseState, Mutation, MutationResult, PlanLifecycleOutcome, PlanLifecycleRequest,
-    ProcessOutput, ProcessState, RegistrationKind, RunState,
+    AgentRuntimeSummary, AppError, AppResult, ApplicationPort, BoundedSnapshot, GuideAction,
+    HookAction, HookResult, InitRequest, InitResult, LeaseState, Mutation, MutationResult,
+    PlanLifecycleOutcome, PlanLifecycleRequest, ProcessOutput, ProcessState, RegistrationKind,
+    RunState,
 };
 use ptrack_core::{
     Meta, Plan, PlanStatus, ProjectRef, ProjectSnapshot, Task, TaskStatus, Timestamp,
@@ -89,19 +88,6 @@ impl ApplicationPort for FakeApplication {
     }
 
     fn git_show(&mut self, _reference: &str, _stat: bool) -> AppResult<ProcessOutput> {
-        unreachable!()
-    }
-
-    fn capability_call(&mut self, _tool: &str, _arguments: &str) -> AppResult<Vec<u8>> {
-        unreachable!()
-    }
-
-    fn capability_mcp(
-        &mut self,
-        _input: Box<dyn Read + Send>,
-        _output: &mut dyn Write,
-        _cancellation: &CapabilityCancellation,
-    ) -> AppResult<CapabilityMcpOutcome> {
         unreachable!()
     }
 

@@ -3,12 +3,11 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-use ptrack_capability_policy::{ApprovalProof, SanitizedAudit, normalize};
 use ptrack_core::{
-    CAPABILITY_MODEL_VERSION, Capability, CapabilityAudit, Commit, Counts, Digest32, Issue,
-    IssueStatus, MemoryKind, MemoryWritebackRecord, Meta, Milestone, MilestoneStatus, Note,
-    NoteTarget, Plan, PlanStatus, ProjectSnapshot, Scratchpad, Severity, StackProfile, Task,
-    TaskStatus, Timestamp, Validate, check_summary, would_create_cycle,
+    Capability, CapabilityAudit, Commit, Counts, Digest32, Issue, IssueStatus, MemoryKind,
+    MemoryWritebackRecord, Meta, Milestone, MilestoneStatus, Note, NoteTarget, Plan, PlanStatus,
+    ProjectSnapshot, Scratchpad, Severity, StackProfile, Task, TaskStatus, Timestamp, Validate,
+    check_summary, would_create_cycle,
 };
 
 use crate::typed::{self, StoredRecord};
@@ -20,7 +19,6 @@ use crate::{
 
 pub const CURRENT_PROJECT_FORMAT: u64 = 5;
 pub const MEMORY_WRITEBACK_REPLAY_LIMIT: usize = 256;
-pub const CAPABILITY_AUDIT_GLOBAL_LIMIT: i64 = 5_000;
 pub const FIRST_RUN_TITLE_MAX_BYTES: usize = 240;
 
 /// The configured machine-wide user identity: a stable random ID minted once
@@ -2120,23 +2118,12 @@ impl ProjectStore {
         Ok(values)
     }
 
-    pub fn add_capability(&self, mut capability: Capability) -> StoreResult<Capability> {
-        let now = self.clock.now_local();
-        self.write(|transaction| {
-            capability.id = transaction.next_id(Collection::Capabilities)?;
-            if capability.model_version == 0 {
-                capability.model_version = CAPABILITY_MODEL_VERSION;
-            }
-            capability.revision = 1;
-            capability.enabled = false;
-            capability.approved_at = Timestamp::Zero;
-            capability.expires_at = Timestamp::Zero;
-            capability.created_at = now;
-            capability.updated_at = now;
-            typed::put(transaction, RecordKey::Id(capability.id), &capability)?;
-            Ok(capability)
-        })
-    }
+    // Capability brokering was retired (it moved to pam). The tables and
+    // record kinds stay so an existing project database still opens and
+    // validates, but nothing mints, approves, or audits a capability any more:
+    // what remains is read access and the one revocation "clear app data"
+    // needs. An enabled grant left in an older database authorizes nothing,
+    // because no broker exists to honor it.
 
     pub fn capability(&self, id: u64) -> StoreResult<Capability> {
         self.get_id(id)
@@ -2146,145 +2133,32 @@ impl ProjectStore {
         self.list::<Capability>()
     }
 
-    /// Replaces one draft using its revision as a compare-and-set fence.
-    ///
-    /// Caller-supplied lifecycle state is ignored. Material edits revoke the
-    /// existing approval; name-only edits preserve it.
-    pub fn update_capability(&self, mut capability: Capability) -> StoreResult<Capability> {
+    /// Revokes every leftover capability grant in one transaction: each
+    /// enabled or approved record is disabled with its approval times cleared
+    /// and its revision advanced. The operator's definitions and audit
+    /// history stay. Returns how many grants were revoked.
+    pub fn revoke_capability_grants(&self) -> StoreResult<usize> {
         let now = self.clock.now_local();
         self.write(|transaction| {
-            let existing = required_write::<Capability>(transaction, RecordKey::Id(capability.id))?;
-            require_capability_revision(capability.revision, existing.revision)?;
-            let security_changed = capability_security_changed(&existing, &capability);
-            capability.id = existing.id;
-            capability.model_version = existing.model_version;
-            capability.revision = existing.revision.checked_add(1).ok_or_else(|| {
-                StoreError::InvalidManifest("capability revision overflow".to_owned())
-            })?;
-            capability.created_at = existing.created_at;
-            capability.updated_at = now;
-            if security_changed {
+            let mut revoked = 0;
+            for mut capability in typed::scan_write::<Capability>(transaction)? {
+                if !capability.enabled
+                    && capability.approved_at.is_zero()
+                    && capability.expires_at.is_zero()
+                {
+                    continue;
+                }
                 capability.enabled = false;
                 capability.approved_at = Timestamp::Zero;
                 capability.expires_at = Timestamp::Zero;
-            } else {
-                capability.enabled = existing.enabled;
-                capability.approved_at = existing.approved_at;
-                capability.expires_at = existing.expires_at;
+                capability.revision = capability.revision.checked_add(1).ok_or_else(|| {
+                    StoreError::InvalidManifest("capability revision overflow".to_owned())
+                })?;
+                capability.updated_at = now;
+                typed::put(transaction, RecordKey::Id(capability.id), &capability)?;
+                revoked += 1;
             }
-            typed::put(transaction, RecordKey::Id(capability.id), &capability)?;
-            Ok(capability)
-        })
-    }
-
-    /// Enables only a transaction-local record which independently matches an
-    /// opaque proof minted by pure normalization and explicit digest confirmation.
-    pub fn approve_capability(&self, proof: ApprovalProof) -> StoreResult<Capability> {
-        let now = self.clock.now_local();
-        self.write(|transaction| {
-            let id = proof.capability_id();
-            let mut capability = required_write::<Capability>(transaction, RecordKey::Id(id))?;
-            require_capability_revision(proof.revision(), capability.revision)?;
-            let preview = normalize(&capability).map_err(|_| StoreError::CapabilityScopeChanged)?;
-            if preview.capability != capability
-                || capability.scope_digest != preview.scope_digest
-                || !proof.matches(id, capability.revision, preview.scope_digest)
-            {
-                return Err(StoreError::CapabilityScopeChanged);
-            }
-            capability.enabled = true;
-            capability.approved_at = now;
-            capability.expires_at =
-                timestamp_add_seconds(now, capability.approval_duration_seconds)?;
-            capability.revision = capability.revision.checked_add(1).ok_or_else(|| {
-                StoreError::InvalidManifest("capability revision overflow".to_owned())
-            })?;
-            capability.updated_at = now;
-            typed::put(transaction, RecordKey::Id(id), &capability)?;
-            Ok(capability)
-        })
-    }
-
-    /// Revokes an approval under the draft revision fence.
-    pub fn disable_capability(&self, id: u64, expected_revision: u64) -> StoreResult<Capability> {
-        let now = self.clock.now_local();
-        self.write(|transaction| {
-            let mut capability = required_write::<Capability>(transaction, RecordKey::Id(id))?;
-            require_capability_revision(expected_revision, capability.revision)?;
-            capability.enabled = false;
-            capability.approved_at = Timestamp::Zero;
-            capability.expires_at = Timestamp::Zero;
-            capability.revision = capability.revision.checked_add(1).ok_or_else(|| {
-                StoreError::InvalidManifest("capability revision overflow".to_owned())
-            })?;
-            capability.updated_at = now;
-            typed::put(transaction, RecordKey::Id(id), &capability)?;
-            Ok(capability)
-        })
-    }
-
-    /// Expires an enabled approval at the storage-owned current time.
-    pub fn expire_capability(&self, id: u64, expected_revision: u64) -> StoreResult<Capability> {
-        let now = self.clock.now_local();
-        self.write(|transaction| {
-            let mut capability = required_write::<Capability>(transaction, RecordKey::Id(id))?;
-            require_capability_revision(expected_revision, capability.revision)?;
-            if !capability.enabled || capability.approved_at.is_zero() {
-                return Err(StoreError::CapabilityNotEnabled);
-            }
-            capability.expires_at = now;
-            capability.revision = capability.revision.checked_add(1).ok_or_else(|| {
-                StoreError::InvalidManifest("capability revision overflow".to_owned())
-            })?;
-            capability.updated_at = now;
-            typed::put(transaction, RecordKey::Id(id), &capability)?;
-            Ok(capability)
-        })
-    }
-
-    pub fn delete_capability(&self, id: u64, expected_revision: u64) -> StoreResult<()> {
-        self.write(|transaction| {
-            let existing = required_write::<Capability>(transaction, RecordKey::Id(id))?;
-            require_capability_revision(expected_revision, existing.revision)?;
-            transaction.delete(Collection::Capabilities, RecordKey::Id(id))?;
-            Ok(())
-        })
-    }
-
-    /// Appends already-sanitized metadata and enforces both retention ceilings
-    /// atomically. The hard global ceiling is not caller-configurable.
-    pub fn record_capability_audit(&self, audit: SanitizedAudit) -> StoreResult<CapabilityAudit> {
-        let (audit, per_capability_keep) = audit.into_store_parts(self.clock.now_local());
-        if !(0..=1_000).contains(&per_capability_keep) {
-            return Err(StoreError::InvalidBoundedLimit);
-        }
-        self.add_capability_audit_bounded(audit, per_capability_keep, CAPABILITY_AUDIT_GLOBAL_LIMIT)
-    }
-
-    pub(crate) fn add_capability_audit_bounded(
-        &self,
-        mut audit: CapabilityAudit,
-        per_capability_keep: i64,
-        total_keep: i64,
-    ) -> StoreResult<CapabilityAudit> {
-        let now = self.clock.now_local();
-        self.write(|transaction| {
-            audit.id = transaction.next_id(Collection::CapabilityAudits)?;
-            if audit.created_at == Timestamp::Zero {
-                audit.created_at = now;
-            }
-            typed::put(transaction, RecordKey::Id(audit.id), &audit)?;
-            prune_audits(
-                transaction,
-                audit.capability_id,
-                if per_capability_keep > 0 {
-                    per_capability_keep
-                } else {
-                    -1
-                },
-                if total_keep > 0 { total_keep } else { -1 },
-            )?;
-            Ok(audit)
+            Ok(revoked)
         })
     }
 
@@ -2302,23 +2176,6 @@ impl ProjectStore {
             values.truncate(limit);
         }
         Ok(values)
-    }
-
-    pub fn prune_capability_audits(&self, capability_id: u64, keep: i64) -> StoreResult<()> {
-        self.write(|transaction| {
-            let keep = keep.max(0);
-            if keep == 0 {
-                for audit in typed::scan_write::<CapabilityAudit>(transaction)? {
-                    if audit.capability_id == capability_id {
-                        transaction
-                            .delete(Collection::CapabilityAudits, RecordKey::Id(audit.id))?;
-                    }
-                }
-                Ok(())
-            } else {
-                prune_audits(transaction, capability_id, keep, -1)
-            }
-        })
     }
 
     pub fn write_memory(&self, request: MemoryWriteRequest) -> StoreResult<MemoryWriteResult> {
@@ -2953,69 +2810,6 @@ fn issue_update_timestamp(previous: Timestamp, now: Timestamp) -> StoreResult<Ti
         nanoseconds: u32::try_from(next.rem_euclid(1_000_000_000)).expect("nanosecond remainder"),
         offset_seconds: 0,
     })
-}
-
-fn capability_security_changed(left: &Capability, right: &Capability) -> bool {
-    left.kind != right.kind
-        || left.agent_profile != right.agent_profile
-        || left.approval_duration_seconds != right.approval_duration_seconds
-        || left.limits != right.limits
-        || left.audit != right.audit
-        || left.http != right.http
-        || left.git != right.git
-        || left.ssh != right.ssh
-        || left.scope_digest != right.scope_digest
-}
-
-fn require_capability_revision(expected: u64, actual: u64) -> StoreResult<()> {
-    if expected == actual {
-        Ok(())
-    } else {
-        Err(StoreError::CapabilityRevisionChanged { expected, actual })
-    }
-}
-
-fn timestamp_add_seconds(value: Timestamp, seconds: i64) -> StoreResult<Timestamp> {
-    let Timestamp::Fixed {
-        seconds: base,
-        nanoseconds,
-        offset_seconds,
-    } = value
-    else {
-        return Err(StoreError::InvalidManifest(
-            "capability approval time must be set".to_owned(),
-        ));
-    };
-    Ok(Timestamp::Fixed {
-        seconds: base.checked_add(seconds).ok_or_else(|| {
-            StoreError::InvalidManifest("capability approval expiry overflow".to_owned())
-        })?,
-        nanoseconds,
-        offset_seconds,
-    })
-}
-
-fn prune_audits(
-    transaction: &mut WriteTransaction,
-    capability_id: u64,
-    per_capability_keep: i64,
-    total_keep: i64,
-) -> StoreResult<()> {
-    let mut audits = typed::scan_write::<CapabilityAudit>(transaction)?;
-    audits.sort_by_key(|audit| std::cmp::Reverse(audit.id));
-    let mut matching = 0_i64;
-    for (index, audit) in audits.into_iter().enumerate() {
-        let total = i64::try_from(index + 1).unwrap_or(i64::MAX);
-        let mut remove = total_keep > 0 && total > total_keep;
-        if audit.capability_id == capability_id {
-            matching += 1;
-            remove |= per_capability_keep > 0 && matching > per_capability_keep;
-        }
-        if remove {
-            transaction.delete(Collection::CapabilityAudits, RecordKey::Id(audit.id))?;
-        }
-    }
-    Ok(())
 }
 
 fn validate_memory_request(request: &MemoryWriteRequest) -> StoreResult<()> {
