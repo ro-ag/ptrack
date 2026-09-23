@@ -137,11 +137,19 @@ export function updateProgress(state = {}) {
   };
 }
 
-export function formatUpdateBytes(value) {
-  const bytes = finiteUpdateNumber(value);
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+const updateActionFailures = {
+  check: "Could not check for updates",
+  download: "Could not download the update",
+  apply: "Could not install the update",
+};
+
+// The backend's own reason is the useful part of an update failure, so it is
+// kept verbatim after a short statement of which action stopped.
+export function updateActionFailureMessage(action, error) {
+  const lead = updateActionFailures[action] || "The update action could not continue";
+  const reason = typeof error === "string" ? error : error?.message;
+  const detail = typeof reason === "string" ? reason.trim() : "";
+  return detail ? `${lead}: ${detail}` : `${lead}.`;
 }
 
 function manualActionDetail(action) {

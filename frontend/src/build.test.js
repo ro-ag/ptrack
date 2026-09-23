@@ -97,7 +97,9 @@ describe("production asset layout", () => {
     const versionStyles = styles.match(/\.app-version\{([^}]*)\}/)?.[1];
     expect(versionStyles).toMatch(/(?:^|;)position:relative(?:;|$)/);
     expect(versionStyles).toMatch(/(?:^|;)z-index:1(?:;|$)/);
-    expect(versionStyles).toMatch(/(?:^|;)--wails-draggable:\s*no-drag(?:;|$)/);
+    // Tauri never reads the Wails-era drag property; drag regions are
+    // data-tauri-drag-region attributes instead.
+    expect(styles).not.toContain("--wails-draggable");
     expect(styles).toMatch(/\.state-card\{[^}]*box-shadow:/);
     expect(styles).not.toMatch(
       /\.state-card\{[^}]*(?:animation|transform|opacity):/,
@@ -301,7 +303,10 @@ describe("production asset layout", () => {
     expect(appSource).toContain(
       "elements.setupGuideStaleSkip.hidden = !firstRunState.guideSkipAllowed",
     );
-    expect(appSource).toContain("skipAllowed: false");
+    // A partial guide apply is never skippable; the status mapping lives in
+    // first-run.ts and both the status and reconcile paths go through it.
+    expect(firstRunSource).toContain("skipAllowed: false");
+    expect(appSource.match(/projectGuideStatusResolution\(/g)).toHaveLength(2);
     expect(appSource).toContain("code.textContent = file.diff");
     expect(appSource).not.toContain("code.innerHTML = file.diff");
     expect(appSource).toContain("element.inert = !visible");
@@ -824,8 +829,12 @@ describe("production asset layout", () => {
     expect(app).toContain("ResetWindowLayout");
     expect(app).toContain("ResetApplicationState");
     expect(appSource).toContain("normalizeLayoutState(await api().GetLayoutState())");
-    expect(appSource).toContain(
-      'layoutStatePatch(layoutState, workspaceState.project?.root || "")',
+    // A save carries every project changed since the last one, and a
+    // workspace transition flushes the pending save before it leaves.
+    expect(appSource).toContain(".SetLayoutState(layoutStatePatch(layoutState, roots))");
+    expect(appSource).toContain("dirtyLayoutProjects.add(projectRoot)");
+    expect(appSource).toMatch(
+      /function beginWorkspaceTransition\(\) \{\n(?:  \/\/[^\n]*\n)*  layoutStateScheduler\.flush\(\);/,
     );
     expect(appSource).toContain(
       "applyLayoutState(normalizeLayoutState(await api().ResetWindowLayout()))",
@@ -893,5 +902,88 @@ describe("production asset layout", () => {
     expect(styles).toMatch(
       /\.settings-section-tab\[aria-selected=(?:"true"|true)\]\{[^}]*border-color:var\(--control-border\)/,
     );
+  });
+});
+
+describe("app.js mutation and refresh guards", () => {
+  const appSource = readFileSync(resolve(frontendRoot, "src/app.js"), "utf8");
+  const functionSource = (name) => {
+    const start = appSource.search(new RegExp(`\\n(?:async )?function ${name}\\(`));
+    expect(start).toBeGreaterThan(0);
+    const end = appSource.indexOf("\n}\n", start);
+    return appSource.slice(start, end);
+  };
+
+  it("never lets an automatic plan-done prompt take focus from typing", () => {
+    const prompt = functionSource("maybePromptForPlanCompletion");
+    expect(prompt).toContain("completionPromptMode(completionPromptContext())");
+    expect(prompt).toContain("showPlanCloseoutBanner(plan, key)");
+    expect(functionSource("completionPromptContext")).toContain('closest?.("#terminal-dock")');
+    expect(functionSource("completionPromptContext")).toContain("document.hasFocus()");
+    expect(functionSource("showPlanCloseoutBanner")).toContain('"Review plan closeout"');
+    const done = functionSource("openPlanDoneDialog");
+    expect(done).toContain("requestAnimationFrame(() => elements.planDialogCancel.focus())");
+    expect(done).not.toContain("elements.planDialogSubmit.focus");
+  });
+
+  it("guards mutations and the add-task form against a second submit", () => {
+    const run = functionSource("runMutation");
+    expect(run).toContain("if (!mutationsInFlight.begin(key)) return false;");
+    expect(run).toContain("mutationsInFlight.end(key)");
+    for (const key of ['"add-task"', '"handoff-send"', '"workflow-prepare"', "`worktree:${item.runId}`"]) {
+      expect(appSource.split(key).length - 1).toBeGreaterThanOrEqual(1);
+    }
+    expect(appSource.split("`worktree:${item.runId}`").length - 1).toBe(2);
+    const pending = functionSource("setAddTaskPending");
+    expect(pending).toContain("elements.taskTitle.readOnly = pending");
+    expect(pending).toContain('elements.addForm.querySelector("button").disabled = pending');
+    expect(appSource).toContain(
+      "if (added && elements.taskTitle.value.trim() === title) elements.taskTitle.value = \"\";",
+    );
+  });
+
+  it("keeps plan lifecycle dialogs busy and fenced for every mode", () => {
+    const submit = functionSource("submitPlanLifecycle");
+    expect(submit).toContain("setPlanDialogBusy(true)");
+    expect(submit).toContain("const token = planDialogToken;");
+    expect(submit).toContain("const transfer = planDialogTransferState ? { ...planDialogTransferState } : null;");
+    expect(submit).toContain("showError(error)");
+    expect(submit).not.toContain("transferSubmitDisabled(planDialogTransferState)");
+    expect(functionSource("closePlanDialog")).toContain("if (planDialogBusy()) return;");
+    expect(functionSource("setPlanDialogBusy")).toContain("elements.planDialogCancel.disabled = busy");
+    expect(functionSource("renderWorkspaceState")).toContain("abandonPlanDialog()");
+  });
+
+  it("re-reads the stack without forcing a scan and orders overlapping reads", () => {
+    const stack = functionSource("loadStackProfile");
+    expect(stack).toContain("stackProfileRequests.next()");
+    expect(stack).toContain("api().GetStackProfileV1(rescan)");
+    expect(appSource).toContain("    void loadStackProfile();\n");
+    expect(appSource).not.toContain("loadStackProfile(!stackProfileRequested)");
+    expect(appSource).toContain('elements.stackRescan?.addEventListener("click", () => void loadStackProfile(true))');
+    expect(functionSource("loadHeatmap")).toContain("heatmapRequests.next()");
+  });
+
+  it("fences deferred work to the workspace that started it", () => {
+    expect(appSource).toContain("const pendingDetailTask = new GenerationSlot();");
+    expect(appSource).not.toContain("pendingDetailTaskId");
+    expect(functionSource("renderWorkspaceState")).toContain("pendingDetailTask.clear()");
+    const close = functionSource("requestCloseProject");
+    expect(close).toContain("const closed = workspaceController.capture();");
+    expect(close).toContain("if (!workspaceController.isCurrent(closed)) return;");
+    expect(appSource).toContain("}, 15_000, () => document.hidden);");
+    expect(appSource).toContain("refreshLoop.resume()");
+  });
+
+  it("uses the shared formatters and names the backend in its own words", () => {
+    expect(appSource).not.toContain("Wails");
+    expect(appSource).toContain("The p-track backend is not ready");
+    expect(appSource).not.toContain("function compactBytes");
+    expect(appSource).not.toContain("formatUpdateBytes");
+    expect(appSource).not.toContain("relativeTimestamp");
+    expect(appSource).toContain('formatRelativeTime(time.dateTime, "long")');
+    expect(appSource).not.toContain("timelineCaption");
+    expect(appSource).toContain("showError(new Error(updateActionFailureMessage(action, error)))");
+    expect(appSource).toMatch(/InstallShellCommand\(\)\)\.catch\(/);
   });
 });

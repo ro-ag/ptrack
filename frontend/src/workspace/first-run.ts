@@ -1,3 +1,5 @@
+import { projectGuideRecoveryCopy } from "./presentation";
+
 export type FirstRunIntent = "initialize" | "open";
 
 export type FirstRunPhase =
@@ -555,6 +557,58 @@ export function isProjectGuidePartiallyApplied(value: unknown): boolean {
     return value.message === PROJECT_GUIDE_PARTIALLY_APPLIED_ERROR;
   }
   return value === PROJECT_GUIDE_PARTIALLY_APPLIED_ERROR;
+}
+
+export type ProjectGuideStatusResolution =
+  | { kind: "none" }
+  | { kind: "stale"; event: Extract<FirstRunEvent, { type: "guideStale" }> }
+  | { kind: "unknown-checkpoint"; message: string };
+
+/**
+ * Maps a guide failure (the error kind a status or a call reported) onto the
+ * durable checkpoint the status names. A partial apply is only reviewable
+ * after the project committed; a stale preview is reviewable before commit
+ * or after it. Any other checkpoint for a guide failure is unknown.
+ */
+export function projectGuideStatusResolution(
+  errorKind: unknown,
+  status: Pick<InitializationStatus, "outcome" | "checkpoint">,
+): ProjectGuideStatusResolution {
+  const postCommit = status.outcome === "recovery-required" &&
+    status.checkpoint === "project-committed";
+  if (isProjectGuidePartiallyApplied(errorKind)) {
+    if (!postCommit) {
+      return {
+        kind: "unknown-checkpoint",
+        message: "A partial guide apply was reported at an unknown checkpoint.",
+      };
+    }
+    return {
+      kind: "stale",
+      event: {
+        type: "guideStale",
+        postCommit: true,
+        checkpoint: status.checkpoint,
+        skipAllowed: false,
+        partiallyApplied: true,
+        message: projectGuideRecoveryCopy("partially-applied").error,
+      },
+    };
+  }
+  if (isProjectGuidePreviewStale(errorKind)) {
+    const preCommit = status.outcome === "ready" && status.checkpoint === "none";
+    if (!preCommit && !postCommit) {
+      return {
+        kind: "unknown-checkpoint",
+        message: "Guide preview became stale at an unknown initialization checkpoint.",
+      };
+    }
+    return {
+      kind: "stale",
+      event: { type: "guideStale", postCommit, checkpoint: status.checkpoint },
+    };
+  }
+  return { kind: "none" };
 }
 
 export interface GoalValidation {

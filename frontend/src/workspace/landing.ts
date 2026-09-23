@@ -3,6 +3,7 @@ import { reducedMotionActive } from "../settings/preferences";
 import type { RecentProjectEntry } from "./recent-projects";
 import type { Overview, Summary } from "./overview";
 import { filterRecentProjects } from "./overview";
+import { relativeTime } from "./format";
 
 export type LandingFilter = "all" | "available" | "synced";
 export function landingProjects(projects: RecentProjectEntry[], overview: Overview | null, query: string, filter: LandingFilter) {
@@ -77,11 +78,6 @@ export function horizontalGesture() {
     return Math.sign(distance);
   };
 }
-export function projectCompletion(summary?: Summary) {
-  if (!summary) return null;
-  const total = summary.counts.doneTasks + summary.counts.openTasks;
-  return total ? Math.round(summary.counts.doneTasks / total * 100) : null;
-}
 export function coverSummary(summary?: Summary, now = Date.now()) {
   const latest = summary?.activity.filter((item) => Number.isFinite(item.updatedAt) && item.updatedAt > 0 && item.updatedAt <= now / 1000)
     .sort((a, b) => b.updatedAt - a.updatedAt)[0];
@@ -96,18 +92,8 @@ export function coverSummary(summary?: Summary, now = Date.now()) {
     syncedAt: summary && Number.isFinite(summary.syncedAt) && summary.syncedAt > 0 ? summary.syncedAt : null,
   };
 }
-export function relativeTimestamp(timestamp: number, now = Date.now()) {
-  if (!Number.isFinite(timestamp)) return "Date unavailable";
-  const difference = now - timestamp;
-  const seconds = Math.abs(difference) / 1000;
-  if (seconds < 60) return "just now";
-  const [divisor, unit] = seconds < 3600 ? [60, "minute"] : seconds < 86400 ? [3600, "hour"] : seconds < 2592000 ? [86400, "day"] : seconds < 31536000 ? [2592000, "month"] : [31536000, "year"];
-  const amount = Math.floor(seconds / Number(divisor));
-  const phrase = `${amount} ${unit}${amount === 1 ? "" : "s"}`;
-  return difference >= 0 ? `${phrase} ago` : `in ${phrase}`;
-}
 function timeLabel(className: string, prefix: string, timestamp: number) {
-  const element = node("time", className, `${prefix}${relativeTimestamp(timestamp)}`);
+  const element = node("time", className, `${prefix}${relativeTime(timestamp, "long")}`);
   if (Number.isFinite(timestamp)) {
     const date = new Date(timestamp);
     element.dateTime = date.toISOString(); element.title = date.toLocaleString();

@@ -129,14 +129,6 @@ export function structuralCloseFocusTarget(
   return action === "close-tab" ? "active-tab" : "active-pane";
 }
 
-export function restoreConnectedFocus(
-  target: { readonly isConnected: boolean; focus(): void } | null,
-): boolean {
-  if (!target?.isConnected) return false;
-  target.focus();
-  return true;
-}
-
 export function tabIndicatorPresentation(
   kind: PaneIndicatorKind,
 ): TabIndicatorPresentation {

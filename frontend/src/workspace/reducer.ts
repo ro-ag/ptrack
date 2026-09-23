@@ -63,6 +63,28 @@ export type WorkspaceAction =
   | { type: "close-pane"; tabId: string; paneId: string }
   | { type: "resize-split"; tabId: string; splitId: string; ratio: number };
 
+/** Receives a tab or split action that failed and left the workspace unchanged. */
+export type WorkspaceActionFailureReporter = (action: string, error: unknown) => void;
+
+const defaultFailureReporter: WorkspaceActionFailureReporter = (action, error) => {
+  console.warn(`Terminal workspace action "${action}" was skipped:`, error);
+};
+
+let reportActionFailure = defaultFailureReporter;
+
+/**
+ * Replaces the failure reporter (the default logs a warning) and returns the
+ * previous one. A failed action still returns the workspace unchanged; this
+ * only keeps the failure from vanishing.
+ */
+export function setWorkspaceActionFailureReporter(
+  reporter: WorkspaceActionFailureReporter | null,
+): WorkspaceActionFailureReporter {
+  const previous = reportActionFailure;
+  reportActionFailure = reporter ?? defaultFailureReporter;
+  return previous;
+}
+
 function updateTab(
   workspace: Workspace,
   tabId: string,
@@ -128,7 +150,8 @@ export function createTab(
   try {
     const tab = createWorkspaceTab(ids, options, collectWorkspaceIds(workspace));
     return { ...workspace, activeTabId: tab.id, tabs: [...workspace.tabs, tab] };
-  } catch {
+  } catch (error) {
+    reportActionFailure("create-tab", error);
     return workspace;
   }
 }
@@ -213,7 +236,8 @@ export function duplicateTab(
     const tabs = workspace.tabs.slice();
     tabs.splice(index + 1, 0, duplicate);
     return { ...workspace, activeTabId: duplicate.id, tabs };
-  } catch {
+  } catch (error) {
+    reportActionFailure("duplicate-tab", error);
     return workspace;
   }
 }
@@ -308,7 +332,8 @@ export function splitPane(
     );
     if (root === tab.root) return workspace;
     return updateTab(workspace, tabId, (current) => ({ ...current, root, activePaneId }));
-  } catch {
+  } catch (error) {
+    reportActionFailure("split-pane", error);
     return workspace;
   }
 }

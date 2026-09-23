@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  GenerationSlot,
+  InFlightOperations,
   RefreshGate,
   RefreshLoop,
+  RequestSequence,
   RuntimeRefreshCoalescer,
   WorkspaceController,
 } from "./controller";
@@ -31,6 +34,17 @@ describe("WorkspaceController", () => {
     controller.publish({ status: "welcome", generation: 1 });
     expect(controller.accepts(refresh, 1)).toBe(false);
   });
+
+  it("lets a deferred close follow-up see that a new open started", () => {
+    const controller = new WorkspaceController();
+    const close = controller.beginTransition();
+    expect(controller.publish({ status: "closed", generation: 1 }, close)).toBe(true);
+    const followUp = controller.capture();
+    expect(controller.isCurrent(followUp)).toBe(true);
+    controller.beginTransition();
+    expect(controller.isCurrent(followUp)).toBe(false);
+    expect(controller.publish({ status: "welcome", generation: 1 }, followUp)).toBe(false);
+  });
 });
 
 describe("RefreshLoop", () => {
@@ -47,6 +61,57 @@ describe("RefreshLoop", () => {
     vi.advanceTimersByTime(60_000);
     expect(work).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
+  });
+
+  it("skips ticks while paused and refreshes once on resume", () => {
+    vi.useFakeTimers();
+    const work = vi.fn();
+    let hidden = true;
+    const loop = new RefreshLoop(work, 15_000, () => hidden);
+
+    loop.resume();
+    expect(work).not.toHaveBeenCalled();
+    loop.start();
+    vi.advanceTimersByTime(45_000);
+    expect(work).not.toHaveBeenCalled();
+    loop.resume();
+    expect(work).not.toHaveBeenCalled();
+    hidden = false;
+    loop.resume();
+    expect(work).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(15_000);
+    expect(work).toHaveBeenCalledTimes(2);
+    loop.dispose();
+    loop.resume();
+    expect(work).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+});
+
+describe("RequestSequence", () => {
+  it("lets only the latest request apply and invalidates on demand", () => {
+    const sequence = new RequestSequence();
+    const first = sequence.next();
+    const second = sequence.next();
+    expect(sequence.isCurrent(first)).toBe(false);
+    expect(sequence.isCurrent(second)).toBe(true);
+    sequence.invalidate();
+    expect(sequence.isCurrent(second)).toBe(false);
+  });
+});
+
+describe("InFlightOperations", () => {
+  it("refuses a duplicate start until the first finishes", () => {
+    const operations = new InFlightOperations();
+    expect(operations.begin("add-task")).toBe(true);
+    expect(operations.begin("add-task")).toBe(false);
+    expect(operations.begin("rename:1")).toBe(true);
+    expect(operations.has("add-task")).toBe(true);
+    operations.end("add-task");
+    expect(operations.has("add-task")).toBe(false);
+    expect(operations.begin("add-task")).toBe(true);
+    operations.clear();
+    expect(operations.has("rename:1")).toBe(false);
   });
 });
 
@@ -133,5 +198,25 @@ describe("RefreshGate", () => {
     gate.cancelQueued();
     await waiting;
     expect(idle).toBe(true);
+  });
+});
+
+describe("GenerationSlot", () => {
+  it("yields a deferred task only to the generation that asked for it", () => {
+    const slot = new GenerationSlot<number>();
+    slot.set(7, 3);
+    expect(slot.pending).toBe(true);
+    expect(slot.take({ status: "open", generation: 4 })).toBeNull();
+    expect(slot.pending).toBe(false);
+
+    slot.set(7, 4);
+    expect(slot.take({ status: "loading", generation: 4 })).toBeNull();
+    slot.set(7, 4);
+    expect(slot.take({ status: "open", generation: 4 })).toBe(7);
+    expect(slot.take({ status: "open", generation: 4 })).toBeNull();
+
+    slot.set(9, 4);
+    slot.clear();
+    expect(slot.take({ status: "open", generation: 4 })).toBeNull();
   });
 });

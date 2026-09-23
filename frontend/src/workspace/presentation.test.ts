@@ -29,7 +29,6 @@ import {
   projectGuideRecoveryCopy,
   projectGuideReviewCopy,
   runtimeAssociationLabel,
-  runtimeCountLabel,
   runtimeEventIsCurrent,
   shortcutIntent,
   stackLanguageRows,
@@ -232,20 +231,13 @@ describe("workspace presentation policy", () => {
     expect(handoffPreviewResponseIsCurrent(7, association, null, 7)).toBe(false);
   });
 
-  it("labels exact runtime targets and separate live resource counts", () => {
+  it("labels exact runtime targets", () => {
     expect(runtimeAssociationLabel({ planId: 2, taskId: 9 })).toBe(
       "plan #2 · task #9",
     );
     expect(runtimeAssociationLabel({ planId: 2 })).toBe("plan #2");
     expect(runtimeAssociationLabel({})).toBe("project");
     expect(runtimeAssociationLabel(null)).toBe("unlinked");
-    expect(runtimeCountLabel(
-      [{ live: true }, { live: false }],
-      [{ live: true }, { live: false }, { live: false }],
-    )).toEqual({
-      compact: "1T · 1A",
-      detail: "1/2 live terminals · 1/3 live agents",
-    });
   });
 
   it("presents only allowlisted content-free agent intelligence", () => {

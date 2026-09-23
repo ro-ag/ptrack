@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { animate } from "motion";
 vi.mock("motion", () => ({ animate: vi.fn() }));
-import { bindCoverDrag, boundedSelection, carouselGeometry, coverSummary, createCoverMotion, carouselPosition, horizontalGesture, landingProjects, projectCompletion, relativeTimestamp, selectedLandingProject } from "./landing";
+import { bindCoverDrag, boundedSelection, carouselGeometry, coverSummary, createCoverMotion, carouselPosition, horizontalGesture, landingProjects, selectedLandingProject } from "./landing";
+import { relativeTime } from "./format";
 import type { RecentProjectEntry } from "./recent-projects";
 import type { Overview } from "./overview";
 const a: RecentProjectEntry = { entryId: "a", base: "authorized-a", name: "Alpha", canonicalPath: "/alpha", lastOpenedAt: "2026-01-01T00:00:00Z", availability: "available" };
@@ -26,11 +27,6 @@ describe("landing carousel", () => {
     expect(carouselPosition(3, 0, 4)).toBe("pos-right");
     expect(carouselPosition(4, 0, 12)).toBe("pos-hidden");
     expect(carouselPosition(0, 0, 0)).toBe("pos-hidden");
-  });
-  it("uses real task completion, keeping uncached and no-task projects unknown", () => {
-    expect(projectCompletion()).toBeNull();
-    expect(projectCompletion(overview.projects[0])).toBe(60);
-    expect(projectCompletion({ ...overview.projects[0], counts: { ...overview.counts, openTasks: 0, doneTasks: 0 } })).toBeNull();
   });
 });
 
@@ -186,14 +182,14 @@ describe("pointer drag navigation", () => {
 describe("relative project freshness", () => {
   const now = Date.UTC(2026, 8, 13, 12);
   it("uses readable units without implying old summaries are current", () => {
-    expect(relativeTimestamp(now - 10000, now)).toBe("just now");
-    expect(relativeTimestamp(now - 120000, now)).toBe("2 minutes ago");
-    expect(relativeTimestamp(now - 3600000, now)).toBe("1 hour ago");
-    expect(relativeTimestamp(now - 86400000 * 4, now)).toBe("4 days ago");
-    expect(relativeTimestamp(now - 86400000 * 60, now)).toBe("2 months ago");
+    expect(relativeTime(now - 10000, "long", now)).toBe("just now");
+    expect(relativeTime(now - 120000, "long", now)).toBe("2 minutes ago");
+    expect(relativeTime(now - 3600000, "long", now)).toBe("1 hour ago");
+    expect(relativeTime(now - 86400000 * 4, "long", now)).toBe("4 days ago");
+    expect(relativeTime(now - 86400000 * 60, "long", now)).toBe("2 months ago");
   });
   it("handles future clock skew and missing dates honestly", () => {
-    expect(relativeTimestamp(now + 120000, now)).toBe("in 2 minutes");
-    expect(relativeTimestamp(NaN, now)).toBe("Date unavailable");
+    expect(relativeTime(now + 120000, "long", now)).toBe("in 2 minutes");
+    expect(relativeTime(NaN, "long", now)).toBe("Date unavailable");
   });
 });

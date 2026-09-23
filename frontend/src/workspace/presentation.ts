@@ -373,20 +373,6 @@ export function runtimeAssociationLabel(
   return "project";
 }
 
-export function runtimeCountLabel(
-  terminals: ReadonlyArray<{ live?: boolean }> = [],
-  agents: ReadonlyArray<{ live?: boolean }> = [],
-): { compact: string; detail: string } {
-  const liveTerminals = terminals.filter((item) => item.live).length;
-  const liveAgents = agents.filter((item) => item.live).length;
-  return {
-    compact: `${liveTerminals}T · ${liveAgents}A`,
-    detail:
-      `${liveTerminals}/${terminals.length} live terminals · ` +
-      `${liveAgents}/${agents.length} live agents`,
-  };
-}
-
 export const agentActivityStates = [
   "running",
   "waiting",

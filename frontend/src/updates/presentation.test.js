@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  formatUpdateBytes,
+  updateActionFailureMessage,
   updateModalOpenTransition,
   updatePresentation,
   updateProgress,
@@ -105,8 +105,17 @@ describe("update presentation", () => {
       total: 0,
       percent: 0,
     });
-    expect(formatUpdateBytes(Number.POSITIVE_INFINITY)).toBe("0 B");
-    expect(formatUpdateBytes(2 * 1024 * 1024)).toBe("2.0 MB");
+  });
+
+  it("keeps the backend's reason in update failure text", () => {
+    expect(updateActionFailureMessage("download", new Error("checksum mismatch")))
+      .toBe("Could not download the update: checksum mismatch");
+    expect(updateActionFailureMessage("check", "network unreachable"))
+      .toBe("Could not check for updates: network unreachable");
+    expect(updateActionFailureMessage("apply", {})).toBe("Could not install the update.");
+    expect(updateActionFailureMessage("unknown", new Error(" "))).toBe(
+      "The update action could not continue.",
+    );
   });
 
   it("fails closed for unknown backend phases", () => {

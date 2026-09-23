@@ -50,6 +50,46 @@ export function planReadyForCompletion(plan: PlanLifecycleState): boolean {
     Number(plan.tasksDone || 0) === total;
 }
 
+export interface CompletionPromptContext {
+  /** The prompt came from a refresh, focus, or watcher event, not a click. */
+  automatic: boolean;
+  /** The main window has keyboard focus (a terminal window may have it). */
+  windowFocused: boolean;
+  /** Focus is inside the terminal dock. */
+  focusInTerminal: boolean;
+  /** Focus is in a field the user types into. */
+  focusInTextEntry: boolean;
+}
+
+/**
+ * An automatic plan-done prompt must never take keyboard focus from someone
+ * typing: a modal there would catch the next Enter meant for a shell or a
+ * field. It becomes a non-modal banner instead; a prompt the user asked for
+ * is always the dialog.
+ */
+export function completionPromptMode(context: CompletionPromptContext): "modal" | "banner" {
+  if (!context.automatic) return "modal";
+  return !context.windowFocused || context.focusInTerminal || context.focusInTextEntry
+    ? "banner"
+    : "modal";
+}
+
+const nonTextInputTypes = new Set([
+  "button", "checkbox", "color", "file", "hidden", "image", "radio", "range", "reset", "submit",
+]);
+
+/** True for elements that take typed text: text-like inputs, textareas, editable content. */
+export function isTextEntryElement(
+  element: { tagName?: string; type?: string; isContentEditable?: boolean } | null | undefined,
+): boolean {
+  if (!element) return false;
+  if (element.isContentEditable) return true;
+  const tag = String(element.tagName || "").toUpperCase();
+  if (tag === "TEXTAREA") return true;
+  if (tag !== "INPUT") return false;
+  return !nonTextInputTypes.has(String(element.type || "text").toLowerCase());
+}
+
 /**
  * Keeps the context menu inside the viewport: a menu opened near the bottom
  * of the sidebar would otherwise render its destructive Delete item

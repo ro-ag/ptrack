@@ -375,7 +375,6 @@ button:disabled {
   min-height: 0;
   cursor: ew-resize;
   touch-action: none;
-  --wails-draggable: no-drag;
 }
 
 .sidebar-resize::after {
@@ -404,7 +403,6 @@ button:disabled {
 .sidebar-top {
   height: 44px;
   flex: 0 0 auto;
-  --wails-draggable: drag;
 }
 
 .sidebar-brand {
@@ -427,7 +425,6 @@ button:disabled {
   line-height: 1.2;
   box-shadow: none;
   padding: 0;
-  --wails-draggable: no-drag;
 }
 
 .app-version:hover,
@@ -442,7 +439,6 @@ button:disabled {
   display: grid;
   flex: 0 0 auto;
   gap: 2px;
-  --wails-draggable: no-drag;
 }
 
 .sidebar-nav-item {
@@ -491,7 +487,6 @@ button:disabled {
   margin-top: var(--space-250);
   border-top: 1px solid var(--line-subtle);
   padding-top: var(--space-150);
-  --wails-draggable: no-drag;
 }
 
 /* Bottom zone of the sidebar: Settings and the project actions live here,
@@ -504,7 +499,6 @@ button:disabled {
   margin-top: var(--space-150);
   padding-top: var(--space-150);
   border-top: 1px solid var(--line-subtle);
-  --wails-draggable: no-drag;
 }
 
 .sidebar-footer-action {
@@ -902,7 +896,6 @@ button:disabled {
   background: var(--topbar-bg);
   -webkit-backdrop-filter: blur(18px) saturate(1.35);
   backdrop-filter: blur(18px) saturate(1.35);
-  --wails-draggable: drag;
 }
 
 .brand,
@@ -988,7 +981,6 @@ h1 {
 .toolbar {
   flex: 0 0 auto;
   gap: var(--space-100);
-  --wails-draggable: no-drag;
 }
 
 .panel-controls {
@@ -998,7 +990,6 @@ h1 {
   border-radius: 9px;
   background: var(--fill-subtle);
   padding: 2px;
-  --wails-draggable: no-drag;
 }
 
 .panel-toggle {
@@ -4545,7 +4536,6 @@ button.modal-backdrop:active {
   border-bottom: 1px solid var(--line-subtle);
   background: var(--surface-soft);
   padding: 4px var(--space-100);
-  --wails-draggable: no-drag;
 }
 
 .terminal-tabs {
@@ -4775,7 +4765,6 @@ button.modal-backdrop:active {
   border-bottom: 1px solid var(--line-subtle);
   background: var(--surface);
   scrollbar-width: thin;
-  --wails-draggable: no-drag;
 }
 
 .terminal-setup-row,

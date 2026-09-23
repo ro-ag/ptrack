@@ -138,16 +138,22 @@ export function normalizeLayoutState(value: unknown): LayoutState {
   };
 }
 
-// layoutStatePatch is the single patch SetLayoutState takes. Only the open
-// project is sent, so the bounded per-project map keeps every other entry.
+// layoutStatePatch is the single patch SetLayoutState takes. Only the named
+// projects are sent — the open one, plus any whose change had not been saved
+// before a switch — so the bounded per-project map keeps every other entry.
 export function layoutStatePatch(
   state: LayoutState,
-  projectRoot: string,
+  projectRoots: string | Iterable<string>,
 ): Record<string, unknown> {
-  const entry = state.projects[projectRoot];
+  const roots = typeof projectRoots === "string" ? [projectRoots] : [...projectRoots];
+  const projects: Record<string, LayoutProjectState> = {};
+  for (const root of roots) {
+    const entry = state.projects[root];
+    if (root !== "" && entry) projects[root] = entry;
+  }
   return {
     sidebar: state.sidebar,
     panels: state.panels,
-    ...(projectRoot === "" || !entry ? {} : { projects: { [projectRoot]: entry } }),
+    ...(Object.keys(projects).length === 0 ? {} : { projects }),
   };
 }

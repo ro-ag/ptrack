@@ -119,4 +119,19 @@ describe("stored layout record", () => {
     expect(layoutStatePatch(state, "")).not.toHaveProperty("projects");
     expect(layoutStatePatch(state, "/unknown")).not.toHaveProperty("projects");
   });
+
+  it("carries every project changed since the last save", () => {
+    const state = normalizeLayoutState({
+      storage: "ok",
+      sidebar: { width: 300 },
+      projects: {
+        "/work/a": { view: "overview", planId: 2 },
+        "/work/b": { view: "board", planId: 5 },
+        "/work/c": { view: "issues", planId: 1 },
+      },
+    });
+    const patch = layoutStatePatch(state, new Set(["/work/a", "/work/b", "", "/gone"]));
+    expect(Object.keys(patch.projects as object).sort()).toEqual(["/work/a", "/work/b"]);
+    expect(layoutStatePatch(state, [])).not.toHaveProperty("projects");
+  });
 });
