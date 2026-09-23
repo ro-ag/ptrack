@@ -395,7 +395,7 @@ fn parity_matrix_counts_are_self_consistent() {
         .filter_map(|line| line.strip_prefix("| `"))
         .filter_map(|line| line.split_once('`').map(|(id, _)| id))
         .collect::<Vec<_>>();
-    assert_eq!(ids.len(), 768);
-    assert_eq!(ids.iter().filter(|id| id.starts_with("GUI-")).count(), 139);
+    assert_eq!(ids.len(), 770);
+    assert_eq!(ids.iter().filter(|id| id.starts_with("GUI-")).count(), 141);
     assert_eq!(ids.iter().filter(|id| id.starts_with("TERM-")).count(), 108);
 }

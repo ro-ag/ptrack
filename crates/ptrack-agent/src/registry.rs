@@ -94,7 +94,7 @@ pub struct RegistryConfig {
     pub additional_cwd_validator: Option<CwdValidator>,
     pub event_policy: Option<EventPrivacyPolicy>,
     pub state_path: PathBuf,
-    /// Event-history flush debounce; zero selects [`DEFAULT_PERSIST_DEBOUNCE`].
+    /// Event-history flush debounce; zero selects the 500 ms default.
     pub persist_debounce: Duration,
 }
 
