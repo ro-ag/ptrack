@@ -62,6 +62,10 @@ it("flags a rolling summary that was written as a digest of notes", () => {
   );
   expect(joined.problem).toBe("joined-tokens");
   expect(summaryShapeCaption(joined)).toBe("Hard to scan: one unbroken run of 44 bytes");
+  // A full commit hash is shown shortened, so it is not words run together.
+  expect(
+    summaryShape("Schema landed in 3f2c9ab4e1d07a5b8c6f9e2d1a0b3c4d5e6f7a81 today.").problem,
+  ).toBe("");
 
   // A long stretch with no sentence end reads as a note dump.
   const unbroken = summaryShape("x ".repeat(220));

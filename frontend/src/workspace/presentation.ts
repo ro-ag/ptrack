@@ -1156,10 +1156,11 @@ const SUMMARY_RUN_LIMIT = 40;
 export function summaryShape(text: string): SummaryShape {
   const characters = [...text].length;
   const sentences = (text.match(/[.!?](?=\s|$)/g) ?? []).length;
-  const longestRun = (text.match(/\S+/g) ?? []).reduce(
-    (longest, token) => Math.max(longest, token.length),
-    0,
-  );
+  // A commit hash is one long token by nature and the card already shows it
+  // shortened, so it never counts as words run together.
+  const longestRun = (text.match(/\S+/g) ?? [])
+    .filter((token) => !/^[(\[]?[0-9a-f]{7,64}[)\].,;:!?]*$/i.test(token))
+    .reduce((longest, token) => Math.max(longest, new TextEncoder().encode(token).length), 0);
   // Length first: when a summary is both too long and badly written, its
   // length is the part the writer has to fix before anything else matters.
   let problem: SummaryShape["problem"] = "";

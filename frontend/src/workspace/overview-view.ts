@@ -425,7 +425,7 @@ export function createOverviewView(ctx: AppContext) {
     stats: element("#project-stats", HTMLDivElement),
     storageStatus: element("#storage-status", HTMLParagraphElement),
     summary: element("#summary", HTMLParagraphElement),
-    summaryAge: element("#summary-age", HTMLSpanElement),
+    summaryAge: element("#summary-age", HTMLParagraphElement),
     summaryExpand: element("#summary-expand", HTMLButtonElement),
     summaryFlag: element("#summary-flag", HTMLSpanElement),
     summaryMetrics: element("#summary-metrics", HTMLSpanElement),

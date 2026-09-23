@@ -1596,6 +1596,11 @@ select option {
   line-height: 1.3;
 }
 
+/* The summary's age sits under its heading so the label never wraps. */
+.summary-age {
+  margin: calc(-1 * var(--space-050)) 0 var(--space-050);
+}
+
 /* Measurements, not decoration: the two numbers the guide rule is written in. */
 .summary-shape {
   display: flex;
