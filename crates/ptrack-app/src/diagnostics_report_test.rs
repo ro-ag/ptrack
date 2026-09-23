@@ -172,3 +172,34 @@ fn the_report_serializes_camel_case_wire_names() {
     assert_eq!(value["migration"]["quarantine"][0]["database"], "global");
     assert_eq!(value["capabilities"], serde_json::Value::Null);
 }
+
+#[test]
+fn receipts_keep_the_newest_twenty_five_newest_first() {
+    let directory = Temp::new("receipts");
+    let home = directory.0.join("home");
+    let base = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+    // Name order matches age, so a name sort lists the oldest first.
+    for index in 0..30_u64 {
+        let batch = home.join("migrations").join(format!("batch-{index:02}"));
+        std::fs::create_dir_all(&batch).unwrap();
+        let receipt = batch.join("receipt.json");
+        std::fs::write(&receipt, b"{}").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&receipt)
+            .unwrap()
+            .set_modified(base + std::time::Duration::from_secs(index))
+            .unwrap();
+    }
+    let receipts = report(&home, "test", None, None).migration.receipts;
+    assert_eq!(receipts.len(), 25);
+    let expected = |name: &str| {
+        home.join("migrations")
+            .join(name)
+            .join("receipt.json")
+            .to_string_lossy()
+            .into_owned()
+    };
+    assert_eq!(receipts[0], expected("batch-29"));
+    assert_eq!(receipts[24], expected("batch-05"));
+}

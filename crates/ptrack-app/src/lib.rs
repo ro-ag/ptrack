@@ -47,8 +47,9 @@ pub use desktop_runtime::{
     RecentProjectAvailabilityV1, RecentProjectLanguageV1, RecentProjectOpenAuthorizationV1,
     RecentProjectRegistryCommitV1, RecentProjectRegistryStatusV1, RecentProjectResolutionV1,
     RecentProjectStackV1, RecentProjectV1, RecentProjectsProvider, RecentProjectsV1,
-    ResetApplicationStateResultV1, ResolvedRecentProjectV1, WorkspaceChangeResult,
-    WorkspaceProject, WorkspaceState, WorkspaceStatus, allowed_desktop_commands,
+    ResetApplicationStateResultV1, ResolvedRecentProjectV1, ShutdownOutcome,
+    WorkspaceChangeResult, WorkspaceProject, WorkspaceState, WorkspaceStatus,
+    allowed_desktop_commands, allowed_terminal_window_commands, scope_request_to_window,
 };
 
 pub use identity::{IDENTITY_CONFIG_KEY, load_identity, set_identity_name};
@@ -78,7 +79,9 @@ pub use service::{
     HookResult, InitRequest, InitResult, LocalApplication, Mutation, MutationResult,
     PlanLifecycleOutcome, PlanLifecycleRequest, PlanTransferSummary, ProcessOutput,
     ProjectEndpoint, RelocateRequest, RelocateResult, SCRATCHPAD_CONFLICT, ScratchpadSnippetV1,
-    ScratchpadV1, UnavailableApplication, WorkspaceBindings, complete_plan, complete_task,
+    ScratchpadV1, UiSurface, UnavailableApplication, WorkspaceBindings, check_commit_sha,
+    close_task_from_ui, complete_plan, complete_plan_from_ui, complete_task, integration_task_id,
+    integration_task_title, next_task, set_plan_status_with_notes, set_task_status_with_notes,
 };
 pub use shell_command::{ShellCommandInstallResult, install_shell_command};
 pub use terminal_runtime::{
@@ -87,7 +90,7 @@ pub use terminal_runtime::{
     TerminalIdentityAuthority, TerminalProfileView, TerminalProfilesV2, TerminalRuntime,
     TerminalRuntimeConfig, TerminalSessionV2, TerminalStatusV2,
 };
-pub use terminal_windows::{TERMINAL_WINDOW_PREFIX, TerminalWindows};
+pub use terminal_windows::{OpenedTerminalWindow, TERMINAL_WINDOW_PREFIX, TerminalWindows};
 pub use update_runtime::{
     DesktopUpdateService, GlobalStoreUpdatePreferences, NoUpdatePreferences,
     UnavailableUpdateService, UpdateEventSink, UpdatePhase, UpdatePreferences, UpdateRelease,

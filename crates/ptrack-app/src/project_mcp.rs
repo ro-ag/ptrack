@@ -3,13 +3,15 @@ use std::io::{Read, Write};
 use ptrack_capability::{
     McpCancellation, McpServeOutcome, ToolCall, ToolDefinition, serve_mcp_with_tools,
 };
-use ptrack_core::{Digest, IssueLine, NextView, NoteTarget, TaskLine, context, next};
+use ptrack_core::{
+    Digest, IssueLine, NextView, NoteTarget, TaskLine, UNTRUSTED_DATA_NOTICE, context,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
     AppError, AppResult, ApplicationPort, CapabilityMcpOutcome, Mutation, MutationResult,
-    complete_task,
+    complete_task, next_task,
 };
 
 const TOOL_GET_CONTEXT: &str = "get_context";
@@ -136,7 +138,7 @@ fn dispatch_tool(application: &mut dyn ApplicationPort, call: ToolCall) -> AppRe
         TOOL_GET_NEXT_TASK => {
             decode_arguments::<EmptyArguments>(call.arguments, TOOL_GET_NEXT_TASK)?;
             Ok(next_value(
-                &next(&application.snapshot()?)
+                &next_task(&application.snapshot()?)
                     .map_err(|error| AppError::Message(error.to_string()))?,
             ))
         }
@@ -279,11 +281,14 @@ fn context_value(digest: &Digest) -> Value {
             "id": plan.id,
             "title": plan.title,
             "open_tasks": plan.open_tasks.iter().map(task_line_value).collect::<Vec<_>>(),
+            "open_tasks_more": plan.open_tasks_more,
             "hold_reason": plan.hold_reason,
             "waiting_on": plan.waiting_on
         })
     });
     json!({
+        "notice": UNTRUSTED_DATA_NOTICE,
+        "truncated": digest.truncated,
         "goal": digest.goal,
         "summary": digest.summary,
         "active_plan": active_plan,

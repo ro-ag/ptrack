@@ -268,7 +268,9 @@ fn validate_leaf(path: &[String], raw: &[String]) -> Result<(), CliError> {
                     )));
                 }
             }
-        } else if !after_separator && value.starts_with('-') {
+        } else if !after_separator && value.starts_with('-') && value != "-" {
+            // A lone `-` is a value (`milestone due <id> -` clears the date),
+            // never a flag.
             let shorthand = value.chars().nth(1).unwrap_or('-');
             return Err(CliError::message(format!(
                 "unknown shorthand flag: {shorthand:?} in {value}"

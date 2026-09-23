@@ -472,6 +472,7 @@ fn hook_operations_reject_links_and_publish_exact_executable_block() {
 
     let directory = TestDirectory::new("hook-safe");
     let (mut application, endpoint) = configured(&directory, true);
+    git(&endpoint.root, &["init", "-q"]);
     let hooks = endpoint.root.join(".git/hooks");
     std::fs::create_dir_all(&hooks).expect("hooks directory");
     let hook = hooks.join("post-commit");
@@ -499,7 +500,7 @@ fn hook_operations_reject_links_and_publish_exact_executable_block() {
         concat!(
             "#!/bin/sh\n",
             "# ptrack:begin\n",
-            "command -v ptrack >/dev/null 2>&1 && ptrack commit record --sha \"$(git rev-parse HEAD)\" --subject \"$(git log -1 --pretty=%s)\" >/dev/null 2>&1 || true\n",
+            "command -v ptrack >/dev/null 2>&1 && ptrack commit record --sha=\"$(git rev-parse HEAD)\" --subject=\"$(git log -1 --pretty=%s)\" >/dev/null 2>&1 || true\n",
             "# ptrack:end\n"
         )
     );
@@ -756,4 +757,313 @@ fn target_open_failures_are_fail_closed_and_only_stale_schemas_get_the_upgrade_h
     let busy = crate::service::target_open_error(root, &StoreError::Busy).to_string();
     assert!(busy.contains("/tmp/some-target-project"), "{busy}");
     assert!(!busy.contains("upgrade ptrack"), "{busy}");
+}
+
+fn git(root: &Path, args: &[&str]) {
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .status()
+        .expect("run git");
+    assert!(status.success(), "git {args:?}");
+}
+
+fn add_plan_and_task(application: &mut LocalApplication) -> (u64, u64) {
+    let MutationResult::Plan(plan) = application
+        .mutate(Mutation::AddPlan {
+            title: "Plan".to_owned(),
+            milestone_id: 0,
+        })
+        .unwrap()
+    else {
+        panic!("plan result");
+    };
+    let MutationResult::Task(task) = application
+        .mutate(Mutation::AddTask {
+            plan_id: plan.id,
+            title: "Task".to_owned(),
+        })
+        .unwrap()
+    else {
+        panic!("task result");
+    };
+    (plan.id, task.id)
+}
+
+#[cfg(unix)]
+#[test]
+fn hook_install_follows_core_hooks_path_and_status_reports_it() {
+    let directory = TestDirectory::new("hook-hooks-path");
+    let (mut application, endpoint) = configured(&directory, true);
+    git(&endpoint.root, &["init", "-q"]);
+    git(&endpoint.root, &["config", "core.hooksPath", ".husky/_"]);
+    std::fs::create_dir_all(endpoint.root.join(".husky")).unwrap();
+
+    let HookResult::Installed { path, changed, .. } =
+        application.hook(HookAction::Install).unwrap()
+    else {
+        panic!("wrong hook result");
+    };
+    assert!(changed);
+    assert_eq!(path, endpoint.root.join(".husky/_/post-commit"));
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("# ptrack:begin")
+    );
+    assert!(!endpoint.root.join(".git/hooks/post-commit").exists());
+    assert_eq!(
+        application.hook(HookAction::Status).unwrap(),
+        HookResult::Status {
+            path,
+            installed: true
+        }
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn hook_install_refuses_a_hooks_path_outside_the_project() {
+    let directory = TestDirectory::new("hook-outside");
+    let (mut application, endpoint) = configured(&directory, true);
+    let shared = directory.0.join("shared-hooks");
+    std::fs::create_dir_all(&shared).unwrap();
+    git(&endpoint.root, &["init", "-q"]);
+    git(
+        &endpoint.root,
+        &["config", "core.hooksPath", shared.to_str().unwrap()],
+    );
+    let error = application
+        .hook(HookAction::Install)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("outside this project"), "{error}");
+    assert!(error.contains("ptrack commit record"), "{error}");
+    assert!(!shared.join("post-commit").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn hook_install_refuses_a_foreign_interpreter_and_respects_a_final_exec() {
+    let directory = TestDirectory::new("hook-shebang");
+    let (mut application, endpoint) = configured(&directory, true);
+    git(&endpoint.root, &["init", "-q"]);
+    let hook = endpoint.root.join(".git/hooks/post-commit");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+
+    let python = "#!/usr/bin/env python3\nprint('hi')\n";
+    std::fs::write(&hook, python).unwrap();
+    let error = application
+        .hook(HookAction::Install)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("runs python3"), "{error}");
+    assert_eq!(std::fs::read_to_string(&hook).unwrap(), python);
+
+    std::fs::write(
+        &hook,
+        "#!/bin/bash\nset -e\nexec lefthook run post-commit \"$@\"\n",
+    )
+    .unwrap();
+    let HookResult::Installed { warning, .. } = application.hook(HookAction::Install).unwrap()
+    else {
+        panic!("wrong hook result");
+    };
+    assert!(warning.unwrap().contains("exec lefthook"));
+    let content = std::fs::read_to_string(&hook).unwrap();
+    let block = content.find("# ptrack:begin").unwrap();
+    let exec = content.find("exec lefthook").unwrap();
+    assert!(block < exec, "{content}");
+    assert!(content.starts_with("#!/bin/bash\nset -e\n"), "{content}");
+}
+
+#[test]
+fn hook_reports_a_directory_that_is_not_a_git_repository() {
+    let directory = TestDirectory::new("hook-no-git");
+    let (mut application, _) = configured(&directory, true);
+    let error = application
+        .hook(HookAction::Status)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("is not a git repository"), "{error}");
+}
+
+#[test]
+fn commit_records_refuse_anything_but_a_hex_sha() {
+    let directory = TestDirectory::new("commit-sha");
+    let (mut application, _) = configured(&directory, true);
+    for sha in [
+        "--output=/tmp/x",
+        "HEAD~1",
+        "abc",
+        "g123456",
+        &"a".repeat(65),
+    ] {
+        let error = application
+            .mutate(Mutation::AddCommit {
+                sha: sha.to_owned(),
+                subject: "x".to_owned(),
+                plan_id: 0,
+                task_id: 0,
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("invalid commit sha"), "{sha}: {error}");
+    }
+    assert!(application.snapshot().unwrap().commits.is_empty());
+    application
+        .mutate(Mutation::AddCommit {
+            sha: "0123abcDEF".to_owned(),
+            subject: "x".to_owned(),
+            plan_id: 0,
+            task_id: 0,
+        })
+        .unwrap();
+    assert!(
+        application
+            .git_show("--output=/tmp/x", false)
+            .unwrap_err()
+            .to_string()
+            .contains("invalid commit reference")
+    );
+}
+
+#[test]
+fn completing_a_missing_task_fails_and_writes_nothing() {
+    let directory = TestDirectory::new("complete-missing");
+    let (mut application, _) = configured(&directory, true);
+    let error = crate::complete_task(&mut application, 999, Some("done".to_owned()), true)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("not found"), "{error}");
+    assert!(application.snapshot().unwrap().notes.is_empty());
+}
+
+#[test]
+fn a_refused_close_leaves_no_orphan_notes() {
+    let directory = TestDirectory::new("complete-refused");
+    let (mut application, endpoint) = configured(&directory, true);
+    let (plan_id, task_id) = add_plan_and_task(&mut application);
+    // Someone else claims the plan, so the status change is refused.
+    let other = ProjectStore::open_existing(&endpoint.database, &endpoint.binding, "test")
+        .unwrap()
+        .with_actor(Some(ptrack_store::ActorIdentity {
+            id: "0123456789abcdefghjkmnpqrs".to_owned(),
+            name: "Teammate".to_owned(),
+        }));
+    other.use_plan(plan_id, false).unwrap();
+    drop(other);
+
+    let error = crate::complete_task(&mut application, task_id, Some("done".to_owned()), true)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("claimed by"), "{error}");
+    let snapshot = application.snapshot().unwrap();
+    assert!(snapshot.notes.is_empty(), "{:?}", snapshot.notes);
+    assert_eq!(snapshot.task(task_id).unwrap().status, TaskStatus::Todo);
+}
+
+#[test]
+fn a_forced_close_commits_its_notes_with_the_status() {
+    let directory = TestDirectory::new("complete-forced");
+    let (mut application, _) = configured(&directory, true);
+    let (_, task_id) = add_plan_and_task(&mut application);
+    let result =
+        crate::complete_task(&mut application, task_id, Some("wired".to_owned()), true).unwrap();
+    assert_eq!(result.closeout_note.unwrap().body, "closeout: wired");
+    assert!(
+        result
+            .override_note
+            .unwrap()
+            .body
+            .starts_with("override: closed via --force (no commit is linked")
+    );
+    let snapshot = application.snapshot().unwrap();
+    assert_eq!(snapshot.task(task_id).unwrap().status, TaskStatus::Done);
+    assert_eq!(snapshot.notes.len(), 2);
+}
+
+#[test]
+fn ui_closes_are_allowed_and_record_the_surface() {
+    let directory = TestDirectory::new("ui-close");
+    let (mut application, _) = configured(&directory, true);
+    let (plan_id, task_id) = add_plan_and_task(&mut application);
+    let MutationResult::Task(other) = application
+        .mutate(Mutation::AddTask {
+            plan_id,
+            title: "Other".to_owned(),
+        })
+        .unwrap()
+    else {
+        panic!("task result");
+    };
+
+    let note = crate::close_task_from_ui(&mut application, crate::UiSurface::Tui, task_id)
+        .unwrap()
+        .expect("override note");
+    assert_eq!(
+        note.body,
+        "override: closed from TUI without evidence (no closeout summary; no linked commit)"
+    );
+    assert_eq!(note.target, NoteTarget::Task);
+
+    let note = crate::complete_plan_from_ui(&mut application, crate::UiSurface::Tui, plan_id)
+        .unwrap()
+        .expect("override note");
+    assert_eq!(
+        note.body,
+        format!(
+            "override: plan completed from TUI with 1 open task #{}",
+            other.id
+        )
+    );
+    let snapshot = application.snapshot().unwrap();
+    assert_eq!(snapshot.plan(plan_id).unwrap().status, PlanStatus::Done);
+    assert_eq!(snapshot.task(task_id).unwrap().status, TaskStatus::Done);
+}
+
+#[test]
+fn next_defers_the_integration_task_until_real_work_is_done() {
+    let directory = TestDirectory::new("next-integration");
+    let (mut application, _) = configured(&directory, true);
+    let MutationResult::Plan(plan) = application
+        .mutate(Mutation::AddPlan {
+            title: "Plan".to_owned(),
+            milestone_id: 0,
+        })
+        .unwrap()
+    else {
+        panic!("plan result");
+    };
+    let MutationResult::Task(integration) = application
+        .mutate(Mutation::AddTask {
+            plan_id: plan.id,
+            title: crate::integration_task_title("ship"),
+        })
+        .unwrap()
+    else {
+        panic!("task result");
+    };
+    let MutationResult::Task(real) = application
+        .mutate(Mutation::AddTask {
+            plan_id: plan.id,
+            title: "Real work".to_owned(),
+        })
+        .unwrap()
+    else {
+        panic!("task result");
+    };
+    application
+        .mutate(Mutation::SetActivePlan(plan.id))
+        .unwrap();
+    let snapshot = application.snapshot().unwrap();
+    assert_eq!(
+        crate::integration_task_id(&snapshot, plan.id),
+        Some(integration.id)
+    );
+    let view = crate::next_task(&snapshot).unwrap();
+    assert_eq!(view.task.unwrap().id, real.id);
 }

@@ -113,6 +113,9 @@ pub struct PlanRow<'a> {
     /// Identity that last mutated this record; [`ptrack_core::LEGACY_ACTOR`]
     /// when unset.
     pub actor: &'a str,
+    /// Tasks not yet done (todo, doing, or blocked).
+    pub open_tasks: usize,
+    pub done_tasks: usize,
 }
 
 #[derive(Serialize)]
@@ -355,8 +358,8 @@ pub struct DigestJson<'a> {
     stack_incomplete: bool,
 }
 
-/// One discovered project. Counts are tracked files; sizes and line counts are
-/// deliberately not reported.
+/// One discovered project: its tracked-file count and, since 0.38.0, the lines
+/// in those files. Byte sizes are deliberately not reported.
 #[derive(Serialize)]
 pub struct StackProjectJson<'a> {
     root: &'a str,

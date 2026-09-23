@@ -12,8 +12,8 @@ use ptrack_app::{
     RuntimeAssociation,
 };
 use ptrack_core::{
-    Commit, MemoryKind, Meta, Note, Plan, PlanStatus, ProjectRef, ProjectSnapshot, Task,
-    TaskStatus, Timestamp, would_create_cycle,
+    Commit, MemoryKind, Meta, Milestone, MilestoneStatus, Note, Plan, PlanStatus, ProjectRef,
+    ProjectSnapshot, Task, TaskStatus, Timestamp, would_create_cycle,
 };
 
 use crate::{Io, RunOutcome, run};
@@ -31,6 +31,8 @@ struct FakeApplication {
     relocate_requests: Vec<RelocateRequest>,
     local_actions: Vec<String>,
     fail_notes: bool,
+    mutations: Vec<Mutation>,
+    git_references: Vec<String>,
 }
 
 impl Default for FakeApplication {
@@ -68,6 +70,8 @@ impl Default for FakeApplication {
             relocate_requests: Vec::new(),
             local_actions: Vec::new(),
             fail_notes: false,
+            mutations: Vec::new(),
+            git_references: Vec::new(),
         }
     }
 }
@@ -98,7 +102,76 @@ impl ApplicationPort for FakeApplication {
     // One flat arm per faked mutation, mirroring the real dispatch.
     #[allow(clippy::too_many_lines)]
     fn mutate(&mut self, mutation: Mutation) -> AppResult<MutationResult> {
+        self.mutations.push(mutation.clone());
         match mutation {
+            Mutation::SetMilestoneDue { .. } => {}
+            Mutation::AddCommit {
+                sha,
+                subject,
+                plan_id,
+                task_id,
+            } => {
+                let commit = Commit {
+                    id: self.snapshot.commits.len() as u64 + 1,
+                    sha,
+                    subject,
+                    plan_id,
+                    task_id,
+                    created_at: Timestamp::Zero,
+                    actor: None,
+                    ulid: None,
+                };
+                self.snapshot.commits.push(commit.clone());
+                return Ok(MutationResult::Commit(commit));
+            }
+            // Mirrors the store's single transaction: a failed note write or a
+            // missing record leaves both the status and the notes untouched.
+            Mutation::SetTaskStatusWithNotes { id, status, notes } => {
+                if !self.snapshot.tasks.iter().any(|task| task.id == id) {
+                    return Err(AppError::Message("not found".to_owned()));
+                }
+                if self.fail_notes && !notes.is_empty() {
+                    return Err(AppError::Message("test note write failed".to_owned()));
+                }
+                self.mutate(Mutation::SetTaskStatus { id, status })?;
+                return self.add_notes(ptrack_core::NoteTarget::Task, id, notes);
+            }
+            // Mirrors ProjectStore::complete_plan: one write that re-checks
+            // open tasks and records a forced close's override note.
+            Mutation::CompletePlan { id, force } => {
+                let open: Vec<u64> = self
+                    .snapshot
+                    .tasks_for_plan(id)
+                    .filter(|task| task.status.is_open())
+                    .map(|task| task.id)
+                    .collect();
+                if !open.is_empty() && !force {
+                    return Err(AppError::Message("open tasks remain".to_owned()));
+                }
+                let notes = if open.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![format!(
+                        "override: closed via --force with open tasks {}",
+                        ptrack_core::id_list(&open)
+                    )]
+                };
+                return self.mutate(Mutation::SetPlanStatusWithNotes {
+                    id,
+                    status: PlanStatus::Done,
+                    notes,
+                });
+            }
+            Mutation::SetPlanStatusWithNotes { id, status, notes } => {
+                if !self.snapshot.plans.iter().any(|plan| plan.id == id) {
+                    return Err(AppError::Message("not found".to_owned()));
+                }
+                if self.fail_notes && !notes.is_empty() {
+                    return Err(AppError::Message("test note write failed".to_owned()));
+                }
+                self.mutate(Mutation::SetPlanStatus { id, status })?;
+                return self.add_notes(ptrack_core::NoteTarget::Plan, id, notes);
+            }
             Mutation::SetGoal(value) => self.snapshot.meta.goal = value,
             Mutation::SetSummary(value) => self.snapshot.meta.summary = value,
             // Mirrors ProjectStore::set_task_hold / set_plan_hold closely
@@ -367,7 +440,8 @@ impl ApplicationPort for FakeApplication {
         Err(AppError::NotImplemented("test hook"))
     }
 
-    fn git_show(&mut self, _reference: &str, _stat: bool) -> AppResult<ProcessOutput> {
+    fn git_show(&mut self, reference: &str, _stat: bool) -> AppResult<ProcessOutput> {
+        self.git_references.push(reference.to_owned());
         self.git_output
             .take()
             .ok_or(AppError::NotImplemented("test git"))
@@ -423,6 +497,29 @@ impl ApplicationPort for FakeApplication {
             bounds: BoundedSnapshot::new(0, 0),
             incomplete: true,
         })
+    }
+}
+
+impl FakeApplication {
+    fn add_notes(
+        &mut self,
+        target: ptrack_core::NoteTarget,
+        target_id: u64,
+        notes: Vec<String>,
+    ) -> AppResult<MutationResult> {
+        let mut written = Vec::new();
+        for body in notes {
+            let MutationResult::Note(note) = self.mutate(Mutation::AddNote {
+                target,
+                target_id,
+                body,
+            })?
+            else {
+                unreachable!("fake add note returns the note");
+            };
+            written.push(note);
+        }
+        Ok(MutationResult::Notes(written))
     }
 }
 
@@ -705,7 +802,10 @@ fn plan_hold_and_resume_round_trip_through_every_surface() {
     assert_eq!(stdout, "plan #1 on hold: budget freeze\n");
 
     let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "plan", "list"]);
-    assert_eq!(stdout, "#1 [active] * Build CLI [on hold: budget freeze]\n");
+    assert_eq!(
+        stdout,
+        "#1 [active] * Build CLI (1 open, 1 done) [on hold: budget freeze]\n"
+    );
 
     let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "plan", "list", "--json"]);
     assert!(stdout.contains("\"hold_reason\": \"budget freeze\""));
@@ -1564,15 +1664,46 @@ fn a_started_task_blocks_opening_new_work_until_finished_or_parked() {
         assert!(message.contains("--force"), "{message}");
     }
 
-    // Parking the started task reopens the gate.
+    // Parking the started task with `task hold` alone reopens the gate: the
+    // task stays `doing` underneath the hold, exactly as the store keeps it.
     let (result, _, _) = invoke_with(
         &mut application,
         &["ptrack", "task", "hold", "1", "waiting", "on", "review"],
     );
     assert_eq!(result.expect("hold"), RunOutcome::ExitSuccess);
-    application.snapshot.tasks[0].status = TaskStatus::Blocked;
+    assert_eq!(application.snapshot.tasks[0].status, TaskStatus::Doing);
     let (result, _, _) = invoke_with(&mut application, &["ptrack", "task", "add", "new work"]);
     assert_eq!(result.expect("add"), RunOutcome::ExitSuccess);
+    assert!(
+        application
+            .snapshot
+            .notes
+            .iter()
+            .all(|note| !note.body.starts_with("override:")),
+        "a parked task must not force an override"
+    );
+}
+
+#[test]
+fn wip_gate_attributes_a_started_task_to_its_plan_claim_owner() {
+    let mut application = seeded();
+    application.snapshot.plans[0].claim_owner = Some("me".to_owned());
+    application.snapshot.tasks[0].status = TaskStatus::Doing;
+    // A teammate renamed my in-progress task, so they are its last editor.
+    application.snapshot.tasks[0].actor = Some("teammate".to_owned());
+    application.identity = Some(ActorIdentity {
+        id: "me".to_owned(),
+        name: "Me".to_owned(),
+    });
+    let (result, _, _) = invoke_with(&mut application, &["ptrack", "task", "add", "my work"]);
+    let message = result.expect_err("still my wip").to_string();
+    assert!(message.contains("task #1"), "{message}");
+
+    // The same edit history in a plan the teammate claimed never blocks me.
+    application.snapshot.plans[0].claim_owner = Some("teammate".to_owned());
+    application.snapshot.tasks[0].actor = Some("me".to_owned());
+    let (result, _, _) = invoke_with(&mut application, &["ptrack", "task", "add", "my work"]);
+    assert_eq!(result.expect("not my wip"), RunOutcome::ExitSuccess);
 }
 
 #[test]
@@ -1744,4 +1875,236 @@ fn local_and_sync_help_does_not_execute_actions() {
         assert!(stderr.is_empty());
         assert!(application.local_actions.is_empty());
     }
+}
+
+#[test]
+fn next_hands_out_real_work_before_the_plan_integration_task() {
+    let mut application = seeded();
+    let (result, stdout, _) = invoke_with(&mut application, &["ptrack", "plan", "add", "Storage"]);
+    assert_eq!(result.expect("plan add"), RunOutcome::ExitSuccess);
+    assert!(stdout.contains("task #3 Integrate and verify"), "{stdout}");
+    let (result, _, _) = invoke_with(&mut application, &["ptrack", "plan", "use", "2"]);
+    assert_eq!(result.expect("plan use"), RunOutcome::ExitSuccess);
+    let (result, stdout, _) =
+        invoke_with(&mut application, &["ptrack", "task", "add", "real work"]);
+    assert_eq!(result.expect("task add"), RunOutcome::ExitSuccess);
+    assert!(stdout.contains("task #4 real work (plan 2)"), "{stdout}");
+
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "next"]);
+    assert_eq!(
+        stdout,
+        "Goal: ship\nnext: [todo] #4 real work (plan: Storage)\n"
+    );
+
+    // Once the real work is done, the integration task is what is left.
+    application
+        .snapshot
+        .tasks
+        .iter_mut()
+        .find(|task| task.id == 4)
+        .unwrap()
+        .status = TaskStatus::Done;
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "next"]);
+    assert!(
+        stdout.contains("next: [todo] #3 Integrate and verify"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn a_task_merely_titled_like_the_integration_task_is_not_deferred() {
+    let mut application = seeded();
+    // Sorted first but not the plan's first-born task: a person named it so.
+    let mut titled = application.snapshot.tasks[0].clone();
+    titled.id = 5;
+    titled.order = 0;
+    titled.title = "Integrate and verify against goal: ship".to_owned();
+    application.snapshot.tasks.insert(0, titled);
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "next"]);
+    assert!(stdout.contains("next: [todo] #5 Integrate"), "{stdout}");
+}
+
+#[test]
+fn commit_shas_are_validated_before_they_are_stored_or_shown() {
+    let mut application = seeded();
+    let (result, _, _) = invoke_with(
+        &mut application,
+        &[
+            "ptrack",
+            "commit",
+            "add",
+            "--",
+            "--output=/tmp/x",
+            "subject",
+        ],
+    );
+    let message = result.expect_err("option sha").to_string();
+    assert!(message.contains("invalid commit sha"), "{message}");
+    let (result, _, _) = invoke_with(
+        &mut application,
+        &["ptrack", "commit", "record", "--sha=HEAD~1", "--subject=x"],
+    );
+    assert!(result.is_err());
+    assert!(application.snapshot.commits.is_empty());
+
+    // A record stored before validation existed never reaches git.
+    let mut legacy = commit_for_task(1, 1);
+    legacy.sha = "--output=/tmp/pwned".to_owned();
+    application.snapshot.commits.push(legacy);
+    let (result, _, _) = invoke_with(&mut application, &["ptrack", "commit", "show", "1"]);
+    let message = result.expect_err("legacy sha").to_string();
+    assert!(message.contains("unusable stored sha"), "{message}");
+    let (result, _, _) = invoke_with(
+        &mut application,
+        &["ptrack", "commit", "show", "--", "--output=/tmp/x"],
+    );
+    assert!(result.is_err());
+    assert!(application.git_references.is_empty());
+}
+
+#[test]
+fn commit_record_links_the_first_existing_task_and_ignores_a_pr_suffix() {
+    let mut application = seeded();
+    for (subject, task_id) in [
+        ("fix: wire context #1 (#2)", 1),
+        ("release: v0.40.1 (#2)", 0),
+        ("refs #99 then #2", 2),
+        ("#1: start", 1),
+    ] {
+        let subject = format!("--subject={subject}");
+        let (result, _, _) = invoke_with(
+            &mut application,
+            &["ptrack", "commit", "record", "--sha=abc1234", &subject],
+        );
+        assert_eq!(result.expect("record"), RunOutcome::ExitSuccess);
+        assert_eq!(
+            application.snapshot.commits.last().unwrap().task_id,
+            task_id,
+            "{subject}"
+        );
+    }
+    // The hook's `--subject=` form keeps a subject that starts with `-`.
+    let (result, _, _) = invoke_with(
+        &mut application,
+        &[
+            "ptrack",
+            "commit",
+            "record",
+            "--sha=abc1234",
+            "--subject=-x #1",
+        ],
+    );
+    assert_eq!(result.expect("dash subject"), RunOutcome::ExitSuccess);
+    assert_eq!(
+        application.snapshot.commits.last().unwrap().subject,
+        "-x #1"
+    );
+}
+
+#[test]
+fn milestone_due_accepts_a_lone_dash_to_clear_the_date() {
+    let mut application = seeded();
+    let (result, _, _) = invoke_with(&mut application, &["ptrack", "milestone", "due", "1", "-"]);
+    assert_eq!(result.expect("clear due"), RunOutcome::ExitSuccess);
+    assert!(application.mutations.contains(&Mutation::SetMilestoneDue {
+        id: 1,
+        due: Timestamp::Zero,
+    }));
+}
+
+#[test]
+fn task_block_records_an_optional_reason_with_the_status() {
+    let mut application = seeded();
+    let (result, _, _) = invoke_with(
+        &mut application,
+        &[
+            "ptrack", "task", "block", "1", "waiting", "on", "api", "keys",
+        ],
+    );
+    assert_eq!(result.expect("block"), RunOutcome::ExitSuccess);
+    assert_eq!(application.snapshot.tasks[0].status, TaskStatus::Blocked);
+    assert!(
+        application
+            .mutations
+            .contains(&Mutation::SetTaskStatusWithNotes {
+                id: 1,
+                status: TaskStatus::Blocked,
+                notes: vec!["blocked: waiting on api keys".to_owned()],
+            })
+    );
+
+    let (result, _, _) = invoke_with(&mut application, &["ptrack", "task", "block", "2"]);
+    assert_eq!(
+        result.expect("block without reason"),
+        RunOutcome::ExitSuccess
+    );
+    assert_eq!(application.snapshot.notes.len(), 1);
+}
+
+#[test]
+fn task_start_force_writes_the_override_with_the_status() {
+    let mut application = seeded();
+    application.snapshot.tasks[0].status = TaskStatus::Doing;
+    application.snapshot.tasks[1].status = TaskStatus::Todo;
+    let (result, _, _) = invoke_with(
+        &mut application,
+        &["ptrack", "task", "start", "2", "--force"],
+    );
+    assert_eq!(result.expect("forced start"), RunOutcome::ExitSuccess);
+    assert!(
+        application
+            .mutations
+            .contains(&Mutation::SetTaskStatusWithNotes {
+                id: 2,
+                status: TaskStatus::Doing,
+                notes: vec![
+                    "override: opened via --force while task #1 was in progress".to_owned()
+                ],
+            })
+    );
+
+    // A refused start (missing task) writes no override note.
+    let notes = application.snapshot.notes.len();
+    let (result, _, _) = invoke_with(
+        &mut application,
+        &["ptrack", "task", "start", "99", "--force"],
+    );
+    assert!(result.is_err());
+    assert_eq!(application.snapshot.notes.len(), notes);
+}
+
+#[test]
+fn plan_list_carries_per_plan_open_and_done_counts() {
+    let mut application = seeded();
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "plan", "list"]);
+    assert_eq!(stdout, "#1 [active] * Build CLI (1 open, 1 done)\n");
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "plan", "list", "--json"]);
+    assert!(
+        stdout.contains("\"open_tasks\": 1,\n    \"done_tasks\": 1\n"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn checkpoint_reports_the_active_plan_milestone_progress() {
+    let mut application = seeded();
+    application.snapshot.milestones.push(Milestone {
+        id: 1,
+        title: "v1".to_owned(),
+        status: MilestoneStatus::Open,
+        due: Timestamp::Zero,
+        order: 1,
+        created_at: Timestamp::Zero,
+        updated_at: Timestamp::Zero,
+        actor: None,
+        ulid: None,
+    });
+    application.snapshot.plans[0].milestone_id = 1;
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "checkpoint"]);
+    assert!(
+        stdout.contains("Milestone: v1 — 0/1 plans done"),
+        "{stdout}"
+    );
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "checkpoint", "--json"]);
+    assert!(stdout.contains("\"milestone\""), "{stdout}");
 }

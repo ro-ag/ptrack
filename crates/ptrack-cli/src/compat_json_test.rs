@@ -90,10 +90,13 @@ fn plan_row_emits_null_claim_and_a_legacy_actor_sentinel() {
         hold_reason: None,
         claimed_by: None,
         actor: "legacy",
+        open_tasks: 2,
+        done_tasks: 1,
     };
     let encoded = serde_json::to_string(&unclaimed).expect("plan row json");
     assert!(encoded.contains("\"claimed_by\":null"));
     assert!(encoded.contains("\"actor\":\"legacy\""));
+    assert!(encoded.ends_with("\"open_tasks\":2,\"done_tasks\":1}"));
 
     let claimed = PlanRow {
         id: 1,
@@ -103,6 +106,8 @@ fn plan_row_emits_null_claim_and_a_legacy_actor_sentinel() {
         hold_reason: None,
         claimed_by: Some("01hzvyekq3s7m8w9x0abcdefgh"),
         actor: "01hzvyekq3s7m8w9x0abcdefgh",
+        open_tasks: 0,
+        done_tasks: 0,
     };
     let encoded = serde_json::to_string(&claimed).expect("plan row json");
     assert!(encoded.contains("\"claimed_by\":\"01hzvyekq3s7m8w9x0abcdefgh\""));

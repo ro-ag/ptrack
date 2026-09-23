@@ -10,12 +10,13 @@ use std::path::PathBuf;
 use clap::ArgMatches;
 use ptrack_app::{
     ApplicationPort, GuideAction, HookAction, HookResult, InitRequest, Mutation, MutationResult,
-    PlanLifecycleOutcome, PlanLifecycleRequest, RelocateRequest, complete_plan, complete_task,
-    serve_project_mcp,
+    PlanLifecycleOutcome, PlanLifecycleRequest, RelocateRequest, check_commit_sha, complete_plan,
+    complete_task, integration_task_title, next_task, serve_project_mcp,
+    set_task_status_with_notes,
 };
 use ptrack_core::{
     IssueStatus, LEGACY_ACTOR, MilestoneStatus, NoteTarget, Severity, TaskStatus, Timestamp,
-    board_for, check_hold_reason, checkpoint, claim_marker, context, hold_marker, next, search,
+    board_for, check_hold_reason, checkpoint, claim_marker, context, hold_marker, search,
     show_issue, show_milestone, show_plan, show_task,
 };
 
@@ -388,12 +389,7 @@ fn plan(
                 format_args!("plan #{} {}", value.id, value.title),
             )?;
             if !matches.get_flag("no-verify-task") {
-                let goal = application.snapshot()?.meta.goal;
-                let title = if goal.is_empty() {
-                    "Integrate and verify against the project goal".to_owned()
-                } else {
-                    format!("Integrate and verify against goal: {goal}")
-                };
+                let title = integration_task_title(&application.snapshot()?.meta.goal);
                 let result = application.mutate(Mutation::AddTask {
                     plan_id: value.id,
                     title,
@@ -409,32 +405,50 @@ fn plan(
         }
         "list" => {
             let snapshot = application.snapshot()?;
+            // Per-plan open/done task counts, as the query-surface spec asks.
+            let counts = |plan_id: u64| {
+                snapshot
+                    .tasks_for_plan(plan_id)
+                    .fold((0, 0), |(open, done), task| {
+                        if task.status == TaskStatus::Done {
+                            (open, done + 1)
+                        } else {
+                            (open + 1, done)
+                        }
+                    })
+            };
             if matches.get_flag("json") {
                 let rows: Vec<_> = snapshot
                     .plans
                     .iter()
-                    .map(|plan| PlanRow {
-                        id: plan.id,
-                        title: &plan.title,
-                        status: plan.status.as_str(),
-                        active: plan.id == snapshot.meta.active_plan,
-                        hold_reason: plan.hold_reason.as_deref(),
-                        claimed_by: plan.claim_owner.as_deref(),
-                        actor: plan.actor.as_deref().unwrap_or(LEGACY_ACTOR),
+                    .map(|plan| {
+                        let (open_tasks, done_tasks) = counts(plan.id);
+                        PlanRow {
+                            id: plan.id,
+                            title: &plan.title,
+                            status: plan.status.as_str(),
+                            active: plan.id == snapshot.meta.active_plan,
+                            hold_reason: plan.hold_reason.as_deref(),
+                            claimed_by: plan.claim_owner.as_deref(),
+                            actor: plan.actor.as_deref().unwrap_or(LEGACY_ACTOR),
+                            open_tasks,
+                            done_tasks,
+                        }
                     })
                     .collect();
                 output::json(io.stdout, &rows)?;
             } else {
-                for plan in snapshot.plans {
+                for plan in &snapshot.plans {
                     let mark = if plan.id == snapshot.meta.active_plan {
                         '*'
                     } else {
                         ' '
                     };
+                    let (open, done) = counts(plan.id);
                     output::line(
                         io.stdout,
                         format_args!(
-                            "#{} [{}] {mark} {}{}{}",
+                            "#{} [{}] {mark} {} ({open} open, {done} done){}{}",
                             plan.id,
                             plan.status,
                             plan.title,
@@ -747,6 +761,12 @@ fn task_dep(
 
 /// The started task blocking new work, when one exists: the caller's own when
 /// an identity is configured, otherwise any (single-agent projects).
+///
+/// A held task is parked, so it never blocks, exactly as the gate's own
+/// refusal promises. Ownership follows the plan claim (goal-anchoring spec,
+/// piece 5): a task in a plan claimed by the caller is the caller's no matter
+/// who last edited it, and a task in someone else's claimed plan never is.
+/// Only an unclaimed plan falls back to the task's last editor.
 /// ponytail: check-then-act, not atomic with the mutation; single-writer local
 /// DB makes the race window irrelevant.
 fn wip_task(
@@ -758,11 +778,17 @@ fn wip_task(
     Ok(snapshot
         .tasks
         .iter()
-        .filter(|task| task.status == TaskStatus::Doing && task.id != exempt)
+        .filter(|task| {
+            task.status == TaskStatus::Doing && task.hold_reason.is_none() && task.id != exempt
+        })
         .find(|task| {
-            actor
-                .as_deref()
-                .is_none_or(|id| task.actor.as_deref() == Some(id))
+            actor.as_deref().is_none_or(|id| {
+                let owner = snapshot
+                    .plan(task.plan_id)
+                    .and_then(|plan| plan.claim_owner.as_deref())
+                    .or(task.actor.as_deref());
+                owner == Some(id)
+            })
         })
         .map(|task| (task.id, task.title.clone())))
 }
@@ -887,13 +913,13 @@ fn task(
         "start" => {
             let id = parse_u64(first(matches, "id")?)?;
             let override_note = wip_gate(application, id, matches.get_flag("force"))?;
-            expect_none(application.mutate(Mutation::SetTaskStatus {
+            // One mutation carries the status and its override note.
+            set_task_status_with_notes(
+                application,
                 id,
-                status: TaskStatus::Doing,
-            })?)?;
-            if let Some(body) = override_note {
-                add_override_note(application, NoteTarget::Task, id, body)?;
-            }
+                TaskStatus::Doing,
+                override_note.into_iter().collect(),
+            )?;
         }
         "done" => {
             let id = parse_u64(first(matches, "id")?)?;
@@ -906,10 +932,17 @@ fn task(
             )?;
         }
         "block" => {
-            expect_none(application.mutate(Mutation::SetTaskStatus {
-                id: parse_u64(first(matches, "id")?)?,
-                status: TaskStatus::Blocked,
-            })?)?;
+            let args = values(matches, "values");
+            let id = parse_u64(&args[0])?;
+            let reason = args[1..].join(" ").trim().to_owned();
+            // The reason is recorded as a note on the task (no record field
+            // holds it); status and note commit together.
+            let notes = if reason.is_empty() {
+                Vec::new()
+            } else {
+                vec![format!("blocked: {reason}")]
+            };
+            set_task_status_with_notes(application, id, TaskStatus::Blocked, notes)?;
         }
         "rename" => {
             let args = values(matches, "values");
@@ -1262,6 +1295,7 @@ fn commit(
     match command {
         "add" => {
             let args = values(matches, "values");
+            check_commit_sha(&args[0])?;
             let task_id = parse_flag_u64("task", option(matches, "task"))?;
             let requested_plan = parse_flag_u64("plan", option(matches, "plan"))?;
             let snapshot = application.snapshot()?;
@@ -1294,11 +1328,10 @@ fn commit(
             if sha.is_empty() {
                 return Err(CliError::message("--sha is required"));
             }
+            check_commit_sha(&sha)?;
             let subject = option(matches, "subject").cloned().unwrap_or_default();
             let snapshot = application.snapshot()?;
-            let task_id = task_reference(&subject)
-                .filter(|id| snapshot.task(*id).is_some())
-                .unwrap_or(0);
+            let task_id = task_reference(&subject, |id| snapshot.task(id).is_some()).unwrap_or(0);
             let plan_id = snapshot
                 .task(task_id)
                 .map_or(snapshot.meta.active_plan, |task| task.plan_id);
@@ -1361,8 +1394,22 @@ fn commit(
                     .find(|commit| commit.id == id)
                     .map(|commit| commit.sha.as_str())
             });
-            let result =
-                application.git_show(reference.unwrap_or(argument), matches.get_flag("stat"))?;
+            // A record written before SHAs were validated may hold anything;
+            // it must never reach git as an option or revision expression.
+            if let Some(sha) = reference {
+                check_commit_sha(sha).map_err(|error| {
+                    CliError::message(format!(
+                        "commit {argument} has an unusable stored sha: {error}"
+                    ))
+                })?;
+            }
+            let target = reference.unwrap_or(argument);
+            if target.starts_with('-') {
+                return Err(CliError::message(format!(
+                    "invalid commit reference {target:?}"
+                )));
+            }
+            let result = application.git_show(target, matches.get_flag("stat"))?;
             io.stdout.write_all(&result.stdout)?;
             io.stderr.write_all(&result.stderr)?;
             if result.exit_code != Some(0) {
@@ -1432,12 +1479,22 @@ fn hook(
         _ => return Err(CliError::message("internal hook dispatch mismatch")),
     };
     match application.hook(action)? {
-        HookResult::Installed { path, changed } if changed => output::line(
-            io.stdout,
-            format_args!("installed post-commit hook at {}", path.display()),
-        )?,
-        HookResult::Installed { .. } => {
-            output::line(io.stdout, "post-commit hook already up to date")?;
+        HookResult::Installed {
+            path,
+            changed,
+            warning,
+        } => {
+            if changed {
+                output::line(
+                    io.stdout,
+                    format_args!("installed post-commit hook at {}", path.display()),
+                )?;
+            } else {
+                output::line(io.stdout, "post-commit hook already up to date")?;
+            }
+            if let Some(warning) = warning {
+                output::line(io.stderr, format_args!("warning: {warning}"))?;
+            }
         }
         HookResult::Removed => output::line(io.stdout, "removed ptrack post-commit hook")?,
         HookResult::Missing => output::line(io.stdout, "no post-commit hook")?,
@@ -1503,7 +1560,7 @@ fn next_command(
     application: &mut dyn ApplicationPort,
     io: &mut Io<'_>,
 ) -> Result<RunOutcome, CliError> {
-    let view = next(&application.snapshot()?)?;
+    let view = next_task(&application.snapshot()?)?;
     if matches.get_flag("json") {
         output::json(io.stdout, &NextJson::from(&view))?;
     } else {
@@ -1517,7 +1574,10 @@ fn checkpoint_command(
     application: &mut dyn ApplicationPort,
     io: &mut Io<'_>,
 ) -> Result<RunOutcome, CliError> {
-    let view = checkpoint(&application.snapshot()?, None);
+    // The active plan's milestone progress, the same line `plan done` prints.
+    let snapshot = application.snapshot()?;
+    let active = snapshot.meta.active_plan;
+    let view = checkpoint(&snapshot, (active != 0).then_some(active));
     if matches.get_flag("json") {
         output::json(io.stdout, &CheckpointJson::from(&view))?;
     } else {
@@ -1977,19 +2037,40 @@ fn short(sha: &str) -> &str {
     sha.get(..8).unwrap_or(sha)
 }
 
-fn task_reference(subject: &str) -> Option<u64> {
+/// The task a commit subject names: the first `#N` that is an existing task.
+///
+/// A trailing `(#N)` is the pull-request number GitHub appends on squash
+/// merge, not a task, so it never links — otherwise `fix: thing #12 (#154)`
+/// would land on task #154.
+fn task_reference(subject: &str, exists: impl Fn(u64) -> bool) -> Option<u64> {
+    let trimmed = subject.trim_end();
+    let pull_request = trimmed
+        .strip_suffix(')')
+        .and_then(|rest| rest.rfind("(#").map(|start| (start, rest)))
+        .filter(|(start, rest)| {
+            let digits = &rest[start + 2..];
+            !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+        })
+        .map(|(start, _)| start + 1);
     let bytes = subject.as_bytes();
-    for index in 0..bytes.len() {
-        if bytes[index] != b'#' {
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'#' || Some(index) == pull_request {
+            index += 1;
             continue;
         }
         let mut end = index + 1;
         while end < bytes.len() && bytes[end].is_ascii_digit() {
             end += 1;
         }
-        if end > index + 1 {
-            return subject[index + 1..end].parse().ok();
+        if let Some(id) = subject[index + 1..end]
+            .parse()
+            .ok()
+            .filter(|id| exists(*id))
+        {
+            return Some(id);
         }
+        index = end.max(index + 1);
     }
     None
 }

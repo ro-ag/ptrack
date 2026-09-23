@@ -56,12 +56,17 @@ pub(crate) fn install_shell_command_from(executable: &Path, home: &Path) -> Resu
     }
     let profile = home.join(".zprofile");
     match ensure_shell_path(&profile, bin_dir) {
-        Ok(true) => Ok(format!(
+        Ok(ShellPathChange::Added) => Ok(format!(
             "Added to PATH in {}:\n\n{}\n\nOpen a new terminal window, then run `ptrack`.",
             profile.display(),
             bin_dir.display()
         )),
-        Ok(false) => Ok(format!(
+        Ok(ShellPathChange::Updated) => Ok(format!(
+            "Updated PATH in {}:\n\n{}\n\nOpen a new terminal window, then run `ptrack`.",
+            profile.display(),
+            bin_dir.display()
+        )),
+        Ok(ShellPathChange::Unchanged) => Ok(format!(
             "Already on PATH via {}:\n\n{}",
             profile.display(),
             bin_dir.display()
@@ -70,7 +75,29 @@ pub(crate) fn install_shell_command_from(executable: &Path, home: &Path) -> Resu
     }
 }
 
-pub(crate) fn ensure_shell_path(profile: &Path, bin_dir: &Path) -> Result<bool, String> {
+/// What [`ensure_shell_path`] did to the profile.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ShellPathChange {
+    /// No managed block existed; one was appended.
+    Added,
+    /// A managed block for another directory (an older install location)
+    /// was replaced in place.
+    Updated,
+    /// The exact managed block for this directory is already there.
+    Unchanged,
+}
+
+fn managed_block(bin_dir: &Path) -> String {
+    format!(
+        "{SHELL_PATH_MARKER_BEGIN}\n# Added by p-track: makes the `ptrack` CLI available in new terminal sessions.\nexport PATH=\"$PATH:{}\"\n{SHELL_PATH_MARKER_END}\n",
+        bin_dir.display()
+    )
+}
+
+/// Makes the profile carry exactly one managed block for `bin_dir`. The whole
+/// block is compared, not just its begin marker, so a block left by an app
+/// installed somewhere else is replaced rather than reported as current.
+pub(crate) fn ensure_shell_path(profile: &Path, bin_dir: &Path) -> Result<ShellPathChange, String> {
     let mut read_file = open_profile_read(profile)
         .map_err(|error| format!("cannot update {}: {error}", profile.display()))?;
     if !read_file
@@ -87,24 +114,36 @@ pub(crate) fn ensure_shell_path(profile: &Path, bin_dir: &Path) -> Result<bool, 
     read_file
         .read_to_end(&mut data)
         .map_err(|error| format!("cannot read {}: {error}", profile.display()))?;
-    if data
-        .windows(SHELL_PATH_MARKER_BEGIN.len())
-        .any(|window| window == SHELL_PATH_MARKER_BEGIN.as_bytes())
-    {
-        return Ok(false);
+    let expected = managed_block(bin_dir);
+    if let Some(begin) = find(&data, SHELL_PATH_MARKER_BEGIN.as_bytes(), 0) {
+        if data[begin..].starts_with(expected.as_bytes()) {
+            return Ok(ShellPathChange::Unchanged);
+        }
+        let end = find(&data, SHELL_PATH_MARKER_END.as_bytes(), begin)
+            .map(|end| end + SHELL_PATH_MARKER_END.len())
+            .ok_or_else(|| {
+                format!(
+                    "cannot update {}: the p-track PATH block has no end marker; remove it and try again",
+                    profile.display()
+                )
+            })?;
+        let end = if data.get(end) == Some(&b'\n') {
+            end + 1
+        } else {
+            end
+        };
+        let mut updated = data[..begin].to_vec();
+        updated.extend_from_slice(expected.as_bytes());
+        updated.extend_from_slice(&data[end..]);
+        replace_profile(profile, &read_file, &updated)
+            .map_err(|error| format!("cannot update {}: {error}", profile.display()))?;
+        return Ok(ShellPathChange::Updated);
     }
     let mut block = Vec::new();
     if !data.is_empty() && !data.ends_with(b"\n") {
         block.push(b'\n');
     }
-    block.extend_from_slice(SHELL_PATH_MARKER_BEGIN.as_bytes());
-    block.extend_from_slice(
-        b"\n# Added by p-track: makes the `ptrack` CLI available in new terminal sessions.\n",
-    );
-    writeln!(block, "export PATH=\"$PATH:{}\"", bin_dir.display())
-        .map_err(|error| format!("cannot update {}: {error}", profile.display()))?;
-    block.extend_from_slice(SHELL_PATH_MARKER_END.as_bytes());
-    block.push(b'\n');
+    block.extend_from_slice(expected.as_bytes());
 
     let mut write_file = open_profile_append(profile)
         .map_err(|error| format!("cannot update {}: {error}", profile.display()))?;
@@ -119,7 +158,60 @@ pub(crate) fn ensure_shell_path(profile: &Path, bin_dir: &Path) -> Result<bool, 
     write_file
         .write_all(&block)
         .map_err(|error| format!("cannot update {}: {error}", profile.display()))?;
-    Ok(true)
+    Ok(ShellPathChange::Added)
+}
+
+fn find(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
+    haystack
+        .get(from..)?
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .map(|index| index + from)
+}
+
+/// Rewrites the profile through a sibling temporary file and a rename, so a
+/// crash leaves either the old or the new profile, never a truncated one. The
+/// original permission bits are kept, and the rename is refused when the
+/// profile was swapped after it was read.
+fn replace_profile(
+    profile: &Path,
+    read_file: &std::fs::File,
+    content: &[u8],
+) -> std::io::Result<()> {
+    let parent = profile
+        .parent()
+        .ok_or_else(|| std::io::Error::other("profile has no parent directory"))?;
+    let name = profile
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("profile has no file name"))?;
+    let temporary = parent.join(format!(
+        ".{}.ptrack-{}.tmp",
+        name.to_string_lossy(),
+        std::process::id()
+    ));
+    let permissions = read_file.metadata()?.permissions();
+    let result = (|| {
+        // `create_new` is O_EXCL: it never follows a planted link.
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(content)?;
+        file.set_permissions(permissions)?;
+        file.sync_all()?;
+        drop(file);
+        let current = open_profile_read(profile)?;
+        if !same_profile(read_file, &current)? {
+            return Err(std::io::Error::other(
+                "profile changed while it was being read",
+            ));
+        }
+        std::fs::rename(&temporary, profile)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
 }
 
 #[cfg(unix)]

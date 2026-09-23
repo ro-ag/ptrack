@@ -188,3 +188,30 @@ fn disable_can_recover_malformed_local_metadata_without_reading_it() {
     app.local_mode("disable").unwrap();
     assert_eq!(app.snapshot().unwrap().meta.goal, "initial");
 }
+
+#[test]
+fn a_moved_local_project_names_the_escape_and_that_escape_works() {
+    let fixture = Fixture::new();
+    let moved = fixture.root.join("moved");
+    fs::rename(&fixture.project, &moved).unwrap();
+    let mut app = RoutedApplication::new(fixture.home.clone(), moved.clone(), "test");
+    let message = app.snapshot().unwrap_err().to_string();
+    assert!(
+        message.contains(
+            "run 'ptrack local disable', then 'ptrack relocate', then 'ptrack local enable'"
+        ),
+        "{message}"
+    );
+
+    // Following the advice, in order, restores project-local mode at the
+    // new location with the data intact.
+    app.local_mode("disable").unwrap();
+    app.relocate(crate::RelocateRequest::default()).unwrap();
+    app.local_mode("enable").unwrap();
+    let mut app = RoutedApplication::new(fixture.home.clone(), moved, "test");
+    assert_eq!(app.snapshot().unwrap().meta.goal, "initial");
+    assert_eq!(
+        app.local_mode("status").unwrap(),
+        "project-local mode is enabled"
+    );
+}

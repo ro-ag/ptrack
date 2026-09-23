@@ -788,7 +788,11 @@ fn task_leaf(name: &str) -> Spec {
                 ),
             ],
         ),
-        "block" => leaf_spec("task block <id>", "Mark a task blocked", HELP_ONLY),
+        "block" => leaf_spec(
+            "task block <id> [reason...]",
+            "Mark a task blocked, recording the optional reason as a task note",
+            HELP_ONLY,
+        ),
         "hold" => leaf_spec(
             "task hold <id> <reason...>",
             "Put a task on hold with a reason (keeps its status)",

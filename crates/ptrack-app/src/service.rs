@@ -3,7 +3,7 @@ use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
@@ -28,7 +28,8 @@ use serde::{Deserialize, Serialize};
 const NO_PROJECT: &str = "no ptrack project found (run 'ptrack init')";
 const HOOK_BEGIN: &str = "# ptrack:begin";
 const HOOK_END: &str = "# ptrack:end";
-const HOOK_BODY: &str = "command -v ptrack >/dev/null 2>&1 && ptrack commit record --sha \"$(git rev-parse HEAD)\" --subject \"$(git log -1 --pretty=%s)\" >/dev/null 2>&1 || true";
+// `--flag=value` form, so a subject that starts with `-` is still a value.
+const HOOK_BODY: &str = "command -v ptrack >/dev/null 2>&1 && ptrack commit record --sha=\"$(git rev-parse HEAD)\" --subject=\"$(git log -1 --pretty=%s)\" >/dev/null 2>&1 || true";
 
 /// The exact conflict message every layer renders for a fenced scratchpad
 /// write. Exported so no presentation layer keeps a copy that can drift.
@@ -322,6 +323,22 @@ pub enum Mutation {
         id: u64,
         status: PlanStatus,
     },
+    /// Marks a plan done in one store transaction whose open-task check reads
+    /// what the status change commits against; `force` closes over open
+    /// tasks and records them in an override note in the same write. Returns
+    /// [`MutationResult::Notes`] holding that note, if any.
+    CompletePlan {
+        id: u64,
+        force: bool,
+    },
+    /// Changes a plan's status and appends `notes` to it in one store
+    /// transaction: the audit notes and the status land together or not at
+    /// all. Returns [`MutationResult::Notes`].
+    SetPlanStatusWithNotes {
+        id: u64,
+        status: PlanStatus,
+        notes: Vec<String>,
+    },
     /// `Some` holds the plan with that reason; `None` resumes it.
     SetPlanHold {
         id: u64,
@@ -353,6 +370,14 @@ pub enum Mutation {
     SetTaskStatus {
         id: u64,
         status: TaskStatus,
+    },
+    /// Changes a task's status and appends `notes` to it in one store
+    /// transaction: the audit notes and the status land together or not at
+    /// all. Returns [`MutationResult::Notes`].
+    SetTaskStatusWithNotes {
+        id: u64,
+        status: TaskStatus,
+        notes: Vec<String>,
     },
     /// `Some` holds the task with that reason; `None` resumes it.
     SetTaskHold {
@@ -440,8 +465,13 @@ pub enum MutationResult {
     Plan(Plan),
     Task(Task),
     Issue(Issue),
-    ScheduledIssue { issue: Issue, task: Task },
+    ScheduledIssue {
+        issue: Issue,
+        task: Task,
+    },
     Note(Note),
+    /// The notes a status-with-notes mutation wrote, in the order given.
+    Notes(Vec<Note>),
     Commit(Commit),
 }
 
@@ -466,46 +496,29 @@ pub struct CompletePlanResult {
 /// the same whole-project checkpoint shown by the CLI.
 ///
 /// `force` is retained for CLI compatibility. Forced completion records the
-/// exact open task IDs before changing the terminal plan status.
+/// exact open task IDs in an override note that commits with the status.
 ///
 /// # Errors
 /// Returns an application error when the plan is absent or inaccessible,
-/// open tasks remain without `force`, or an audit/status mutation fails.
+/// open tasks remain without `force`, or the status-and-note write fails (in
+/// which case neither landed).
 pub fn complete_plan(
     application: &mut dyn ApplicationPort,
     plan_id: u64,
     force: bool,
 ) -> AppResult<CompletePlanResult> {
-    let snapshot = application.snapshot()?;
-    let open_tasks = snapshot
-        .tasks_for_plan(plan_id)
-        .filter(|task| task.status.is_open())
-        .map(|task| task.id)
-        .collect::<Vec<_>>();
+    let open_tasks = open_plan_tasks(application, plan_id)?;
     if !open_tasks.is_empty() && !force {
         return Err(AppError::Message(format!(
             "cannot close plan #{plan_id}: open tasks remain ({}); finish them or pass --force",
             id_list(&open_tasks)
         )));
     }
-    expect_no_mutation_result(&application.mutate(Mutation::SetPlanStatus {
-        id: plan_id,
-        status: PlanStatus::Done,
-    })?)?;
-    let override_note = if open_tasks.is_empty() {
-        None
-    } else {
-        Some(expect_note_result(application.mutate(
-            Mutation::AddNote {
-                target: NoteTarget::Plan,
-                target_id: plan_id,
-                body: format!(
-                    "override: closed via --force with open tasks {}",
-                    id_list(&open_tasks)
-                ),
-            },
-        )?)?)
-    };
+    // The store re-checks open tasks inside the closing transaction and
+    // writes the override note there, so status and audit land together.
+    let override_note =
+        expect_notes_result(application.mutate(Mutation::CompletePlan { id: plan_id, force })?)?
+            .pop();
     Ok(CompletePlanResult {
         plan_id,
         checkpoint: checkpoint(&application.snapshot()?, Some(plan_id)),
@@ -513,25 +526,24 @@ pub fn complete_plan(
     })
 }
 
-/// Completes one task while enforcing the agent workflow's evidence gate.
-///
-/// A nonblank summary and at least one linked commit are required unless
-/// `force` is set. Forced omissions are recorded as an override note.
-///
-/// # Errors
-/// Returns an application error when evidence is missing, the task is absent or
-/// inaccessible, or either the status or audit-note mutation fails.
-pub fn complete_task(
+fn open_plan_tasks(application: &mut dyn ApplicationPort, plan_id: u64) -> AppResult<Vec<u64>> {
+    Ok(application
+        .snapshot()?
+        .tasks_for_plan(plan_id)
+        .filter(|task| task.status.is_open())
+        .map(|task| task.id)
+        .collect())
+}
+
+/// The closing-evidence gaps for a task: a missing summary and no linked
+/// commit, each as the sentence the refusal prints.
+fn missing_evidence(
     application: &mut dyn ApplicationPort,
     task_id: u64,
-    summary: Option<String>,
-    force: bool,
-) -> AppResult<CompleteTaskResult> {
-    let summary = summary
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty());
-    let snapshot = application.snapshot()?;
-    let linked_commits = snapshot
+    summary: Option<&str>,
+) -> AppResult<(usize, Vec<&'static str>)> {
+    let linked_commits = application
+        .snapshot()?
         .commits
         .iter()
         .filter(|commit| commit.task_id == task_id)
@@ -546,39 +558,50 @@ pub fn complete_task(
              (ptrack hook install records it) or run ptrack commit record",
         );
     }
+    Ok((linked_commits, missing))
+}
+
+/// Completes one task while enforcing the agent workflow's evidence gate.
+///
+/// A nonblank summary and at least one linked commit are required unless
+/// `force` is set. Forced omissions are recorded as an override note. The
+/// closeout note, the override note, and the status change commit in one
+/// transaction, so a refused or failed close leaves no orphan notes behind
+/// and a retry never duplicates them.
+///
+/// # Errors
+/// Returns an application error when evidence is missing, the task is absent or
+/// inaccessible, or the status-and-notes write fails.
+pub fn complete_task(
+    application: &mut dyn ApplicationPort,
+    task_id: u64,
+    summary: Option<String>,
+    force: bool,
+) -> AppResult<CompleteTaskResult> {
+    let summary = summary
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    let (linked_commits, missing) = missing_evidence(application, task_id, summary.as_deref())?;
     if !missing.is_empty() && !force {
         return Err(AppError::Message(format!(
             "cannot close task #{task_id}: {} (or pass --force)",
             missing.join("; ")
         )));
     }
-
-    let closeout_note = summary
-        .map(|summary| {
-            expect_note_result(application.mutate(Mutation::AddNote {
-                target: NoteTarget::Task,
-                target_id: task_id,
-                body: format!("closeout: {summary}"),
-            })?)
-        })
-        .transpose()?;
-    let override_note = if missing.is_empty() {
-        None
-    } else {
-        Some(expect_note_result(application.mutate(
-            Mutation::AddNote {
-                target: NoteTarget::Task,
-                target_id: task_id,
-                body: format!("override: closed via --force ({})", missing.join("; ")),
-            },
-        )?)?)
-    };
-    // Required audit evidence must exist before the irreversible status
-    // transition. A note-write failure therefore leaves the task open.
-    expect_no_mutation_result(&application.mutate(Mutation::SetTaskStatus {
-        id: task_id,
-        status: TaskStatus::Done,
-    })?)?;
+    let mut notes = Vec::new();
+    if let Some(summary) = &summary {
+        notes.push(format!("closeout: {summary}"));
+    }
+    if !missing.is_empty() {
+        notes.push(format!(
+            "override: closed via --force ({})",
+            missing.join("; ")
+        ));
+    }
+    let mut written =
+        set_task_status_with_notes(application, task_id, TaskStatus::Done, notes)?.into_iter();
+    let closeout_note = summary.and_then(|_| written.next());
+    let override_note = written.next();
     Ok(CompleteTaskResult {
         task_id,
         linked_commits,
@@ -587,9 +610,133 @@ pub fn complete_task(
     })
 }
 
-fn expect_no_mutation_result(result: &MutationResult) -> AppResult<()> {
-    if matches!(result, &MutationResult::None) {
-        Ok(())
+/// Sets a task's status and writes `notes` on it atomically; see
+/// [`Mutation::SetTaskStatusWithNotes`].
+///
+/// # Errors
+/// Returns the store refusal (missing task, claim gate, write failure); on
+/// error neither the status nor any note was written.
+pub fn set_task_status_with_notes(
+    application: &mut dyn ApplicationPort,
+    id: u64,
+    status: TaskStatus,
+    notes: Vec<String>,
+) -> AppResult<Vec<Note>> {
+    expect_notes_result(application.mutate(Mutation::SetTaskStatusWithNotes {
+        id,
+        status,
+        notes,
+    })?)
+}
+
+/// Sets a plan's status and writes `notes` on it atomically; see
+/// [`Mutation::SetPlanStatusWithNotes`].
+///
+/// # Errors
+/// Returns the store refusal; on error neither the status nor any note was
+/// written.
+pub fn set_plan_status_with_notes(
+    application: &mut dyn ApplicationPort,
+    id: u64,
+    status: PlanStatus,
+    notes: Vec<String>,
+) -> AppResult<Vec<Note>> {
+    expect_notes_result(application.mutate(Mutation::SetPlanStatusWithNotes {
+        id,
+        status,
+        notes,
+    })?)
+}
+
+/// A human surface (TUI, desktop) that may close work without the agent
+/// evidence gate. Humans are exempt from the gate, but every such close is
+/// recorded, so the audit trail names where it happened.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UiSurface {
+    Tui,
+    Desktop,
+}
+
+impl UiSurface {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Tui => "TUI",
+            Self::Desktop => "desktop",
+        }
+    }
+}
+
+/// Marks a task done from a human surface. Allowed without a closeout summary
+/// or a linked commit; when either is missing an override note naming the
+/// surface ("override: closed from TUI without evidence (…)") commits in the
+/// same transaction as the status. Returns that note, if one was written.
+///
+/// # Errors
+/// Returns the store refusal; on error nothing was written.
+pub fn close_task_from_ui(
+    application: &mut dyn ApplicationPort,
+    surface: UiSurface,
+    task_id: u64,
+) -> AppResult<Option<Note>> {
+    let snapshot = application.snapshot()?;
+    let mut missing = Vec::new();
+    if !snapshot.notes.iter().any(|note| {
+        note.target == NoteTarget::Task
+            && note.target_id == task_id
+            && note.body.starts_with("closeout:")
+    }) {
+        missing.push("no closeout summary");
+    }
+    if !snapshot
+        .commits
+        .iter()
+        .any(|commit| commit.task_id == task_id)
+    {
+        missing.push("no linked commit");
+    }
+    let notes = if missing.is_empty() {
+        Vec::new()
+    } else {
+        vec![format!(
+            "override: closed from {} without evidence ({})",
+            surface.as_str(),
+            missing.join("; ")
+        )]
+    };
+    Ok(set_task_status_with_notes(application, task_id, TaskStatus::Done, notes)?.pop())
+}
+
+/// Marks a plan done from a human surface. Allowed with open tasks; when any
+/// remain an override note naming the surface and the open task IDs ("override:
+/// plan completed from TUI with 2 open tasks #3, #4") commits in the same
+/// transaction as the status. Returns that note, if one was written.
+///
+/// # Errors
+/// Returns the store refusal; on error nothing was written.
+pub fn complete_plan_from_ui(
+    application: &mut dyn ApplicationPort,
+    surface: UiSurface,
+    plan_id: u64,
+) -> AppResult<Option<Note>> {
+    let open_tasks = open_plan_tasks(application, plan_id)?;
+    let notes = if open_tasks.is_empty() {
+        Vec::new()
+    } else {
+        vec![format!(
+            "override: plan completed from {} with {} open task{} {}",
+            surface.as_str(),
+            open_tasks.len(),
+            if open_tasks.len() == 1 { "" } else { "s" },
+            id_list(&open_tasks)
+        )]
+    };
+    Ok(set_plan_status_with_notes(application, plan_id, PlanStatus::Done, notes)?.pop())
+}
+
+fn expect_notes_result(result: MutationResult) -> AppResult<Vec<Note>> {
+    if let MutationResult::Notes(notes) = result {
+        Ok(notes)
     } else {
         Err(AppError::Message(
             "internal mutation result mismatch".to_owned(),
@@ -597,13 +744,93 @@ fn expect_no_mutation_result(result: &MutationResult) -> AppResult<()> {
     }
 }
 
-fn expect_note_result(result: MutationResult) -> AppResult<Note> {
-    if let MutationResult::Note(note) = result {
-        Ok(note)
+/// Title prefix shared by both forms of the integration task.
+const INTEGRATION_TASK_PREFIX: &str = "Integrate and verify against";
+
+/// The title `ptrack plan add` gives the integration task it appends to a new
+/// plan, so the creator and [`integration_task_id`] share one spelling.
+#[must_use]
+pub fn integration_task_title(goal: &str) -> String {
+    if goal.is_empty() {
+        format!("{INTEGRATION_TASK_PREFIX} the project goal")
     } else {
-        Err(AppError::Message(
-            "internal mutation result mismatch".to_owned(),
-        ))
+        format!("{INTEGRATION_TASK_PREFIX} goal: {goal}")
+    }
+}
+
+/// The integration task `ptrack plan add` appended to `plan_id`, when it is
+/// still there.
+///
+/// No record field marks it, so it is recognised by how it was created: `plan
+/// add` writes it as the plan's first-born task (the lowest ID among the tasks
+/// created no earlier than the plan; a task created before the plan was moved
+/// in later) under the integration title. A title alone is not enough — a
+/// person may name any task that way — and a renamed integration task is
+/// simply ordinary work again.
+#[must_use]
+pub fn integration_task_id(snapshot: &ProjectSnapshot, plan_id: u64) -> Option<u64> {
+    let plan_born = snapshot.plan(plan_id)?.created_at.unix_nanoseconds();
+    let first_born = snapshot
+        .tasks_for_plan(plan_id)
+        .filter(
+            |task| match (plan_born, task.created_at.unix_nanoseconds()) {
+                (Some(plan), Some(task)) => task >= plan,
+                _ => true,
+            },
+        )
+        .min_by_key(|task| task.id)?;
+    first_born
+        .title
+        .starts_with(INTEGRATION_TASK_PREFIX)
+        .then_some(first_born.id)
+}
+
+/// `ptrack next` for every surface: the core selection, except that the
+/// active plan's integration task waits until it is the only unheld work left.
+///
+/// `plan add` creates that task first, so by order it would be handed out
+/// before any real work; the goal-anchoring spec makes it the plan's final
+/// task. Once it is already started it is selected like any other task.
+///
+/// # Errors
+/// Returns the core report error when the active plan pointer is dangling.
+pub fn next_task(
+    snapshot: &ProjectSnapshot,
+) -> Result<ptrack_core::NextView, ptrack_core::ReportError> {
+    let plan_id = snapshot.meta.active_plan;
+    let Some(integration) = integration_task_id(snapshot, plan_id) else {
+        return ptrack_core::next(snapshot);
+    };
+    let waiting = snapshot
+        .task(integration)
+        .is_some_and(|task| task.status == TaskStatus::Todo);
+    let other_work = snapshot.tasks_for_plan(plan_id).any(|task| {
+        task.id != integration
+            && task.hold_reason.is_none()
+            && matches!(task.status, TaskStatus::Todo | TaskStatus::Doing)
+    });
+    if !(waiting && other_work) {
+        return ptrack_core::next(snapshot);
+    }
+    let mut deferred = snapshot.clone();
+    deferred.tasks.retain(|task| task.id != integration);
+    ptrack_core::next(&deferred)
+}
+
+/// Accepts only a 4–64 digit hexadecimal object name, the shape of every SHA
+/// `git rev-parse` prints. Anything else — an option such as `--output=…`, a
+/// revision expression, a path — could make a later `git show` do something
+/// other than show one commit, so it is refused before it is stored.
+///
+/// # Errors
+/// Returns a message naming the rejected value's problem.
+pub fn check_commit_sha(sha: &str) -> AppResult<()> {
+    if (4..=64).contains(&sha.len()) && sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Ok(())
+    } else {
+        Err(AppError::Message(format!(
+            "invalid commit sha {sha:?}: want 4-64 hexadecimal digits"
+        )))
     }
 }
 
@@ -667,10 +894,19 @@ pub enum HookAction {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HookResult {
-    Installed { path: PathBuf, changed: bool },
+    /// `warning` explains an adjustment the caller should know about, such as
+    /// the block being placed before an existing hook's final `exec`.
+    Installed {
+        path: PathBuf,
+        changed: bool,
+        warning: Option<String>,
+    },
     Removed,
     Missing,
-    Status { path: PathBuf, installed: bool },
+    Status {
+        path: PathBuf,
+        installed: bool,
+    },
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -1101,7 +1337,7 @@ impl LocalApplication {
                 // traveled are deleted here, not detached — they follow their
                 // task. A failure here leaves a visible duplicate rather than a
                 // lost plan, so the refusal has to name both sides.
-                store.delete_plan_for_move(plan_id).map_err(|error| {
+                store.delete_plan_for_move(&subtree).map_err(|error| {
                     AppError::Message(format!(
                         "plan #{plan_id} was copied into {target_label} as #{} but could not be removed from {source_label}: {error}; the plan now exists in both projects — remove the source copy with 'ptrack plan delete'",
                         new_plan.id
@@ -1282,6 +1518,16 @@ impl ApplicationPort for LocalApplication {
                     store.set_plan_status(id, status)?;
                     MutationResult::None
                 }
+                Mutation::CompletePlan { id, force } => MutationResult::Notes(
+                    store
+                        .complete_plan(id, force)?
+                        .override_note
+                        .into_iter()
+                        .collect(),
+                ),
+                Mutation::SetPlanStatusWithNotes { id, status, notes } => {
+                    MutationResult::Notes(plan_status_with_notes(store, id, status, notes)?)
+                }
                 Mutation::SetPlanHold { id, reason } => {
                     store.set_plan_hold(id, reason)?;
                     MutationResult::None
@@ -1316,6 +1562,9 @@ impl ApplicationPort for LocalApplication {
                 Mutation::SetTaskStatus { id, status } => {
                     store.set_task_status(id, status)?;
                     MutationResult::None
+                }
+                Mutation::SetTaskStatusWithNotes { id, status, notes } => {
+                    MutationResult::Notes(task_status_with_notes(store, id, status, notes)?)
                 }
                 Mutation::SetTaskHold { id, reason } => {
                     store.set_task_hold(id, reason)?;
@@ -1407,7 +1656,10 @@ impl ApplicationPort for LocalApplication {
                     subject,
                     plan_id,
                     task_id,
-                } => MutationResult::Commit(store.add_commit(sha, subject, plan_id, task_id)?),
+                } => {
+                    check_commit_sha(&sha)?;
+                    MutationResult::Commit(store.add_commit(sha, subject, plan_id, task_id)?)
+                }
             };
             Ok(result)
         })
@@ -1501,35 +1753,28 @@ impl ApplicationPort for LocalApplication {
     fn hook(&mut self, action: HookAction) -> AppResult<HookResult> {
         self.require_global()?;
         let root = self.verified_root()?;
-        let git_directory = root.join(".git");
-        let metadata = fs::symlink_metadata(&git_directory).map_err(|_| {
-            AppError::Message(format!(
-                ".git is not a directory at {} — install the hook manually",
-                git_directory.display()
-            ))
-        })?;
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Err(AppError::Message(format!(
-                ".git is not a directory at {} — install the hook manually",
-                git_directory.display()
-            )));
-        }
-        let path = git_directory.join("hooks").join("post-commit");
+        let hooks = effective_hooks_directory(&root)?;
+        let path = hooks.directory.join("post-commit");
         match action {
             HookAction::Install => {
-                ensure_directory(
-                    path.parent().expect("hook path has parent"),
-                    "hook directory",
-                )?;
+                hooks.require_project_local()?;
+                ensure_directory(&hooks.directory, "hook directory")?;
                 let existing = read_regular(&path, "post-commit hook")?;
-                let (updated, changed) =
-                    upsert_hook(existing.as_ref().map_or("", |file| &file.content));
+                let (updated, changed, warning) = upsert_hook(
+                    existing.as_ref().map_or("", |file| &file.content),
+                )
+                .map_err(|message| AppError::Message(format!("{}: {message}", path.display())))?;
                 if changed {
                     atomic_publish(&path, &updated, existing.as_ref(), 0o755, "hook")?;
                 }
-                Ok(HookResult::Installed { path, changed })
+                Ok(HookResult::Installed {
+                    path,
+                    changed,
+                    warning,
+                })
             }
             HookAction::Uninstall => {
+                hooks.require_project_local()?;
                 let Some(existing) = read_regular(&path, "post-commit hook")? else {
                     return Ok(HookResult::Missing);
                 };
@@ -1551,20 +1796,25 @@ impl ApplicationPort for LocalApplication {
 
     fn git_show(&mut self, reference: &str, stat: bool) -> AppResult<ProcessOutput> {
         self.require_global()?;
-        let root = self.verified_root()?;
-        let mut command = Command::new("git");
-        command.arg("-C").arg(root).arg("show");
-        if stat {
-            command.arg("--stat");
+        if reference.is_empty() || reference.starts_with('-') {
+            return Err(AppError::Message(format!(
+                "invalid commit reference {reference:?}"
+            )));
         }
-        command
-            .arg(reference)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .env("GIT_PAGER", "cat")
-            .env("GIT_OPTIONAL_LOCKS", "0");
+        let root = self.verified_root()?;
+        // The runner policy of `ptrack-git` (no fsmonitor, scrubbed `GIT_*`
+        // environment), no external diff or textconv driver, and
+        // `--end-of-options` so even a hostile stored value stays a revision:
+        // git never reads it as `--output=<file>` or any other option.
+        let mut args = vec![OsString::from("show")];
+        args.extend(ptrack_git::NO_EXTERNAL_DIFF_ARGS.map(OsString::from));
+        if stat {
+            args.push(OsString::from("--stat"));
+        }
+        args.push(OsString::from("--end-of-options"));
+        args.push(OsString::from(reference));
+        let mut command = ptrack_git::hardened_git_command(&root, &args);
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
         let output = command.output()?;
         Ok(ProcessOutput {
             stdout: output.stdout,
@@ -1634,6 +1884,43 @@ impl ApplicationPort for LocalApplication {
             McpServeOutcome::Cancelled => CapabilityMcpOutcome::Cancelled,
         })
     }
+}
+
+/// A done transition and its notes commit in the store's single closeout
+/// transaction.
+// PENDING-WP1: other statuses wait on a generic single-transaction
+// status-with-notes store API; until then the status is written first so a
+// refused change still leaves no notes.
+fn task_status_with_notes(
+    store: &ProjectStore,
+    id: u64,
+    status: TaskStatus,
+    notes: Vec<String>,
+) -> AppResult<Vec<Note>> {
+    if status == TaskStatus::Done {
+        return Ok(store.complete_task_with_notes(id, &notes)?.notes);
+    }
+    store.set_task_status(id, status)?;
+    notes
+        .into_iter()
+        .map(|body| Ok(store.add_note(NoteTarget::Task, id, body)?))
+        .collect()
+}
+
+// PENDING-WP1: waits on a generic single-transaction status-with-notes store
+// API; until then the status is written first so a refused change still
+// leaves no notes.
+fn plan_status_with_notes(
+    store: &ProjectStore,
+    id: u64,
+    status: PlanStatus,
+    notes: Vec<String>,
+) -> AppResult<Vec<Note>> {
+    store.set_plan_status(id, status)?;
+    notes
+        .into_iter()
+        .map(|body| Ok(store.add_note(NoteTarget::Plan, id, body)?))
+        .collect()
 }
 
 #[derive(Clone)]
@@ -2033,7 +2320,109 @@ fn hook_block() -> String {
     format!("{HOOK_BEGIN}\n{HOOK_BODY}\n{HOOK_END}\n")
 }
 
-fn upsert_hook(content: &str) -> (String, bool) {
+/// Where git actually runs this repository's hooks from.
+struct HooksDirectory {
+    directory: PathBuf,
+    root: PathBuf,
+    git_directory: PathBuf,
+}
+
+impl HooksDirectory {
+    /// Refuses to write a hook outside the project and its git directory: a
+    /// shared `core.hooksPath` (say `~/.githooks`) would run the block for
+    /// every repository on the machine, not just this project.
+    fn require_project_local(&self) -> AppResult<()> {
+        let directory = canonical_or_parent(&self.directory);
+        if directory.starts_with(&self.root) || directory.starts_with(&self.git_directory) {
+            return Ok(());
+        }
+        Err(AppError::Message(format!(
+            "git runs hooks from {} (core.hooksPath), outside this project; add this line to that post-commit hook yourself:\n{HOOK_BODY}",
+            self.directory.display()
+        )))
+    }
+}
+
+/// Resolves the hooks directory with `git rev-parse --git-path hooks`, which
+/// honors `core.hooksPath` and linked worktrees, instead of assuming
+/// `.git/hooks`.
+fn effective_hooks_directory(root: &Path) -> AppResult<HooksDirectory> {
+    let args = ["rev-parse", "--git-common-dir", "--git-path", "hooks"].map(OsString::from);
+    let output = ptrack_git::hardened_git_command(root, &args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| AppError::Message(format!("cannot run git: {error}")))?;
+    let stdout = String::from_utf8(output.stdout).unwrap_or_default();
+    let mut lines = stdout.lines().filter(|line| !line.is_empty());
+    let (Some(git_directory), Some(hooks), true) =
+        (lines.next(), lines.next(), output.status.success())
+    else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(AppError::Message(format!(
+            "{} is not a git repository ({}) — run 'git init' or install the hook manually",
+            root.display(),
+            stderr.trim()
+        )));
+    };
+    Ok(HooksDirectory {
+        directory: root.join(hooks),
+        root: canonical_or_parent(root),
+        git_directory: canonical_or_parent(&root.join(git_directory)),
+    })
+}
+
+/// Canonicalizes `path`, or its parent plus its own name while it does not
+/// exist yet, so a containment check still sees through symlinks.
+fn canonical_or_parent(path: &Path) -> PathBuf {
+    if let Ok(path) = fs::canonicalize(path) {
+        return path;
+    }
+    match (path.parent().map(fs::canonicalize), path.file_name()) {
+        (Some(Ok(parent)), Some(name)) => parent.join(name),
+        _ => path.to_path_buf(),
+    }
+}
+
+/// Shells whose syntax the ptrack block is written in.
+const HOOK_SHELLS: [&str; 5] = ["sh", "bash", "zsh", "dash", "ksh"];
+
+/// The interpreter a hook's shebang names, when it is not a POSIX-style
+/// shell. A hook with no shebang is run by git through `sh`.
+fn foreign_interpreter(content: &str) -> Option<String> {
+    let line = content.lines().next()?.strip_prefix("#!")?;
+    let mut words = line.split_whitespace();
+    let mut program = words.next()?.rsplit('/').next().unwrap_or_default();
+    if program == "env" {
+        program = words
+            .find(|word| !word.starts_with('-') && !word.contains('='))
+            .map_or("", |word| word.rsplit('/').next().unwrap_or_default());
+    }
+    (!HOOK_SHELLS.contains(&program)).then(|| program.to_owned())
+}
+
+/// The byte offset of the hook's last command line when that line ends the
+/// script before an appended block could run: `exec`, `exit`, or a sourced
+/// script (which may itself `exit`, as husky's runner does).
+fn terminal_line(content: &str) -> Option<(usize, &str)> {
+    let mut offset = 0;
+    let mut last = None;
+    for line in content.split_inclusive('\n') {
+        let command = line.trim();
+        if !command.is_empty() && !command.starts_with('#') {
+            last = Some((offset, command));
+        }
+        offset += line.len();
+    }
+    let (offset, command) = last?;
+    let word = command.split_whitespace().next().unwrap_or_default();
+    matches!(word, "exec" | "exit" | "." | "source").then_some((offset, command))
+}
+
+/// Inserts or refreshes the managed block. Returns the new text, whether it
+/// changed, and a warning when the block had to go before the hook's final
+/// command; refuses a hook written for another interpreter.
+fn upsert_hook(content: &str) -> Result<(String, bool, Option<String>), String> {
     let block = hook_block();
     if let (Some(begin), Some(end)) = (content.find(HOOK_BEGIN), content.find(HOOK_END))
         && end > begin
@@ -2044,15 +2433,29 @@ fn upsert_hook(content: &str) -> (String, bool) {
             .unwrap_or(&content[end + HOOK_END.len()..]);
         let updated = format!("{before}{block}{after}");
         let changed = updated != content;
-        return (updated, changed);
+        return Ok((updated, changed, None));
     }
     if content.trim().is_empty() {
-        return (format!("#!/bin/sh\n{block}"), true);
+        return Ok((format!("#!/bin/sh\n{block}"), true, None));
     }
-    (
+    if let Some(interpreter) = foreign_interpreter(content) {
+        return Err(format!(
+            "the existing post-commit hook runs {interpreter}, not a POSIX shell; \
+             leaving it untouched — have it run this shell command after each commit:\n{HOOK_BODY}"
+        ));
+    }
+    if let Some((offset, command)) = terminal_line(content) {
+        let updated = format!("{}{block}{}", &content[..offset], &content[offset..]);
+        let warning = format!(
+            "the existing post-commit hook ends with `{command}`, so the ptrack block was placed before that line"
+        );
+        return Ok((updated, true, Some(warning)));
+    }
+    Ok((
         format!("{}\n\n{block}", content.trim_end_matches('\n')),
         true,
-    )
+        None,
+    ))
 }
 
 fn strip_hook(content: &str) -> String {
@@ -2098,11 +2501,4 @@ pub(crate) fn target_open_error(root: &Path, error: &ptrack_store::StoreError) -
         "cannot open target project {}: {error}{hint}",
         root.display()
     ))
-}
-
-#[allow(dead_code)]
-fn _git_environment() -> Vec<(OsString, OsString)> {
-    // Reserved for the bounded git adapter; keeping this service API free of
-    // ambient remote/process authority is part of the capability cutover.
-    Vec::new()
 }

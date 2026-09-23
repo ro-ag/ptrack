@@ -237,3 +237,64 @@ fn board_column_change_is_deferred_until_the_mutation_and_reload_succeed() {
         })
     ));
 }
+
+#[test]
+fn done_moves_from_the_board_and_overview_go_through_the_recorded_close() {
+    let mut value = model();
+    value.snapshot.plans.push(Plan {
+        id: 1,
+        title: "Plan".to_owned(),
+        status: PlanStatus::Active,
+        milestone_id: 0,
+        order: 1,
+        created_at: Timestamp::Zero,
+        updated_at: Timestamp::Zero,
+        hold_reason: None,
+        actor: None,
+        claim_conflict: false,
+        claim_epoch: 0,
+        claim_owner: None,
+        ulid: None,
+        deps: Vec::new(),
+    });
+    value.snapshot.tasks.push(Task {
+        id: 2,
+        plan_id: 1,
+        title: "Card".to_owned(),
+        status: TaskStatus::Blocked,
+        order: 1,
+        created_at: Timestamp::Zero,
+        updated_at: Timestamp::Zero,
+        hold_reason: None,
+        actor: None,
+        ulid: None,
+        deps: Vec::new(),
+    });
+    value.welcome = false;
+    value.tab = Tab::Board;
+    value.board_col = 2;
+    assert!(matches!(
+        update(&mut value, &Key::Char('L')),
+        Some(Effect::Close {
+            target: crate::model::UiClose::Task(2),
+            success: crate::model::Success::MovedCard { column: 3, .. },
+        })
+    ));
+
+    value.tab = Tab::Overview;
+    value.focus = PaneFocus::Tasks;
+    assert!(matches!(
+        update(&mut value, &Key::Char('d')),
+        Some(Effect::Close {
+            target: crate::model::UiClose::Task(2),
+            ..
+        })
+    ));
+    assert!(matches!(
+        update(&mut value, &Key::Char('x')),
+        Some(Effect::Close {
+            target: crate::model::UiClose::Plan(1),
+            ..
+        })
+    ));
+}

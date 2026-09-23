@@ -2,7 +2,9 @@ use std::fmt;
 use std::io::{self, IsTerminal, stdout};
 use std::time::Duration;
 
-use ptrack_app::ApplicationPort;
+use ptrack_app::{
+    ApplicationPort, MutationResult, UiSurface, close_task_from_ui, complete_plan_from_ui,
+};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::cursor::{Hide, Show};
@@ -16,7 +18,7 @@ use ratatui::crossterm::terminal::{
 };
 
 use crate::input::Key;
-use crate::model::{Effect, Model, RuntimeContext};
+use crate::model::{Effect, Model, RuntimeContext, UiClose};
 use crate::reducer::{success_message, update};
 use crate::render::draw;
 
@@ -213,19 +215,24 @@ pub(crate) fn apply_effect(
                         .clone_into(&mut model.status);
                     return false;
                 };
-                match application.snapshot() {
-                    Ok(snapshot) => {
-                        if let crate::model::Success::MovedCard { column, .. } = &success {
-                            model.board_col = *column;
-                        }
-                        model.replace_snapshot(snapshot);
-                        model.status = message;
-                    }
-                    Err(error) => model.status = format!("change saved; reload failed: {error}"),
-                }
+                reload_after_change(application, model, &success, message);
             }
             Err(error) => model.status = error.to_string(),
         },
+        Effect::Close { target, success } => {
+            let closed = match target {
+                UiClose::Task(id) => close_task_from_ui(application, UiSurface::Tui, id),
+                UiClose::Plan(id) => complete_plan_from_ui(application, UiSurface::Tui, id),
+            };
+            match closed {
+                Ok(_) => {
+                    let message =
+                        success_message(&success, &MutationResult::None).unwrap_or_default();
+                    reload_after_change(application, model, &success, message);
+                }
+                Err(error) => model.status = error.to_string(),
+            }
+        }
         Effect::LoadAgentDetail(run_id) => match application.agent_run(&run_id) {
             Ok(detail) => {
                 model.agent_detail = Some(detail);
@@ -235,6 +242,24 @@ pub(crate) fn apply_effect(
         },
     }
     false
+}
+
+fn reload_after_change(
+    application: &mut dyn ApplicationPort,
+    model: &mut Model,
+    success: &crate::model::Success,
+    message: String,
+) {
+    match application.snapshot() {
+        Ok(snapshot) => {
+            if let crate::model::Success::MovedCard { column, .. } = success {
+                model.board_col = *column;
+            }
+            model.replace_snapshot(snapshot);
+            model.status = message;
+        }
+        Err(error) => model.status = format!("change saved; reload failed: {error}"),
+    }
 }
 
 fn refresh_agents(application: &mut dyn ApplicationPort, model: &mut Model) {

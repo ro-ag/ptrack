@@ -240,8 +240,17 @@ fn read(root: &Path) -> AppResult<Option<LocalMetadata>> {
             "invalid local metadata; refusing global fallback: {e}"
         ))
     })?;
+    if value.version == 1 && value.root != root {
+        // The project folder moved. `local enable` alone cannot help: the
+        // registry still names the old folder, and `relocate` needs global
+        // routing, which this sidecar blocks until it is removed.
+        return Err(AppError::Message(format!(
+            "local metadata was written for {} but this project is now at {}; outside the sandbox run 'ptrack local disable', then 'ptrack relocate', then 'ptrack local enable'",
+            value.root.display(),
+            root.display()
+        )));
+    }
     if value.version != 1
-        || value.root != root
         || value.generation == 0
         || value.database_id.is_empty()
         || value.actor_id.is_some() != value.actor_name.is_some()

@@ -50,7 +50,7 @@ pub const LEAVES: &[LeafSpec] = &[
     leaf(&["task", "show"], ArgCount::Exact(1)),
     leaf(&["task", "start"], ArgCount::Exact(1)),
     leaf(&["task", "done"], ArgCount::Exact(1)),
-    leaf(&["task", "block"], ArgCount::Exact(1)),
+    leaf(&["task", "block"], ArgCount::Minimum(1)),
     leaf(&["task", "hold"], ArgCount::Minimum(2)),
     leaf(&["task", "resume"], ArgCount::Exact(1)),
     leaf(&["task", "rename"], ArgCount::Minimum(2)),

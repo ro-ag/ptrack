@@ -244,15 +244,22 @@ fn receipts(migrations: &Path) -> Vec<String> {
     let Ok(entries) = fs::read_dir(migrations) else {
         return Vec::new();
     };
+    // Newest first, and only then bounded: taking before sorting would keep
+    // an arbitrary directory-order subset and could drop the latest receipt.
     let mut receipts = entries
         .flatten()
         .map(|entry| entry.path().join(RECEIPT_FILENAME))
-        .filter(|path| path.is_file())
-        .map(|path| display(&path))
-        .take(MIGRATION_RECEIPT_LIMIT)
+        .filter_map(|path| {
+            let metadata = fs::metadata(&path).ok().filter(fs::Metadata::is_file)?;
+            Some((metadata.modified().ok(), path))
+        })
         .collect::<Vec<_>>();
-    receipts.sort();
+    receipts.sort_by(|left, right| right.cmp(left));
     receipts
+        .into_iter()
+        .take(MIGRATION_RECEIPT_LIMIT)
+        .map(|(_, path)| display(&path))
+        .collect()
 }
 
 fn timestamp(nanoseconds: i64) -> String {

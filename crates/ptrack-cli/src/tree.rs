@@ -110,7 +110,7 @@ pub fn root() -> Command {
                 c.arg(positional("id", 1))
                     .args([option("summary"), flag("force")])
             })
-            .mut_subcommand("block", |c| c.arg(positional("id", 1)))
+            .mut_subcommand("block", |c| c.arg(positional("values", 1..)))
             .mut_subcommand("rename", |c| c.arg(positional("values", 2..)))
             .mut_subcommand("move", |c| c.arg(positional("id", 1)).arg(option("plan")))
             .mut_subcommand("convert", |c| c.alias("promote").arg(positional("id", 1)))
