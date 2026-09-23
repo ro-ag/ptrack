@@ -4,6 +4,7 @@ export type PlanLifecycleAction =
   | "done"
   | "hold"
   | "resume"
+  | "reopen"
   | "delete"
   | "move"
   | "copy";
@@ -34,6 +35,10 @@ export function planMenuItems(plan: PlanLifecycleState = {}): PlanMenuItem[] {
         ? { action: "resume", label: "Resume", destructive: false }
         : { action: "hold", label: "Put on hold…", destructive: false },
     );
+  } else if (plan.status === "done") {
+    // The way back from a plan closed too early, including by the automatic
+    // prompt that fires when the last task finishes.
+    items.push({ action: "reopen", label: "Reopen plan", destructive: false });
   }
   items.push(
     { action: "move", label: "Move to project…", destructive: false },

@@ -19,12 +19,17 @@ describe("plan lifecycle menu", () => {
     expect(items.filter((item) => item.destructive).map((item) => item.action)).toEqual(["delete"]);
   });
 
-  it("offers resume for a held plan and no open-only actions for a done plan", () => {
+  it("offers resume for a held plan and only reopen for a done plan", () => {
     expect(planMenuItems({ status: "active", holdReason: "Later" })
       .map((item) => item.action)).toContain("resume");
     expect(planMenuItems({ status: "done" }).map((item) => item.action)).toEqual([
-      "copy-context", "rename", "move", "copy", "delete",
+      "copy-context", "rename", "reopen", "move", "copy", "delete",
     ]);
+    expect(planMenuItems({ status: "done" }).find((item) => item.action === "reopen"))
+      .toEqual({ action: "reopen", label: "Reopen plan", destructive: false });
+    for (const status of ["active", "archived"]) {
+      expect(planMenuItems({ status }).map((item) => item.action)).not.toContain("reopen");
+    }
   });
 });
 

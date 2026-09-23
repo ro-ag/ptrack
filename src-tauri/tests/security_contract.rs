@@ -69,6 +69,13 @@ fn shell_has_only_the_bounded_adapter_commands() {
         .expect("shell command result must use the native dialog");
     assert!(shell_dialog_lease < shell_invoke && shell_invoke < shell_dialog);
     assert!(source.contains("ptrack_cli::version()"));
+    // Every bridge request is scoped by the window that sent it before it
+    // reaches the runtime, so a terminal window cannot use the main window's
+    // commands or address another window's assignment.
+    let scoped = source
+        .find("scope_request_to_window(window.label(), request)")
+        .expect("gui_invoke must scope each request to its calling window");
+    assert!(scoped < shell_invoke);
     assert!(!source.contains("windows_subsystem"));
     assert!(manifest.contains("name = \"ptrack\"\npath = \"src/main.rs\""));
     assert!(manifest.contains("tauri-plugin-dialog = \"=2.7.2\""));
@@ -156,9 +163,23 @@ fn terminal_windows_are_label_scoped_and_independent() {
     let main_only = handler
         .find("if window.label() != MAIN_WINDOW_LABEL {")
         .expect("close must be label scoped");
+    // The main window's close holds the close and tears the runtime down off
+    // the event loop, bounded; the runtime tests cover what that teardown does.
     let shutdown = handler
-        .find("if runtime.begin_shutdown().is_err() {")
+        .find("close_main_window(window.app_handle(), &closing_events);")
         .expect("the main window's close must begin shutdown");
+    let held = handler
+        .find("api.prevent_close();")
+        .expect("the main window's close must be held until teardown finishes");
+    assert!(main_only < held && held < shutdown);
+    assert!(source.contains("runtime.shutdown_within(EXIT_TEARDOWN_BOUND, false)"));
+    // Quit takes the same bounded teardown, whether or not a window saw it.
+    let run = source
+        .split_once("application.run(move |app, event| {")
+        .map(|(_, rest)| rest)
+        .expect("the shell must run the application event loop");
+    assert!(run.contains("tauri::RunEvent::ExitRequested { api, code, .. }"));
+    assert!(run.contains("runtime.shutdown_within(EXIT_TEARDOWN_BOUND, true)"));
     // The pop-in runs on destruction, not on the close request: the webview's
     // stream socket drops with the webview, and only then does its session
     // release the output lease the main window is about to re-claim.
@@ -289,10 +310,26 @@ fn tauri_uses_the_existing_frontend_and_exact_window_contract() {
         config["bundle"]["macOS"]["entitlements"],
         "../build/darwin/entitlements.plist"
     );
+    let csp = config["app"]["security"]["csp"]
+        .as_str()
+        .expect("the desktop CSP must be configured");
+    // The terminal stream binds the IPv4 loopback address and names it in
+    // every stream URL, so no other websocket origin is needed.
+    assert!(csp.contains("ws://127.0.0.1:*"));
+    assert!(!csp.contains("ws://localhost"));
+    // Tauri hashes the one inline theme script in index.html into
+    // `script-src` at build time, so inline script needs no blanket allowance.
+    let script_src = csp
+        .split(';')
+        .map(str::trim)
+        .find(|directive| directive.starts_with("script-src"))
+        .expect("the desktop CSP must restrict scripts");
+    assert_eq!(script_src, "script-src 'self'");
     assert!(
-        config["app"]["security"]["csp"]
-            .as_str()
-            .is_some_and(|csp| csp.contains("ws://127.0.0.1:*"))
+        !config["app"]["security"]
+            .as_object()
+            .is_some_and(|security| security.contains_key("dangerousDisableAssetCspModification")),
+        "Tauri must keep injecting the inline script hash"
     );
     assert_eq!(
         config["app"]["security"]["capabilities"],

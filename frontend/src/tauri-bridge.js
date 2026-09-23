@@ -7,26 +7,20 @@ const COMMANDS = Object.freeze([
   "AcknowledgeAgentHandoffV2",
   "AddIssueV1",
   "AddPlanV1",
-  "AddTask",
-  "AddTaskNote",
   "AddTaskNoteV2",
   "AddTaskV2",
   "ApplyUpdate",
   "ApproveAgentWorkflowV2",
-  "AssociateAgentRunV2",
-  "AssociateTerminalV2",
   "CancelUpdateOperation",
   "CancelWorkspaceChange",
   "CheckForUpdates",
   "ClaimTerminalStream",
   "CloseProject",
-  "CloseTerminal",
   "CloseTerminalV2",
   "CompletePlanV1",
   "CopyPlanV1",
   "CreateFirstPlanV1",
   "CreateFirstTaskV1",
-  "CreateTerminal",
   "CreateTerminalV2",
   "DeletePlanV1",
   "DisableCapabilityV2",
@@ -36,10 +30,6 @@ const COMMANDS = Object.freeze([
   "ExpireCapabilityV2",
   "ForgetRecentProjectV1",
   "GetActivityHeatmapV2",
-  "GetAgentIntelligenceV2",
-  "GetAgentRunsV2",
-  "GetBoard",
-  "GetBoardV2",
   "GetCapabilitiesV2",
   "GetCapabilityAuditsV2",
   "GetDiagnosticsReport",
@@ -51,7 +41,6 @@ const COMMANDS = Object.freeze([
   "GetPendingInitializationV1",
   "GetPreferences",
   "GetProjectTimelineV1",
-  "GetRecentProjects",
   "GetRecentProjectsV1",
   "GetScratchpadV1",
   "GetStackProfileV1",
@@ -68,8 +57,6 @@ const COMMANDS = Object.freeze([
   "LaunchLinkedAgentV2",
   "ListProjectsV1",
   "MoveIssueTaskV1",
-  "MoveTask",
-  "MoveTaskV2",
   "MoveTaskV3",
   "MovePlanV1",
   "MutateTerminalAssociationV2",
@@ -86,12 +73,11 @@ const COMMANDS = Object.freeze([
   "RefreshGlobalOverviewV1",
   "RemoveCapabilityV2",
   "RenamePlanV1",
-  "RenameTask",
   "RenameTaskV2",
+  "ReopenPlanV1",
   "ResetApplicationState",
   "ResetPreferences",
   "ResetWindowLayout",
-  "ResizeTerminal",
   "ResizeTerminalV2",
   "ResolveRecentProjectV1",
   "ResumePlanV1",
@@ -182,15 +168,35 @@ function installTauriBridge(target = globalThis, dependencies = {}) {
     label: target.__TAURI_INTERNALS__.metadata?.currentWindow?.label ??
       terminalWindowLabel(target.location?.hash ?? "") ?? "main",
   };
+  // A refused subscription must not vanish as an unhandled rejection: the
+  // window would silently never hear the event. It is logged and announced as
+  // `ptrack:event-subscription-failed` on the window, so the page can say so.
+  const subscriptionFailed = (name, error) => {
+    const message = normalizeError(error).message;
+    target.console?.error?.(`p-track could not subscribe to ${name}: ${message}`);
+    if (typeof target.dispatchEvent === "function" && typeof target.CustomEvent === "function") {
+      target.dispatchEvent(new target.CustomEvent("ptrack:event-subscription-failed", {
+        detail: { name, message },
+      }));
+    }
+  };
   const eventsOnMultiple = (name, callback) => {
     let disposed = false;
     let unlisten = null;
-    void listenEvent(name, (event) => {
-      if (!disposed) callback(event.payload);
-    }, { target: eventTarget }).then((dispose) => {
-      if (disposed) dispose();
-      else unlisten = dispose;
-    });
+    let subscription;
+    try {
+      subscription = Promise.resolve(listenEvent(name, (event) => {
+        if (!disposed) callback(event.payload);
+      }, { target: eventTarget }));
+    } catch (error) {
+      subscription = Promise.reject(error);
+    }
+    void subscription
+      .then((dispose) => {
+        if (disposed) dispose();
+        else unlisten = dispose;
+      })
+      .catch((error) => subscriptionFailed(name, error));
     return () => {
       disposed = true;
       if (unlisten) unlisten();

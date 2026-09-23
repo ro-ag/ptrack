@@ -31,3 +31,6 @@ unsafe_code = "forbid"
 
 [lints.clippy]
 pedantic = "warn"
+# A lock guard held past its last use turned a network download into a stall
+# of every other desktop command; the lint keeps guard scopes tight.
+significant_drop_tightening = "warn"

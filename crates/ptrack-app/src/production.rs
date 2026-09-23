@@ -1176,6 +1176,7 @@ impl RecentProjectsProvider for ProductionRecentProjects {
             };
             listed.remove(&oldest);
         }
+        drop(listed);
         Ok(RecentProjectsV1 { projects })
     }
 
@@ -1222,6 +1223,7 @@ impl RecentProjectsProvider for ProductionRecentProjects {
                 confirmations.remove(&oldest);
             }
             confirmations.insert(token.clone(), confirmation);
+            drop(confirmations);
             (RecentProjectResolutionV1::ConfirmationRequired, token)
         };
         Ok(ResolvedRecentProjectV1 {
@@ -1324,6 +1326,7 @@ impl RecentProjectsProvider for ProductionRecentProjects {
                 expires_at: Instant::now() + RECENT_CONFIRMATION_TTL,
             },
         );
+        drop(completed);
         Ok(commit)
     }
 
@@ -1370,7 +1373,10 @@ impl RecentProjectsProvider for ProductionRecentProjects {
 }
 
 pub struct ProductionDesktopWorkspaceFactory {
-    runtime: Arc<ActiveRuntime>,
+    /// Replaceable so a marker reloaded after the command line registered a
+    /// project serves new workspaces without discarding `async_runtime`,
+    /// which the open workspace's terminal manager still runs on.
+    runtime: Mutex<Arc<ActiveRuntime>>,
     events: Option<Arc<dyn DesktopEventSink>>,
     async_runtime: tokio::runtime::Runtime,
     initial_plan: u64,
@@ -1392,17 +1398,22 @@ impl ProductionDesktopWorkspaceFactory {
             .build()
             .map_err(|_| AppError::Message("terminal runtime is unavailable".to_owned()))?;
         Ok(Arc::new(Self {
-            runtime,
+            runtime: Mutex::new(runtime),
             events,
             async_runtime,
             initial_plan,
         }))
     }
+
+    fn replace_runtime(&self, runtime: Arc<ActiveRuntime>) {
+        *lock(&self.runtime) = runtime;
+    }
 }
 
 impl DesktopWorkspaceFactory for ProductionDesktopWorkspaceFactory {
     fn build(&self, root: &Path, generation: u64) -> AppResult<Arc<dyn DesktopWorkspace>> {
-        let bindings = self.runtime.bindings_for_exact_root(root)?;
+        let runtime = Arc::clone(&lock(&self.runtime));
+        let bindings = runtime.bindings_for_exact_root(root)?;
         let endpoint = bindings.project.clone().ok_or(AppError::NoProject)?;
         let discovered =
             discover_profiles().map_err(|error| AppError::Message(error.to_string()))?;
@@ -1470,7 +1481,7 @@ impl DesktopWorkspaceFactory for ProductionDesktopWorkspaceFactory {
         Ok(Arc::new(ProductionDesktopWorkspace {
             inner,
             server,
-            _runtime: Arc::clone(&self.runtime),
+            _runtime: runtime,
         }))
     }
 }
@@ -1738,6 +1749,7 @@ impl ProductionDesktopAuthority {
             state.guide_previews.remove(&oldest);
         }
         state.guide_previews.insert(preview_token.clone(), manifest);
+        drop(state);
         Ok(ProjectGuidePreviewV1 {
             available: true,
             message: String::new(),
@@ -1951,6 +1963,12 @@ impl ProductionDesktopAuthority {
                 "another project has an incomplete initialization",
             ));
         }
+        let runtime = match runtime {
+            Some(current) if current.bindings_for(&canonical)?.project.is_none() => {
+                Some(self.reload_marker().unwrap_or(current))
+            }
+            other => other,
+        };
         if let Some(runtime) = runtime
             && let Some(project) = runtime.bindings_for(&canonical)?.project
         {
@@ -1987,7 +2005,7 @@ impl ProductionDesktopAuthority {
                 // on anything that is not a genuinely moved store, and this
                 // walk must stay a read-only classification.
                 let reason = if depth == 0 {
-                    "an unregistered project store requires recovery; a moved project can be re-registered by quitting p-track and running 'ptrack relocate' in the project folder"
+                    "an unregistered project store requires recovery; if this project folder was moved, quit p-track and run 'ptrack relocate' in it to re-register it"
                 } else {
                     "an unregistered project store requires recovery"
                 };
@@ -2042,6 +2060,7 @@ impl ProductionDesktopAuthority {
         let mut state = lock(&self.state);
         state.initialization = Some(status.clone());
         state.initialization_goal = Some(goal.to_owned());
+        drop(state);
         Ok(status)
     }
 
@@ -2411,6 +2430,7 @@ impl ProductionDesktopAuthority {
         state.recents = recents;
         state.updates = updates;
         state.initialization = Some(initialization);
+        drop(state);
         Ok(())
     }
 
@@ -2489,6 +2509,7 @@ impl ProductionDesktopAuthority {
         state.initialization = Some(journal.status);
         state.initialization_goal = Some(journal.goal);
         state.initialization_guide = journal.guide;
+        drop(state);
         Ok(())
     }
 }
@@ -2564,7 +2585,14 @@ impl DesktopWorkspaceFactory for ProductionDesktopAuthority {
             .factory
             .clone()
             .ok_or_else(uninitialized)?;
-        factory.build(root, generation)
+        match factory.build(root, generation) {
+            // A project the command line registered after launch is missing
+            // only from this process's copy of the marker.
+            Err(AppError::NoProject) if self.reload_marker().is_some() => {
+                factory.build(root, generation)
+            }
+            built => built,
+        }
     }
 }
 
@@ -2608,11 +2636,8 @@ impl RecentProjectsProvider for ProductionDesktopAuthority {
         base: &str,
         candidate: &Path,
     ) -> AppResult<ResolvedRecentProjectV1> {
-        lock(&self.state)
-            .recents
-            .clone()
-            .ok_or_else(uninitialized)?
-            .resolve_recent_project(entry_id, base, candidate)
+        let recents = self.recent_provider()?;
+        recents.resolve_recent_project(entry_id, base, candidate)
     }
 
     fn authorize_recent_project_open(
@@ -2622,27 +2647,21 @@ impl RecentProjectsProvider for ProductionDesktopAuthority {
         canonical_root: &Path,
         relocation_confirmation_token: &str,
     ) -> AppResult<RecentProjectOpenAuthorizationV1> {
-        lock(&self.state)
-            .recents
-            .clone()
-            .ok_or_else(uninitialized)?
-            .authorize_recent_project_open(
-                entry_id,
-                base,
-                canonical_root,
-                relocation_confirmation_token,
-            )
+        let recents = self.recent_provider()?;
+        recents.authorize_recent_project_open(
+            entry_id,
+            base,
+            canonical_root,
+            relocation_confirmation_token,
+        )
     }
 
     fn finish_recent_project_open(
         &self,
         authorization: &RecentProjectOpenAuthorizationV1,
     ) -> AppResult<RecentProjectRegistryCommitV1> {
-        lock(&self.state)
-            .recents
-            .clone()
-            .ok_or_else(uninitialized)?
-            .finish_recent_project_open(authorization)
+        let recents = self.recent_provider()?;
+        recents.finish_recent_project_open(authorization)
     }
 
     fn forget_recent_project(
@@ -2650,11 +2669,8 @@ impl RecentProjectsProvider for ProductionDesktopAuthority {
         entry_id: &str,
         base: &str,
     ) -> AppResult<ForgetRecentProjectResultV1> {
-        lock(&self.state)
-            .recents
-            .clone()
-            .ok_or_else(uninitialized)?
-            .forget_recent_project(entry_id, base)
+        let recents = self.recent_provider()?;
+        recents.forget_recent_project(entry_id, base)
     }
 }
 
@@ -2895,6 +2911,7 @@ impl DesktopInitializationService for ProductionDesktopAuthority {
             state.initialization = Some(status);
             state.initialization_goal = Some(goal);
             state.initialization_guide = guide;
+            drop(state);
             return Err(AppError::Message(
                 "desktop runtime authority could not be quiesced".to_owned(),
             ));
@@ -3027,46 +3044,107 @@ impl DesktopInitializationService for ProductionDesktopAuthority {
     }
 }
 
+impl ProductionDesktopAuthority {
+    /// Clones the current update service out of the authority state.
+    ///
+    /// Every update delegate binds this in its own statement so the state
+    /// mutex is released before a (possibly network-bound) update call runs;
+    /// holding it across the call blocked `CancelUpdateOperation`,
+    /// `GetUpdateState`, and `OpenProject` for the whole download.
+    fn update_service(&self) -> Arc<dyn DesktopUpdateService> {
+        Arc::clone(&lock(&self.state).updates)
+    }
+
+    /// Swaps in a scripted update service so a test can hold one operation
+    /// open and prove the other delegates still answer.
+    #[cfg(test)]
+    pub(crate) fn replace_update_service_for_test(&self, updates: Arc<dyn DesktopUpdateService>) {
+        lock(&self.state).updates = updates;
+    }
+
+    /// Reloads the generation marker when another process published a newer
+    /// one, and rebinds the workspace factory and recent projects to it.
+    ///
+    /// The desktop authority loads the marker once, so a project the command
+    /// line registers while the app runs is unknown to it until this runs.
+    /// Returns the fresh runtime only when the marker changed. The update
+    /// service is left alone: it is bound to the global store, not to the
+    /// project list, and may be mid-operation.
+    fn reload_marker(&self) -> Option<Arc<ActiveRuntime>> {
+        let current = lock(&self.state).runtime.clone()?;
+        let fresh = ActiveRuntime::load(&self.global_home, &self.writer_version)
+            .ok()
+            .flatten()?;
+        if fresh.marker() == current.marker() {
+            return None;
+        }
+        let mut state = lock(&self.state);
+        if !state
+            .runtime
+            .as_ref()
+            .is_some_and(|runtime| Arc::ptr_eq(runtime, &current))
+        {
+            // Another caller rebound the authority first; its runtime wins.
+            return state.runtime.clone();
+        }
+        if let Some(factory) = &state.factory {
+            factory.replace_runtime(Arc::clone(&fresh));
+        }
+        if state.recents.is_some() {
+            state.recents = Some(ProductionRecentProjects::new(Arc::clone(&fresh)));
+        }
+        state.runtime = Some(Arc::clone(&fresh));
+        drop(state);
+        Some(fresh)
+    }
+
+    /// Clones the recent-project provider without holding the state mutex
+    /// across the provider call.
+    fn recent_provider(&self) -> AppResult<Arc<ProductionRecentProjects>> {
+        let recents = lock(&self.state).recents.clone();
+        recents.ok_or_else(uninitialized)
+    }
+}
+
 impl DesktopUpdateService for ProductionDesktopAuthority {
     fn start(&self) -> Result<(), String> {
-        lock(&self.state).updates.clone().start()
+        let updates = self.update_service();
+        updates.start()
     }
 
     fn state(&self) -> UpdateState {
-        lock(&self.state).updates.clone().state()
+        let updates = self.update_service();
+        updates.state()
     }
 
     fn set_automatic_checks(&self, enabled: bool) -> Result<UpdateState, String> {
-        lock(&self.state)
-            .updates
-            .clone()
-            .set_automatic_checks(enabled)
+        let updates = self.update_service();
+        updates.set_automatic_checks(enabled)
     }
 
     fn check_for_updates(&self) -> Result<UpdateState, String> {
-        lock(&self.state).updates.clone().check_for_updates()
+        let updates = self.update_service();
+        updates.check_for_updates()
     }
 
     fn download_update(&self, expected_version: &str) -> Result<UpdateState, String> {
-        lock(&self.state)
-            .updates
-            .clone()
-            .download_update(expected_version)
+        let updates = self.update_service();
+        updates.download_update(expected_version)
     }
 
     fn apply_update(&self, expected_version: &str) -> Result<UpdateState, String> {
-        lock(&self.state)
-            .updates
-            .clone()
-            .apply_update(expected_version)
+        let updates = self.update_service();
+        updates.apply_update(expected_version)
     }
 
     fn cancel_operation(&self) -> UpdateState {
-        lock(&self.state).updates.clone().cancel_operation()
+        let updates = self.update_service();
+        updates.cancel_operation()
     }
 
     fn shutdown(&self) -> Result<(), String> {
-        lock(&self.state).updates.clone().shutdown()
+        let updates = self.update_service();
+        updates.shutdown()
     }
 }
 

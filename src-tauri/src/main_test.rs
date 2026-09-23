@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use serde_json::json;
 
 use super::{
-    ProjectPickerPurpose, WindowStateCapture, preferred_theme, project_picker_result,
-    validate_external_url, write_startup_failure,
+    ExitGate, ExitStep, ProjectPickerPurpose, WindowStateCapture, preferred_theme,
+    project_picker_result, validate_external_url, write_startup_failure,
 };
 
 #[test]
@@ -105,4 +105,25 @@ fn startup_failures_are_recorded_and_appended() {
     let first = recorded.find("store open failed").expect("first entry");
     let second = recorded.find("second launch failed").expect("second entry");
     assert!(first < second, "entries append in order");
+}
+
+/// One teardown per process: the first exit request starts it and is held,
+/// requests arriving meanwhile are held too, and only the exit the teardown
+/// issues itself goes through. The final `Exit` runs the teardown only when
+/// no teardown ever finished — the Cmd-Q path, which sees no request at all.
+#[test]
+fn the_exit_gate_runs_exactly_one_teardown_before_letting_the_exit_through() {
+    let gate = ExitGate::default();
+    assert_eq!(gate.request(), ExitStep::TearDown);
+    assert_eq!(gate.request(), ExitStep::Hold);
+    assert_eq!(gate.request(), ExitStep::Hold);
+    assert!(gate.finish());
+    assert_eq!(gate.request(), ExitStep::Proceed);
+    // The `Exit` that follows has nothing left to tear down.
+    assert!(!gate.finish());
+
+    // Cmd-Q on macOS: `Exit` arrives with no request before it.
+    let quit = ExitGate::default();
+    assert!(quit.finish());
+    assert_eq!(quit.request(), ExitStep::Proceed);
 }

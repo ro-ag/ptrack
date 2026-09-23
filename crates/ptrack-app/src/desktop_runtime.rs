@@ -20,12 +20,11 @@ use ptrack_capability_policy::{
 };
 use ptrack_core::{
     Capability, CapabilityKind, Commit, Issue, IssueStatus, MemoryKind, Meta, Note, NoteTarget,
-    Plan, ProjectSnapshot, Severity, StackProfile, Task, TaskStatus, Timestamp, open_plan_deps,
-    open_task_deps,
+    Plan, PlanStatus, ProjectSnapshot, Severity, StackProfile, Task, TaskStatus, Timestamp,
+    open_plan_deps, open_task_deps,
 };
 use ptrack_store::{
     FIRST_RUN_TITLE_MAX_BYTES, GlobalStore, MemoryWriteRequest, ProjectStore, StoreError,
-    find_project_database,
 };
 use ptrack_terminal::{SessionInfo, SessionState};
 use ptrack_terminal::{TerminalAssociation, TerminalAssociationPointer};
@@ -38,7 +37,7 @@ use tokio_util::sync::CancellationToken;
 use crate::diagnostics_report::{CapabilityCountsV1, DiagnosticsReportV1};
 use crate::layout_state::{layout_state, reset_window_layout, set_layout_state};
 use crate::preferences::{PreferencesDocumentV1, preferences, reset_preferences, set_preferences};
-use crate::terminal_windows::{TerminalWindowTab, TerminalWindows};
+use crate::terminal_windows::{OpenedTerminalWindow, TerminalWindowTab, TerminalWindows};
 use crate::{
     ActiveRuntime, AgentRuntimeService, AppError, AppResult, ApplicationPort,
     LaunchedEventAuthority, LinkedAgentRuntimeHooks, Mutation, MutationResult,
@@ -49,7 +48,6 @@ use crate::{
 const MAX_COMMAND_BYTES: usize = 1024 * 1024;
 const DEFAULT_CONFIRMATION_TTL: Duration = Duration::from_secs(60);
 const RUNTIME_CALL_TIMEOUT: Duration = Duration::from_millis(250);
-const RECENT_PROJECT_LIMIT: usize = 20;
 const RECENT_PROJECT_PATH_LIMIT: usize = 16 * 1024;
 const RECENT_PROJECT_TOKEN_BYTES: usize = 43;
 const SEARCH_RESULT_LIMIT: usize = 50;
@@ -68,33 +66,28 @@ const SNAPSHOT_RUNTIME_LIMIT: usize = 64;
 const WORKSPACE_WATCH_INTERVAL: Duration = Duration::from_secs(2);
 const WORKSPACE_WATCH_DEBOUNCE: Duration = Duration::from_millis(500);
 const WORKSPACE_OPERATION_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
+const SHUTDOWN_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 
 pub const FIRST_RUN_GOAL_MAX_BYTES: usize = 4_096;
 
-const COMMANDS: [&str; 110] = [
+const COMMANDS: [&str; 96] = [
     "AcknowledgeAgentHandoffV2",
     "AddIssueV1",
     "AddPlanV1",
-    "AddTask",
-    "AddTaskNote",
     "AddTaskNoteV2",
     "AddTaskV2",
     "ApplyUpdate",
     "ApproveAgentWorkflowV2",
-    "AssociateAgentRunV2",
-    "AssociateTerminalV2",
     "CancelUpdateOperation",
     "CancelWorkspaceChange",
     "CheckForUpdates",
     "ClaimTerminalStream",
     "CloseProject",
-    "CloseTerminal",
     "CloseTerminalV2",
     "CompletePlanV1",
     "CopyPlanV1",
     "CreateFirstPlanV1",
     "CreateFirstTaskV1",
-    "CreateTerminal",
     "CreateTerminalV2",
     "DeletePlanV1",
     "DisableCapabilityV2",
@@ -104,10 +97,6 @@ const COMMANDS: [&str; 110] = [
     "ExpireCapabilityV2",
     "ForgetRecentProjectV1",
     "GetActivityHeatmapV2",
-    "GetAgentIntelligenceV2",
-    "GetAgentRunsV2",
-    "GetBoard",
-    "GetBoardV2",
     "GetCapabilitiesV2",
     "GetCapabilityAuditsV2",
     "GetDiagnosticsReport",
@@ -119,7 +108,6 @@ const COMMANDS: [&str; 110] = [
     "GetPendingInitializationV1",
     "GetPreferences",
     "GetProjectTimelineV1",
-    "GetRecentProjects",
     "GetRecentProjectsV1",
     "GetScratchpadV1",
     "GetStackProfileV1",
@@ -137,8 +125,6 @@ const COMMANDS: [&str; 110] = [
     "ListProjectsV1",
     "MoveIssueTaskV1",
     "MovePlanV1",
-    "MoveTask",
-    "MoveTaskV2",
     "MoveTaskV3",
     "MutateTerminalAssociationV2",
     "OpenHelpDestination",
@@ -154,12 +140,11 @@ const COMMANDS: [&str; 110] = [
     "RefreshGlobalOverviewV1",
     "RemoveCapabilityV2",
     "RenamePlanV1",
-    "RenameTask",
     "RenameTaskV2",
+    "ReopenPlanV1",
     "ResetApplicationState",
     "ResetPreferences",
     "ResetWindowLayout",
-    "ResizeTerminal",
     "ResizeTerminalV2",
     "ResolveRecentProjectV1",
     "ResumePlanV1",
@@ -184,10 +169,88 @@ const COMMANDS: [&str; 110] = [
     "WriteTerminalMemoryV2",
 ];
 
+/// The commands a popped-out terminal window actually sends, sorted. A
+/// terminal window renders one tab of sessions and nothing else, so every
+/// project, plan, task, and update mutation stays reachable from the main
+/// window only.
+const TERMINAL_WINDOW_COMMANDS: [&str; 10] = [
+    "ClaimTerminalStream",
+    "CloseTerminalV2",
+    "CreateTerminalV2",
+    "GetPreferences",
+    "GetTerminalProfiles",
+    "GetTerminalWindowTab",
+    "GetWorkspaceState",
+    "ResizeTerminalV2",
+    // The terminal window's own theme toggle writes the shared preference.
+    "SetPreferences",
+    "SetTerminalWindowTab",
+];
+
+/// The commands that address the calling terminal window's own assignment.
+const TERMINAL_WINDOW_SELF_COMMANDS: [&str; 2] = ["GetTerminalWindowTab", "SetTerminalWindowTab"];
+
+/// How one bounded runtime teardown ended.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ShutdownOutcome {
+    /// The runtime shut down; these terminal windows go with it.
+    Completed(Vec<String>),
+    /// The runtime refused to close and stays fully usable, updates included.
+    Refused(String),
+    /// The bound elapsed while the teardown was still running.
+    TimedOut,
+}
+
 /// Exact desktop bridge command allowlist.
 #[must_use]
 pub const fn allowed_desktop_commands() -> &'static [&'static str] {
     &COMMANDS
+}
+
+/// Exact subset of [`allowed_desktop_commands`] a terminal window may send.
+#[must_use]
+pub const fn allowed_terminal_window_commands() -> &'static [&'static str] {
+    &TERMINAL_WINDOW_COMMANDS
+}
+
+/// Scopes one bridge request to the window that sent it.
+///
+/// The main window reaches every allowlisted command except the two that
+/// address a terminal window's own assignment. A terminal window reaches only
+/// the commands it uses, and those two always address the caller: the label
+/// in the payload is replaced by the caller's, so one terminal window can never
+/// read or rewrite another's tab. Any other label is refused.
+///
+/// # Errors
+/// Returns an error when the calling window may not send the method.
+pub fn scope_request_to_window(
+    window_label: &str,
+    mut request: DesktopCommandRequest,
+) -> AppResult<DesktopCommandRequest> {
+    let method = request.method.as_str();
+    let self_addressed = TERMINAL_WINDOW_SELF_COMMANDS.contains(&method);
+    if window_label == crate::window_state::MAIN_WINDOW_LABEL {
+        if self_addressed {
+            return Err(window_refusal(method));
+        }
+        return Ok(request);
+    }
+    let terminal_window = window_label
+        .strip_prefix(crate::terminal_windows::TERMINAL_WINDOW_PREFIX)
+        .is_some_and(|suffix| {
+            !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+        });
+    if !terminal_window || TERMINAL_WINDOW_COMMANDS.binary_search(&method).is_err() {
+        return Err(window_refusal(method));
+    }
+    if self_addressed && let Some(label) = request.arguments.first_mut() {
+        *label = Value::String(window_label.to_owned());
+    }
+    Ok(request)
+}
+
+fn window_refusal(method: &str) -> AppError {
+    AppError::Message(format!("{method} is not available to this window"))
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -932,6 +995,7 @@ impl Drop for DesktopNativeActionLease {
     fn drop(&mut self) {
         let mut state = lock(&self.runtime.state);
         state.active_calls = state.active_calls.saturating_sub(1);
+        drop(state);
         self.runtime.calls_changed.notify_all();
     }
 }
@@ -961,7 +1025,11 @@ pub struct DesktopRuntime {
     state: Mutex<RuntimeState>,
     calls_changed: Condvar,
     watcher: Mutex<Option<WorkspaceWatcher>>,
+    global_binding: Mutex<Option<CachedGlobalBinding>>,
     terminal_windows: Mutex<TerminalWindows>,
+    /// Windows an open expired on its own; the next sweep hands them to the
+    /// shell to close.
+    expired_terminal_windows: Mutex<Vec<String>>,
     recent_projects: Arc<dyn RecentProjectsProvider>,
     initialization: Arc<dyn DesktopInitializationService>,
     update_service: Arc<dyn crate::DesktopUpdateService>,
@@ -997,7 +1065,9 @@ impl DesktopRuntime {
             }),
             calls_changed: Condvar::new(),
             watcher: Mutex::new(None),
+            global_binding: Mutex::new(None),
             terminal_windows: Mutex::new(TerminalWindows::default()),
+            expired_terminal_windows: Mutex::new(Vec::new()),
             recent_projects: config.recent_projects,
             initialization: config.initialization,
             update_service: config.update_service,
@@ -1106,7 +1176,6 @@ impl DesktopRuntime {
             }
             "GetGlobalOverviewV1" => self.get_global_overview_v1(&request.arguments),
             "RefreshGlobalOverviewV1" => self.refresh_global_overview_v1(&request.arguments),
-            "GetRecentProjects" => self.get_recent_projects(),
             "GetRecentProjectsV1" => self.get_recent_projects_v1(&request.arguments),
             "ResolveRecentProjectV1" => self.resolve_recent_project_v1(&request.arguments),
             "OpenRecentProjectV1" => self.open_recent_project_v1(&request.arguments),
@@ -1149,8 +1218,9 @@ impl DesktopRuntime {
     fn open_terminal_window_command(&self, arguments: &[Value]) -> AppResult<Value> {
         require_argument_count("OpenTerminalWindow", arguments, 2)?;
         let tab = tab_args("OpenTerminalWindow", arguments, 0)?;
-        let label = self.open_terminal_window(tab)?;
-        Ok(json!({ "label": label }))
+        let opened = self.open_terminal_window(tab)?;
+        lock(&self.expired_terminal_windows).extend(opened.expired);
+        Ok(json!({ "label": opened.label }))
     }
 
     fn terminal_window_tab_command(&self, arguments: &[Value]) -> AppResult<Value> {
@@ -1180,12 +1250,17 @@ impl DesktopRuntime {
     /// builds the window from that label and calls `close_terminal_window` if
     /// the build fails, so a failed pop-out never leaves a session unowned.
     ///
+    /// The fence is read inside the window-map lock: read before it, a
+    /// project switch landing in between would let this open record the old
+    /// generation as current and expire the new workspace's windows.
+    ///
     /// # Errors
     /// Returns an error with no project open, without at least one session,
     /// when any session is already shown by a window, or at the window limit.
-    pub fn open_terminal_window(&self, tab: TerminalWindowTab) -> AppResult<String> {
+    pub fn open_terminal_window(&self, tab: TerminalWindowTab) -> AppResult<OpenedTerminalWindow> {
+        let mut windows = lock(&self.terminal_windows);
         let fence = self.terminal_window_fence();
-        lock(&self.terminal_windows).open(fence, tab)
+        windows.open(fence, tab)
     }
 
     /// The tab one terminal window owns, or `None` for an unknown label.
@@ -1213,13 +1288,20 @@ impl DesktopRuntime {
     /// Labels whose workspace is gone — a switched or closed project — so the
     /// shell can close their windows. Empty while the workspace is unchanged.
     pub fn expire_terminal_windows(&self) -> Vec<String> {
-        let fence = self.terminal_window_fence();
-        lock(&self.terminal_windows).expire(fence)
+        let mut labels = {
+            let mut windows = lock(&self.terminal_windows);
+            let fence = self.terminal_window_fence();
+            windows.expire(fence)
+        };
+        labels.append(&mut lock(&self.expired_terminal_windows));
+        labels
     }
 
     /// Clears every assignment and reports the labels, for app shutdown.
     pub fn drain_terminal_windows(&self) -> Vec<String> {
-        lock(&self.terminal_windows).drain()
+        let mut labels = lock(&self.terminal_windows).drain();
+        labels.append(&mut lock(&self.expired_terminal_windows));
+        labels
     }
 
     fn get_preferences(self: &Arc<Self>, arguments: &[Value]) -> AppResult<Value> {
@@ -1312,16 +1394,37 @@ impl DesktopRuntime {
 
     /// Opens the global store for project-independent application state. The
     /// home is the same fixed platform home the host resolved at startup.
+    /// Opens the global store for one application-state command.
+    ///
+    /// Loading the runtime attests every registered project, far too much for
+    /// the layout writes a window resize sends, so the attested global binding
+    /// is cached and reused while the generation marker is unchanged. Only the
+    /// binding is kept, never the runtime: its shared cutover lease would
+    /// block the exclusive lease a desktop initialization needs.
     fn global_store(&self) -> AppResult<GlobalStore> {
         let home = crate::resolve_global_home()?;
+        let stamp = marker_stamp(&home);
+        let cached = lock(&self.global_binding)
+            .clone()
+            .filter(|cached| cached.home == home && stamp.is_some() && cached.stamp == stamp);
+        if let Some(cached) = cached
+            && let Ok(store) = GlobalStore::open_existing(&cached.database, &cached.binding)
+        {
+            return Ok(store);
+        }
         let runtime = ActiveRuntime::load(&home, &self.version)?.ok_or_else(|| {
             AppError::Message("p-track runtime is not initialized (run 'ptrack init')".to_owned())
         })?;
         let bindings = runtime.global_bindings(runtime.global_home())?;
-        Ok(GlobalStore::open_existing(
-            &bindings.global_database,
-            &bindings.global_binding,
-        )?)
+        let store =
+            GlobalStore::open_existing(&bindings.global_database, &bindings.global_binding)?;
+        *lock(&self.global_binding) = Some(CachedGlobalBinding {
+            home,
+            stamp,
+            database: bindings.global_database,
+            binding: bindings.global_binding,
+        });
+        Ok(store)
     }
 
     fn diagnostics_report(&self) -> AppResult<DiagnosticsReportV1> {
@@ -1359,11 +1462,6 @@ impl DesktopRuntime {
         let _lease = self.begin_native_action()?;
         let _mutation = lock(&self.recent_mutation);
         value(self.recent_projects.refresh_global_overview_v1()?)
-    }
-
-    fn get_recent_projects(self: &Arc<Self>) -> AppResult<Value> {
-        let _lease = self.begin_native_action()?;
-        value(self.recent_projects.recent_projects()?)
     }
 
     fn get_recent_projects_v1(self: &Arc<Self>, arguments: &[Value]) -> AppResult<Value> {
@@ -1510,6 +1608,7 @@ impl DesktopRuntime {
                 });
             };
             state.active_calls = state.active_calls.saturating_add(1);
+            drop(state);
             (generation, workspace)
         };
         let _lease = DesktopCallLease { runtime: self };
@@ -1540,33 +1639,16 @@ impl DesktopRuntime {
             state.shutdown_retry = false;
             state.confirmation = None;
         }
+        // An in-flight download or install holds a native-action lease, so it
+        // is asked to stop before the drain; a cancel is not permanent, and a
+        // refused close below leaves the update service exactly as usable as
+        // it was. The permanent update shutdown only runs once every call has
+        // drained and the close can no longer be refused by them.
+        let _ = self.update_service.cancel_operation();
+        self.drain_calls_for_close()?;
         if let Err(error) = self.update_service.shutdown() {
             lock(&self.state).shutting_down = false;
             return Err(AppError::Message(error));
-        }
-        {
-            let mut state = lock(&self.state);
-            let deadline = Instant::now() + RUNTIME_CALL_TIMEOUT;
-            while state.active_calls != 0 {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() {
-                    state.shutting_down = false;
-                    return Err(AppError::Message(
-                        "runtime calls did not finish before close".to_owned(),
-                    ));
-                }
-                let (next, result) = self
-                    .calls_changed
-                    .wait_timeout(state, remaining)
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                state = next;
-                if result.timed_out() && state.active_calls != 0 {
-                    state.shutting_down = false;
-                    return Err(AppError::Message(
-                        "runtime calls did not finish before close".to_owned(),
-                    ));
-                }
-            }
         }
         let _transition = lock(&self.transition);
         let workspace = lock(&self.state).workspace.clone();
@@ -1580,7 +1662,74 @@ impl DesktopRuntime {
         let mut state = lock(&self.state);
         state.workspace = None;
         state.status = WorkspaceStatus::Closed;
+        drop(state);
         Ok(())
+    }
+
+    /// Runs [`Self::begin_shutdown`] on its own thread and waits at most
+    /// `bound` for it, so neither a window close nor an app quit can hang on a
+    /// slow teardown. With `retry` a refusal is retried until the bound: the
+    /// app is quitting and a call still in flight must not keep it alive, so
+    /// the teardown keeps trying until the calls drain or the time is up.
+    ///
+    /// A teardown still running at the bound keeps running on its thread;
+    /// the caller decides whether to wait for the process to end anyway.
+    pub fn shutdown_within(self: &Arc<Self>, bound: Duration, retry: bool) -> ShutdownOutcome {
+        let deadline = Instant::now() + bound;
+        let (sender, receiver) = channel();
+        let runtime = Arc::clone(self);
+        let spawned = thread::Builder::new()
+            .name("ptrack-shutdown".to_owned())
+            .spawn(move || {
+                let result = loop {
+                    match runtime.begin_shutdown() {
+                        Ok(()) => break Ok(runtime.drain_terminal_windows()),
+                        Err(_) if retry && Instant::now() + SHUTDOWN_RETRY_INTERVAL < deadline => {
+                            thread::sleep(SHUTDOWN_RETRY_INTERVAL);
+                        }
+                        Err(error) => break Err(error.to_string()),
+                    }
+                };
+                let _ = sender.send(result);
+            });
+        if let Err(error) = spawned {
+            return ShutdownOutcome::Refused(format!("runtime shutdown could not start: {error}"));
+        }
+        match receiver.recv_timeout(bound) {
+            Ok(Ok(windows)) => ShutdownOutcome::Completed(windows),
+            Ok(Err(message)) => ShutdownOutcome::Refused(message),
+            Err(_) => ShutdownOutcome::TimedOut,
+        }
+    }
+
+    /// Waits a bounded time for every admitted call to finish. A timeout
+    /// reopens admission and reports the refused close.
+    fn drain_calls_for_close(&self) -> AppResult<()> {
+        let mut state = lock(&self.state);
+        let deadline = Instant::now() + RUNTIME_CALL_TIMEOUT;
+        while state.active_calls != 0 {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let (next, _) = self
+                .calls_changed
+                .wait_timeout(state, remaining)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state = next;
+        }
+        let drained = state.active_calls == 0;
+        if !drained {
+            state.shutting_down = false;
+        }
+        drop(state);
+        if drained {
+            Ok(())
+        } else {
+            Err(AppError::Message(
+                "runtime calls did not finish before close".to_owned(),
+            ))
+        }
     }
 
     /// Acquires one shutdown-fenced lease for a native menu, dialog, browser,
@@ -1680,37 +1829,47 @@ impl DesktopRuntime {
             while state.active_calls != 0 {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
-                    state.authority_changing = false;
-                    state.status = WorkspaceStatus::Error;
-                    "runtime calls did not finish before initialization"
-                        .clone_into(&mut state.error);
-                    return Err(AppError::Message(state.error.clone()));
+                    break;
                 }
-                let (next, result) = self
+                let (next, _) = self
                     .calls_changed
                     .wait_timeout(state, remaining)
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 state = next;
-                if result.timed_out() && state.active_calls != 0 {
-                    state.authority_changing = false;
-                    state.status = WorkspaceStatus::Error;
-                    "runtime calls did not finish before initialization"
-                        .clone_into(&mut state.error);
-                    return Err(AppError::Message(state.error.clone()));
-                }
+            }
+            let refused = (state.active_calls != 0).then(|| {
+                state.authority_changing = false;
+                state.status = WorkspaceStatus::Error;
+                "runtime calls did not finish before initialization".clone_into(&mut state.error);
+                state.error.clone()
+            });
+            drop(state);
+            if let Some(error) = refused {
+                return Err(AppError::Message(error));
             }
         }
         let _transition = lock(&self.transition);
 
         let initialized = (|| -> AppResult<InitializeProjectResultV1> {
+            // The drain above waited for calls admitted before the fence, and
+            // an open admitted then may have published a workspace since the
+            // check. Building over it would orphan its terminals, agent
+            // server, and broker, so initialization refuses instead.
+            if lock(&self.state).workspace.is_some() {
+                return Err(AppError::Message(
+                    "project initialization requires no open workspace".to_owned(),
+                ));
+            }
             let status = self.initialization.initialize(&request)?;
             if status.outcome == InitializationOutcomeV1::RecoveryRequired {
                 let mut state = lock(&self.state);
                 state.status = WorkspaceStatus::Error;
                 state.error.clone_from(&status.error_kind);
+                let view = state_view(&state, &self.version);
+                drop(state);
                 return Ok(InitializeProjectResultV1 {
                     initialization: status,
-                    state: state_view(&state, &self.version),
+                    state: view,
                 });
             }
             if !matches!(
@@ -1763,11 +1922,14 @@ impl DesktopRuntime {
 
         let mut state = lock(&self.state);
         state.authority_changing = false;
-        if let Err(error) = &initialized
-            && state.workspace.is_none()
-        {
-            state.status = WorkspaceStatus::Error;
-            state.error = error.to_string();
+        if let Err(error) = &initialized {
+            if state.workspace.is_none() {
+                state.status = WorkspaceStatus::Error;
+                state.error = error.to_string();
+            } else {
+                // A workspace published during the drain stays the open one.
+                state.status = WorkspaceStatus::Open;
+            }
         }
         drop(state);
         self.calls_changed.notify_all();
@@ -1830,6 +1992,7 @@ impl DesktopRuntime {
             request: request.clone(),
             result: result.clone(),
         });
+        drop(state);
         Ok(Some(result))
     }
 
@@ -1882,6 +2045,7 @@ impl DesktopRuntime {
                 let mut state = lock(&self.state);
                 state.status = WorkspaceStatus::Error;
                 state.error = error.to_string();
+                drop(state);
                 return Err(error);
             }
         };
@@ -1905,6 +2069,14 @@ impl DesktopRuntime {
     ) -> AppResult<WorkspaceChangeResult> {
         let _transition = lock(&self.transition);
         self.require_not_shutting_down()?;
+        // An initialization fences the authority before it drains, and an open
+        // admitted just before that fence must not publish a workspace the
+        // initialization is about to replace.
+        if lock(&self.state).authority_changing {
+            return Err(AppError::Message(
+                "runtime authority is changing".to_owned(),
+            ));
+        }
         let canonical = fs::canonicalize(root).map_err(AppError::Io)?;
         if !canonical.is_dir() {
             return Err(AppError::Message(
@@ -1949,6 +2121,7 @@ impl DesktopRuntime {
                 };
                 if old.is_none() {
                     state.error = error.to_string();
+                    drop(state);
                 }
                 return Err(error);
             }
@@ -2040,7 +2213,9 @@ impl DesktopRuntime {
         let closed_state = {
             let mut state = lock(&self.state);
             state.status = WorkspaceStatus::Closed;
-            state_view(&state, &self.version)
+            let view = state_view(&state, &self.version);
+            drop(state);
+            view
         };
         let result = WorkspaceChangeResult {
             state: closed_state,
@@ -2131,6 +2306,7 @@ impl DesktopRuntime {
                 && Instant::now() <= confirmation.expires_at
         });
         state.confirmation = None;
+        drop(state);
         if valid {
             Ok(true)
         } else {
@@ -2150,6 +2326,7 @@ impl DesktopRuntime {
             .as_ref()
             .is_some_and(|confirmation| confirmation.token == token);
         state.confirmation = None;
+        drop(state);
         if valid {
             Ok(())
         } else {
@@ -2235,6 +2412,40 @@ impl DesktopRuntime {
     }
 }
 
+/// The attested global-store binding and the marker it was read under.
+#[derive(Clone)]
+struct CachedGlobalBinding {
+    home: PathBuf,
+    stamp: Option<MarkerStamp>,
+    database: PathBuf,
+    binding: ptrack_store::ActiveBinding,
+}
+
+/// Identifies one version of the generation marker file. Every publication
+/// replaces the file, so a new marker changes its identity or modification
+/// time even when its length happens to match.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MarkerStamp {
+    length: u64,
+    modified: Option<SystemTime>,
+    #[cfg(unix)]
+    inode: u64,
+}
+
+fn marker_stamp(home: &Path) -> Option<MarkerStamp> {
+    let metadata = fs::metadata(
+        home.join("runtime")
+            .join(ptrack_store::ACTIVE_GENERATION_MARKER),
+    )
+    .ok()?;
+    Some(MarkerStamp {
+        length: metadata.len(),
+        modified: metadata.modified().ok(),
+        #[cfg(unix)]
+        inode: std::os::unix::fs::MetadataExt::ino(&metadata),
+    })
+}
+
 impl Drop for DesktopRuntime {
     fn drop(&mut self) {
         if let Some(watcher) = self
@@ -2264,6 +2475,7 @@ impl Drop for DesktopCallLease<'_> {
     fn drop(&mut self) {
         let mut state = lock(&self.runtime.state);
         state.active_calls = state.active_calls.saturating_sub(1);
+        drop(state);
         self.runtime.calls_changed.notify_all();
     }
 }
@@ -2500,7 +2712,7 @@ impl BoundDesktopWorkspace {
         while state.active != 0 {
             let now = Instant::now();
             if now >= deadline {
-                return false;
+                break;
             }
             let (next, _) = self
                 .workspace_calls
@@ -2509,7 +2721,9 @@ impl BoundDesktopWorkspace {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             state = next;
         }
-        true
+        let drained = state.active == 0;
+        drop(state);
+        drained
     }
 
     fn admission_revision(&self) -> u64 {
@@ -2834,7 +3048,13 @@ impl BoundDesktopWorkspace {
         })
     }
 
-    fn board(&self, plan_id: u64) -> AppResult<BoardView> {
+    /// The full board projection the retired `GetBoardV2` bridge command
+    /// served. The desktop reads the bounded board inside
+    /// `GetWorkspaceSnapshot`; tests still assert the unbounded shape here.
+    #[cfg(test)]
+    pub(super) fn board_v2(&self, generation: u64, plan_id: u64) -> AppResult<Value> {
+        let _workspace_call = self.begin_workspace_call()?;
+        self.require_generation(generation)?;
         let snapshot = self.snapshot()?;
         let mut board = board_view(
             &snapshot,
@@ -2846,7 +3066,7 @@ impl BoundDesktopWorkspace {
             },
         )?;
         apply_linked_runtime_to_board(&mut board, &self.runtime_projection(&snapshot)?);
-        Ok(board)
+        Ok(json!({ "generation": self.generation, "board": board }))
     }
 
     fn runtime_projection(&self, snapshot: &ProjectSnapshot) -> AppResult<RuntimeProjectionView> {
@@ -2970,9 +3190,29 @@ impl BoundDesktopWorkspace {
         task_id: u64,
         use_resources: impl FnOnce(Vec<TaskResource>) -> AppResult<T>,
     ) -> AppResult<T> {
+        self.with_exact_resources(snapshot, ResourceScope::Task(task_id), use_resources)
+    }
+
+    /// The live terminals and agents linked to a plan or to any of its tasks,
+    /// read from the same exact snapshots a task move uses.
+    fn with_exact_plan_resources<T>(
+        &self,
+        snapshot: &ProjectSnapshot,
+        plan_id: u64,
+        use_resources: impl FnOnce(Vec<TaskResource>) -> AppResult<T>,
+    ) -> AppResult<T> {
+        self.with_exact_resources(snapshot, ResourceScope::Plan(plan_id), use_resources)
+    }
+
+    fn with_exact_resources<T>(
+        &self,
+        snapshot: &ProjectSnapshot,
+        scope: ResourceScope,
+        use_resources: impl FnOnce(Vec<TaskResource>) -> AppResult<T>,
+    ) -> AppResult<T> {
         let mut use_resources = Some(use_resources);
         let mut run = |sessions: &[SessionInfo]| {
-            let terminal_resources = terminal_task_resources(snapshot, task_id, sessions);
+            let terminal_resources = terminal_task_resources(snapshot, scope, sessions);
             if let Some(agent) = &self.agent {
                 let mut output = None;
                 let mut callback = |runs: &[Run]| {
@@ -2981,7 +3221,7 @@ impl BoundDesktopWorkspace {
                         snapshot,
                         &self.endpoint.root,
                         self.generation,
-                        task_id,
+                        scope,
                         runs,
                     ));
                     resources.sort();
@@ -3041,6 +3281,7 @@ impl BoundDesktopWorkspace {
                 continue;
             }
             challenges.insert(token.clone(), challenge.clone());
+            drop(challenges);
             return Ok((token, expires_at));
         }
         Err(AppError::Message(
@@ -3063,6 +3304,7 @@ impl BoundDesktopWorkspace {
         let challenge = challenges
             .remove(token)
             .ok_or_else(invalid_task_confirmation)?;
+        drop(challenges);
         if now >= challenge.expires_at
             || challenge.generation != self.generation
             || challenge.task_id != task_id
@@ -3107,12 +3349,13 @@ impl BoundDesktopWorkspace {
                 let active_agents = resources.len().saturating_sub(active_terminals);
                 if resources.is_empty() {
                     store
-                        .compare_and_set_task_status(
+                        .compare_and_set_task_status_with_notes(
                             task.id,
                             task.plan_id,
                             task.status,
                             task.updated_at,
                             wanted,
+                            &desktop_close_override(&snapshot, task.id, task.status, wanted),
                         )
                         .map_err(AppError::from)?;
                     return Ok(task_transition_applied(base));
@@ -3172,12 +3415,13 @@ impl BoundDesktopWorkspace {
             {
                 return Err(invalid_task_confirmation());
             }
-            let result = store.compare_and_set_task_status(
+            let result = store.compare_and_set_task_status_with_notes(
                 task_id,
                 challenge.plan_id,
                 challenge.from_status,
                 challenge.task_updated_at,
                 wanted,
+                &desktop_close_override(&snapshot, task_id, challenge.from_status, wanted),
             );
             match result {
                 Ok(_) => Ok(task_transition_applied(json!({
@@ -3190,6 +3434,119 @@ impl BoundDesktopWorkspace {
                 Err(error) => Err(AppError::from(error)),
             }
         })
+    }
+
+    /// Runs a destructive plan operation only while no live terminal or agent
+    /// is linked to the plan or to any of its tasks — the same exact resource
+    /// check a task move to another plan applies, fenced the same way.
+    fn with_plan_resources_released<T>(
+        &self,
+        plan_id: u64,
+        action: &str,
+        operation: impl FnOnce() -> AppResult<T>,
+    ) -> AppResult<T> {
+        let _transition = lock(&self.resource_transition);
+        let _admission = self.fence_resource_admission()?;
+        if lock(&self.resource_admission.state).pending != 0 {
+            return Err(AppError::Message(format!(
+                "plan {action} must retry after resource admission completes"
+            )));
+        }
+        let snapshot = self.snapshot()?;
+        self.with_exact_plan_resources(&snapshot, plan_id, |resources| {
+            if !resources.is_empty() {
+                return Err(AppError::Message(format!(
+                    "stop or detach linked terminals and agents before {action} this plan"
+                )));
+            }
+            operation()
+        })
+    }
+
+    /// Previews or deletes one plan. The preview carries a revision of exactly
+    /// what it counted; a delete that names one is refused when the plan no
+    /// longer matches it, so a stale dialog can never confirm counts the user
+    /// was not shown.
+    fn delete_plan_v1(
+        &self,
+        plan_id: u64,
+        confirm: bool,
+        preview_revision: &str,
+    ) -> AppResult<Value> {
+        self.with_plan_resources_released(plan_id, "deleting", || {
+            let mut application = lock(&self.application);
+            if !confirm {
+                let PlanLifecycleOutcome::Preview(summary) =
+                    application.plan_lifecycle(PlanLifecycleRequest::DeletePreview { plan_id })?
+                else {
+                    return Err(unavailable("plan delete preview"));
+                };
+                let summary = delete_summary_json(&summary);
+                return Ok(json!({
+                    "generation": self.generation,
+                    "preview": true,
+                    "previewRevision": delete_preview_revision(&summary),
+                    "summary": summary,
+                }));
+            }
+            if !preview_revision.is_empty() {
+                let PlanLifecycleOutcome::Preview(current) =
+                    application.plan_lifecycle(PlanLifecycleRequest::DeletePreview { plan_id })?
+                else {
+                    return Err(unavailable("plan delete preview"));
+                };
+                if delete_preview_revision(&delete_summary_json(&current)) != preview_revision {
+                    return Err(message(
+                        "plan changed since the delete preview; review it again",
+                    ));
+                }
+            }
+            let PlanLifecycleOutcome::Deleted(summary) =
+                application.plan_lifecycle(PlanLifecycleRequest::Delete { plan_id })?
+            else {
+                return Err(unavailable("plan delete result"));
+            };
+            drop(application);
+            Ok(json!({
+                "generation": self.generation,
+                "preview": false,
+                "summary": delete_summary_json(&summary),
+            }))
+        })
+    }
+
+    fn move_plan_v1(&self, plan_id: u64, to: &str, rename: Option<String>) -> AppResult<Value> {
+        self.with_plan_resources_released(plan_id, "moving", || {
+            let outcome = lock(&self.application).plan_lifecycle(PlanLifecycleRequest::Move {
+                plan_id,
+                to: to.to_owned(),
+                rename,
+            })?;
+            let PlanLifecycleOutcome::Transferred(summary) = outcome else {
+                return Err(unavailable("plan move result"));
+            };
+            Ok(json!({ "generation": self.generation, "summary": transfer_summary_json(&summary) }))
+        })
+    }
+
+    /// Returns a done plan to active. The store's claim gate applies exactly
+    /// as it does to every other plan status change.
+    fn reopen_plan_v1(&self, plan_id: u64) -> AppResult<Value> {
+        let snapshot = self.snapshot()?;
+        let plan = snapshot
+            .plan(plan_id)
+            .ok_or_else(|| AppError::Message(format!("plan #{plan_id} not found")))?;
+        if plan.status != PlanStatus::Done {
+            return Err(AppError::Message(format!(
+                "plan #{plan_id} is {} and cannot be reopened",
+                plan.status.as_str()
+            )));
+        }
+        lock(&self.application).mutate(Mutation::SetPlanStatus {
+            id: plan_id,
+            status: PlanStatus::Active,
+        })?;
+        Ok(json!({ "generation": self.generation, "planId": plan_id, "status": "active" }))
     }
 
     fn start_first_task_v1(&self, task_id: u64, expected_updated_at: &str) -> AppResult<Task> {
@@ -3337,32 +3694,6 @@ impl BoundDesktopWorkspace {
             .as_ref()
             .ok_or_else(|| unavailable("AgentRun registry"))?;
         match method {
-            "AssociateAgentRunV2" => {
-                let generation = u64_arg(arguments, 0)?;
-                self.require_generation(generation)?;
-                let pointer = association_pointer_arg(arguments, 2)?;
-                validate_association_pointer(&self.snapshot()?, pointer)?;
-                let _transition = lock(&self.resource_transition);
-                value(agent.associate_run(
-                    self.generation,
-                    string_arg(arguments, 1)?,
-                    AgentAssociationPointer {
-                        version: pointer.version,
-                        plan_id: pointer.plan_id,
-                        task_id: pointer.task_id,
-                    },
-                )?)
-            }
-            "GetAgentRunsV2" => {
-                let generation = u64_arg(arguments, 0)?;
-                self.require_generation(generation)?;
-                value(agent.agent_runs(self.generation)?)
-            }
-            "GetAgentIntelligenceV2" => {
-                let generation = u64_arg(arguments, 0)?;
-                self.require_generation(generation)?;
-                value(agent.agent_intelligence(self.generation, string_arg(arguments, 1)?)?)
-            }
             "PreviewAgentHandoffV2" => {
                 let generation = u64_arg(arguments, 0)?;
                 self.require_generation(generation)?;
@@ -3370,7 +3701,7 @@ impl BoundDesktopWorkspace {
             }
             "SendAgentHandoffV2" => {
                 let generation = u64_arg(arguments, 0)?;
-                self.require_generation(generation)?;
+                self.require_exact_generation(generation)?;
                 value(agent.send_handoff(
                     self.generation,
                     string_arg(arguments, 1)?,
@@ -3381,7 +3712,7 @@ impl BoundDesktopWorkspace {
             }
             "AcknowledgeAgentHandoffV2" => {
                 let generation = u64_arg(arguments, 0)?;
-                self.require_generation(generation)?;
+                self.require_exact_generation(generation)?;
                 value(agent.acknowledge_handoff(
                     self.generation,
                     string_arg(arguments, 1)?,
@@ -3390,7 +3721,7 @@ impl BoundDesktopWorkspace {
             }
             "SetAgentTaskOwnershipV2" => {
                 let generation = u64_arg(arguments, 0)?;
-                self.require_generation(generation)?;
+                self.require_exact_generation(generation)?;
                 value(agent.set_task_ownership(
                     self.generation,
                     string_arg(arguments, 1)?,
@@ -3400,7 +3731,7 @@ impl BoundDesktopWorkspace {
             }
             "SetAgentWorktreeV2" => {
                 let generation = u64_arg(arguments, 0)?;
-                self.require_generation(generation)?;
+                self.require_exact_generation(generation)?;
                 value(agent.set_worktree(
                     self.generation,
                     string_arg(arguments, 1)?,
@@ -3411,7 +3742,7 @@ impl BoundDesktopWorkspace {
             }
             "PrepareAgentWorkflowV2" => {
                 let generation = u64_arg(arguments, 0)?;
-                self.require_generation(generation)?;
+                self.require_exact_generation(generation)?;
                 let kind = parse_workflow_kind(string_arg(arguments, 3)?)?;
                 value(agent.prepare_workflow(
                     self.generation,
@@ -3423,12 +3754,12 @@ impl BoundDesktopWorkspace {
             }
             "ApproveAgentWorkflowV2" => {
                 let generation = u64_arg(arguments, 0)?;
-                self.require_generation(generation)?;
+                self.require_exact_generation(generation)?;
                 value(agent.approve_workflow(self.generation, string_arg(arguments, 1)?)?)
             }
             "DismissAgentWorkflowV2" => {
                 let generation = u64_arg(arguments, 0)?;
-                self.require_generation(generation)?;
+                self.require_exact_generation(generation)?;
                 value(agent.dismiss_workflow(self.generation, string_arg(arguments, 1)?)?)
             }
             _ => Err(unavailable(method)),
@@ -3625,14 +3956,6 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
     fn invoke(&self, method: &str, arguments: &[Value]) -> AppResult<Value> {
         let _workspace_call = self.begin_workspace_call()?;
         match method {
-            "GetBoard" => value(self.board(u64_arg(arguments, 0)?)?),
-            "GetBoardV2" => {
-                let generation = u64_arg(arguments, 0)?;
-                self.require_generation(generation)?;
-                Ok(
-                    json!({ "generation": self.generation, "board": self.board(u64_arg(arguments, 1)?)? }),
-                )
-            }
             "AddPlanV1" => {
                 require_argument_count(method, arguments, 2)?;
                 self.require_exact_generation(u64_arg(arguments, 0)?)?;
@@ -3669,56 +3992,34 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
                     state: self.first_run_state(),
                 })
             }
-            "AddTask" | "AddTaskV2" => {
-                let (generation, offset) = if method == "AddTaskV2" {
-                    (u64_arg(arguments, 0)?, 1)
-                } else {
-                    (0, 0)
-                };
-                self.require_generation(generation)?;
-                let title = trimmed_nonempty(
-                    string_arg(arguments, offset + 1)?,
-                    "task title cannot be empty",
-                )?;
+            "AddTaskV2" => {
+                self.require_exact_generation(u64_arg(arguments, 0)?)?;
+                let title =
+                    trimmed_nonempty(string_arg(arguments, 2)?, "task title cannot be empty")?;
                 let result = lock(&self.application).mutate(Mutation::AddTask {
-                    plan_id: u64_arg(arguments, offset)?,
+                    plan_id: u64_arg(arguments, 1)?,
                     title,
                 })?;
                 let MutationResult::Task(task) = result else {
                     return Err(unavailable("task mutation"));
                 };
                 let card = task_card(&self.snapshot()?, &task);
-                if method == "AddTaskV2" {
-                    Ok(json!({ "generation": self.generation, "task": card }))
-                } else {
-                    value(card)
-                }
+                Ok(json!({ "generation": self.generation, "task": card }))
             }
-            "RenameTask" | "RenameTaskV2" => {
-                let (generation, offset) = if method == "RenameTaskV2" {
-                    (u64_arg(arguments, 0)?, 1)
-                } else {
-                    (0, 0)
-                };
-                self.require_generation(generation)?;
-                let title = trimmed_nonempty(
-                    string_arg(arguments, offset + 1)?,
-                    "task title cannot be empty",
-                )?;
+            "RenameTaskV2" => {
+                self.require_exact_generation(u64_arg(arguments, 0)?)?;
+                let title =
+                    trimmed_nonempty(string_arg(arguments, 2)?, "task title cannot be empty")?;
                 lock(&self.application).mutate(Mutation::SetTaskTitle {
-                    id: u64_arg(arguments, offset)?,
+                    id: u64_arg(arguments, 1)?,
                     title,
                 })?;
-                if method == "RenameTaskV2" {
-                    Ok(json!({ "generation": self.generation }))
-                } else {
-                    Ok(Value::Null)
-                }
+                Ok(json!({ "generation": self.generation }))
             }
             "RenamePlanV1" => {
                 require_argument_count(method, arguments, 3)?;
                 let generation = u64_arg(arguments, 0)?;
-                self.require_generation(generation)?;
+                self.require_exact_generation(generation)?;
                 let title =
                     trimmed_nonempty(string_arg(arguments, 2)?, "plan title cannot be empty")?;
                 lock(&self.application).mutate(Mutation::SetPlanTitle {
@@ -3730,10 +4031,11 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
             "CompletePlanV1" => {
                 require_argument_count(method, arguments, 2)?;
                 let generation = u64_arg(arguments, 0)?;
-                self.require_generation(generation)?;
+                self.require_exact_generation(generation)?;
                 let plan_id = u64_arg(arguments, 1)?;
                 let mut application = lock(&self.application);
                 let result = complete_plan(application.as_mut(), plan_id, false)?;
+                drop(application);
                 Ok(json!({
                     "generation": self.generation,
                     "checkpoint": {
@@ -3748,7 +4050,7 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
             "HoldPlanV1" => {
                 require_argument_count(method, arguments, 3)?;
                 let generation = u64_arg(arguments, 0)?;
-                self.require_generation(generation)?;
+                self.require_exact_generation(generation)?;
                 let reason =
                     trimmed_nonempty(string_arg(arguments, 2)?, "hold reason cannot be empty")?;
                 lock(&self.application).mutate(Mutation::SetPlanHold {
@@ -3760,7 +4062,7 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
             "ResumePlanV1" => {
                 require_argument_count(method, arguments, 2)?;
                 let generation = u64_arg(arguments, 0)?;
-                self.require_generation(generation)?;
+                self.require_exact_generation(generation)?;
                 lock(&self.application).mutate(Mutation::SetPlanHold {
                     id: u64_arg(arguments, 1)?,
                     reason: None,
@@ -3768,50 +4070,41 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
                 Ok(json!({ "generation": self.generation }))
             }
             "DeletePlanV1" => {
-                require_argument_count(method, arguments, 3)?;
-                let generation = u64_arg(arguments, 0)?;
-                self.require_generation(generation)?;
-                let plan_id = u64_arg(arguments, 1)?;
-                let request = if bool_arg(arguments, 2)? {
-                    PlanLifecycleRequest::Delete { plan_id }
+                if arguments.len() != 3 && arguments.len() != 4 {
+                    return Err(message(
+                        "plan delete expects generation, plan ID, confirmation, and optional preview revision",
+                    ));
+                }
+                self.require_exact_generation(u64_arg(arguments, 0)?)?;
+                let preview_revision = if arguments.len() == 4 {
+                    string_arg(arguments, 3)?
                 } else {
-                    PlanLifecycleRequest::DeletePreview { plan_id }
+                    ""
                 };
-                let outcome = lock(&self.application).plan_lifecycle(request)?;
-                let (summary, preview) = match outcome {
-                    PlanLifecycleOutcome::Preview(summary) => (summary, true),
-                    PlanLifecycleOutcome::Deleted(summary) => (summary, false),
-                    PlanLifecycleOutcome::Transferred(_) => {
-                        return Err(unavailable("plan delete result"));
-                    }
-                };
-                Ok(json!({
-                    "generation": self.generation,
-                    "preview": preview,
-                    "summary": delete_summary_json(&summary),
-                }))
+                self.delete_plan_v1(
+                    u64_arg(arguments, 1)?,
+                    bool_arg(arguments, 2)?,
+                    preview_revision,
+                )
             }
             "MovePlanV1" => {
                 require_argument_count(method, arguments, 4)?;
-                let generation = u64_arg(arguments, 0)?;
-                self.require_generation(generation)?;
-                let outcome =
-                    lock(&self.application).plan_lifecycle(PlanLifecycleRequest::Move {
-                        plan_id: u64_arg(arguments, 1)?,
-                        to: string_arg(arguments, 2)?.to_owned(),
-                        rename: optional_string(string_arg(arguments, 3)?),
-                    })?;
-                let PlanLifecycleOutcome::Transferred(summary) = outcome else {
-                    return Err(unavailable("plan move result"));
-                };
-                Ok(
-                    json!({ "generation": self.generation, "summary": transfer_summary_json(&summary) }),
+                self.require_exact_generation(u64_arg(arguments, 0)?)?;
+                self.move_plan_v1(
+                    u64_arg(arguments, 1)?,
+                    string_arg(arguments, 2)?,
+                    optional_string(string_arg(arguments, 3)?),
                 )
+            }
+            "ReopenPlanV1" => {
+                require_argument_count(method, arguments, 2)?;
+                self.require_exact_generation(u64_arg(arguments, 0)?)?;
+                self.reopen_plan_v1(u64_arg(arguments, 1)?)
             }
             "CopyPlanV1" => {
                 require_argument_count(method, arguments, 4)?;
                 let generation = u64_arg(arguments, 0)?;
-                self.require_generation(generation)?;
+                self.require_exact_generation(generation)?;
                 let outcome =
                     lock(&self.application).plan_lifecycle(PlanLifecycleRequest::Copy {
                         plan_id: u64_arg(arguments, 1)?,
@@ -4003,18 +4296,11 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
                     "task": task_card(&self.snapshot()?, &task),
                 }))
             }
-            "AddTaskNote" | "AddTaskNoteV2" => {
-                let (generation, offset) = if method == "AddTaskNoteV2" {
-                    (u64_arg(arguments, 0)?, 1)
-                } else {
-                    (0, 0)
-                };
-                self.require_generation(generation)?;
-                let body = trimmed_nonempty(
-                    string_arg(arguments, offset + 1)?,
-                    "memory note cannot be empty",
-                )?;
-                let task_id = u64_arg(arguments, offset)?;
+            "AddTaskNoteV2" => {
+                self.require_exact_generation(u64_arg(arguments, 0)?)?;
+                let body =
+                    trimmed_nonempty(string_arg(arguments, 2)?, "memory note cannot be empty")?;
+                let task_id = u64_arg(arguments, 1)?;
                 if self.snapshot()?.task(task_id).is_none() {
                     return Err(AppError::Message(format!("task #{task_id} not found")));
                 }
@@ -4023,11 +4309,7 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
                     target_id: task_id,
                     body,
                 })?;
-                if method == "AddTaskNoteV2" {
-                    Ok(json!({ "generation": self.generation }))
-                } else {
-                    Ok(Value::Null)
-                }
+                Ok(json!({ "generation": self.generation }))
             }
             "GetScratchpadV1" => {
                 self.require_generation(u64_arg(arguments, 0)?)?;
@@ -4038,7 +4320,7 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
                 }))
             }
             "SetScratchpadV1" => {
-                self.require_generation(u64_arg(arguments, 0)?)?;
+                self.require_exact_generation(u64_arg(arguments, 0)?)?;
                 // The fence is this argument, never the revision inside the
                 // payload: the caller states the revision it read, and the
                 // runtime stamps the next one.
@@ -4051,38 +4333,11 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
                     "revision": stored.revision,
                 }))
             }
-            "MoveTask" | "MoveTaskV2" | "MoveTaskV3" => {
-                let (generation, offset) = if method == "MoveTask" {
-                    (0, 0)
-                } else {
-                    (u64_arg(arguments, 0)?, 1)
-                };
-                self.require_generation(generation)?;
-                let task_id = u64_arg(arguments, offset)?;
-                let status = parse_task_status(string_arg(arguments, offset + 1)?)?;
-                let confirmation = if method == "MoveTaskV3" {
-                    string_arg(arguments, offset + 2)?
-                } else {
-                    ""
-                };
-                let result = self.move_task_v3(task_id, status, confirmation)?;
-                if method != "MoveTaskV3"
-                    && !result
-                        .get("applied")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false)
-                {
-                    return Err(AppError::Message(
-                        "task transition confirmation is required".to_owned(),
-                    ));
-                }
-                if method == "MoveTaskV3" {
-                    Ok(result)
-                } else if method == "MoveTaskV2" {
-                    Ok(json!({ "generation": self.generation }))
-                } else {
-                    Ok(Value::Null)
-                }
+            "MoveTaskV3" => {
+                self.require_exact_generation(u64_arg(arguments, 0)?)?;
+                let task_id = u64_arg(arguments, 1)?;
+                let status = parse_task_status(string_arg(arguments, 2)?)?;
+                self.move_task_v3(task_id, status, string_arg(arguments, 3)?)
             }
             "SearchV2" => value(search(&self.snapshot()?, string_arg(arguments, 0)?)),
             "StartFirstTaskV1" => {
@@ -4150,35 +4405,14 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
                     deadline,
                 )
             }
-            "GetRecentProjects" => {
-                let projects = lock(&self.application).projects()?;
-                let recent = projects
-                    .into_iter()
-                    .take(RECENT_PROJECT_LIMIT)
-                    .map(|project| {
-                        let available = Path::new(&project.path).is_dir()
-                            && find_project_database(&project.path).is_ok();
-                        json!({
-                            "name": project.name,
-                            "path": project.path,
-                            "lastSeen": timestamp(project.last_seen),
-                            "available": available
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                Ok(Value::Array(recent))
-            }
             "GetTerminalProfiles" | "GetTerminalProfilesV2" => {
                 let terminal = self
                     .terminal
                     .as_ref()
                     .ok_or_else(|| unavailable("terminal manager"))?;
-                let generation = if method == "GetTerminalProfilesV2" {
-                    u64_arg(arguments, 0)?
-                } else {
-                    0
-                };
-                self.require_generation(generation)?;
+                if method == "GetTerminalProfilesV2" {
+                    self.require_exact_generation(u64_arg(arguments, 0)?)?;
+                }
                 let profiles = terminal.profiles(self.generation)?;
                 if method == "GetTerminalProfilesV2" {
                     value(profiles)
@@ -4188,7 +4422,7 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
             }
             "ValidateTerminalCWDsV2" => {
                 let generation = u64_arg(arguments, 0)?;
-                self.require_generation(generation)?;
+                self.require_exact_generation(generation)?;
                 let cwds = string_vec_arg(arguments, 1)?;
                 value(
                     self.terminal
@@ -4199,7 +4433,7 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
             }
             "LaunchLinkedAgentV2" => {
                 let generation = u64_arg(arguments, 0)?;
-                self.require_generation(generation)?;
+                self.require_exact_generation(generation)?;
                 let _admission = self.begin_resource_admission()?;
                 let profile_id = string_arg(arguments, 1)?;
                 if profile_id.is_empty() || profile_id.trim() != profile_id {
@@ -4280,7 +4514,7 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
             }
             "RollbackLinkedAgentLaunchV2" => {
                 let generation = u64_arg(arguments, 0)?;
-                self.require_generation(generation)?;
+                self.require_exact_generation(generation)?;
                 let session_id = string_arg(arguments, 1)?;
                 let _transition = lock(&self.resource_transition);
                 let agent = self
@@ -4298,13 +4532,9 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
                     .rollback_linked(self.generation, session_id)?;
                 Ok(Value::Null)
             }
-            "CreateTerminal" | "CreateTerminalV2" => {
-                let (generation, offset) = if method == "CreateTerminalV2" {
-                    (u64_arg(arguments, 0)?, 1)
-                } else {
-                    (0, 0)
-                };
-                self.require_generation(generation)?;
+            "CreateTerminalV2" => {
+                self.require_exact_generation(u64_arg(arguments, 0)?)?;
+                let offset = 1;
                 let _admission = self.begin_resource_admission()?;
                 let _transition = lock(&self.resource_transition);
                 let cwd_value = string_arg(arguments, offset + 1)?;
@@ -4324,25 +4554,11 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
                         u16_arg(arguments, offset + 2)?,
                         u16_arg(arguments, offset + 3)?,
                     )?;
-                if method == "CreateTerminalV2" {
-                    value(result)
-                } else {
-                    Ok(json!({
-                        "sessionId": result.session_id,
-                        "profileId": result.profile_id,
-                        "cwd": result.cwd,
-                        "state": result.state,
-                        "streamUrl": result.stream_url
-                    }))
-                }
+                value(result)
             }
-            "ResizeTerminal" | "ResizeTerminalV2" => {
-                let (generation, offset) = if method == "ResizeTerminalV2" {
-                    (u64_arg(arguments, 0)?, 1)
-                } else {
-                    (0, 0)
-                };
-                self.require_generation(generation)?;
+            "ResizeTerminalV2" => {
+                self.require_exact_generation(u64_arg(arguments, 0)?)?;
+                let offset = 1;
                 self.terminal
                     .as_ref()
                     .ok_or_else(|| unavailable("terminal manager"))?
@@ -4356,11 +4572,7 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
                         u16_arg(arguments, offset + 1)?,
                         u16_arg(arguments, offset + 2)?,
                     )?;
-                if method == "ResizeTerminalV2" {
-                    Ok(json!({ "generation": self.generation }))
-                } else {
-                    Ok(Value::Null)
-                }
+                Ok(json!({ "generation": self.generation }))
             }
             // Fenced by the bound workspace generation, so a ticket can never
             // be minted for a session belonging to a superseded project.
@@ -4377,51 +4589,21 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
                         )?,
                 )
             }
-            "CloseTerminal" | "CloseTerminalV2" => {
-                let (generation, offset) = if method == "CloseTerminalV2" {
-                    (u64_arg(arguments, 0)?, 1)
-                } else {
-                    (0, 0)
-                };
-                self.require_generation(generation)?;
+            "CloseTerminalV2" => {
+                self.require_exact_generation(u64_arg(arguments, 0)?)?;
                 self.terminal
                     .as_ref()
                     .ok_or_else(|| unavailable("terminal manager"))?
                     .close(
                         self.generation,
-                        string_arg(arguments, offset)?,
-                        bool_arg(arguments, offset + 1)?,
+                        string_arg(arguments, 1)?,
+                        bool_arg(arguments, 2)?,
                     )?;
-                if method == "CloseTerminalV2" {
-                    Ok(json!({ "generation": self.generation }))
-                } else {
-                    Ok(Value::Null)
-                }
-            }
-            "AssociateTerminalV2" => {
-                let generation = u64_arg(arguments, 0)?;
-                self.require_generation(generation)?;
-                let pointer = association_pointer_arg(arguments, 2)?;
-                validate_association_pointer(&self.snapshot()?, pointer)?;
-                let _transition = lock(&self.resource_transition);
-                if let Some(agent) = &self.agent
-                    && agent.has_linked_terminal(self.generation, string_arg(arguments, 1)?)?
-                {
-                    return Err(AppError::Message(
-                        "linked terminal association requires a revision-fenced mutation"
-                            .to_owned(),
-                    ));
-                }
-                let association = self
-                    .terminal
-                    .as_ref()
-                    .ok_or_else(|| unavailable("terminal association manager"))?
-                    .associate(self.generation, string_arg(arguments, 1)?, pointer)?;
-                value(association)
+                Ok(json!({ "generation": self.generation }))
             }
             "MutateTerminalAssociationV2" => {
                 let generation = u64_arg(arguments, 0)?;
-                self.require_generation(generation)?;
+                self.require_exact_generation(generation)?;
                 let detach = bool_arg(arguments, 3)?;
                 let pointer = if detach {
                     TerminalAssociationPointer {
@@ -4520,7 +4702,7 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
             }
             "PreviewTerminalWritebackV2" => {
                 let generation = u64_arg(arguments, 0)?;
-                self.require_generation(generation)?;
+                self.require_exact_generation(generation)?;
                 let session_id = string_arg(arguments, 1)?;
                 let revision = u64_arg(arguments, 2)?;
                 let kind = memory_kind_arg(arguments, 3)?;
@@ -4546,7 +4728,7 @@ impl DesktopWorkspace for BoundDesktopWorkspace {
             }
             "WriteTerminalMemoryV2" => {
                 let generation = u64_arg(arguments, 0)?;
-                self.require_generation(generation)?;
+                self.require_exact_generation(generation)?;
                 let session_id = string_arg(arguments, 1)?;
                 let revision = u64_arg(arguments, 2)?;
                 let request_id = string_arg(arguments, 3)?;
@@ -4686,12 +4868,69 @@ fn notification_evidence_id(run: &AgentRuntimeSummary, kind: DesktopNotification
     )
 }
 
-fn terminal_task_resources(
+/// The override note a board move to Done records when the task has no
+/// closeout summary or no linked commit. Humans may close without evidence,
+/// but never silently: the note lands in the same transaction as the status,
+/// in the exact form `close_task_from_ui` writes for the desktop surface.
+fn desktop_close_override(
     snapshot: &ProjectSnapshot,
     task_id: u64,
+    from: TaskStatus,
+    to: TaskStatus,
+) -> Vec<String> {
+    if to != TaskStatus::Done || from == TaskStatus::Done {
+        return Vec::new();
+    }
+    let mut missing = Vec::new();
+    if !snapshot.notes.iter().any(|note| {
+        note.target == NoteTarget::Task
+            && note.target_id == task_id
+            && note.body.starts_with("closeout:")
+    }) {
+        missing.push("no closeout summary");
+    }
+    if !snapshot
+        .commits
+        .iter()
+        .any(|commit| commit.task_id == task_id)
+    {
+        missing.push("no linked commit");
+    }
+    if missing.is_empty() {
+        return Vec::new();
+    }
+    vec![format!(
+        "override: closed from {} without evidence ({})",
+        crate::UiSurface::Desktop.as_str(),
+        missing.join("; ")
+    )]
+}
+
+/// Which linked resources one exact resource check covers.
+#[derive(Clone, Copy, Debug)]
+enum ResourceScope {
+    /// Resources linked to exactly this task.
+    Task(u64),
+    /// Resources linked to this plan or to any task in it.
+    Plan(u64),
+}
+
+impl ResourceScope {
+    fn covers(self, snapshot: &ProjectSnapshot, plan_id: u64, task_id: u64) -> bool {
+        match self {
+            Self::Task(wanted) => {
+                task_id == wanted && snapshot.task(wanted).map(|task| task.plan_id) == Some(plan_id)
+            }
+            Self::Plan(wanted) => plan_id == wanted,
+        }
+    }
+}
+
+fn terminal_task_resources(
+    snapshot: &ProjectSnapshot,
+    scope: ResourceScope,
     sessions: &[SessionInfo],
 ) -> Vec<TaskResource> {
-    let plan_id = snapshot.task(task_id).map(|task| task.plan_id);
     sessions
         .iter()
         .filter(|session| {
@@ -4703,17 +4942,20 @@ fn terminal_task_resources(
         .filter_map(|session| {
             let association = session.association.as_ref()?;
             (association.revision != 0
-                && association.pointer.task_id == task_id
-                && Some(association.pointer.plan_id) == plan_id)
-                .then(|| TaskResource {
-                    kind: "terminal",
-                    id: session.id.clone(),
-                    revision: association.revision,
-                    state: session.state.to_string(),
-                    process_state: String::new(),
-                    lease_state: String::new(),
-                    lifecycle_revision: 0,
-                })
+                && scope.covers(
+                    snapshot,
+                    association.pointer.plan_id,
+                    association.pointer.task_id,
+                ))
+            .then(|| TaskResource {
+                kind: "terminal",
+                id: session.id.clone(),
+                revision: association.revision,
+                state: session.state.to_string(),
+                process_state: String::new(),
+                lease_state: String::new(),
+                lifecycle_revision: 0,
+            })
         })
         .collect()
 }
@@ -4722,10 +4964,9 @@ fn agent_task_resources(
     snapshot: &ProjectSnapshot,
     project_root: &Path,
     generation: u64,
-    task_id: u64,
+    scope: ResourceScope,
     runs: &[Run],
 ) -> Vec<TaskResource> {
-    let plan_id = snapshot.task(task_id).map(|task| task.plan_id);
     runs.iter()
         .filter(|run| agent_run_is_live(run))
         .filter_map(|run| {
@@ -4735,17 +4976,20 @@ fn agent_task_resources(
                 && association.generation == generation
                 && association.live_id == run.id
                 && association.revision != 0
-                && association.target.task_id == task_id
-                && Some(association.target.plan_id) == plan_id)
-                .then(|| TaskResource {
-                    kind: "agent",
-                    id: run.id.clone(),
-                    revision: association.revision,
-                    state: run.state.as_str().to_owned(),
-                    process_state: run.process_state.as_str().to_owned(),
-                    lease_state: run.lease_state.as_str().to_owned(),
-                    lifecycle_revision: run.lifecycle_revision,
-                })
+                && scope.covers(
+                    snapshot,
+                    association.target.plan_id,
+                    association.target.task_id,
+                ))
+            .then(|| TaskResource {
+                kind: "agent",
+                id: run.id.clone(),
+                revision: association.revision,
+                state: run.state.as_str().to_owned(),
+                process_state: run.process_state.as_str().to_owned(),
+                lease_state: run.lease_state.as_str().to_owned(),
+                lifecycle_revision: run.lifecycle_revision,
+            })
         })
         .collect()
 }
@@ -5558,7 +5802,7 @@ fn commit_view(commit: &Commit) -> Value {
     })
 }
 
-fn search(snapshot: &ProjectSnapshot, query: &str) -> Vec<Value> {
+pub(super) fn search(snapshot: &ProjectSnapshot, query: &str) -> Vec<Value> {
     let needle = query.trim().to_lowercase();
     if needle.is_empty() {
         return Vec::new();
@@ -5607,13 +5851,13 @@ fn search(snapshot: &ProjectSnapshot, query: &str) -> Vec<Value> {
         }
     }
     for note in &snapshot.notes {
-        if let Some(index) = note.body.to_lowercase().find(&needle) {
+        if let Some((start, end)) = find_case_insensitive(&note.body, &needle) {
             results.push(json!({
                 "kind": "note",
                 "id": note.id,
                 "planId": if note.target == NoteTarget::Plan { note.target_id } else { 0 },
                 "title": note_title(note),
-                "snippet": snippet(&note.body, index, needle.len())
+                "snippet": snippet(&note.body, start, end)
             }));
         }
         if results.len() == SEARCH_RESULT_LIMIT {
@@ -5642,10 +5886,56 @@ fn note_title(note: &Note) -> String {
     )
 }
 
-fn snippet(body: &str, index: usize, needle_len: usize) -> String {
-    let start = index.saturating_sub(SEARCH_SNIPPET_SPAN / 2);
-    let end = (index + needle_len + SEARCH_SNIPPET_SPAN / 2).min(body.len());
-    let mut result = body.get(start..end).unwrap_or(body).to_owned();
+/// Finds `needle` — already lowercased — in `haystack` ignoring case, and
+/// returns the byte range of the match in `haystack` itself.
+///
+/// Offsets found in `haystack.to_lowercase()` do not address the original:
+/// lowercasing changes byte lengths (`İ` grows, the Kelvin sign `K` and `ẞ`
+/// shrink), so they land on the wrong text or inside a character. Matching the
+/// lowercase expansion of each original character keeps every offset on a
+/// boundary of the string it indexes.
+pub(super) fn find_case_insensitive(haystack: &str, needle: &str) -> Option<(usize, usize)> {
+    if needle.is_empty() {
+        return None;
+    }
+    haystack.char_indices().find_map(|(start, _)| {
+        lowercase_match_len(&haystack[start..], needle).map(|length| (start, start + length))
+    })
+}
+
+/// The byte length of the shortest prefix of `text` whose lowercase form
+/// begins with `needle`, if any. A needle that ends inside one character's
+/// expansion takes the whole character.
+fn lowercase_match_len(text: &str, needle: &str) -> Option<usize> {
+    let mut wanted = needle.chars().peekable();
+    for (offset, character) in text.char_indices() {
+        for lower in character.to_lowercase() {
+            match wanted.next() {
+                Some(expected) if expected == lower => {}
+                Some(_) => return None,
+                None => break,
+            }
+        }
+        if wanted.peek().is_none() {
+            return Some(offset + character.len_utf8());
+        }
+    }
+    None
+}
+
+/// The note text around one match, widened to character boundaries of `body`.
+fn snippet(body: &str, match_start: usize, match_end: usize) -> String {
+    let mut start = match_start.saturating_sub(SEARCH_SNIPPET_SPAN / 2);
+    while !body.is_char_boundary(start) {
+        start -= 1;
+    }
+    let mut end = match_end
+        .saturating_add(SEARCH_SNIPPET_SPAN / 2)
+        .min(body.len());
+    while !body.is_char_boundary(end) {
+        end += 1;
+    }
+    let mut result = body[start..end].to_owned();
     if start != 0 {
         result.insert(0, '…');
     }
@@ -6658,6 +6948,15 @@ fn delete_summary_json(summary: &ptrack_store::PlanDeleteSummary) -> Value {
             .map(|(id, title)| json!({ "id": id, "title": title }))
             .collect::<Vec<_>>(),
     })
+}
+
+/// A stable revision of one delete preview: it changes whenever anything the
+/// preview counted changes.
+fn delete_preview_revision(summary: &Value) -> String {
+    use std::hash::{DefaultHasher, Hash as _, Hasher as _};
+    let mut hasher = DefaultHasher::new();
+    summary.to_string().hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 fn transfer_summary_json(summary: &crate::PlanTransferSummary) -> Value {

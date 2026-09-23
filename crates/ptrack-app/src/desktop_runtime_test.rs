@@ -22,11 +22,12 @@ use super::desktop_runtime::{
     ActiveResourceSummary, BoundDesktopWorkspace, DesktopCommandRequest, DesktopRuntime,
     DesktopRuntimeConfig, DesktopWorkspace, DesktopWorkspaceFactory,
     RecentProjectOpenAuthorizationV1, RecentProjectRegistryCommitV1, RecentProjectRegistryStatusV1,
-    RecentProjectsProvider, ResetApplicationStateResultV1, StackScanOutcome, WorkspaceProject,
-    WorkspaceStatus, agent_intelligence_for_task_result, allowed_desktop_commands,
-    apply_preferences, board_view, capture_git_snapshot_with, confirm_linked_launch, heatmap_at,
-    project_storage, record_last_project_in, reset_application_records, snapshot_board_view,
-    stack_scan_due, stack_scan_outcome, watch_workspace_data,
+    RecentProjectsProvider, ResetApplicationStateResultV1, ShutdownOutcome, StackScanOutcome,
+    WorkspaceProject, WorkspaceStatus, agent_intelligence_for_task_result,
+    allowed_desktop_commands, allowed_terminal_window_commands, apply_preferences, board_view,
+    capture_git_snapshot_with, confirm_linked_launch, find_case_insensitive, heatmap_at,
+    project_storage, record_last_project_in, reset_application_records, scope_request_to_window,
+    search, snapshot_board_view, stack_scan_due, stack_scan_outcome, watch_workspace_data,
 };
 use crate::{
     AppError, AppResult, DesktopEvent, DesktopEventSink, DesktopInitializationService,
@@ -228,9 +229,15 @@ impl RecentProjectsProvider for RecordingRecentRecovery {
 
 impl RecentProjectsProvider for BlockingRecentProjects {
     fn recent_projects(&self) -> AppResult<Vec<Value>> {
+        Ok(Vec::new())
+    }
+
+    fn recent_projects_v1(&self) -> AppResult<super::desktop_runtime::RecentProjectsV1> {
         self.entered.wait();
         self.release.wait();
-        Ok(Vec::new())
+        Ok(super::desktop_runtime::RecentProjectsV1 {
+            projects: Vec::new(),
+        })
     }
 }
 
@@ -323,14 +330,16 @@ impl DesktopInitializationService for RecordingInitialization {
                 "desktop-bound checkpoint unavailable".to_owned(),
             ));
         }
-        let mut status = self.status.lock().unwrap();
-        let status = status
+        let mut guard = self.status.lock().unwrap();
+        let status = guard
             .as_mut()
             .filter(|status| status.operation_id == operation_id)
             .ok_or_else(|| AppError::Message("initialization operation is unknown".to_owned()))?;
         status.checkpoint = InitializationCheckpointV1::DesktopBound;
         status.outcome = InitializationOutcomeV1::Complete;
-        Ok(status.clone())
+        let marked = status.clone();
+        drop(guard);
+        Ok(marked)
     }
 }
 
@@ -847,7 +856,7 @@ fn initialization_drains_an_active_native_call_and_rejects_shutdown_and_new_call
 
     let recent_runtime = runtime.clone();
     let recent =
-        thread::spawn(move || recent_runtime.invoke(request("GetRecentProjects", Vec::new())));
+        thread::spawn(move || recent_runtime.invoke(request("GetRecentProjectsV1", Vec::new())));
     entered.wait();
 
     let (finished, completion) = channel();
@@ -945,26 +954,20 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "AcknowledgeAgentHandoffV2",
             "AddIssueV1",
             "AddPlanV1",
-            "AddTask",
-            "AddTaskNote",
             "AddTaskNoteV2",
             "AddTaskV2",
             "ApplyUpdate",
             "ApproveAgentWorkflowV2",
-            "AssociateAgentRunV2",
-            "AssociateTerminalV2",
             "CancelUpdateOperation",
             "CancelWorkspaceChange",
             "CheckForUpdates",
             "ClaimTerminalStream",
             "CloseProject",
-            "CloseTerminal",
             "CloseTerminalV2",
             "CompletePlanV1",
             "CopyPlanV1",
             "CreateFirstPlanV1",
             "CreateFirstTaskV1",
-            "CreateTerminal",
             "CreateTerminalV2",
             "DeletePlanV1",
             "DisableCapabilityV2",
@@ -974,10 +977,6 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "ExpireCapabilityV2",
             "ForgetRecentProjectV1",
             "GetActivityHeatmapV2",
-            "GetAgentIntelligenceV2",
-            "GetAgentRunsV2",
-            "GetBoard",
-            "GetBoardV2",
             "GetCapabilitiesV2",
             "GetCapabilityAuditsV2",
             "GetDiagnosticsReport",
@@ -989,7 +988,6 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "GetPendingInitializationV1",
             "GetPreferences",
             "GetProjectTimelineV1",
-            "GetRecentProjects",
             "GetRecentProjectsV1",
             "GetScratchpadV1",
             "GetStackProfileV1",
@@ -1007,8 +1005,6 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "ListProjectsV1",
             "MoveIssueTaskV1",
             "MovePlanV1",
-            "MoveTask",
-            "MoveTaskV2",
             "MoveTaskV3",
             "MutateTerminalAssociationV2",
             "OpenHelpDestination",
@@ -1024,12 +1020,11 @@ fn desktop_command_allowlist_is_exact_sorted_unique_and_byte_bounded() {
             "RefreshGlobalOverviewV1",
             "RemoveCapabilityV2",
             "RenamePlanV1",
-            "RenameTask",
             "RenameTaskV2",
+            "ReopenPlanV1",
             "ResetApplicationState",
             "ResetPreferences",
             "ResetWindowLayout",
-            "ResizeTerminal",
             "ResizeTerminalV2",
             "ResolveRecentProjectV1",
             "ResumePlanV1",
@@ -1713,7 +1708,7 @@ fn shutdown_is_idempotent_and_fences_future_calls() {
     assert_eq!(runtime.workspace_state().status, WorkspaceStatus::Closed);
     assert_eq!(
         runtime
-            .invoke(request("GetBoard", vec![json!(0)]))
+            .invoke(request("GetWorkspaceSnapshot", vec![json!(1)]))
             .unwrap_err()
             .to_string(),
         "terminal lifecycle is shutting down"
@@ -2014,13 +2009,13 @@ fn recent_projects_are_available_without_an_open_workspace_and_fenced_on_close()
         confirmation_ttl: Duration::from_secs(60),
     });
     let recent = runtime
-        .invoke(request("GetRecentProjects", Vec::new()))
+        .invoke(request("GetRecentProjectsV1", Vec::new()))
         .unwrap();
-    assert_eq!(recent[0]["name"], "Recent");
+    assert_eq!(recent["projects"], json!([]));
     runtime.begin_shutdown().unwrap();
     assert_eq!(
         runtime
-            .invoke(request("GetRecentProjects", Vec::new()))
+            .invoke(request("GetRecentProjectsV1", Vec::new()))
             .unwrap_err()
             .to_string(),
         "terminal lifecycle is shutting down"
@@ -2270,7 +2265,7 @@ fn close_timeout_restores_admission_and_retry_finishes_after_runtime_call() {
     });
     let caller = {
         let runtime = runtime.clone();
-        std::thread::spawn(move || runtime.invoke(request("GetBoard", vec![json!(0)])))
+        std::thread::spawn(move || runtime.invoke(request("GetWorkspaceSnapshot", vec![json!(1)])))
     };
     entered.wait();
     assert_eq!(
@@ -2445,9 +2440,7 @@ fn add_plan_wire_supports_existing_projects_and_rejects_stale_or_invalid_request
         assert_eq!(created["plan"]["title"], title);
         assert_eq!(created["plan"]["status"], "active");
     }
-    let board = workspace
-        .invoke("GetBoardV2", &[json!(7), json!(2)])
-        .unwrap();
+    let board = workspace.board_v2(7, 2).unwrap();
     assert_eq!(board["board"]["planId"], 2);
     assert_eq!(board["board"]["plans"].as_array().unwrap().len(), 2);
 }
@@ -2615,17 +2608,12 @@ fn first_run_workspace_mutations_are_exact_fenced_and_idempotent() {
 fn bound_workspace_projects_board_search_mutations_and_capability_preview() {
     let directory = TestDirectory::new("bound");
     let workspace = bound_workspace(&directory);
-    let board = workspace
-        .invoke("GetBoardV2", &[json!(7), json!(0)])
-        .unwrap();
+    let board = workspace.board_v2(7, 0).unwrap();
     assert_eq!(board["generation"], 7);
     assert_eq!(board["board"]["goal"], "Ship parity");
     assert_eq!(board["board"]["columns"][0]["tasks"][0]["noteCount"], 1);
     assert_eq!(
-        workspace
-            .invoke("GetBoardV2", &[json!(8), json!(0)])
-            .unwrap_err()
-            .to_string(),
+        workspace.board_v2(8, 0).unwrap_err().to_string(),
         "stale workspace generation: expected 8, active 7"
     );
 
@@ -3181,10 +3169,7 @@ fn workspace_shutdown_drains_its_own_calls_and_fences_late_invocations() {
         .unwrap();
     handle.join().unwrap();
     assert_eq!(
-        workspace
-            .invoke("GetBoardV2", &[json!(7), json!(1)])
-            .unwrap_err()
-            .to_string(),
+        workspace.board_v2(7, 1).unwrap_err().to_string(),
         "workspace is closing"
     );
 }
@@ -3302,9 +3287,7 @@ async fn task_transition_challenge_is_opaque_single_use_and_resource_revision_fe
         None,
     );
 
-    let board = workspace
-        .invoke("GetBoardV2", &[json!(7), json!(1)])
-        .unwrap();
+    let board = workspace.board_v2(7, 1).unwrap();
     assert_eq!(
         board["board"]["columns"][0]["tasks"][0]["linkedRuntime"]["terminals"],
         1
@@ -3709,7 +3692,7 @@ fn every_allowlisted_capability_method_routes_to_the_broker() {
             "{method}"
         );
     }
-    for method in ["GetPreferences", "CreateTerminal", "LaunchLinkedAgentV2"] {
+    for method in ["GetPreferences", "CreateTerminalV2", "LaunchLinkedAgentV2"] {
         assert!(
             !crate::desktop_runtime::routes_to_capability(method),
             "{method}"
@@ -3745,9 +3728,7 @@ fn held_plans_and_tasks_reach_the_board_payload_without_leaving_their_column() {
         None,
     );
 
-    let board = workspace
-        .invoke("GetBoardV2", &[json!(7), json!(0)])
-        .unwrap();
+    let board = workspace.board_v2(7, 0).unwrap();
     let columns = board["board"]["columns"].as_array().unwrap();
     // Four lanes, and the held task still sits in Todo — hold is a badge, not a lane.
     assert_eq!(columns.len(), 4);
@@ -3794,9 +3775,7 @@ fn claimed_plans_reach_the_board_and_snapshot_payload_with_the_resolved_name() {
         None,
     );
 
-    let board = workspace
-        .invoke("GetBoardV2", &[json!(7), json!(0)])
-        .unwrap();
+    let board = workspace.board_v2(7, 0).unwrap();
     assert_eq!(board["board"]["plans"][0]["claimedBy"], "Alice");
 
     let snapshot = workspace
@@ -3822,9 +3801,7 @@ fn unclaimed_plans_omit_claimed_by_from_the_board_payload() {
         None,
     );
 
-    let board = workspace
-        .invoke("GetBoardV2", &[json!(7), json!(0)])
-        .unwrap();
+    let board = workspace.board_v2(7, 0).unwrap();
     assert!(board["board"]["plans"][0].get("claimedBy").is_none());
 }
 
@@ -3986,9 +3963,7 @@ fn desktop_plan_completion_hold_and_resume_preserve_cli_lifecycle_rules() {
             &[json!(7), json!(plan_id), json!("Waiting for review")],
         )
         .unwrap();
-    let held = workspace
-        .invoke("GetBoardV2", &[json!(7), json!(plan_id)])
-        .unwrap();
+    let held = workspace.board_v2(7, plan_id).unwrap();
     assert_eq!(held["board"]["plans"][0]["status"], json!("active"));
     assert_eq!(
         held["board"]["plans"][0]["holdReason"],
@@ -3997,9 +3972,7 @@ fn desktop_plan_completion_hold_and_resume_preserve_cli_lifecycle_rules() {
     workspace
         .invoke("ResumePlanV1", &[json!(7), json!(plan_id)])
         .unwrap();
-    let resumed = workspace
-        .invoke("GetBoardV2", &[json!(7), json!(plan_id)])
-        .unwrap();
+    let resumed = workspace.board_v2(7, plan_id).unwrap();
     assert!(resumed["board"]["plans"][0].get("holdReason").is_none());
 
     let refusal = workspace
@@ -4007,7 +3980,10 @@ fn desktop_plan_completion_hold_and_resume_preserve_cli_lifecycle_rules() {
         .unwrap_err();
     assert!(refusal.to_string().contains("open tasks remain"));
     workspace
-        .invoke("MoveTaskV2", &[json!(7), json!(task_id), json!("done")])
+        .invoke(
+            "MoveTaskV3",
+            &[json!(7), json!(task_id), json!("done"), json!("")],
+        )
         .unwrap();
     let completed = workspace
         .invoke("CompletePlanV1", &[json!(7), json!(plan_id)])
@@ -4019,9 +3995,7 @@ fn desktop_plan_completion_hold_and_resume_preserve_cli_lifecycle_rules() {
             .contains("CHECKPOINT — before continuing, re-evaluate:")
     );
     assert_eq!(completed["checkpoint"]["openPlans"], json!([]));
-    let board = workspace
-        .invoke("GetBoardV2", &[json!(7), json!(plan_id)])
-        .unwrap();
+    let board = workspace.board_v2(7, plan_id).unwrap();
     assert_eq!(board["board"]["plans"][0]["status"], json!("done"));
     let hold_done = workspace
         .invoke("HoldPlanV1", &[json!(7), json!(plan_id), json!("Too late")])
@@ -4287,4 +4261,617 @@ fn a_scratchpad_conflict_reaches_the_runtime_boundary_with_its_stored_record() {
             .unwrap()["scratchpad"]["text"],
         "typed beside the terminal"
     );
+}
+
+/// A workspace whose teardown takes longer than any close may wait.
+struct SlowShutdownWorkspace {
+    inner: Arc<FakeWorkspace>,
+    delay: Duration,
+}
+
+impl DesktopWorkspace for SlowShutdownWorkspace {
+    fn project(&self) -> WorkspaceProject {
+        self.inner.project()
+    }
+
+    fn invoke(&self, method: &str, arguments: &[Value]) -> AppResult<Value> {
+        self.inner.invoke(method, arguments)
+    }
+
+    fn active_resources(&self) -> AppResult<ActiveResourceSummary> {
+        self.inner.active_resources()
+    }
+
+    fn shutdown(&self) -> AppResult<()> {
+        thread::sleep(self.delay);
+        self.inner.shutdown()
+    }
+}
+
+fn runtime_with(
+    workspace: Arc<dyn DesktopWorkspace>,
+    updates: Arc<dyn DesktopUpdateService>,
+) -> Arc<DesktopRuntime> {
+    DesktopRuntime::new(DesktopRuntimeConfig {
+        version: "test".to_owned(),
+        factory: Arc::new(FakeFactory::default()),
+        event_sink: None,
+        initial_workspace: Some(workspace),
+        recent_projects: Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+        initialization: Arc::new(super::desktop_runtime::NoDesktopInitializationService),
+        update_service: updates,
+        confirmation_ttl: Duration::from_secs(60),
+    })
+}
+
+/// A close refused because a call did not drain must leave updates alive:
+/// the window stays open, and so must everything it can still reach.
+#[test]
+fn a_refused_close_leaves_the_update_service_running() {
+    let root = TestDirectory::new("refused-close-updates");
+    let entered = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let inner = FakeWorkspace::new(&root.0, 1);
+    let updates = RecordingUpdates::new();
+    let runtime = runtime_with(
+        Arc::new(BlockingWorkspace {
+            inner: inner.clone(),
+            entered: entered.clone(),
+            release: release.clone(),
+        }),
+        updates.clone(),
+    );
+    let caller = {
+        let runtime = runtime.clone();
+        thread::spawn(move || runtime.invoke(request("GetWorkspaceSnapshot", vec![json!(1)])))
+    };
+    entered.wait();
+    assert_eq!(
+        runtime.begin_shutdown().unwrap_err().to_string(),
+        "runtime calls did not finish before close"
+    );
+    assert!(
+        !updates
+            .calls
+            .lock()
+            .unwrap()
+            .contains(&"shutdown".to_owned())
+    );
+    let checked = runtime
+        .invoke(request("CheckForUpdates", Vec::new()))
+        .unwrap();
+    assert_eq!(checked["phase"], "current");
+
+    release.wait();
+    caller.join().unwrap().unwrap();
+    runtime.begin_shutdown().unwrap();
+    let calls = updates.calls.lock().unwrap().clone();
+    assert_eq!(calls.last().map(String::as_str), Some("shutdown"));
+    assert_eq!(inner.shutdowns.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn a_bounded_shutdown_completes_and_hands_back_the_terminal_windows() {
+    let root = TestDirectory::new("bounded-shutdown");
+    let workspace = FakeWorkspace::new(&root.0, 1);
+    let runtime = runtime_with(workspace.clone(), UnavailableUpdateService::new("test"));
+    runtime
+        .invoke(request(
+            "OpenTerminalWindow",
+            vec![json!(["session-a"]), json!({ "id": "tab-1" })],
+        ))
+        .unwrap();
+    assert_eq!(
+        runtime.shutdown_within(Duration::from_secs(3), false),
+        ShutdownOutcome::Completed(vec!["terminal-1".to_owned()])
+    );
+    assert_eq!(workspace.shutdowns.load(Ordering::SeqCst), 1);
+    // Idempotent: a quit after the window close finds nothing left to do.
+    assert_eq!(
+        runtime.shutdown_within(Duration::from_secs(3), true),
+        ShutdownOutcome::Completed(Vec::new())
+    );
+}
+
+#[test]
+fn a_bounded_close_is_refused_by_a_live_call_and_a_quit_retries_past_it() {
+    let root = TestDirectory::new("bounded-refusal");
+    let entered = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let inner = FakeWorkspace::new(&root.0, 1);
+    let runtime = runtime_with(
+        Arc::new(BlockingWorkspace {
+            inner: inner.clone(),
+            entered: entered.clone(),
+            release: release.clone(),
+        }),
+        UnavailableUpdateService::new("test"),
+    );
+    let caller = {
+        let runtime = runtime.clone();
+        thread::spawn(move || runtime.invoke(request("GetWorkspaceSnapshot", vec![json!(1)])))
+    };
+    entered.wait();
+    assert_eq!(
+        runtime.shutdown_within(Duration::from_secs(3), false),
+        ShutdownOutcome::Refused("runtime calls did not finish before close".to_owned())
+    );
+    assert_eq!(runtime.workspace_state().status, WorkspaceStatus::Open);
+
+    // A quit keeps retrying while the call is still running, and finishes
+    // once it drains, well inside the bound.
+    let releaser = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(400));
+        release.wait();
+    });
+    let started = Instant::now();
+    assert_eq!(
+        runtime.shutdown_within(Duration::from_secs(3), true),
+        ShutdownOutcome::Completed(Vec::new())
+    );
+    assert!(started.elapsed() < Duration::from_secs(3));
+    releaser.join().unwrap();
+    caller.join().unwrap().unwrap();
+    assert_eq!(inner.shutdowns.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn a_teardown_slower_than_the_bound_never_holds_the_caller() {
+    let root = TestDirectory::new("bounded-timeout");
+    let inner = FakeWorkspace::new(&root.0, 1);
+    let runtime = runtime_with(
+        Arc::new(SlowShutdownWorkspace {
+            inner: inner.clone(),
+            delay: Duration::from_millis(1_500),
+        }),
+        UnavailableUpdateService::new("test"),
+    );
+    let started = Instant::now();
+    assert_eq!(
+        runtime.shutdown_within(Duration::from_millis(200), true),
+        ShutdownOutcome::TimedOut
+    );
+    assert!(started.elapsed() < Duration::from_millis(1_000));
+    // The teardown itself still finishes on its own thread.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while inner.shutdowns.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(inner.shutdowns.load(Ordering::SeqCst), 1);
+}
+
+/// An open admitted before initialization fenced the authority can publish a
+/// workspace during the drain. Initialization must then refuse rather than
+/// build a second workspace over it and orphan the first one's services.
+#[test]
+fn initialization_refuses_when_an_open_published_during_its_drain() {
+    let directory = TestDirectory::new("initialize-open-race");
+    let opened_root = directory.0.join("opened");
+    let initialized_root = directory.0.join("initialized");
+    std::fs::create_dir(&opened_root).unwrap();
+    std::fs::create_dir(&initialized_root).unwrap();
+    let entered = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let initialization = RecordingInitialization::new(initialized_root.clone());
+    let runtime = DesktopRuntime::new(DesktopRuntimeConfig {
+        version: "test".to_owned(),
+        factory: Arc::new(BlockingFactory {
+            entered: entered.clone(),
+            release: release.clone(),
+        }),
+        event_sink: None,
+        initial_workspace: None,
+        recent_projects: Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+        initialization: initialization.clone(),
+        update_service: UnavailableUpdateService::new("test"),
+        confirmation_ttl: Duration::from_secs(60),
+    });
+    let opener = {
+        let runtime = runtime.clone();
+        let root = opened_root.clone();
+        thread::spawn(move || runtime.invoke(request("OpenProject", vec![json!(root), json!("")])))
+    };
+    entered.wait();
+    let initializer = {
+        let runtime = runtime.clone();
+        let root = initialized_root.clone();
+        thread::spawn(move || runtime.invoke(initialize_request(&root, "race the open")))
+    };
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while runtime
+        .invoke(request("GetUpdateState", Vec::new()))
+        .is_ok()
+        && Instant::now() < deadline
+    {
+        thread::yield_now();
+    }
+    release.wait();
+    opener.join().unwrap().unwrap();
+    assert_eq!(
+        initializer.join().unwrap().unwrap_err().to_string(),
+        "project initialization requires no open workspace"
+    );
+    let state = runtime.workspace_state();
+    assert_eq!(state.status, WorkspaceStatus::Open);
+    assert_eq!(
+        state.project.unwrap().root,
+        opened_root.to_string_lossy().into_owned()
+    );
+    assert!(initialization.requests.lock().unwrap().is_empty());
+}
+
+#[test]
+fn terminal_windows_reach_only_their_own_commands_and_assignment() {
+    let terminal = |method: &str, arguments: Vec<Value>| {
+        scope_request_to_window("terminal-3", request(method, arguments))
+    };
+    let commands = allowed_terminal_window_commands();
+    assert!(commands.windows(2).all(|pair| pair[0] < pair[1]));
+    for method in commands {
+        assert!(allowed_desktop_commands().contains(method), "{method}");
+        assert!(
+            terminal(method, vec![json!("terminal-9")]).is_ok(),
+            "{method}"
+        );
+    }
+    for method in [
+        "MoveTaskV3",
+        "DeletePlanV1",
+        "OpenProject",
+        "ApplyUpdate",
+        "OpenTerminalWindow",
+    ] {
+        assert_eq!(
+            terminal(method, Vec::new()).unwrap_err().to_string(),
+            format!("{method} is not available to this window")
+        );
+    }
+    // The assignment commands always address the caller, whatever it names.
+    for method in ["GetTerminalWindowTab", "SetTerminalWindowTab"] {
+        let scoped = terminal(method, vec![json!("terminal-1"), json!(["s"]), json!({})]).unwrap();
+        assert_eq!(scoped.arguments[0], json!("terminal-3"));
+        assert!(
+            scope_request_to_window("main", request(method, vec![json!("terminal-1")])).is_err()
+        );
+    }
+    let main = scope_request_to_window("main", request("DeletePlanV1", vec![json!(1)])).unwrap();
+    assert_eq!(main.arguments, vec![json!(1)]);
+    for label in ["terminal-", "terminal-x", "other", ""] {
+        assert!(
+            scope_request_to_window(label, request("GetWorkspaceState", Vec::new())).is_err(),
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn legacy_generation_free_commands_are_gone_and_mutations_need_the_exact_generation() {
+    for method in [
+        "AddTask",
+        "AddTaskNote",
+        "AssociateAgentRunV2",
+        "AssociateTerminalV2",
+        "CloseTerminal",
+        "CreateTerminal",
+        "GetAgentIntelligenceV2",
+        "GetAgentRunsV2",
+        "GetBoard",
+        "GetBoardV2",
+        "GetRecentProjects",
+        "MoveTask",
+        "MoveTaskV2",
+        "RenameTask",
+        "ResizeTerminal",
+    ] {
+        assert!(!allowed_desktop_commands().contains(&method), "{method}");
+    }
+    let directory = TestDirectory::new("exact-generation");
+    let workspace = bound_workspace(&directory);
+    for (method, arguments) in [
+        ("AddTaskV2", vec![json!(0), json!(1), json!("Task")]),
+        ("RenameTaskV2", vec![json!(0), json!(1), json!("Task")]),
+        ("AddTaskNoteV2", vec![json!(0), json!(1), json!("Note")]),
+        (
+            "MoveTaskV3",
+            vec![json!(0), json!(1), json!("done"), json!("")],
+        ),
+        ("RenamePlanV1", vec![json!(0), json!(1), json!("Plan")]),
+        ("DeletePlanV1", vec![json!(0), json!(1), json!(true)]),
+        ("CompletePlanV1", vec![json!(0), json!(1)]),
+        ("ReopenPlanV1", vec![json!(0), json!(1)]),
+        ("SetScratchpadV1", vec![json!(0), json!(0), json!({})]),
+        (
+            "CloseTerminalV2",
+            vec![json!(0), json!("session"), json!(true)],
+        ),
+        (
+            "ResizeTerminalV2",
+            vec![json!(0), json!("session"), json!(24), json!(80)],
+        ),
+    ] {
+        assert_eq!(
+            workspace
+                .invoke(method, &arguments)
+                .unwrap_err()
+                .to_string(),
+            "stale workspace generation: expected 0, active 7",
+            "{method}"
+        );
+    }
+}
+
+#[test]
+fn a_done_plan_can_be_reopened_and_only_a_done_plan() {
+    let directory = TestDirectory::new("plan-reopen");
+    let (bindings, task_id) = bound_bindings(&directory);
+    let workspace = BoundDesktopWorkspace::new(
+        7,
+        0,
+        bindings.clone(),
+        Box::new(LocalApplication::new(bindings)),
+        None,
+        None,
+        None,
+    );
+    assert_eq!(
+        workspace
+            .invoke("ReopenPlanV1", &[json!(7), json!(1)])
+            .unwrap_err()
+            .to_string(),
+        "plan #1 is active and cannot be reopened"
+    );
+    workspace
+        .invoke(
+            "MoveTaskV3",
+            &[json!(7), json!(task_id), json!("done"), json!("")],
+        )
+        .unwrap();
+    workspace
+        .invoke("CompletePlanV1", &[json!(7), json!(1)])
+        .unwrap();
+    assert_eq!(
+        workspace.board_v2(7, 1).unwrap()["board"]["plans"][0]["status"],
+        "done"
+    );
+    assert_eq!(
+        workspace
+            .invoke("ReopenPlanV1", &[json!(7), json!(1)])
+            .unwrap(),
+        json!({ "generation": 7, "planId": 1, "status": "active" })
+    );
+    assert_eq!(
+        workspace.board_v2(7, 1).unwrap()["board"]["plans"][0]["status"],
+        "active"
+    );
+    assert_eq!(
+        workspace
+            .invoke("ReopenPlanV1", &[json!(7), json!(99)])
+            .unwrap_err()
+            .to_string(),
+        "plan #99 not found"
+    );
+}
+
+/// A delete preview names a revision of what it counted, and a delete that
+/// carries it is refused once the plan has changed: a stale dialog can never
+/// confirm counts it did not show.
+#[test]
+fn a_plan_delete_is_bound_to_the_preview_it_confirms() {
+    let directory = TestDirectory::new("plan-delete-revision");
+    let workspace = bound_workspace(&directory);
+    let preview = workspace
+        .invoke("DeletePlanV1", &[json!(7), json!(1), json!(false)])
+        .unwrap();
+    let revision = preview["previewRevision"].as_str().unwrap().to_owned();
+    assert_eq!(revision.len(), 16);
+    // The same state previews to the same revision.
+    assert_eq!(
+        workspace
+            .invoke("DeletePlanV1", &[json!(7), json!(1), json!(false)])
+            .unwrap()["previewRevision"],
+        json!(revision)
+    );
+    workspace
+        .invoke(
+            "AddTaskV2",
+            &[json!(7), json!(1), json!("Added after the preview")],
+        )
+        .unwrap();
+    assert_eq!(
+        workspace
+            .invoke(
+                "DeletePlanV1",
+                &[json!(7), json!(1), json!(true), json!(revision)]
+            )
+            .unwrap_err()
+            .to_string(),
+        "plan changed since the delete preview; review it again"
+    );
+    let fresh = workspace
+        .invoke("DeletePlanV1", &[json!(7), json!(1), json!(false)])
+        .unwrap();
+    assert_eq!(fresh["summary"]["tasks"], 2);
+    let deleted = workspace
+        .invoke(
+            "DeletePlanV1",
+            &[
+                json!(7),
+                json!(1),
+                json!(true),
+                fresh["previewRevision"].clone(),
+            ],
+        )
+        .unwrap();
+    assert_eq!(deleted["preview"], false);
+    assert_eq!(deleted["summary"]["tasks"], 2);
+}
+
+#[tokio::test]
+async fn plan_delete_and_move_refuse_while_a_linked_terminal_runs() {
+    let directory = TestDirectory::new("plan-delete-linked");
+    let (bindings, task_id) = bound_bindings(&directory);
+    let root = bindings.project.as_ref().unwrap().root.clone();
+    let manager = Manager::new(&root, vec![profile(&root)], Arc::new(TestFactory))
+        .await
+        .unwrap();
+    let terminal = TerminalRuntime::new(TerminalRuntimeConfig {
+        generation: 7,
+        project_root: root,
+        manager,
+        identity: Arc::new(TestIdentity::default()),
+        events: Arc::new(TestEvents::default()),
+        attachment_lease: std::time::Duration::from_secs(30),
+    })
+    .unwrap();
+    let session = terminal.create(7, "shell-default", None, 24, 80).unwrap();
+    terminal
+        .associate(
+            7,
+            &session.session_id,
+            TerminalAssociationPointer {
+                version: 1,
+                plan_id: 1,
+                task_id,
+            },
+        )
+        .unwrap();
+    let workspace = BoundDesktopWorkspace::new(
+        7,
+        0,
+        bindings.clone(),
+        Box::new(LocalApplication::new(bindings)),
+        Some(terminal),
+        None,
+        None,
+    );
+    for confirm in [false, true] {
+        assert_eq!(
+            workspace
+                .invoke("DeletePlanV1", &[json!(7), json!(1), json!(confirm)])
+                .unwrap_err()
+                .to_string(),
+            "stop or detach linked terminals and agents before deleting this plan"
+        );
+    }
+    assert_eq!(
+        workspace
+            .invoke(
+                "MovePlanV1",
+                &[json!(7), json!(1), json!("/elsewhere"), json!("")],
+            )
+            .unwrap_err()
+            .to_string(),
+        "stop or detach linked terminals and agents before moving this plan"
+    );
+    // A plan nothing is linked to still previews normally.
+    let other = workspace
+        .invoke("AddPlanV1", &[json!(7), json!("Unlinked")])
+        .unwrap();
+    let preview = workspace
+        .invoke(
+            "DeletePlanV1",
+            &[json!(7), other["plan"]["id"].clone(), json!(false)],
+        )
+        .unwrap();
+    assert_eq!(preview["preview"], true);
+    // The plan and its task are untouched.
+    assert_eq!(workspace.board_v2(7, 1).unwrap()["board"]["planId"], 1);
+}
+
+#[test]
+fn note_search_snippets_address_the_original_text_under_case_folding() {
+    // `İ` lowercases to two characters, the Kelvin sign and `ẞ` to shorter
+    // byte sequences: offsets taken from the lowercased copy land elsewhere.
+    for (body, needle, found) in [
+        ("İİİ prefix Kelvin tail", "kelvin", "Kelvin"),
+        (
+            "\u{212A}elvin is spelled with a Kelvin sign",
+            "kelvin",
+            "\u{212A}elvin",
+        ),
+        ("GROẞE Straße", "straße", "Straße"),
+        ("ẞẞẞ then GROẞ", "groß", "GROẞ"),
+        ("plain ascii Match here", "match", "Match"),
+    ] {
+        let (start, end) = find_case_insensitive(body, needle).unwrap();
+        assert_eq!(&body[start..end], found, "{body}");
+    }
+    // A needle ending inside one character's expansion takes the character.
+    let (start, end) = find_case_insensitive("xİy", "i").unwrap();
+    assert_eq!(&"xİy"[start..end], "İ");
+    assert!(find_case_insensitive("abc", "abcd").is_none());
+    assert!(find_case_insensitive("abc", "").is_none());
+
+    let long_prefix = "İ".repeat(40);
+    let body = format!("{long_prefix} the needle sits here {}", "ẞ".repeat(40));
+    let mut snapshot = activity_snapshot();
+    snapshot.notes = vec![Note {
+        body: body.clone(),
+        ..activity_note(1, NoteTarget::Project, 0)
+    }];
+    let results = search(&snapshot, "NEEDLE");
+    assert_eq!(results.len(), 1);
+    let snippet = results[0]["snippet"].as_str().unwrap();
+    assert!(snippet.contains("the needle sits here"), "{snippet}");
+    assert!(
+        snippet.starts_with('…') && snippet.ends_with('…'),
+        "{snippet}"
+    );
+    assert!(snippet.len() < body.len());
+}
+
+/// A board move to Done is a human closing the task: allowed without a
+/// closeout summary or a linked commit, but never silently — the override
+/// note commits with the status.
+#[test]
+fn a_board_close_without_evidence_records_the_desktop_override() {
+    let directory = TestDirectory::new("board-close-override");
+    let (bindings, task_id) = bound_bindings(&directory);
+    let endpoint = bindings.project.clone().unwrap();
+    let workspace = BoundDesktopWorkspace::new(
+        7,
+        0,
+        bindings.clone(),
+        Box::new(LocalApplication::new(bindings)),
+        None,
+        None,
+        None,
+    );
+    let overrides = || {
+        ProjectStore::open_existing(&endpoint.database, &endpoint.binding, "test")
+            .unwrap()
+            .snapshot()
+            .unwrap()
+            .notes
+            .into_iter()
+            .filter(|note| note.target_id == task_id && note.body.starts_with("override:"))
+            .map(|note| note.body)
+            .collect::<Vec<_>>()
+    };
+    let moved = workspace
+        .invoke(
+            "MoveTaskV3",
+            &[json!(7), json!(task_id), json!("doing"), json!("")],
+        )
+        .unwrap();
+    assert_eq!(moved["applied"], true);
+    assert!(overrides().is_empty());
+    workspace
+        .invoke(
+            "MoveTaskV3",
+            &[json!(7), json!(task_id), json!("done"), json!("")],
+        )
+        .unwrap();
+    assert_eq!(
+        overrides(),
+        ["override: closed from desktop without evidence (no closeout summary; no linked commit)"]
+    );
+    // Already done: nothing new is recorded.
+    workspace
+        .invoke(
+            "MoveTaskV3",
+            &[json!(7), json!(task_id), json!("done"), json!("")],
+        )
+        .unwrap();
+    assert_eq!(overrides().len(), 1);
 }
