@@ -61,6 +61,30 @@ export function utf8ByteLength(text: string): number {
   return encoder.encode(text).length;
 }
 
+/** Below this many bytes left, the status line says how many remain. */
+export const scratchpadTextWarnBytes = 4_096;
+
+/**
+ * The note is capped in UTF-8 bytes by the store, which a textarea `maxlength`
+ * (UTF-16 code units) cannot express: a note of CJK text or emoji can be well
+ * under the character limit and still be refused. `null` means nothing to say.
+ */
+export function scratchpadTextLimitNotice(text: string): string | null {
+  const bytes = utf8ByteLength(text);
+  if (bytes > scratchpadTextMaxBytes) {
+    return `Too long by ${(bytes - scratchpadTextMaxBytes).toLocaleString("en-US")} bytes; not saved`;
+  }
+  const left = scratchpadTextMaxBytes - bytes;
+  if (left < scratchpadTextWarnBytes) {
+    return `${left.toLocaleString("en-US")} bytes left`;
+  }
+  return null;
+}
+
+export function scratchpadTextFits(text: string): boolean {
+  return utf8ByteLength(text) <= scratchpadTextMaxBytes;
+}
+
 export function emptyScratchpad(): Scratchpad {
   return { text: "", snippets: [], revision: 0, updatedAt: 0 };
 }
@@ -344,6 +368,7 @@ export class ScratchpadSaver {
   #dirty = false;
   #edits = 0;
   #disposed = false;
+  #inflight: Promise<void> = Promise.resolve();
 
   constructor(host: ScratchpadSaverHost) {
     this.#host = host;
@@ -382,8 +407,20 @@ export class ScratchpadSaver {
   #markDirty(): void {
     this.#dirty = true;
     this.#edits += 1;
-    this.#host.status(scratchpadStatus.saving);
-    this.#scheduler.markDirty();
+    this.#status(scratchpadStatus.saving);
+    // An oversized note stays dirty and says so; the store would refuse it.
+    if (scratchpadTextFits(this.#record.text)) this.#scheduler.markDirty();
+  }
+
+  /**
+   * Every status line carries the byte budget when it matters: over the cap
+   * the refusal replaces the hint, near it the remaining bytes follow it.
+   */
+  #status(text: string): void {
+    const limit = scratchpadTextLimitNotice(this.#record.text);
+    if (limit === null) this.#host.status(text);
+    else if (!scratchpadTextFits(this.#record.text)) this.#host.status(limit);
+    else this.#host.status(`${text} \u00b7 ${limit}`);
   }
 
   /** One read per instance, shared by every caller that needs the stored record. */
@@ -415,7 +452,7 @@ export class ScratchpadSaver {
     const kept = this.#host.applyRecord(this.#record, replaceLocalText);
     if (kept === null) {
       this.#dirty = false;
-      this.#host.status(scratchpadStatus.saved);
+      this.#status(scratchpadStatus.saved);
       return;
     }
     this.#record.text = kept;
@@ -436,7 +473,8 @@ export class ScratchpadSaver {
     // Only a first write needs the stored revision, and only while the instance
     // is alive: after disposal there is no time left to wait for a read.
     const wait = this.#loaded || this.#disposed ? null : this.ensureLoaded();
-    return this.#run(wait);
+    this.#inflight = this.#run(wait);
+    return this.#inflight;
   }
 
   async #run(wait: Promise<void> | null): Promise<void> {
@@ -447,7 +485,7 @@ export class ScratchpadSaver {
         if (!this.#loaded) {
           // The read failed; writing at revision 0 would take the conflict path
           // for what was a transient error. Stay dirty and retry on the next edit.
-          this.#host.status(scratchpadNotices.saveFailed);
+          this.#status(scratchpadNotices.saveFailed);
           return;
         }
       }
@@ -463,7 +501,11 @@ export class ScratchpadSaver {
   async #send(): Promise<void> {
     const record = this.#record;
     const edits = this.#edits;
-    this.#host.status(scratchpadStatus.saving);
+    if (!scratchpadTextFits(record.text)) {
+      this.#status(scratchpadStatus.saving);
+      return;
+    }
+    this.#status(scratchpadStatus.saving);
     try {
       const result = await this.#host.backend.set(
         this.#host.generation,
@@ -476,13 +518,13 @@ export class ScratchpadSaver {
       }
       this.#loaded = true;
       if (this.#edits === edits) this.#dirty = false;
-      this.#host.status(scratchpadStatus.saved);
+      this.#status(scratchpadStatus.saved);
     } catch (error) {
       if (isScratchpadConflict(error)) {
         await this.#recoverConflict(error);
         return;
       }
-      this.#host.status(scratchpadNotices.saveFailed);
+      this.#status(scratchpadNotices.saveFailed);
       this.#host.reportError(error);
     }
   }
@@ -498,7 +540,7 @@ export class ScratchpadSaver {
     const stored = scratchpadConflictRecord(error);
     if (stored === null) await this.load(true);
     else this.#install(stored, true);
-    this.#host.status(scratchpadNotices.reloaded);
+    this.#status(scratchpadNotices.reloaded);
   }
 
   /** Writes any pending edit now. Returns true when a write was started. */
@@ -507,6 +549,20 @@ export class ScratchpadSaver {
     if (!this.#dirty || this.#saving) return false;
     void this.save();
     return true;
+  }
+
+  /**
+   * Writes any pending edit and resolves once every write that was started
+   * has settled. A project switch awaits this before the runtime moves to the
+   * next generation: a write issued after that is fenced out and lost.
+   */
+  async flushPending(): Promise<void> {
+    this.flush();
+    let settled: Promise<void> | null = null;
+    while (settled !== this.#inflight) {
+      settled = this.#inflight;
+      await settled.catch(() => {});
+    }
   }
 
   dispose(): void {

@@ -245,6 +245,7 @@ async fn manager_owns_listener_sessions_crypto_values_and_shutdown() {
     )));
     assert!(!first_ticket.gap);
     assert_eq!(first_ticket.from_sequence, 0);
+    assert_eq!(first_ticket.state, SessionState::Running);
     assert_eq!(
         first_ticket.url.split('/').nth(2),
         second_ticket.url.split('/').nth(2)
@@ -440,5 +441,33 @@ async fn lifecycle_enumeration_is_not_truncated_at_the_snapshot_cap() {
     assert_eq!(total, SESSION_COUNT);
     assert_eq!(manager.lifecycle_session_ids().len(), SESSION_COUNT);
 
+    manager.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_ticket_for_an_exited_session_says_so() {
+    let root = TempDirectory::new();
+    let manager = Manager::new(
+        &root.0,
+        vec![profile(if cfg!(windows) { "cmd.exe" } else { "/bin/sh" })],
+        Arc::new(ExitedFactory),
+    )
+    .await
+    .unwrap();
+    let session = manager.create("shell-default", None, 24, 80).unwrap();
+    for _ in 0..200 {
+        if session.state() == SessionState::Exited {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    // The replay is still claimable, but the renderer is told the stream will
+    // end after it, so that end is never mistaken for a loss to re-claim.
+    let ticket = manager.mint_stream_ticket(session.id(), 0).unwrap();
+    assert_eq!(ticket.state, SessionState::Exited);
+    assert_eq!(
+        serde_json::to_value(&ticket).unwrap()["state"],
+        serde_json::json!("exited")
+    );
     manager.shutdown().await.unwrap();
 }

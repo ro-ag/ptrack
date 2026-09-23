@@ -15,7 +15,7 @@ use crate::profile::{
 };
 use crate::pty::{NativePtyFactory, PtyFactory, StartRequest};
 use crate::session::{
-    Session, SessionError, SessionInfo, SessionMetadata, TerminalAssociation,
+    Session, SessionError, SessionInfo, SessionMetadata, SessionState, TerminalAssociation,
     TerminalAssociationChange, TerminalAssociationPointer,
 };
 use crate::shell_integration::{ShellIntegrationOwner, prepare_shell_integration};
@@ -73,6 +73,10 @@ pub struct StreamTicket {
     pub from_sequence: u64,
     /// True when output older than `from_sequence` was dropped and is lost.
     pub gap: bool,
+    /// The session state at mint time. An exited session still replays what
+    /// it retained, but its stream ends after the replay and a renderer must
+    /// not treat that end as a loss worth re-claiming.
+    pub state: SessionState,
 }
 
 impl From<SessionError> for ManagerError {
@@ -446,6 +450,7 @@ impl Manager {
             url,
             from_sequence: resume,
             gap: requested < oldest,
+            state: session.state(),
         })
     }
 
@@ -708,7 +713,7 @@ impl Manager {
                 .inner
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let mut sessions: HashMap<_, _> = inner.sessions.drain().collect();
+            let mut sessions = std::mem::take(&mut inner.sessions);
             sessions.extend(inner.closing.drain());
             sessions.into_values().collect::<Vec<_>>()
         };
@@ -787,7 +792,7 @@ impl Drop for Manager {
                 .inner
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let mut sessions: HashMap<_, _> = inner.sessions.drain().collect();
+            let mut sessions = std::mem::take(&mut inner.sessions);
             sessions.extend(inner.closing.drain());
             sessions.into_values().collect::<Vec<_>>()
         };

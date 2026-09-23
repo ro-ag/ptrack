@@ -318,3 +318,62 @@ fn environment_value(environment: &[String], key: &str) -> String {
         })
         .unwrap_or_default()
 }
+
+/// An XDG setup: `~/.zshenv` moves `ZDOTDIR`, and the real `.zprofile` and
+/// `.zshrc` live there. The wrapper must follow it, as plain zsh would.
+#[cfg(unix)]
+#[test]
+fn zsh_follows_a_zdotdir_that_the_user_zshenv_sets() {
+    let Some(zsh) = ["/bin/zsh", "/usr/bin/zsh"]
+        .into_iter()
+        .find(|path| std::path::Path::new(path).exists())
+    else {
+        return;
+    };
+    let home = std::env::temp_dir().join(format!(
+        "ptrack-zdotdir-home-{}-{}",
+        std::process::id(),
+        getrandom::u64().unwrap()
+    ));
+    let xdg = home.join(".config").join("zsh");
+    fs::create_dir_all(&xdg).unwrap();
+    fs::write(
+        home.join(".zshenv"),
+        "print -r -- \"zshenv-zdotdir=${ZDOTDIR:-unset}\"\nexport ZDOTDIR=\"$HOME/.config/zsh\"\n",
+    )
+    .unwrap();
+    fs::write(home.join(".zshrc"), "print home-zshrc\n").unwrap();
+    fs::write(home.join(".zprofile"), "print home-zprofile\n").unwrap();
+    fs::write(xdg.join(".zshrc"), "print xdg-zshrc\n").unwrap();
+    fs::write(xdg.join(".zprofile"), "print xdg-zprofile\n").unwrap();
+
+    let owner = shell_owner();
+    let value = profile(ProfileKind::Shell, zsh, &["-li"]);
+    let environment = vec![
+        format!("HOME={}", home.display()),
+        "PATH=/usr/bin:/bin".to_owned(),
+        "TERM=dumb".to_owned(),
+    ];
+    let (_, prepared, descriptor) = owner.prepare(&value, &environment, "nonce-value");
+    assert_eq!(descriptor.quality, ShellIntegrationQuality::Rich);
+    let output = Command::new(zsh)
+        .args(["-l", "-i", "-c", "print -r -- \"final-zdotdir=$ZDOTDIR\""])
+        .env_clear()
+        .envs(prepared.iter().filter_map(|entry| entry.split_once('=')))
+        .current_dir(&home)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // It ran with ZDOTDIR as zsh would have left it: unset, not the wrapper.
+    assert!(stdout.contains("zshenv-zdotdir=unset"), "{stdout}");
+    assert!(stdout.contains("xdg-zprofile"), "{stdout}");
+    assert!(stdout.contains("xdg-zshrc"), "{stdout}");
+    assert!(!stdout.contains("home-zshrc"), "{stdout}");
+    assert!(!stdout.contains("home-zprofile"), "{stdout}");
+    assert!(
+        stdout.contains(&format!("final-zdotdir={}", xdg.display())),
+        "{stdout}"
+    );
+    owner.close().unwrap();
+    let _ = fs::remove_dir_all(&home);
+}

@@ -17,6 +17,7 @@ import {
   scratchpadSnippetMaxBytes,
   scratchpadSplitterWidth,
   scratchpadStatus,
+  scratchpadTextLimitNotice,
   scratchpadTextMaxBytes,
   scratchpadWidthStorageKey,
   snippetPreview,
@@ -110,6 +111,19 @@ describe("scratchpad limits", () => {
       unavailable: "Scratchpad is unavailable; the copy was not added.",
     });
     expect(scratchpadStatus).toEqual({ saving: "Saving\u2026", saved: "Saved" });
+  });
+});
+
+describe("scratchpadTextLimitNotice", () => {
+  it("counts UTF-8 bytes, not characters", () => {
+    expect(scratchpadTextLimitNotice("a".repeat(1_000))).toBeNull();
+    expect(scratchpadTextLimitNotice("a".repeat(scratchpadTextMaxBytes))).toBe("0 bytes left");
+    expect(scratchpadTextLimitNotice("a".repeat(scratchpadTextMaxBytes - 100))).toBe(
+      "100 bytes left",
+    );
+    expect(scratchpadTextLimitNotice("😀".repeat(16_385))).toBe(
+      "Too long by 4 bytes; not saved",
+    );
   });
 });
 
@@ -573,6 +587,13 @@ function saverHarness(options: {
     failClipboard: (error: unknown) => {
       clipboardError = error;
     },
+    deferSet: () => {
+      let release: () => void = () => {};
+      setResult = (call) => new Promise((resolve) => {
+        release = () => resolve({ generation: call.generation, revision: call.revision + 1 });
+      });
+      return () => release();
+    },
   };
 }
 
@@ -617,6 +638,53 @@ describe("ScratchpadSaver", () => {
     await settle();
     expect(h.sets).toHaveLength(1);
     expect(h.sets[0].scratchpad.text).toBe("half-typed note");
+  });
+
+  it("flushPending resolves only once the last edit reached the store", async () => {
+    // A project switch awaits this before the runtime changes generation; a
+    // write issued from dispose() afterwards is fenced out and lost.
+    const h = saverHarness({ record: stored("stored", 2) });
+    await h.saver.ensureLoaded();
+    const release = h.deferSet();
+    h.saver.markText("last words");
+    let flushed = false;
+    const flushing = h.saver.flushPending().then(() => {
+      flushed = true;
+    });
+    await settle();
+    expect(h.sets).toHaveLength(1);
+    expect(h.sets[0].generation).toBe(7);
+    expect(h.sets[0].scratchpad.text).toBe("last words");
+    expect(flushed).toBe(false);
+    release();
+    await flushing;
+    expect(h.saver.dirty).toBe(false);
+  });
+
+  it("flushPending waits for the first read before writing", async () => {
+    const h = saverHarness({ record: stored("stored", 5) });
+    h.saver.markText("typed before the read");
+    await h.saver.flushPending();
+    expect(h.sets).toHaveLength(1);
+    expect(h.sets[0].revision).toBe(5);
+  });
+
+  it("refuses to send a note over the byte cap and says so", async () => {
+    const h = saverHarness({ record: stored("stored", 1) });
+    await h.saver.ensureLoaded();
+    // 22 000 characters: far under a UTF-16 maxlength, 66 000 UTF-8 bytes.
+    h.saver.markText("世".repeat(22_000));
+    h.clock.runAll();
+    expect(h.saver.flush()).toBe(true);
+    await settle();
+    expect(h.sets).toEqual([]);
+    expect(h.saver.dirty).toBe(true);
+    expect(h.statuses.at(-1)).toBe("Too long by 464 bytes; not saved");
+    h.saver.markText("short again");
+    h.clock.runAll();
+    await settle();
+    expect(h.sets).toHaveLength(1);
+    expect(h.statuses.at(-1)).toBe(scratchpadStatus.saved);
   });
 
   it("does nothing on dispose when nothing was edited", () => {

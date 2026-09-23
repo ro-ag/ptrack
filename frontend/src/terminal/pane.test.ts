@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { TerminalStreamClient } from "./client";
 
 type SocketEventType = "open" | "close" | "error" | "message";
-type SocketListener = (event: { data?: unknown }) => void;
+type SocketListener = (event: { data?: unknown; code?: number }) => void;
 
 class FakeWebSocket {
   binaryType = "blob";
@@ -42,9 +42,9 @@ class FakeWebSocket {
     this.dispatch("open");
   }
 
-  remoteClose() {
+  remoteClose(code?: number) {
     this.readyState = 3;
-    this.dispatch("close");
+    this.dispatch("close", code === undefined ? {} : { code });
   }
 
   fail() {
@@ -67,7 +67,7 @@ class FakeWebSocket {
     return count;
   }
 
-  private dispatch(type: SocketEventType, event: { data?: unknown } = {}) {
+  private dispatch(type: SocketEventType, event: { data?: unknown; code?: number } = {}) {
     for (const listener of [...(this.listeners.get(type) ?? [])]) {
       listener(event);
     }
@@ -267,11 +267,59 @@ describe("TerminalStreamClient", () => {
 
     socket.receive(`{"type":"gap"}`);
     expect(onGap).toHaveBeenCalledOnce();
+    expect(onGap).toHaveBeenLastCalledWith(null);
     expect(client.state).toBe("open");
 
     socket.receive(`{"type":"gap","extra":1}`);
     expect(onGap).toHaveBeenCalledOnce();
     expect(client.state).toBe("error");
+  });
+
+  it("reports the sequence a truncated replay actually resumes from", () => {
+    const socket = new FakeWebSocket();
+    const onGap = vi.fn();
+    const client = new TerminalStreamClient({
+      createWebSocket: () => socket,
+      writeOutput: vi.fn(),
+      onStateChange: vi.fn(),
+      onGap,
+    });
+    client.connect("ws://127.0.0.1/terminal/session");
+    socket.open();
+
+    socket.receive(`{"type":"gap","sequence":262144}`);
+    expect(onGap).toHaveBeenLastCalledWith(262144);
+    expect(client.state).toBe("open");
+
+    // Anything but a plain decimal sequence is not the control frame.
+    socket.receive(`{"type":"gap","sequence":-1}`);
+    expect(onGap).toHaveBeenCalledOnce();
+    expect(client.state).toBe("error");
+  });
+
+  it("tells a normal closure, the end of output, apart from a lost stream", () => {
+    const make = () => {
+      const socket = new FakeWebSocket();
+      const client = new TerminalStreamClient({
+        createWebSocket: () => socket,
+        writeOutput: vi.fn(),
+        onStateChange: vi.fn(),
+      });
+      client.connect("ws://127.0.0.1/terminal/session");
+      socket.open();
+      return { socket, client };
+    };
+    const ended = make();
+    ended.socket.remoteClose(1000);
+    expect(ended.client.state).toBe("closed");
+    expect(ended.client.outputEnded).toBe(true);
+
+    for (const code of [undefined, 1001, 1006, 1011]) {
+      const lost = make();
+      lost.socket.remoteClose(code);
+      expect(lost.client.state).toBe("closed");
+      expect(lost.client.outputEnded).toBe(false);
+    }
   });
 
   it("caps queued plus in-progress output at the protocol window", () => {

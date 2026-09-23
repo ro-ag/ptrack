@@ -35,8 +35,14 @@ pub const STREAM_PONG_WAIT: Duration = Duration::from_secs(60);
 pub const STREAM_PING_EVERY: Duration = Duration::from_secs(25);
 pub const STREAM_WRITE_WAIT: Duration = Duration::from_secs(10);
 pub const STREAM_READ_HEADER_WAIT: Duration = Duration::from_secs(5);
-/// Sent once, before the replay, when retained output was dropped (§4).
-pub const STREAM_GAP_CONTROL: &str = r#"{"type":"gap"}"#;
+/// The control frame sent once, before the replay, when retained output was
+/// dropped (§4). It names the sequence the replay actually resumes from: the
+/// clamp a mint computed can be stale by the time the socket connects, and a
+/// renderer counting from the stale value would drift on every later re-claim.
+#[must_use]
+pub fn stream_gap_control(resumed: u64) -> String {
+    format!(r#"{{"type":"gap","sequence":{resumed}}}"#)
+}
 
 type ResponseBody = Full<Bytes>;
 
@@ -48,6 +54,9 @@ pub struct StreamAttachment {
     /// True when the buffer wrapped past the requested sequence, so output
     /// older than the replay is lost. Announced to the renderer before it.
     pub gap: bool,
+    /// The sequence the replay starts at, which is what the renderer resumes
+    /// counting from.
+    pub resumed: u64,
     /// Retained output replayed before live output, from the resumed sequence.
     pub replay: Vec<u8>,
     pub live: mpsc::Receiver<Vec<u8>>,
@@ -408,7 +417,11 @@ where
     // A wrapped buffer says so before the replay it truncated: silence would be
     // a lie about what the renderer is about to see.
     if attachment.gap {
-        send_with_deadline(&mut sink, Message::Text(STREAM_GAP_CONTROL.into())).await?;
+        send_with_deadline(
+            &mut sink,
+            Message::Text(stream_gap_control(attachment.resumed).into()),
+        )
+        .await?;
     }
     for chunk in split_output(&attachment.replay) {
         ledger.reserve_pending(chunk.len(), &cancellation).await?;

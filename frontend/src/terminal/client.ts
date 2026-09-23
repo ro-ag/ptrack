@@ -1,7 +1,7 @@
 export type StreamState = "closed" | "connecting" | "open" | "error";
 
 type SocketEventType = "open" | "close" | "error" | "message";
-type SocketListener = (event: { data?: unknown }) => void;
+type SocketListener = (event: { data?: unknown; code?: number }) => void;
 
 interface WebSocketLike {
   binaryType: string;
@@ -17,12 +17,29 @@ interface TerminalStreamClientOptions {
   writeOutput(bytes: Uint8Array, done: () => void): void;
   onStateChange(state: StreamState): void;
   onOutput?(byteLength: number): void;
-  onGap?(): void;
+  /**
+   * The replay was truncated. `sequence` is where it actually resumes — the
+   * renderer's own count restarts there — or null from a server too old to say.
+   */
+  onGap?(sequence: number | null): void;
 }
 
 const outputWindowBytes = 512 * 1024;
-// The one control frame the server sends, once, before a truncated replay.
-const gapControl = `{"type":"gap"}`;
+// The one control frame the server sends, once, before a truncated replay,
+// naming the sequence the replay resumes from.
+const gapControl = /^\{"type":"gap"(?:,"sequence":(0|[1-9][0-9]{0,15}))?\}$/;
+// The server closes with 1000 only once the session's output ended: the
+// shell exited or its PTY closed. Nothing is left to re-claim.
+const normalClosure = 1000;
+
+function gapSequence(data: unknown): number | null | undefined {
+  if (typeof data !== "string") return undefined;
+  const match = gapControl.exec(data);
+  if (!match) return undefined;
+  if (match[1] === undefined) return null;
+  const sequence = Number(match[1]);
+  return Number.isSafeInteger(sequence) ? sequence : undefined;
+}
 
 export class TerminalStreamClient {
   readonly #options: TerminalStreamClientOptions;
@@ -33,14 +50,16 @@ export class TerminalStreamClient {
   #writing = false;
   #generation = 0;
   #consumed = false;
+  #outputEnded = false;
 
   readonly #onOpen: SocketListener = () => {
     if (!this.#socket) return;
     this.#setState("open");
   };
 
-  readonly #onClose: SocketListener = () => {
+  readonly #onClose: SocketListener = (event) => {
     if (!this.#socket) return;
+    this.#outputEnded = event?.code === normalClosure;
     this.#detachSocket(false);
     this.#setState("closed");
   };
@@ -51,8 +70,9 @@ export class TerminalStreamClient {
   };
 
   readonly #onMessage: SocketListener = (event) => {
-    if (this.#state === "open" && event.data === gapControl) {
-      this.#options.onGap?.();
+    const gap = this.#state === "open" ? gapSequence(event.data) : undefined;
+    if (gap !== undefined) {
+      this.#options.onGap?.(gap);
       return;
     }
     if (this.#state !== "open" || !(event.data instanceof ArrayBuffer)) {
@@ -79,6 +99,11 @@ export class TerminalStreamClient {
 
   get state(): StreamState {
     return this.#state;
+  }
+
+  /** The server closed the stream because the session's output ended. */
+  get outputEnded(): boolean {
+    return this.#outputEnded;
   }
 
   connect(url: string): void {

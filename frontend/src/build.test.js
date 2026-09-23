@@ -484,8 +484,12 @@ describe("production asset layout", () => {
       /id="terminal-scratchpad-splitter"[^>]*role="separator"[^>]*tabindex="0"[\s\S]*aria-valuemin="240"[\s\S]*hidden/,
     );
     expect(index).toMatch(
-      /<textarea[^>]*id="terminal-scratchpad-text"[^>]*maxlength="65536"[^>]*spellcheck="false"/,
+      /<textarea[^>]*id="terminal-scratchpad-text"[^>]*aria-describedby="terminal-scratchpad-state"[^>]*spellcheck="false"/,
     );
+    // The cap is 65 536 UTF-8 bytes, which a UTF-16 maxlength cannot express
+    // and would enforce by silently dropping pasted text; the saver counts
+    // bytes and says when the note is over.
+    expect(index).not.toMatch(/<textarea[^>]*id="terminal-scratchpad-text"[^>]*maxlength=/);
     expect(index).toMatch(
       /<div[^>]*id="terminal-stage"[^>]*class="terminal-stage"[\s\S]*id="terminal-host"[\s\S]*id="terminal-message"[\s\S]*<\/div>/,
     );
@@ -631,7 +635,8 @@ describe("production asset layout", () => {
       /\.panel-toggle:focus-visible,[^{]*\.terminal-context-menu button:focus-visible\{[^}]*outline:2px solid var\(--accent\)[^}]*outline-offset:-2px/,
     );
     expect(paneSource).toMatch(
-      /action === "zoom-reset"\) \{\s*this\.#setFontSize\(this\.#activeProfileDefaultFontSize\(\)\)/,
+      // Zoom reset lands on the profile's default size (terminalZoomFontSize).
+      /this\.#setFontSize\(terminalZoomFontSize\(\s*action,\s*this\.#fontSize,\s*this\.#activeProfileDefaultFontSize\(\),?\s*\)\)/,
     );
     expect(paneSource).toMatch(
       /setApplicationOverlayOpen\(open: boolean, focusTerminal: false\): void \{[\s\S]*?#renderPanelVisibility\(focusTerminal\)/,

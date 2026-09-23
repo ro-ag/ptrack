@@ -158,13 +158,18 @@ impl PtyProcess for WindowsPtyProcess {
     }
 
     fn kill(&self) -> io::Result<()> {
+        // A closed child dropped its kill-on-close Job, which already ended
+        // the whole tree: there is nothing left to kill, and reporting it
+        // would turn every close of an exited session into an error.
         self.child
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_mut()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "ConPTY child is closed"))?
-            .kill()
-            .map_err(|error| io::Error::other(error.to_string()))
+            .map_or(Ok(()), |child| {
+                child
+                    .kill()
+                    .map_err(|error| io::Error::other(error.to_string()))
+            })
     }
 
     fn close(&self) -> io::Result<()> {

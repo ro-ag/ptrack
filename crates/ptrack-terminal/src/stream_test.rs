@@ -13,9 +13,9 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::{Error as WebSocketError, Message};
 
 use super::{
-    MAX_INPUT_FRAME_BYTES, OUTPUT_CHUNK_BYTES, STREAM_GAP_CONTROL, STREAM_PATH_PREFIX,
-    StreamAttachRefusal, StreamAttachment, StreamServer, StreamSession, StreamSessionError,
-    StreamSessionHost, allowed_stream_origin_str,
+    MAX_INPUT_FRAME_BYTES, OUTPUT_CHUNK_BYTES, STREAM_PATH_PREFIX, StreamAttachRefusal,
+    StreamAttachment, StreamServer, StreamSession, StreamSessionError, StreamSessionHost,
+    allowed_stream_origin_str,
 };
 
 const TEST_WAIT: Duration = Duration::from_secs(3);
@@ -110,6 +110,7 @@ impl StreamSession for TestSession {
         Ok(StreamAttachment {
             lease,
             gap: self.gap.load(Ordering::Acquire),
+            resumed: from_sequence,
             replay: self.scrollback[start..].to_vec(),
             live,
         })
@@ -530,7 +531,7 @@ async fn a_wrapped_replay_announces_its_gap_before_the_replay() {
     let mut connection = dial(&fixture.url, "wails://wails").await.unwrap();
     assert_eq!(
         timeout_message(&mut connection).await,
-        Message::Text(STREAM_GAP_CONTROL.into())
+        Message::Text(r#"{"type":"gap","sequence":0}"#.into())
     );
     assert_eq!(
         timeout_message(&mut connection).await,

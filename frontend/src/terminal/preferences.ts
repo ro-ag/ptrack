@@ -16,6 +16,16 @@ export function clampTerminalFontSize(fontSize: number): number {
   );
 }
 
+/** The font size a zoom shortcut asks for, from the pane's current and default size. */
+export function terminalZoomFontSize(
+  action: "zoom-in" | "zoom-out" | "zoom-reset",
+  current: number,
+  base: number,
+): number {
+  if (action === "zoom-reset") return clampTerminalFontSize(base);
+  return clampTerminalFontSize(current + (action === "zoom-in" ? 1 : -1));
+}
+
 export function storedTerminalFontSize(value: string | null): number {
   if (value === null || value.trim() === "") return defaultTerminalFontSize;
   return clampTerminalFontSize(Number(value));

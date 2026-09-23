@@ -164,6 +164,48 @@ impl PtyProcess for KillErrorProcess {
     }
 }
 
+/// A PTY whose teardown blocks for a while, like a close waiting out a
+/// process escalation.
+#[derive(Default)]
+struct SlowCloseFactory;
+
+impl PtyFactory for SlowCloseFactory {
+    fn start(&self, _request: StartRequest) -> io::Result<Box<dyn PtyProcess>> {
+        Ok(Box::new(SlowCloseProcess::default()))
+    }
+}
+
+#[derive(Default)]
+struct SlowCloseProcess(TestProcess);
+
+impl PtyProcess for SlowCloseProcess {
+    fn pid(&self) -> u32 {
+        self.0.pid()
+    }
+    fn read(&self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.0.read(buffer)
+    }
+    fn write(&self, buffer: &[u8]) -> io::Result<usize> {
+        self.0.write(buffer)
+    }
+    fn resize(&self, rows: u16, columns: u16) -> io::Result<()> {
+        self.0.resize(rows, columns)
+    }
+    fn wait(&self) -> io::Result<i32> {
+        self.0.wait()
+    }
+    fn terminate(&self) -> io::Result<()> {
+        self.0.terminate()
+    }
+    fn kill(&self) -> io::Result<()> {
+        self.0.kill()
+    }
+    fn close(&self) -> io::Result<()> {
+        std::thread::sleep(Duration::from_millis(600));
+        self.0.close()
+    }
+}
+
 #[derive(Default)]
 pub(super) struct TestIdentity {
     calls: Mutex<Vec<String>>,
@@ -796,6 +838,51 @@ async fn published_linked_failure_uses_failure_order_and_surfaces_force_close_er
             format!("revoke-failed:{}", linked.session_id),
             format!("remove:{}", linked.session_id),
         ]
+    );
+    runtime.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_expired_lease_closes_the_session_off_the_async_worker() {
+    let root = TempDirectory::new();
+    let manager = Manager::new(&root.0, vec![profile(&root.0)], Arc::new(SlowCloseFactory))
+        .await
+        .unwrap();
+    let events = Arc::new(TestEvents::default());
+    let runtime = TerminalRuntime::new(TerminalRuntimeConfig {
+        generation: 5,
+        project_root: root.0.clone(),
+        manager,
+        identity: Arc::new(TestIdentity::default()),
+        events: events.clone(),
+        attachment_lease: Duration::from_millis(10),
+    })
+    .unwrap();
+    let started = std::time::Instant::now();
+    runtime.create(5, "shell-default", None, 24, 80).unwrap();
+    // The monitor fires after 10 ms and starts a close that blocks for 600 ms;
+    // the only runtime thread must stay free to wake this timer meanwhile.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        started.elapsed() < Duration::from_millis(400),
+        "the async worker was blocked for {:?}",
+        started.elapsed()
+    );
+    for _ in 0..200 {
+        if events
+            .statuses
+            .lock()
+            .unwrap()
+            .last()
+            .is_some_and(|status| status.state == ptrack_terminal::SessionState::Closed)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        events.statuses.lock().unwrap().last().unwrap().state,
+        ptrack_terminal::SessionState::Closed
     );
     runtime.shutdown().await.unwrap();
 }

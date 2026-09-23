@@ -2,42 +2,43 @@ import "./settings-kimi.css";
 import "./landing.css";
 import "./cover-flow.css";
 import { bindProjectView } from "./workspace/project-view";
-import { landingProjects, selectedLandingProject, renderLandingProjects, relativeTimestamp } from "./workspace/landing";
+import { landingProjects, selectedLandingProject, renderLandingProjects } from "./workspace/landing";
+import { formatBytes, relativeTime as formatRelativeTime } from "./workspace/format";
 import { overviewActivity, overviewRefreshMessage } from "./workspace/overview";
 import "./tauri-bridge";
 import { filterPlans, splitCurrentPlan } from "./workspace/plan-list";
 import { bindPlanMotion } from "./workspace/plan-motion";
 import { agentContextText } from "./workspace/copy-context";
-import { FitAddon } from "@xterm/addon-fit";
-import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
-import { WebLinksAddon } from "@xterm/addon-web-links";
 import { readModernUnicodeSetting } from "./terminal/unicode";
 import { TerminalResizeDispatcher } from "./terminal/resize-dispatch";
 import { terminalControlIcon } from "./terminal/control-icon";
 import { workspaceTabElementIds } from "./workspace/tab-bar";
-import { SearchAddon } from "@xterm/addon-search";
-import { Terminal } from "@xterm/xterm";
 import { mountTerminalDock } from "./terminal/pane";
 import { TerminalStreamClient } from "./terminal/client";
 import {
   binaryStringToBytes,
   commitClipboardPaste,
+  pasteReviewSummary,
   prepareClipboardPaste,
   splitTerminalInput,
-  terminalShortcutAction,
+  terminalKeyShortcut,
   terminalTextToBytes,
 } from "./terminal/paste";
-import { terminalSearchResultLabel } from "./terminal/search";
+import { terminalPlatform } from "./terminal/platform";
+import { createTerminalRenderer } from "./terminal/renderer";
+import { terminalSearchOptions, terminalSearchResultLabel } from "./terminal/search";
 import {
   loadTerminalFont,
   normalizeTerminalProfileSettings,
-  terminalRendererOptions,
 } from "./terminal/profile-settings";
 import {
   detachedLastTabCloseTitle,
   detachedTabCloseIntent,
   reclaimStream,
   reclaimingStreamNotice,
+  streamClaimEnded,
+  streamCloseDisposition,
+  streamOutputEndedNotice,
   streamReclaimFailedNotice,
   terminalGapNotice,
   terminalWindowLabel,
@@ -70,6 +71,7 @@ import {
 import {
   clampTerminalFontSize,
   readTerminalProfileFontSize,
+  terminalZoomFontSize,
   writeTerminalProfileFontSize,
 } from "./terminal/preferences";
 import {
@@ -84,7 +86,7 @@ import {
   settingsTabId,
 } from "./settings/sections";
 import {
-  formatUpdateBytes,
+  updateActionFailureMessage,
   updateModalOpenTransition,
   updatePresentation,
   updateProgress,
@@ -118,14 +120,19 @@ import {
 } from "./workspace/native-menu";
 import {
   clampMenuPosition,
+  completionPromptMode,
   deleteConfirmationText,
+  isTextEntryElement,
   planMenuItems,
   planReadyForCompletion,
   transferSubmitDisabled,
 } from "./workspace/plan-lifecycle";
 import {
+  GenerationSlot,
+  InFlightOperations,
   RefreshGate,
   RefreshLoop,
+  RequestSequence,
   RuntimeRefreshCoalescer,
   WorkspaceController,
 } from "./workspace/controller";
@@ -136,12 +143,11 @@ import {
   initializationFailureMessage,
   initializationStatusMatchesOperation,
   initialFirstRunState,
-  isProjectGuidePartiallyApplied,
-  isProjectGuidePreviewStale,
   pendingInitializationEvent,
   parseProjectGuidePreview,
   PROJECT_GUIDANCE_UNAVAILABLE,
   projectGuideCommitFields,
+  projectGuideStatusResolution,
   reduceFirstRun,
   resolveFirstRunStartupState,
   validateNorthStarGoal,
@@ -246,7 +252,6 @@ const elements = {
   overviewPage: document.querySelector("#overview-page"),
   overviewHeading: document.querySelector("#overview-heading"),
   issuesPage: document.querySelector("#issues-page"),
-  timelineCaption: document.querySelector("#timeline-caption"),
   issuesHeading: document.querySelector("#issues-heading"),
   navBoard: document.querySelector("#nav-board"),
   navOverview: document.querySelector("#nav-overview"),
@@ -615,9 +620,14 @@ const elements = {
 const workspaceController = new WorkspaceController();
 const refreshGate = new RefreshGate();
 const nativeEventDisposers = [];
+// The background poll pauses while the window is hidden and catches up once
+// when it is shown again.
 const refreshLoop = new RefreshLoop(() => {
   void loadSnapshot(board?.planId || 0, true);
-}, 15_000);
+}, 15_000, () => document.hidden);
+const mutationsInFlight = new InFlightOperations();
+const stackProfileRequests = new RequestSequence();
+const heatmapRequests = new RequestSequence();
 const runtimeRefreshes = new RuntimeRefreshCoalescer((generation) => {
   if (!runtimeEventIsCurrent(
     generation,
@@ -656,11 +666,16 @@ let contextMenuDispose = null;
 let contextMenuReturnFocus = null;
 let planRenameActive = false;
 let planDialogMode = null; // "create" | "done" | "checkpoint" | "hold" | "delete" | "move" | "copy"
+let planDialogDeleteRevision = "";
 let planCreateSequence = 0;
 let planDialogPlan = null;
 let planDialogTransferState = null;
 let planDialogReturnFocus = null;
+// Bumped whenever the plan dialog opens or closes, so a pending submit can
+// tell that the dialog it started from is gone or was replaced.
+let planDialogToken = 0;
 const promptedCompletedPlans = new Set();
+let planCloseoutBanner = null;
 let toastTimer = null;
 let memoryModalReturnFocus = null;
 let settingsModalReturnFocus = null;
@@ -712,6 +727,7 @@ let terminalWritebackBusy = false;
 let taskTransitionRequest = null;
 let taskTransitionSequence = 0;
 let taskTransitionBusy = false;
+let addTaskPending = false;
 let dragJustEndedAt = 0;
 let sidebarWidth = defaultSidebarWidth;
 let sidebarHidden = false;
@@ -723,9 +739,14 @@ let paletteActive = -1;
 let paletteTimer = null;
 let paletteSequence = 0;
 let paletteReturnFocus = null;
-let pendingDetailTaskId = 0;
+// A task the palette or an issue asked to open once its plan's board loads.
+// It belongs to the workspace generation that asked, so a project switch or
+// close can never open another project's task with the same number.
+const pendingDetailTask = new GenerationSlot();
 let heatmapRequested = false;
-let stackProfileRequested = false;
+// A forced rescan owns the stack panel until it answers; a plain re-read
+// started meanwhile would only race it with the stored, pre-rescan profile.
+let stackRescanInFlight = false;
 let stackProfile = null;
 let stackDetailExpanded = false;
 const expandedLanes = new Set();
@@ -758,10 +779,19 @@ const layoutStateScheduler = new WorkspacePersistenceScheduler(
   () => writeLayoutState(),
 );
 
+// Projects whose layout changed since the last save. A save carries all of
+// them, so a project switch inside the debounce window cannot drop the
+// previous project's change.
+const dirtyLayoutProjects = new Set();
+
 function writeLayoutState() {
+  const roots = new Set(dirtyLayoutProjects);
+  const openRoot = workspaceState.project?.root || "";
+  if (openRoot) roots.add(openRoot);
+  dirtyLayoutProjects.clear();
   try {
     void api()
-      .SetLayoutState(layoutStatePatch(layoutState, workspaceState.project?.root || ""))
+      .SetLayoutState(layoutStatePatch(layoutState, roots))
       .catch(() => {});
   } catch {
     // Layout persistence is optional; the live layout is unchanged.
@@ -837,6 +867,7 @@ function recordProjectLayout() {
   const current = layoutState.projects[projectRoot];
   if (current && JSON.stringify(current) === JSON.stringify(next)) return;
   layoutState.projects[projectRoot] = next;
+  dirtyLayoutProjects.add(projectRoot);
   layoutStateScheduler.markDirty();
 }
 
@@ -966,7 +997,7 @@ const statusTitles = {
 
 function api() {
   const backend = window.go?.gui?.App;
-  if (!backend) throw new Error("The Wails backend is not ready");
+  if (!backend) throw new Error("The p-track backend is not ready");
   return backend;
 }
 
@@ -994,22 +1025,10 @@ function setStatus(message) {
   elements.status.textContent = message;
 }
 
+// Dense metadata rows use the short style of the shared formatter; the
+// landing page uses its long style.
 function relativeTime(value) {
-  const date = new Date(value);
-  const elapsed = Date.now() - date.getTime();
-  if (!Number.isFinite(elapsed)) return "";
-  const minutes = Math.max(0, Math.round(elapsed / 60000));
-  if (minutes < 1) return "now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.round(hours / 24)}d ago`;
-}
-
-function compactBytes(value) {
-  if (!Number.isFinite(value) || value < 1024) return `${value || 0} B`;
-  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KiB`;
-  return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
+  return formatRelativeTime(value, "short");
 }
 
 // Display names for the identifiers the backend can send. An unknown
@@ -1895,34 +1914,38 @@ async function loadProjectHistory(force = false) {
   }
 }
 
-// The stack profile follows the heatmap pattern: fetched lazily once the
-// Overview is shown, re-fetched after a snapshot reload. The backend scans
-// only when HEAD moved, so a re-fetch is usually a stored read.
-// `force` also forces a rescan, which is what the Repository panel's Rescan
-// control needs.
-async function loadStackProfile(force = false) {
+// The stack profile is re-read on every snapshot and when the Overview is
+// first shown. A plain read never forces a scan: the backend rescans on its
+// own only when HEAD moved since the stored profile, so a re-read is usually
+// a stored read. Only the Repository panel's Rescan control (`rescan`)
+// forces a full scan. A failed read shows the failure and waits for the next
+// snapshot's plain read; it never escalates to a forced scan.
+async function loadStackProfile(rescan = false) {
   if (workspaceController.state.status !== "open") return;
-  if (stackProfileRequested && !force) return;
-  stackProfileRequested = true;
+  if (stackRescanInFlight && !rescan) return;
   const ticket = workspaceController.capture();
-  if (force) stackProfile = { state: "scanning" };
-  try {
-    const response = await api().GetStackProfileV1(force);
-    if (!workspaceController.accepts(ticket, ticket.generation)) return;
-    stackProfile = response;
-    withOverviewScrollPreserved(() => {
-      if (board) renderMemory();
-      renderStackProfile();
-    });
-  } catch {
-    if (!workspaceController.accepts(ticket, ticket.generation)) return;
-    stackProfileRequested = false;
-    stackProfile = { state: "failed" };
-    withOverviewScrollPreserved(() => {
-      if (board) renderMemory();
-      renderStackProfile();
-    });
+  const request = stackProfileRequests.next();
+  if (rescan) {
+    stackRescanInFlight = true;
+    stackProfile = { state: "scanning" };
+    withOverviewScrollPreserved(renderStackProfile);
   }
+  const current = () => stackProfileRequests.isCurrent(request) &&
+    workspaceController.accepts(ticket, ticket.generation);
+  try {
+    const response = await api().GetStackProfileV1(rescan);
+    if (!current()) return;
+    stackProfile = response;
+  } catch {
+    if (!current()) return;
+    stackProfile = { state: "failed" };
+  } finally {
+    if (rescan && stackProfileRequests.isCurrent(request)) stackRescanInFlight = false;
+  }
+  withOverviewScrollPreserved(() => {
+    if (board) renderMemory();
+    renderStackProfile();
+  });
 }
 
 // The heatmap is fetched lazily: only once the Overview is shown, and
@@ -1932,12 +1955,15 @@ async function loadHeatmap(force = false) {
   if (heatmapRequested && !force) return;
   heatmapRequested = true;
   const ticket = workspaceController.capture();
+  const request = heatmapRequests.next();
+  const current = () => heatmapRequests.isCurrent(request) &&
+    workspaceController.accepts(ticket, ticket.generation);
   try {
     const days = await api().GetActivityHeatmapV2(16);
-    if (!workspaceController.accepts(ticket, ticket.generation)) return;
+    if (!current()) return;
     withOverviewScrollPreserved(() => renderHeatmap(days));
   } catch (error) {
-    if (!workspaceController.accepts(ticket, ticket.generation)) return;
+    if (!current()) return;
     heatmapRequested = false;
     if (workspaceController.state.status === "open") showError(error);
   }
@@ -2455,7 +2481,7 @@ function renderBoard() {
   elements.planProgress.style.width = `${percentage}%`;
   elements.planProgressLabel.textContent = `${done}/${total} done`;
   elements.taskTitle.disabled = board.planId === 0;
-  elements.addForm.querySelector("button").disabled = board.planId === 0;
+  elements.addForm.querySelector("button").disabled = board.planId === 0 || addTaskPending;
   elements.planLaunchAgent.disabled = board.planId === 0;
   elements.planCopyContext.disabled = board.planId === 0;
   const collapsed = new Set(
@@ -2484,7 +2510,7 @@ function renderIntelligence() {
   elements.projectRoot.textContent = project.root;
   const storage = project.storage;
   elements.storageStatus.textContent = storage.exists
-    ? `p-track format v${storage.formatVersion} · ${compactBytes(storage.sizeBytes)} · last written by ${storage.lastWriteVersion || "unknown"}`
+    ? `p-track format v${storage.formatVersion} · ${formatBytes(storage.sizeBytes)} · last written by ${storage.lastWriteVersion || "unknown"}`
     : storage.error || "p-track storage unavailable";
   elements.snapshotBounds.replaceChildren();
   for (const [label, bound] of Object.entries(tracking.bounds || {})) {
@@ -2926,6 +2952,7 @@ function renderAgentActivity(section) {
             ),
             "Verifying existing worktree…",
             "Could not associate worktree",
+            `worktree:${item.runId}`,
           );
         });
         controls.append(select, associate);
@@ -2946,6 +2973,7 @@ function renderAgentActivity(section) {
               ),
               "Detaching worktree metadata…",
               "Could not detach worktree",
+              `worktree:${item.runId}`,
             );
           });
           controls.append(detach);
@@ -3236,9 +3264,9 @@ async function loadSnapshot(
     if (view === "issues") void loadIssues(true);
     if (view === "overview" && heatmapRequested) void loadHeatmap(true);
     if (view === "overview" && projectHistoryRequested) void loadProjectHistory(true);
-    // Every snapshot re-reads the stack: opening a project lands one, and the
-    // backend scans only when HEAD moved since the stored profile.
-    void loadStackProfile(!stackProfileRequested);
+    // Every snapshot re-reads the stack with a plain read: the backend scans
+    // only when HEAD moved since the stored profile.
+    void loadStackProfile();
     const now = new Date(response.capturedAt).toLocaleTimeString([], {
       hour: "numeric",
       minute: "2-digit",
@@ -3294,34 +3322,48 @@ async function loadExactTaskTransitionSnapshot(planId, generation) {
   return false;
 }
 
-async function runMutation(operation, progress, failed) {
-  if (!board || workspaceController.state.status !== "open") return;
+// `key` names the operation for the in-flight guard: a second start of the
+// same key while the first is pending is refused, so a double Enter or double
+// click submits once. It defaults to the progress text, which already names
+// the action and its target. Resolves true only when the mutation succeeded
+// for the workspace that started it.
+async function runMutation(operation, progress, failed, key = progress) {
+  if (!board || workspaceController.state.status !== "open") return false;
+  if (!mutationsInFlight.begin(key)) return false;
+  try {
+    return await runGuardedMutation(operation, progress, failed);
+  } finally {
+    mutationsInFlight.end(key);
+  }
+}
+
+async function runGuardedMutation(operation, progress, failed) {
   const ticket = workspaceController.capture();
   const focusKey = document.activeElement?.dataset?.mutationFocusKey || "";
   setStatus(progress);
   try {
     const result = await operation(ticket.generation);
-    if (result?.generation && !workspaceController.accepts(ticket, result.generation)) return;
+    if (result?.generation && !workspaceController.accepts(ticket, result.generation)) return false;
     await loadSnapshot(board.planId);
     restoreMutationFocus(focusKey);
     if (detailTask && !elements.drawer.hidden) {
       // Sync from the fresh snapshot, then reload the full detail.
-      const fresh = board?.columns
-        ?.flatMap((column) => column.tasks)
-        .find((task) => Number(task.id) === Number(detailTask.id));
+      const fresh = boardTask(detailTask.id);
       if (fresh) {
         detailTask = fresh;
         renderDrawerTask(fresh);
       }
       void loadTaskDetail(detailTask);
     }
+    return true;
   } catch (error) {
     if (ticket.epoch === workspaceController.capture().epoch) {
       showError(error);
       setStatus(failed);
-      await loadSnapshot(board.planId, true);
+      await loadSnapshot(board?.planId || 0, true);
       restoreMutationFocus(focusKey);
     }
+    return false;
   }
 }
 
@@ -3694,6 +3736,7 @@ function openPlanContextMenu(plan, titleElement, invoker, position) {
         else if (item.action === "done") openPlanDoneDialog(plan);
         else if (item.action === "hold") openPlanHoldDialog(plan);
         else if (item.action === "resume") void resumePlan(plan);
+        else if (item.action === "reopen") void reopenPlan(plan);
         else if (item.action === "delete") void openPlanDeleteDialog(plan);
         else void openPlanTransferDialog(plan, item.action);
       },
@@ -3778,15 +3821,40 @@ function beginPlanRename(titleElement, plan) {
   input.select();
 }
 
-function closePlanDialog() {
-  if (elements.planDialogForm.getAttribute("aria-busy") === "true") return;
+function planDialogBusy() {
+  return elements.planDialogForm.getAttribute("aria-busy") === "true";
+}
+
+// A submit in flight owns the dialog: Escape, Cancel and the backdrop all go
+// through closePlanDialog, which refuses while the form is busy.
+function setPlanDialogBusy(busy) {
+  if (busy) elements.planDialogForm.setAttribute("aria-busy", "true");
+  else elements.planDialogForm.removeAttribute("aria-busy");
+  elements.planDialogTitle.readOnly = busy;
+  elements.planDialogProject.disabled = busy;
+  elements.planDialogCancel.disabled = busy;
+  if (busy) elements.planDialogSubmit.disabled = true;
+}
+
+// Closes the dialog even mid-submit: the workspace it belonged to is gone.
+function abandonPlanDialog() {
   if (elements.planDialog.hidden) return;
+  planCreateSequence += 1;
+  setPlanDialogBusy(false);
+  closePlanDialog();
+}
+
+function closePlanDialog() {
+  if (planDialogBusy()) return;
+  if (elements.planDialog.hidden) return;
+  planDialogToken += 1;
   hideApplicationOverlay(elements.planDialog);
   planDialogReturnFocus?.focus?.();
   planDialogReturnFocus = null;
   planDialogMode = null;
   planDialogPlan = null;
   planDialogTransferState = null;
+  planDialogDeleteRevision = "";
   elements.planDialogBody.classList.remove("plan-dialog-checkpoint");
   elements.planDialogError.hidden = true;
   elements.planDialogError.textContent = "";
@@ -3801,6 +3869,8 @@ function setPlanDialogError(error) {
 }
 
 function openPlanDialogShell() {
+  planDialogToken += 1;
+  hidePlanCloseoutBanner();
   planDialogReturnFocus =
     document.activeElement instanceof HTMLElement ? document.activeElement : null;
   elements.planDialogError.hidden = true;
@@ -3823,17 +3893,77 @@ function completionPromptKey(plan) {
   return `${workspaceController.state.generation}:${Number(plan.id)}`;
 }
 
+// The prompt fires from refreshes, window focus and watcher events, so it is
+// always automatic. It opens the dialog only when nobody is typing; otherwise
+// it leaves a non-modal banner, because a modal would catch the next Enter
+// meant for a shell or a field.
 function maybePromptForPlanCompletion() {
   const plan = currentBoardPlan();
-  if (!plan) return;
+  if (!plan) {
+    hidePlanCloseoutBanner();
+    return;
+  }
   const key = completionPromptKey(plan);
+  if (planCloseoutBanner && planCloseoutBanner.key !== key) hidePlanCloseoutBanner();
   if (!planReadyForCompletion(plan)) {
     promptedCompletedPlans.delete(key);
+    hidePlanCloseoutBanner();
     return;
   }
   if (promptedCompletedPlans.has(key) || snapshotDialogIsOpen()) return;
   promptedCompletedPlans.add(key);
-  openPlanDoneDialog(plan, true);
+  if (completionPromptMode(completionPromptContext()) === "banner") {
+    showPlanCloseoutBanner(plan, key);
+  } else {
+    openPlanDoneDialog(plan, true);
+  }
+}
+
+function completionPromptContext() {
+  const active = document.activeElement;
+  return {
+    automatic: true,
+    windowFocused: document.hasFocus(),
+    focusInTerminal: Boolean(active?.closest?.("#terminal-dock")),
+    focusInTextEntry: isTextEntryElement(active),
+  };
+}
+
+function showPlanCloseoutBanner(plan, key) {
+  hidePlanCloseoutBanner();
+  const banner = document.createElement("div");
+  banner.className = "toast plan-closeout-banner";
+  banner.setAttribute("role", "status");
+  banner.setAttribute("aria-live", "polite");
+  const message = document.createElement("span");
+  message.textContent = `Every task in “${plan.title}” is done. `;
+  const review = document.createElement("button");
+  review.type = "button";
+  review.className = "button-secondary";
+  review.textContent = "Review plan closeout";
+  review.addEventListener("click", () => {
+    // The banner sits outside the inert app shell; another dialog wins.
+    if (snapshotDialogIsOpen()) return;
+    hidePlanCloseoutBanner();
+    const current = currentBoardPlan();
+    if (current && completionPromptKey(current) === key && planReadyForCompletion(current)) {
+      openPlanDoneDialog(current, true);
+    }
+  });
+  const dismiss = document.createElement("button");
+  dismiss.type = "button";
+  dismiss.className = "button-secondary";
+  dismiss.textContent = "Dismiss";
+  dismiss.setAttribute("aria-label", "Dismiss plan closeout reminder");
+  dismiss.addEventListener("click", hidePlanCloseoutBanner);
+  banner.append(message, review, " ", dismiss);
+  document.body.append(banner);
+  planCloseoutBanner = { element: banner, key };
+}
+
+function hidePlanCloseoutBanner() {
+  planCloseoutBanner?.element.remove();
+  planCloseoutBanner = null;
 }
 
 function openNewPlanDialog() {
@@ -3856,7 +3986,7 @@ function openNewPlanDialog() {
 }
 
 async function submitNewPlan() {
-  if (elements.planDialogForm.getAttribute("aria-busy") === "true") return;
+  if (planDialogBusy()) return;
   const validation = validateOnboardingTitle(elements.planDialogTitle.value, "plan");
   if (validation.error) {
     setPlanDialogError(validation.error);
@@ -3865,15 +3995,12 @@ async function submitNewPlan() {
   }
   const ticket = workspaceController.capture();
   const sequence = ++planCreateSequence;
-  elements.planDialogForm.setAttribute("aria-busy", "true");
-  elements.planDialogTitle.readOnly = true;
-  elements.planDialogSubmit.disabled = true;
-  elements.planDialogCancel.disabled = true;
+  setPlanDialogBusy(true);
   elements.planDialogError.hidden = true;
   try {
     const response = await api().AddPlanV1(ticket.generation, validation.value);
     if (sequence !== planCreateSequence || !workspaceController.accepts(ticket, Number(response.generation))) return;
-    elements.planDialogForm.removeAttribute("aria-busy");
+    setPlanDialogBusy(false);
     closePlanDialog();
     clearPlanFilters();
     setView("board");
@@ -3883,9 +4010,7 @@ async function submitNewPlan() {
     if (sequence === planCreateSequence && workspaceController.accepts(ticket, ticket.generation)) setPlanDialogError(error);
   } finally {
     if (sequence === planCreateSequence) {
-      elements.planDialogForm.removeAttribute("aria-busy");
-      elements.planDialogTitle.readOnly = false;
-      elements.planDialogCancel.disabled = false;
+      setPlanDialogBusy(false);
       if (planDialogMode === "create") syncPlanDialogState();
     }
   }
@@ -3918,9 +4043,9 @@ function openPlanDoneDialog(plan, automatic = false) {
   elements.planDialogCancel.textContent = automatic ? "Not now" : "Cancel";
   elements.planDialogSubmit.textContent = "Mark plan done";
   elements.planDialogSubmit.disabled = remaining !== 0;
-  requestAnimationFrame(() => {
-    (remaining === 0 ? elements.planDialogSubmit : elements.planDialogCancel).focus();
-  });
+  // Never the submit button: closing a plan takes a deliberate click or Tab,
+  // not a stray Enter.
+  requestAnimationFrame(() => elements.planDialogCancel.focus());
 }
 
 function openPlanHoldDialog(plan) {
@@ -3975,6 +4100,21 @@ async function resumePlan(plan) {
   }
 }
 
+async function reopenPlan(plan) {
+  if (workspaceController.state.status !== "open") return;
+  const ticket = workspaceController.capture();
+  setStatus(`Reopening plan #${plan.id}…`);
+  try {
+    const response = await api().ReopenPlanV1(ticket.generation, Number(plan.id));
+    if (!workspaceController.accepts(ticket, Number(response.generation))) return;
+    await loadSnapshot(Number(plan.id));
+    setStatus(`Plan #${plan.id} reopened.`);
+  } catch (error) {
+    showError(error);
+    setStatus(`Could not reopen plan #${plan.id}`);
+  }
+}
+
 async function openPlanDeleteDialog(plan) {
   if (workspaceController.state.status !== "open") return;
   const ticket = workspaceController.capture();
@@ -3990,6 +4130,9 @@ async function openPlanDeleteDialog(plan) {
   planDialogMode = "delete";
   planDialogPlan = plan;
   planDialogTransferState = null;
+  // The confirmation is bound to exactly what this preview counted: the
+  // runtime refuses the delete if the plan changed since.
+  planDialogDeleteRevision = String(response.previewRevision || "");
   openPlanDialogShell();
   elements.planDialogEyebrow.textContent = "Delete plan";
   elements.planDialogHeading.textContent = `Delete “${response.summary.title}”?`;
@@ -4102,8 +4245,8 @@ function renderUpdateState(nextState) {
   elements.updatesProgressWrap.hidden = nextState.phase !== "downloading";
   elements.updatesProgress.value = progress.percent;
   elements.updatesProgressLabel.textContent = progress.total > 0
-    ? `${progress.percent}% · ${formatUpdateBytes(progress.downloaded)} of ${formatUpdateBytes(progress.total)}`
-    : `${formatUpdateBytes(progress.downloaded)} downloaded`;
+    ? `${progress.percent}% · ${formatBytes(progress.downloaded)} of ${formatBytes(progress.total)}`
+    : `${formatBytes(progress.downloaded)} downloaded`;
 
   elements.updatesRelease.hidden = !release;
   elements.updatesReleaseVersion.textContent = release ? `Version ${release.version}` : "";
@@ -4148,15 +4291,15 @@ function updateReleaseMeta(release) {
       }));
     }
   }
-  if (Number(release.sizeBytes) > 0) parts.push(formatUpdateBytes(release.sizeBytes));
+  if (Number(release.sizeBytes) > 0) parts.push(formatBytes(release.sizeBytes));
   return parts.join(" · ");
 }
 
 async function refreshUpdateState() {
   try {
     renderUpdateState(await api().GetUpdateState());
-  } catch {
-    showError(new Error("Could not load update status."));
+  } catch (error) {
+    showError(new Error(`Could not load update status: ${messageFrom(error)}`));
   }
 }
 
@@ -4209,10 +4352,10 @@ async function runUpdateAction(action) {
     if (action === "download") state = await api().DownloadUpdate(version);
     if (action === "apply") state = await api().ApplyUpdate(version);
     if (state) renderUpdateState(state);
-  } catch {
+  } catch (error) {
     await refreshUpdateState();
     if (!updateCancelRequested) {
-      showError(new Error("The update action could not continue safely."));
+      showError(new Error(updateActionFailureMessage(action, error)));
     }
   } finally {
     updateActionBusy = false;
@@ -4226,9 +4369,9 @@ async function setAutomaticUpdateChecks(enabled) {
   elements.settingsUpdatesAutomatic.disabled = true;
   try {
     renderUpdateState(await api().SetAutomaticUpdateChecks(Boolean(enabled)));
-  } catch {
+  } catch (error) {
     await refreshUpdateState();
-    showError(new Error("Could not save the automatic update preference."));
+    showError(new Error(`Could not save the automatic update preference: ${messageFrom(error)}`));
   } finally {
     elements.updatesAutomatic.disabled = false;
     elements.settingsUpdatesAutomatic.disabled = false;
@@ -4243,7 +4386,9 @@ const projectLicenseURL = `${projectRepositoryURL}/blob/main/LICENSE`;
 function openProjectURL(url) {
   if (!url.startsWith(projectRepositoryURL)) return;
   if (typeof window.runtime?.BrowserOpenURL === "function") {
-    window.runtime.BrowserOpenURL(url);
+    void Promise.resolve().then(() => window.runtime.BrowserOpenURL(url)).catch((error) => {
+      showError(new Error(`Could not open the link: ${messageFrom(error)}`));
+    });
     return;
   }
   window.open(url, "_blank", "noopener,noreferrer");
@@ -4762,7 +4907,7 @@ function activatePaletteResult(result) {
     setView("overview");
     return;
   }
-  pendingDetailTaskId = target.taskId;
+  requestPendingTaskDetail(target.taskId);
   setView("board");
   if (Number(board?.planId) === Number(target.planId)) {
     openPendingTaskDetail();
@@ -4774,13 +4919,15 @@ function activatePaletteResult(result) {
 // Opens the drawer for a task chosen in the palette once the board for its
 // plan has loaded. Called from the snapshot success path and directly when
 // the task's plan is already selected.
+function requestPendingTaskDetail(taskId) {
+  pendingDetailTask.set(Number(taskId), workspaceController.state.generation);
+}
+
 function openPendingTaskDetail() {
-  if (!pendingDetailTaskId || !board) return;
-  const task = board.columns
-    .flatMap((column) => column.tasks)
-    .find((candidate) => Number(candidate.id) === Number(pendingDetailTaskId));
-  const taskId = pendingDetailTaskId;
-  pendingDetailTaskId = 0;
+  if (!pendingDetailTask.pending || !board) return;
+  const taskId = pendingDetailTask.take(workspaceController.state);
+  if (!taskId) return;
+  const task = boardTask(taskId);
   if (task) { openTaskDetail(task); return; }
   const request = ++detailRequest;
   const ticket = workspaceController.capture();
@@ -5890,6 +6037,7 @@ async function reconcileRecentProjectOpenFailure(ticket, entry, resolution, erro
 async function openResolvedRecentProject(ticket, entry, resolution) {
   if (!recentProjectOperationIsCurrent(ticket)) return;
   setRecentProjectsState({ type: "opening" });
+  await terminalHandle?.flushPending();
   let transition = beginWorkspaceTransition();
   try {
     let result = parseRecentProjectOpenResult(
@@ -6620,12 +6768,7 @@ async function finishFirstPlanOnboarding(planId = firstPlanState.planId) {
   setFirstPlanState({ type: "finish" });
   elements.stateCard.removeAttribute("aria-busy");
   elements.stateScreen.hidden = true;
-  elements.workspace.inert = false;
-  elements.workspace.removeAttribute("aria-busy");
-  elements.overviewPage.inert = false;
-  elements.overviewPage.removeAttribute("aria-busy");
-  elements.issuesPage.inert = false;
-  elements.issuesPage.removeAttribute("aria-busy");
+  setWorkspacePagesBusy(false);
   elements.navBoard.disabled = false;
   elements.navOverview.disabled = false;
   elements.navIssues.disabled = false;
@@ -6912,6 +7055,7 @@ function renderWorkspaceState(state, focus = false) {
     recentProjectsState = reduceRecentProjects(recentProjectsState, { type: "loadCancelled" });
   }
   const projectChanged = workspaceProjectChanged(workspaceState, state);
+  if (projectChanged || state.status !== "open") pendingDetailTask.clear();
   if (projectChanged) {
     snapshotSequence += 1;
     snapshot = null;
@@ -6922,7 +7066,9 @@ function renderWorkspaceState(state, focus = false) {
     heatmapRequested = false;
     projectHistoryRequested = false;
     projectHistory = null;
-    stackProfileRequested = false;
+    stackProfileRequests.invalidate();
+    stackRescanInFlight = false;
+    heatmapRequests.invalidate();
     stackProfile = null;
     issuesState = { issues: [], bounds: { shown: 0, total: 0 } };
     issuesOffset = 0;
@@ -6949,12 +7095,10 @@ function renderWorkspaceState(state, focus = false) {
     );
   }
   const open = state.status === "open";
-  if (!open && planDialogMode === "create") {
-    planCreateSequence += 1;
-    elements.planDialogForm.removeAttribute("aria-busy");
-    elements.planDialogTitle.readOnly = false;
-    elements.planDialogCancel.disabled = false;
-    closePlanDialog();
+  // A plan dialog belongs to the project that opened it, even mid-submit.
+  if (!open || projectChanged) {
+    abandonPlanDialog();
+    hidePlanCloseoutBanner();
   }
   if (!open) hideAgentActionForms();
   if (projectChanged) restoreProjectLayout(state.project?.root || "");
@@ -6968,12 +7112,7 @@ function renderWorkspaceState(state, focus = false) {
   elements.switchProject.hidden = !open;
   elements.closeProject.hidden = !open;
   elements.openProject.hidden = true;
-  elements.workspace.removeAttribute("aria-busy");
-  elements.workspace.inert = false;
-  elements.overviewPage.removeAttribute("aria-busy");
-  elements.overviewPage.inert = false;
-  elements.issuesPage.removeAttribute("aria-busy");
-  elements.issuesPage.inert = false;
+  setWorkspacePagesBusy(false);
   elements.switchProject.disabled = false;
   elements.closeProject.disabled = false;
 
@@ -7025,7 +7164,9 @@ function renderWorkspaceState(state, focus = false) {
   heatmapRequested = false;
   projectHistoryRequested = false;
   projectHistory = null;
-  stackProfileRequested = false;
+  stackProfileRequests.invalidate();
+  stackRescanInFlight = false;
+  heatmapRequests.invalidate();
   stackProfile = null;
   board = null;
   clearPlanFilters();
@@ -7063,14 +7204,7 @@ function publishBackendState(state, transition, focus = false, keepInert = false
   );
   if (!published) return false;
   renderWorkspaceState(state, focus);
-  if (state.status === "open" && keepInert) {
-    elements.workspace.inert = true;
-    elements.workspace.setAttribute("aria-busy", "true");
-    elements.overviewPage.inert = true;
-    elements.overviewPage.setAttribute("aria-busy", "true");
-    elements.issuesPage.inert = true;
-    elements.issuesPage.setAttribute("aria-busy", "true");
-  }
+  if (state.status === "open" && keepInert) setWorkspacePagesBusy(true);
   if (state.status === "open" && !keepInert) {
     void loadSnapshot(restoredPlanId(state.project?.root));
   }
@@ -7078,18 +7212,15 @@ function publishBackendState(state, transition, focus = false, keepInert = false
 }
 
 function beginWorkspaceTransition() {
+  // A pending layout save still belongs to the project being left.
+  layoutStateScheduler.flush();
   closeTerminalAssociationEditor(false, true);
   closeTerminalWriteback(false, true);
   closeTaskTransition(false, false, true);
   hideAgentActionForms();
   const transition = workspaceController.beginTransition();
   if (workspaceState.status === "open") {
-    elements.workspace.inert = true;
-    elements.workspace.setAttribute("aria-busy", "true");
-    elements.overviewPage.inert = true;
-    elements.overviewPage.setAttribute("aria-busy", "true");
-    elements.issuesPage.inert = true;
-    elements.issuesPage.setAttribute("aria-busy", "true");
+    setWorkspacePagesBusy(true);
     elements.switchProject.disabled = true;
     elements.closeProject.disabled = true;
     setStatus("Preparing project transition…");
@@ -7100,6 +7231,16 @@ function beginWorkspaceTransition() {
     });
   }
   return transition;
+}
+
+// The board, Overview and Issues pages go inert together while a workspace
+// transition is pending, and come back together when it settles.
+function setWorkspacePagesBusy(busy) {
+  for (const page of [elements.workspace, elements.overviewPage, elements.issuesPage]) {
+    page.inert = busy;
+    if (busy) page.setAttribute("aria-busy", "true");
+    else page.removeAttribute("aria-busy");
+  }
 }
 
 function hideAgentActionForms() {
@@ -7139,6 +7280,7 @@ function firstRunStoragePath(root) {
 }
 
 async function openExactProject(root) {
+  await terminalHandle?.flushPending();
   let transition = beginWorkspaceTransition();
   const outcome = await runExactProjectOpen(
     api(),
@@ -7507,35 +7649,11 @@ async function applyInitializationStatus(
   if (!initializationStatusMatchesOperation(status, operationId, canonicalRoot)) {
     throw new Error("Initialization status does not match the committed operation.");
   }
-  if (isProjectGuidePartiallyApplied(status.errorKind)) {
-    const postCommit = status.outcome === "recovery-required" &&
-      status.checkpoint === "project-committed";
-    if (postCommit) {
-      setFirstRunState({
-        type: "guideStale",
-        postCommit: true,
-        checkpoint: status.checkpoint,
-        skipAllowed: false,
-        partiallyApplied: true,
-        message: projectGuideRecoveryCopy("partially-applied").error,
-      }, true);
-      return;
-    }
-    throw new Error("A partial guide apply was reported at an unknown checkpoint.");
-  }
-  if (isProjectGuidePreviewStale(status.errorKind)) {
-    const preCommit = status.outcome === "ready" && status.checkpoint === "none";
-    const postCommit = status.outcome === "recovery-required" &&
-      status.checkpoint === "project-committed";
-    if (preCommit || postCommit) {
-      setFirstRunState({
-        type: "guideStale",
-        postCommit,
-        checkpoint: status.checkpoint,
-      }, true);
-      return;
-    }
-    throw new Error("Guide preview became stale at an unknown initialization checkpoint.");
+  const guide = projectGuideStatusResolution(status.errorKind, status);
+  if (guide.kind === "unknown-checkpoint") throw new Error(guide.message);
+  if (guide.kind === "stale") {
+    setFirstRunState(guide.event, true);
+    return;
   }
   if (status.outcome === "complete") {
     if (status.checkpoint !== "desktop-bound") {
@@ -7622,39 +7740,15 @@ async function reconcileInitializationStatus(
   try {
     const status = observedStatus ||
       await readInitializationStatus(api(), operationId);
-    if (isProjectGuidePartiallyApplied(error)) {
-      const postCommit = status.outcome === "recovery-required" &&
-        status.checkpoint === "project-committed";
-      if (postCommit) {
-        if (!initializationStatusMatchesOperation(status, operationId, canonicalRoot)) {
-          throw new Error("Initialization status does not match the committed operation.");
-        }
-        setFirstRunState({
-          type: "guideStale",
-          postCommit: true,
-          checkpoint: status.checkpoint,
-          skipAllowed: false,
-          partiallyApplied: true,
-          message: projectGuideRecoveryCopy("partially-applied").error,
-        }, true);
-        return;
+    // The call's own error can name a guide failure the status does not; a
+    // checkpoint that does not fit it falls through to the status itself.
+    const guide = projectGuideStatusResolution(error, status);
+    if (guide.kind === "stale") {
+      if (!initializationStatusMatchesOperation(status, operationId, canonicalRoot)) {
+        throw new Error("Initialization status does not match the committed operation.");
       }
-    }
-    if (isProjectGuidePreviewStale(error)) {
-      const preCommit = status.outcome === "ready" && status.checkpoint === "none";
-      const postCommit = status.outcome === "recovery-required" &&
-        status.checkpoint === "project-committed";
-      if (preCommit || postCommit) {
-        if (!initializationStatusMatchesOperation(status, operationId, canonicalRoot)) {
-          throw new Error("Initialization status does not match the committed operation.");
-        }
-        setFirstRunState({
-          type: "guideStale",
-          postCommit,
-          checkpoint: status.checkpoint,
-        }, true);
-        return;
-      }
+      setFirstRunState(guide.event, true);
+      return;
     }
     await applyInitializationStatus(operationId, canonicalRoot, status);
   } catch (statusError) {
@@ -7863,6 +7957,7 @@ async function openProjectFromRecovery() {
 async function requestCloseProject() {
   if (workspaceController.state.status !== "open") return;
   try {
+    await terminalHandle?.flushPending();
     let transition = beginWorkspaceTransition();
     let result = await api().CloseProject("");
     if (result.requiresConfirmation) {
@@ -7879,16 +7974,21 @@ async function requestCloseProject() {
     if (!publishBackendState(result.state, transition, true)) return;
     if (result.warning) showError(result.warning);
     if (result.state.status === "closed") {
+      // The follow-up read publishes only if nothing moved the workspace in
+      // the meantime: a project opened within these 350 ms owns the window.
+      const closed = workspaceController.capture();
       window.setTimeout(async () => {
+        if (!workspaceController.isCurrent(closed)) return;
         try {
           const state = await api().GetWorkspaceState();
+          if (!workspaceController.isCurrent(closed)) return;
           workspaceController.publish({
             status: state.status,
             generation: Number(state.generation || 0),
           });
           renderWorkspaceState(state, true);
         } catch (error) {
-          showError(error);
+          if (workspaceController.isCurrent(closed)) showError(error);
         }
       }, 350);
     }
@@ -8236,7 +8336,9 @@ function registerNativeProjectActions() {
       },
       installShellCommand: () => {
         if (nativeCommandAllowed("installShellCommand")) {
-          void api().InstallShellCommand();
+          void Promise.resolve().then(() => api().InstallShellCommand()).catch((error) => {
+            showError(new Error(`Could not install the shell command: ${messageFrom(error)}`));
+          });
         }
       },
       checkForUpdates: () => {
@@ -8247,6 +8349,11 @@ function registerNativeProjectActions() {
       },
     }),
     eventsOn("update:state-changed", (state) => renderUpdateState(state)),
+    // A window close the runtime refused (a call still running) leaves every
+    // service up; say why the window stayed open instead of doing nothing.
+    eventsOn("app:close-refused", (message) =>
+      showError(new Error(`p-track could not close yet: ${messageFrom(message)}`)),
+    ),
     eventsOn("workspace:data-changed", () =>
       void loadSnapshot(board?.planId || 0, true),
     ),
@@ -8412,7 +8519,7 @@ elements.issueOpenTask.addEventListener("click", () => {
   const taskId = Number(issue.taskId);
   const planId = Number(issue.planId);
   closeIssueDetail(false);
-  pendingDetailTaskId = taskId;
+  requestPendingTaskDetail(taskId);
   setView("board");
   if (Number(board?.planId) === planId) openPendingTaskDetail();
   else selectPlan(planId);
@@ -8439,6 +8546,7 @@ elements.agentHandoffForm.addEventListener("submit", (event) => {
     ),
     "Sending bounded handoff proposal…",
     "Could not send handoff proposal",
+    "handoff-send",
   );
 });
 elements.agentWorkflowKind.addEventListener("change", () => {
@@ -8468,11 +8576,15 @@ elements.agentWorkflowForm.addEventListener("submit", (event) => {
 		),
 		"Preparing exact workflow proposal…",
 		"Could not prepare workflow proposal",
+		"workflow-prepare",
 	);
 });
 window.addEventListener("focus", () => {
   if (workspaceController.state.status !== "open") return;
   void loadSnapshot(board?.planId || 0, true);
+});
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && workspaceController.state.status === "open") refreshLoop.resume();
 });
 
 elements.paletteInput.addEventListener("input", schedulePaletteSearch);
@@ -8825,80 +8937,106 @@ elements.planDialogForm.addEventListener("submit", async (event) => {
     await submitNewPlan();
     return;
   }
-  if (!planDialogPlan || !planDialogMode) return;
+  await submitPlanLifecycle();
+});
+
+function planLifecycleRequest(mode, generation, plan, transfer, holdReason, deleteRevision) {
+  const planId = Number(plan.id);
+  if (mode === "done") return api().CompletePlanV1(generation, planId);
+  if (mode === "hold") return api().HoldPlanV1(generation, planId, holdReason);
+  if (mode === "delete") return api().DeletePlanV1(generation, planId, true, deleteRevision);
+  const title = transfer.title.trim();
+  return mode === "move"
+    ? api().MovePlanV1(generation, planId, transfer.targetPath, title)
+    : api().CopyPlanV1(generation, planId, transfer.targetPath, title);
+}
+
+// Every lifecycle mode captures what it submits before the request, keeps the
+// dialog busy until it answers, and afterwards touches the dialog only if it
+// is still the one that submitted (the token). An error with no dialog left
+// to hold it goes to the toast instead of vanishing.
+async function submitPlanLifecycle() {
+  if (planDialogBusy() || !planDialogPlan || !planDialogMode) return;
   const plan = planDialogPlan;
   const mode = planDialogMode;
+  const transfer = planDialogTransferState ? { ...planDialogTransferState } : null;
+  const holdReason = elements.planDialogTitle.value.trim();
+  const deleteRevision = planDialogDeleteRevision;
+  if ((mode === "move" || mode === "copy") && (!transfer || transferSubmitDisabled(transfer))) return;
+  if (mode === "hold" && !holdReason) return;
+  const token = planDialogToken;
+  const dialogCurrent = () => token === planDialogToken && !elements.planDialog.hidden;
+  const ticket = workspaceController.capture();
   elements.planDialogError.hidden = true;
-  elements.planDialogSubmit.disabled = true;
+  setPlanDialogBusy(true);
+  let response;
   try {
-    const ticket = workspaceController.capture();
-    if (mode === "done") {
-      const response = await api().CompletePlanV1(ticket.generation, Number(plan.id));
-      if (!workspaceController.accepts(ticket, Number(response.generation))) return;
-      const nextPlan = response.checkpoint.openPlans
-        ?.find((candidate) => Number(candidate.id) !== Number(plan.id));
-      closePlanDialog();
-      openPlanCheckpointDialog(plan, response.checkpoint);
-      await loadSnapshot(nextPlan ? Number(nextPlan.id) : null);
-      return;
-    } else if (mode === "hold") {
-      const response = await api().HoldPlanV1(
-        ticket.generation,
-        Number(plan.id),
-        elements.planDialogTitle.value.trim(),
-      );
-      if (!workspaceController.accepts(ticket, Number(response.generation))) return;
-    } else if (mode === "delete") {
-      await api().DeletePlanV1(ticket.generation, Number(plan.id), true);
-    } else if (mode === "move") {
-      await api().MovePlanV1(
-        ticket.generation,
-        Number(plan.id),
-        planDialogTransferState.targetPath,
-        planDialogTransferState.title.trim(),
-      );
-    } else {
-      await api().CopyPlanV1(
-        ticket.generation,
-        Number(plan.id),
-        planDialogTransferState.targetPath,
-        planDialogTransferState.title.trim(),
-      );
-    }
-    closePlanDialog();
-    await loadSnapshot(mode === "hold" ? Number(plan.id) : 0);
+    response = await planLifecycleRequest(
+      mode, ticket.generation, plan, transfer, holdReason, deleteRevision,
+    );
   } catch (error) {
-    setPlanDialogError(error);
-    elements.planDialogSubmit.disabled = mode === "delete" || mode === "done"
-      ? false
-      : mode === "hold"
+    if (dialogCurrent()) {
+      setPlanDialogBusy(false);
+      setPlanDialogError(error);
+      elements.planDialogSubmit.disabled = mode === "hold"
         ? elements.planDialogTitle.value.trim() === ""
-        : transferSubmitDisabled(planDialogTransferState);
+        : transfer ? transferSubmitDisabled(transfer) : false;
+    } else if (workspaceController.isCurrent(ticket)) {
+      showError(error);
+    }
+    return;
   }
-});
+  if (dialogCurrent()) {
+    setPlanDialogBusy(false);
+    closePlanDialog();
+  }
+  if (!workspaceController.accepts(ticket, Number(response?.generation))) return;
+  if (mode === "done") {
+    const nextPlan = response.checkpoint.openPlans
+      ?.find((candidate) => Number(candidate.id) !== Number(plan.id));
+    if (elements.planDialog.hidden) openPlanCheckpointDialog(plan, response.checkpoint);
+    await loadSnapshot(nextPlan ? Number(nextPlan.id) : null);
+    return;
+  }
+  await loadSnapshot(mode === "hold" ? Number(plan.id) : 0);
+}
 document.querySelectorAll("[data-close-plan-dialog]").forEach((element) => {
   element.addEventListener("click", closePlanDialog);
 });
 
+// While AddTaskV2 is pending the field is read-only (it keeps focus, so the
+// user's place survives) and the button is disabled; the in-flight key
+// refuses a second Enter. The title clears only once the task was added.
+function setAddTaskPending(pending) {
+  addTaskPending = pending;
+  if (pending) elements.addForm.setAttribute("aria-busy", "true");
+  else elements.addForm.removeAttribute("aria-busy");
+  elements.taskTitle.readOnly = pending;
+  elements.addForm.querySelector("button").disabled = pending || !board?.planId;
+}
+
 elements.addForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (addTaskPending) return;
   const title = elements.taskTitle.value.trim();
   if (!title || !board?.planId) return;
   const ticket = workspaceController.capture();
-  await runMutation(
-    async (generation) => {
-      const result = await api().AddTaskV2(generation, Number(board.planId), title);
-      if (workspaceController.accepts(ticket, Number(result.generation))) {
-        elements.taskTitle.value = "";
-      }
-      return result;
-    },
-    "Adding task…",
-    "Could not add task",
-  );
-  if (workspaceController.accepts(ticket, ticket.generation)) {
-    elements.taskTitle.focus();
+  const planId = Number(board.planId);
+  setAddTaskPending(true);
+  let added = false;
+  try {
+    added = await runMutation(
+      (generation) => api().AddTaskV2(generation, planId, title),
+      "Adding task…",
+      "Could not add task",
+      "add-task",
+    );
+  } finally {
+    setAddTaskPending(false);
   }
+  if (!workspaceController.accepts(ticket, ticket.generation)) return;
+  if (added && elements.taskTitle.value.trim() === title) elements.taskTitle.value = "";
+  elements.taskTitle.focus();
 });
 
 elements.dialogForm.addEventListener("submit", async (event) => {
@@ -9169,7 +9307,7 @@ async function startTerminalWindow(label) {
   const gapDetail = document.getElementById("terminal-window-gap-detail");
   const host = document.getElementById("terminal-window-host");
   section.hidden = false;
-  section.dataset.macos = String(/Mac/.test(navigator.platform));
+  section.dataset.macos = String(terminalPlatform() === "mac");
   gapDetail.textContent = terminalGapNotice;
   const showGap = () => {
     gap.hidden = false;
@@ -9237,22 +9375,13 @@ async function startTerminalWindow(label) {
       const profileId = findTerminalPane(owner.root, paneId)?.profileId ?? "";
       const settings = settingsForProfile(profileId);
       const fontSize = readTerminalProfileFontSize(localStorage, profileId, settings.fontSize);
-      const terminal = new Terminal({
-        allowProposedApi: true,
-        cursorBlink: true,
-        rescaleOverlappingGlyphs: true,
-        ...terminalRendererOptions(settings, fontSize),
+      // The dock's renderer, add-ons and link rule (terminal/renderer.ts).
+      const { terminal, fit, search } = createTerminalRenderer({
+        settings,
+        fontSize,
+        modernUnicode: readModernUnicodeSetting(localStorage),
+        onLinkError: (error) => setStatus(messageFrom(error)),
       });
-      const fit = new FitAddon();
-      terminal.loadAddon(fit);
-      if (readModernUnicodeSetting(localStorage)) terminal.loadAddon(new UnicodeGraphemesAddon());
-      terminal.loadAddon(new WebLinksAddon((event, uri) => {
-        if (/Mac/.test(navigator.platform) ? !event.metaKey : !event.ctrlKey) return;
-        event.preventDefault();
-        window.runtime?.BrowserOpenURL?.(uri);
-      }));
-      const search = new SearchAddon();
-      terminal.loadAddon(search);
       terminal.open(paneHost);
       terminal.textarea?.setAttribute(
         "aria-label",
@@ -9272,6 +9401,8 @@ async function startTerminalWindow(label) {
         attempts: 0,
         reclaiming: false,
         ended: false,
+        sessionEnded: false,
+        exitStatus: "",
         client: null,
       });
       const pane = panes.get(paneId);
@@ -9349,17 +9480,6 @@ async function startTerminalWindow(label) {
     const searchInput = document.getElementById("terminal-window-search-input");
     const searchResults = document.getElementById("terminal-window-search-results");
     const searchClose = document.getElementById("terminal-window-search-close");
-    const searchOptions = (incremental) => ({
-      incremental,
-      decorations: {
-        matchBackground: "#26483e",
-        matchBorder: "#3dd6a3",
-        matchOverviewRuler: "#3dd6a3",
-        activeMatchBackground: "#7a5f1f",
-        activeMatchBorder: "#ffd75f",
-        activeMatchColorOverviewRuler: "#ffd75f",
-      },
-    });
     const runSearch = (incremental, backwards = false) => {
       const pane = activePane();
       if (!pane) return;
@@ -9370,8 +9490,8 @@ async function startTerminalWindow(label) {
         return;
       }
       const found = backwards
-        ? pane.search.findPrevious(query, searchOptions(false))
-        : pane.search.findNext(query, searchOptions(incremental));
+        ? pane.search.findPrevious(query, terminalSearchOptions(false))
+        : pane.search.findNext(query, terminalSearchOptions(incremental));
       if (!found) searchResults.textContent = "No results";
     };
     const openSearch = () => {
@@ -9415,9 +9535,9 @@ async function startTerminalWindow(label) {
         );
       });
       pane.terminal.attachCustomKeyEventHandler((event) => {
-        const action = terminalShortcutAction(
+        const action = terminalKeyShortcut(
           event,
-          /Mac|iPhone|iPad/.test(navigator.platform) ? "mac" : "linux",
+          terminalPlatform(),
           pane.terminal.hasSelection(),
         );
         if (!action) return true;
@@ -9428,13 +9548,9 @@ async function startTerminalWindow(label) {
             openSearch();
             break;
           case "zoom-in":
-            zoomPane(pane, pane.fontSize + 1);
-            break;
           case "zoom-out":
-            zoomPane(pane, pane.fontSize - 1);
-            break;
           case "zoom-reset":
-            zoomPane(pane, pane.baseFontSize);
+            zoomPane(pane, terminalZoomFontSize(action, pane.fontSize, pane.baseFontSize));
             break;
           case "copy":
             void navigator.clipboard
@@ -9454,19 +9570,20 @@ async function startTerminalWindow(label) {
         }
         return false;
       });
-      // The dock's paste guard, fed by the event's own clipboard payload: a
-      // multi-line paste outside the alternate screen asks first.
+      // The dock's paste guard, fed by the event's own clipboard payload.
+      // This window has no shell integration, so the alternate screen alone
+      // never waives the multi-line review: output can enter it at will.
       pane.terminal.textarea?.addEventListener("paste", (event) => {
         event.preventDefault();
         event.stopPropagation();
         const request = prepareClipboardPaste(
           event.clipboardData?.getData("text") ?? "",
-          pane.terminal.buffer.active.type === "alternate",
+          { alternateScreen: pane.terminal.buffer.active.type === "alternate" },
         );
         void commitClipboardPaste(
           request,
           (pending) => Promise.resolve(window.confirm(
-            `Paste ${pending.lineCount} lines into the terminal?`,
+            `Paste into the terminal? ${pasteReviewSummary(pending)}.`,
           )),
           (text) => pane.terminal.paste(text),
         );
@@ -9476,8 +9593,9 @@ async function startTerminalWindow(label) {
       // client's write generation is what stops input from a released
       // renderer reaching a re-claimed PTY, so a re-attach builds a new one
       // instead of reopening it.
-      const attach = (url, from) => {
+      const attach = (url, from, sessionEnded = false) => {
         pane.sequence = Number(from || 0);
+        pane.sessionEnded = sessionEnded;
         const next = new TerminalStreamClient({
           createWebSocket: (streamUrl) => new WebSocket(streamUrl),
           // The rendered byte count is the sequence: a re-claim resumes
@@ -9499,9 +9617,28 @@ async function startTerminalWindow(label) {
               pane.resize.invalidate({ rows: pane.terminal.rows, columns: pane.terminal.cols });
               fitPane(pane);
             }
-            if (state === "closed" || state === "error") scheduleReclaim();
+            if (state !== "closed" && state !== "error") return;
+            // A normal closure means the shell's output ended: waiting for
+            // its exit beats replaying the same scrollback forever.
+            const disposition = streamCloseDisposition({
+              outputEnded: state === "closed" && next.outputEnded,
+              sessionEnded: pane.sessionEnded,
+              recoverable: !pane.ended,
+            });
+            if (disposition === "ended") {
+              pane.ended = true;
+              setStatus(pane.exitStatus || streamOutputEndedNotice);
+            } else if (disposition === "reclaim") {
+              scheduleReclaim();
+            }
           },
-          onGap: showGap,
+          // The replay starts where the server says, even when the buffer
+          // wrapped again after the claim was minted.
+          onGap: (sequence) => {
+            if (pane.client !== next) return;
+            if (sequence !== null) pane.sequence = sequence;
+            showGap();
+          },
         });
         pane.client = next;
         next.connect(url);
@@ -9520,7 +9657,7 @@ async function startTerminalWindow(label) {
           claim: (fromSequence) => api().ClaimTerminalStream(pane.sessionId, fromSequence),
           attach: (claim) => {
             if (claim.gap) showGap();
-            attach(claim.url, claim.fromSequence);
+            attach(claim.url, claim.fromSequence, streamClaimEnded(claim));
           },
           reclaiming: () => {
             pane.attempts += 1;
@@ -9548,18 +9685,24 @@ async function startTerminalWindow(label) {
       const claim = streamUrl ? { url: streamUrl, fromSequence: 0, gap: false }
         : await api().ClaimTerminalStream(pane.sessionId, 0);
       if (claim.gap) showGap();
-      attach(claim.url, claim.fromSequence);
+      // A shell that ended before this window claimed it still replays; its
+      // stream then ends for good instead of being claimed back.
+      if (streamClaimEnded(claim)) pane.ended = true;
+      attach(claim.url, claim.fromSequence, streamClaimEnded(claim));
     };
-    for (const pane of panes.values()) await connectPane(pane);
 
+    // Listening starts before the first claim: an exit that lands while the
+    // panes connect must reach them, not a window that subscribed too late.
     window.runtime?.EventsOnMultiple?.("terminal:exit", (payload) => {
       for (const pane of panes.values()) {
         if (payload?.sessionId !== pane.sessionId) continue;
         pane.ended = true;
         pane.state = "closed";
-        setStatus(payload.error || `Exited (${payload.exitCode})`);
+        pane.exitStatus = payload.error || `Exited (${payload.exitCode})`;
+        setStatus(pane.exitStatus);
       }
     }, -1);
+    for (const pane of panes.values()) await connectPane(pane);
 
     const fitAll = () => {
       for (const id of paneIds(currentTab().root)) {
@@ -9725,7 +9868,7 @@ async function startTerminalWindow(label) {
         list.querySelector('[aria-selected="true"]')?.focus();
       });
       window.addEventListener("keydown", (event) => {
-        const modifier = /Mac/.test(navigator.platform) ? event.metaKey : event.ctrlKey && event.shiftKey;
+        const modifier = terminalPlatform() === "mac" ? event.metaKey : event.ctrlKey && event.shiftKey;
         if (event.type !== "keydown" || event.repeat || event.isComposing) return;
         if (event.ctrlKey && event.key === "Tab") {
           event.preventDefault();
@@ -9790,11 +9933,14 @@ async function loadGlobalOverview(refresh = false) {
     globalOverview = refresh ? result.overview : result;
     overviewRefreshNotice = refresh ? overviewRefreshMessage(result) : "";
     overviewError = "";
-  } catch {
+  } catch (error) {
     if (!isCurrent()) return;
+    // Stated on the landing page itself (never a blocking dialog), with the
+    // backend's reason so the failure can be acted on.
+    const reason = messageFrom(error);
     if (!refresh) globalOverview = null;
-    overviewRefreshNotice = refresh ? "Could not refresh summaries. Existing summaries are still available. Try again." : "";
-    overviewError = refresh ? "" : "Could not load summaries. You can still open a project.";
+    overviewRefreshNotice = refresh ? `Could not refresh summaries: ${reason}. Existing summaries are still available. Try again.` : "";
+    overviewError = refresh ? "" : `Could not load summaries: ${reason}. You can still open a project.`;
   } finally {
     if (request === overviewRequest) {
       overviewLoading = false;
@@ -9832,7 +9978,7 @@ function renderGlobalOverview() {
   if (!overview) return;
   const oldest = Math.min(...overview.projects.map((project) => project.syncedAt));
   coverage.textContent = "Work counts include only these summaries. " +
-    (overview.projects.length ? `Oldest summary updated ${relativeTimestamp(oldest * 1000)}.` : "Open any project without a summary.");
+    (overview.projects.length ? `Oldest summary updated ${formatRelativeTime(oldest * 1000, "long")}.` : "Open any project without a summary.");
   const period = document.querySelector("#global-overview-period").value;
   const updates = overviewActivity(overview, period === "all" ? null : 30);
   if (!updates.length) activity.textContent = "No synced record updates in this period.";
@@ -9857,7 +10003,7 @@ function renderGlobalOverview() {
     context.title = update.root;
     const time = document.createElement("time");
     time.dateTime = new Date(update.updatedAt * 1000).toISOString();
-    time.textContent = relativeTime(time.dateTime);
+    time.textContent = formatRelativeTime(time.dateTime, "long");
     time.title = `Updated ${new Date(update.updatedAt * 1000).toLocaleString()}`;
     metadata.append(status, context, time);
     content.append(title, metadata);

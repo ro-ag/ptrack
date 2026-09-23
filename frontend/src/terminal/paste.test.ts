@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   commitClipboardPaste,
   isTerminalCompositionEvent,
+  pasteReviewSummary,
   prepareClipboardPaste,
   terminalTextToBytes,
   terminalShortcutAction,
@@ -18,6 +19,12 @@ describe("terminalTextToBytes", () => {
   });
 });
 
+const promptTarget = { alternateScreen: false };
+const programTarget = {
+  alternateScreen: true,
+  shell: { quality: "rich", phase: "executing" },
+};
+
 describe("prepareClipboardPaste", () => {
   it.each([
     ["", "", 0, false],
@@ -29,7 +36,7 @@ describe("prepareClipboardPaste", () => {
   ])(
     "normalizes and classifies %j",
     (input, text, lineCount, requiresConfirmation) => {
-      expect(prepareClipboardPaste(input, false)).toMatchObject({
+      expect(prepareClipboardPaste(input, promptTarget)).toMatchObject({
         text,
         lineCount,
         requiresConfirmation,
@@ -37,13 +44,49 @@ describe("prepareClipboardPaste", () => {
     },
   );
 
-  it("bypasses multiline confirmation in the alternate screen", () => {
-    expect(prepareClipboardPaste("one\ntwo", true).requiresConfirmation).toBe(false);
+  it("bypasses multiline review only for an authenticated running program", () => {
+    expect(prepareClipboardPaste("one\ntwo", programTarget).requiresConfirmation).toBe(false);
+  });
+
+  it("keeps reviewing when output alone entered the alternate screen", () => {
+    // `cat` of a file can switch screens; without authenticated integration
+    // saying a command runs, the alternate screen proves nothing.
+    for (const target of [
+      { alternateScreen: true },
+      { alternateScreen: true, shell: null },
+      { alternateScreen: true, shell: { quality: "basic", phase: "executing" } },
+      { alternateScreen: true, shell: { quality: "rich", phase: "editing" } },
+      { alternateScreen: false, shell: { quality: "rich", phase: "executing" } },
+    ]) {
+      expect(prepareClipboardPaste("one\ntwo", target).requiresConfirmation).toBe(true);
+    }
+  });
+
+  it("strips an early bracketed-paste end and control keystrokes, and asks first", () => {
+    const request = prepareClipboardPaste("echo safe\x1b[201~\x0frm -rf ~", promptTarget);
+    expect(request.text).toBe("echo saferm -rf ~");
+    expect(request.controlCharactersRemoved).toBe(7);
+    expect(request.lineCount).toBe(1);
+    expect(request.requiresConfirmation).toBe(true);
+    expect(pasteReviewSummary(request)).toBe("1 line · 7 control characters removed");
+  });
+
+  it("asks even inside a running program when controls were removed", () => {
+    const request = prepareClipboardPaste("a\x1b[200~b\x7fc\u009bd", programTarget);
+    expect(request.text).toBe("abcd");
+    expect(request.requiresConfirmation).toBe(true);
+  });
+
+  it("keeps tabs and newlines, and folds carriage returns", () => {
+    const request = prepareClipboardPaste("a\tb\r\nc\rd", promptTarget);
+    expect(request.text).toBe("a\tb\nc\nd");
+    expect(request.controlCharactersRemoved).toBe(0);
+    expect(pasteReviewSummary(request)).toBe("3 lines");
   });
 
   it("bounds a large Unicode preview without breaking the full paste", () => {
     const input = `${"😀".repeat(20)}\nsecond line`;
-    const request = prepareClipboardPaste(input, false, 12);
+    const request = prepareClipboardPaste(input, promptTarget, 12);
 
     expect(Array.from(request.preview)).toHaveLength(13);
     expect(request.preview.endsWith("…")).toBe(true);
@@ -53,7 +96,7 @@ describe("prepareClipboardPaste", () => {
 
   it("preserves whitespace and keeps markup literal in the preview", () => {
     const input = "  <script>alert('&')</script>  ";
-    const request = prepareClipboardPaste(input, false);
+    const request = prepareClipboardPaste(input, promptTarget);
 
     expect(request.text).toBe(input);
     expect(request.preview).toBe(input);
@@ -67,7 +110,7 @@ describe("commitClipboardPaste", () => {
     const paste = vi.fn();
 
     await expect(
-      commitClipboardPaste(prepareClipboardPaste("", false), confirm, paste),
+      commitClipboardPaste(prepareClipboardPaste("", promptTarget), confirm, paste),
     ).resolves.toBe(false);
     expect(confirm).not.toHaveBeenCalled();
     expect(paste).not.toHaveBeenCalled();
@@ -78,14 +121,14 @@ describe("commitClipboardPaste", () => {
     const paste = vi.fn();
 
     await expect(
-      commitClipboardPaste(prepareClipboardPaste("echo safe", false), confirm, paste),
+      commitClipboardPaste(prepareClipboardPaste("echo safe", promptTarget), confirm, paste),
     ).resolves.toBe(true);
     expect(confirm).not.toHaveBeenCalled();
     expect(paste).toHaveBeenCalledWith("echo safe");
   });
 
   it("cancels or confirms multiline input without executing lines itself", async () => {
-    const request = prepareClipboardPaste("echo one\r\necho two", false);
+    const request = prepareClipboardPaste("echo one\r\necho two", promptTarget);
     const cancelPaste = vi.fn();
     const confirmPaste = vi.fn();
 
@@ -107,9 +150,9 @@ describe("commitClipboardPaste", () => {
     };
 
     await commitClipboardPaste(
-      prepareClipboardPaste("one\ntwo", true),
+      prepareClipboardPaste("one\ntwo", programTarget),
       async () => {
-        throw new Error("alternate screen should bypass confirmation");
+        throw new Error("a running full-screen program should bypass confirmation");
       },
       (text) => terminal.paste(text),
     );

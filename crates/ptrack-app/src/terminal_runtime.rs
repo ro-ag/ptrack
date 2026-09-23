@@ -1205,7 +1205,14 @@ impl TerminalRuntime {
                 runtime
                     .identity
                     .revoke_session(runtime.generation, session.id());
-                let _ = runtime.manager.close_session(session.id(), true);
+                // Closing joins the session's worker threads and waits out
+                // its process escalation: that blocking work belongs on the
+                // blocking pool, never on an async worker.
+                let manager = Arc::clone(&runtime.manager);
+                let session_id = session.id().to_owned();
+                let _ =
+                    tokio::task::spawn_blocking(move || manager.close_session(&session_id, true))
+                        .await;
                 runtime.events.status(TerminalStatusV2 {
                     generation: runtime.generation,
                     session_id: session.id().to_owned(),
