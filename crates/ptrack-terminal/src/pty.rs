@@ -7,6 +7,8 @@ mod platform;
 #[cfg(windows)]
 #[path = "pty_windows.rs"]
 mod platform;
+#[cfg(all(unix, test))]
+pub(crate) use platform::parse_stat_session;
 
 /// Independently owned, already validated launch parameters passed to a PTY.
 #[derive(Clone, Debug, Eq, PartialEq)]

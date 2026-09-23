@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use rustix::event::{PollFd, PollFlags, poll};
 use rustix::process::{
-    Pid, Signal, WaitId, WaitIdOptions, getsid, kill_process, kill_process_group, waitid,
+    Pid, Signal, WaitId, WaitIdOptions, kill_process, kill_process_group, waitid,
 };
 
 use super::{PtyProcess, StartRequest};
@@ -303,8 +303,32 @@ pub(super) fn session_members(leader: Pid) -> Vec<Pid> {
     candidate_pids()
         .into_iter()
         .filter_map(Pid::from_raw)
-        .filter(|pid| *pid != leader && getsid(Some(*pid)).is_ok_and(|sid| sid == leader))
+        .filter(|pid| *pid != leader && session_of(*pid) == Some(leader.as_raw_nonzero().get()))
         .collect()
+}
+
+/// The session id of `pid`, read from procfs. Kernel threads report session 0,
+/// which rustix's `getsid` cannot represent (it asserts a positive pid), so
+/// Linux never asks it.
+#[cfg(target_os = "linux")]
+fn session_of(pid: Pid) -> Option<i32> {
+    let stat = std::fs::read_to_string(format!("/proc/{}/stat", pid.as_raw_nonzero())).ok()?;
+    parse_stat_session(&stat)
+}
+
+/// Field 6 of `/proc/<pid>/stat`, counted after the parenthesised command
+/// name, which may itself contain spaces or parentheses.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn parse_stat_session(stat: &str) -> Option<i32> {
+    let (_, rest) = stat.rsplit_once(')')?;
+    rest.split_whitespace().nth(3)?.parse().ok()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn session_of(pid: Pid) -> Option<i32> {
+    rustix::process::getsid(Some(pid))
+        .ok()
+        .map(|sid| sid.as_raw_nonzero().get())
 }
 
 #[cfg(target_os = "linux")]
