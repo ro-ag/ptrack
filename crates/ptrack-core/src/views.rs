@@ -1,8 +1,8 @@
 use std::fmt::Write as _;
 
 use crate::report::{
-    ReportError, claim_marker, hold_marker, id_list, note_line, notes_markdown, open_plan_deps,
-    open_task_deps, task_line,
+    ReportError, claim_marker, hold_marker, id_list, inline_text, note_line, notes_markdown,
+    open_plan_deps, open_task_deps, task_line,
 };
 use crate::{NoteLine, ProjectSnapshot, TaskLine, TaskStatus};
 
@@ -166,7 +166,10 @@ impl NextView {
             Some(task) => writeln!(
                 &mut output,
                 "next: [{}] #{} {} (plan: {})",
-                task.status, task.id, task.title, self.plan_title
+                task.status,
+                task.id,
+                inline_text(&task.title),
+                inline_text(&self.plan_title)
             )
             .expect("writing to String cannot fail"),
             None => {
@@ -177,7 +180,9 @@ impl NextView {
             writeln!(
                 &mut output,
                 "issue: #{} [{}] {}",
-                issue.id, issue.severity, issue.title
+                issue.id,
+                issue.severity,
+                inline_text(&issue.title)
             )
             .expect("writing to String cannot fail");
         }
@@ -225,7 +230,7 @@ impl PlanShow {
         let mut output = format!(
             "# Plan #{} {} [{}]{}{}\n\n## Tasks\n",
             self.plan.id,
-            self.plan.title,
+            inline_text(&self.plan.title),
             self.plan.status,
             hold_marker(self.plan.hold_reason.as_deref()),
             claim_marker(
@@ -244,7 +249,7 @@ impl PlanShow {
                     "- [{}] #{} {}{}",
                     task.status,
                     task.id,
-                    task.title,
+                    inline_text(&task.title),
                     hold_marker(task.hold_reason.as_deref())
                 )
                 .expect("writing to String cannot fail");
@@ -298,7 +303,7 @@ impl TaskShow {
             &mut output,
             "# Task #{} {} [{}]{}\n\n",
             self.task.id,
-            self.task.title,
+            inline_text(&self.task.title),
             self.task.status,
             hold_marker(self.task.hold_reason.as_deref())
         )
@@ -308,7 +313,7 @@ impl TaskShow {
                 &mut output,
                 "Plan: #{} {}{}{}\n",
                 plan.id,
-                plan.title,
+                inline_text(&plan.title),
                 hold_marker(plan.hold_reason.as_deref()),
                 claim_marker(
                     plan.claimed_by_name
@@ -395,7 +400,12 @@ impl MilestoneShow {
         };
         let mut output = format!(
             "# Milestone #{} {} [{}]{}\n\nTasks: {} done · {} open\n\n## Plans\n",
-            self.id, self.title, self.status, due, self.tasks_done, self.tasks_open
+            self.id,
+            inline_text(&self.title),
+            self.status,
+            due,
+            self.tasks_done,
+            self.tasks_open
         );
         if self.plans.is_empty() {
             output.push_str("_none_\n");
@@ -406,7 +416,7 @@ impl MilestoneShow {
                 &mut output,
                 "- #{} {} [{}]{}{}",
                 plan.id,
-                plan.title,
+                inline_text(&plan.title),
                 plan.status,
                 hold_marker(plan.hold_reason.as_deref()),
                 claim_marker(
@@ -464,11 +474,19 @@ impl IssueShow {
     pub fn markdown(&self) -> String {
         let mut output = format!(
             "# Issue #{} {}\n\nStatus: {} · Severity: {}\n",
-            self.id, self.title, self.status, self.severity
+            self.id,
+            inline_text(&self.title),
+            self.status,
+            self.severity
         );
         if let Some(task) = &self.task {
-            writeln!(&mut output, "Task: #{} {}", task.id, task.title)
-                .expect("writing to String cannot fail");
+            writeln!(
+                &mut output,
+                "Task: #{} {}",
+                task.id,
+                inline_text(&task.title)
+            )
+            .expect("writing to String cannot fail");
         }
         if !self.body.trim().is_empty() {
             output.push('\n');
@@ -523,7 +541,11 @@ impl Board {
     /// Renders the exact Go-compatible board Markdown.
     #[must_use]
     pub fn markdown(&self) -> String {
-        let mut output = format!("# Board — #{} {}\n\n", self.plan_id, self.plan_title);
+        let mut output = format!(
+            "# Board — #{} {}\n\n",
+            self.plan_id,
+            inline_text(&self.plan_title)
+        );
         for (name, tasks) in [
             ("Todo", &self.todo),
             ("Doing", &self.doing),
@@ -540,7 +562,7 @@ impl Board {
                         &mut output,
                         "- #{} {}{}",
                         task.id,
-                        task.title,
+                        inline_text(&task.title),
                         hold_marker(task.hold_reason.as_deref())
                     )
                     .expect("writing to String cannot fail");
@@ -661,7 +683,7 @@ impl CheckpointView {
         } else {
             self.open_plans
                 .iter()
-                .map(|(id, title)| format!("#{id} {title}"))
+                .map(|(id, title)| format!("#{id} {}", inline_text(title)))
                 .collect::<Vec<_>>()
                 .join(", ")
         };
@@ -677,7 +699,9 @@ impl CheckpointView {
             writeln!(
                 &mut output,
                 "Milestone: {} — {}/{} plans done",
-                milestone.title, milestone.plans_done, milestone.plans_total
+                inline_text(&milestone.title),
+                milestone.plans_done,
+                milestone.plans_total
             )
             .expect("writing to String cannot fail");
         }

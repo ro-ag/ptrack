@@ -1,8 +1,15 @@
 use std::fmt::Write as _;
 
-use crate::report::{claim_marker, hold_marker, issue_line, note_line, notes_markdown, task_line};
+use crate::report::{
+    claim_marker, hold_marker, inline_text, issue_line, note_line, note_markdown, task_line,
+};
 use crate::views::plan_ref;
 use crate::{IssueLine, MilestoneRef, NoteLine, PlanRef, ProjectSnapshot, TaskLine};
+
+/// Characters of note body a search result shows around its match.
+pub(crate) const SEARCH_SNIPPET_CHARS: usize = 120;
+/// Characters of that window placed before the match, so the hit is in view.
+const SNIPPET_LEAD_CHARS: usize = 40;
 
 /// Substring matches across milestones, plans, tasks, issues, and notes.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -62,26 +69,32 @@ pub fn search(snapshot: &ProjectSnapshot, term: &str) -> SearchView {
 }
 
 impl SearchView {
-    /// Renders the exact Go-compatible grouped search Markdown.
+    /// Renders the grouped search Markdown.
+    ///
+    /// No matches renders nothing at all, as the query-surface spec requires,
+    /// so a script can test for empty output. Titles render on one line, and a
+    /// note shows a bounded single-line snippet around its first match rather
+    /// than its whole body.
     #[must_use]
     pub fn markdown(&self) -> String {
-        let mut output = format!("# Search: {}\n\n", go_quote(&self.term));
         if self.milestones.is_empty()
             && self.plans.is_empty()
             && self.tasks.is_empty()
             && self.issues.is_empty()
             && self.notes.is_empty()
         {
-            output.push_str("_no matches_\n");
-            return output;
+            return String::new();
         }
+        let mut output = format!("# Search: {}\n\n", go_quote(&self.term));
         if !self.milestones.is_empty() {
             output.push_str("## Milestones\n");
             for milestone in &self.milestones {
                 writeln!(
                     &mut output,
                     "- #{} {} [{}]",
-                    milestone.id, milestone.title, milestone.status
+                    milestone.id,
+                    inline_text(&milestone.title),
+                    milestone.status
                 )
                 .expect("writing to String cannot fail");
             }
@@ -94,7 +107,7 @@ impl SearchView {
                     &mut output,
                     "- #{} {} [{}]{}{}",
                     plan.id,
-                    plan.title,
+                    inline_text(&plan.title),
                     plan.status,
                     hold_marker(plan.hold_reason.as_deref()),
                     claim_marker(
@@ -115,7 +128,7 @@ impl SearchView {
                     "- [{}] #{} {} (plan {}){}",
                     task.status,
                     task.id,
-                    task.title,
+                    inline_text(&task.title),
                     task.plan_id,
                     hold_marker(task.hold_reason.as_deref())
                 )
@@ -129,7 +142,10 @@ impl SearchView {
                 writeln!(
                     &mut output,
                     "- #{} [{}] {} ({})",
-                    issue.id, issue.severity, issue.title, issue.status
+                    issue.id,
+                    issue.severity,
+                    inline_text(&issue.title),
+                    issue.status
                 )
                 .expect("writing to String cannot fail");
             }
@@ -137,10 +153,45 @@ impl SearchView {
         }
         if !self.notes.is_empty() {
             output.push_str("## Notes\n");
-            output.push_str(&notes_markdown(&self.notes));
+            for note in &self.notes {
+                let line = NoteLine {
+                    body: snippet(&note.body, &self.term),
+                    ..note.clone()
+                };
+                output.push_str("- ");
+                output.push_str(&note_markdown(&line));
+                output.push('\n');
+            }
         }
         output
     }
+}
+
+/// Returns at most [`SEARCH_SNIPPET_CHARS`] characters of `body` around the
+/// first case-insensitive match of `term`, on one line, with `…` marking each
+/// side that was cut.
+///
+/// The match is located in the lowercased copy, whose characters correspond
+/// one to one with the original's, so the window is cut on the original's
+/// character boundaries even where lowercasing changes a character's width.
+fn snippet(body: &str, term: &str) -> String {
+    let lowered = simple_lowercase(body);
+    let hit = lowered
+        .find(&simple_lowercase(term))
+        .map_or(0, |offset| lowered[..offset].chars().count());
+    let total = body.chars().count();
+    let mut start = hit.saturating_sub(SNIPPET_LEAD_CHARS);
+    let end = (start + SEARCH_SNIPPET_CHARS).min(total);
+    start = start.min(end.saturating_sub(SEARCH_SNIPPET_CHARS));
+    let mut window = String::new();
+    if start > 0 {
+        window.push('…');
+    }
+    window.extend(body.chars().skip(start).take(end - start));
+    if end < total {
+        window.push('…');
+    }
+    inline_text(&window).into_owned()
 }
 
 fn go_quote(value: &str) -> String {

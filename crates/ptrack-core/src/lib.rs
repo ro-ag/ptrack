@@ -10,6 +10,7 @@ mod guide;
 mod model;
 mod report;
 mod search;
+mod secrets;
 mod snapshot;
 pub mod stack;
 mod validation;
@@ -32,14 +33,20 @@ pub use model::{
     Task, TaskStatus, Timestamp,
 };
 pub use report::{
-    DepWait, Digest, IssueLine, NoteLine, PlanBrief, ReportError, TaskLine, claim_marker, context,
-    hold_marker, id_list, open_plan_deps, open_task_deps,
+    DepWait, Digest, IssueLine, MAX_CONTEXT_DIGEST_BYTES, NoteLine, PlanBrief, ReportError,
+    TaskLine, UNTRUSTED_DATA_NOTICE, claim_marker, context, hold_marker, id_list, open_plan_deps,
+    open_task_deps,
 };
 pub use search::{SearchView, search};
+pub use secrets::{
+    REDACTED_CREDENTIAL, contains_credential, contains_high_risk_secret,
+    redact_credential_assignments, redact_credential_lines, redact_url_userinfo,
+};
 pub use snapshot::ProjectSnapshot;
 pub use validation::{
     LEGACY_ACTOR, MAX_HOLD_REASON_BYTES, MAX_IDENTITY_NAME_BYTES, MAX_SUMMARY_BYTES, Validate,
-    ValidationError, check_hold_reason, check_identity_name, check_summary, is_identity_id,
+    ValidationError, check_hold_reason, check_identity_name, check_summary, check_title,
+    is_identity_id,
 };
 pub use views::{
     Board, CheckpointView, DepSkip, IssueShow, MilestoneProgress, MilestoneRef, MilestoneShow,
@@ -59,6 +66,8 @@ mod model_behavior_test;
 mod report_test;
 #[cfg(test)]
 mod search_test;
+#[cfg(test)]
+mod secrets_test;
 #[cfg(test)]
 mod snapshot_test;
 #[cfg(test)]

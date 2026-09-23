@@ -3,7 +3,7 @@ use crate::{
     MAX_IDENTITY_NAME_BYTES, MAX_SUMMARY_BYTES, MemoryKind, Meta, NativeRecord, Note, NoteTarget,
     PlanStatus, SCRATCHPAD_MAX_SNIPPETS, SCRATCHPAD_SNIPPET_MAX_BYTES, SCRATCHPAD_TEXT_MAX_BYTES,
     Scratchpad, ScratchpadSnippet, TaskStatus, Timestamp, Validate, check_hold_reason,
-    check_identity_name, check_summary, is_identity_id,
+    check_identity_name, check_summary, check_title, decode_record, encode_record, is_identity_id,
 };
 
 use super::codec_test::valid_capability;
@@ -606,4 +606,26 @@ fn scratchpad_caps_its_note_snippet_count_and_snippet_size() {
             .reason(),
         "must be at most 4096 UTF-8 bytes"
     );
+}
+
+#[test]
+fn titles_are_single_line_at_the_write_boundary_only() {
+    assert_eq!(check_title("Build CLI — v2 (ß, 🦀)"), Ok(()));
+    for title in [
+        "a\nb",
+        "a\r\n## forged",
+        "tab\there",
+        "line\u{2028}sep",
+        "bidi\u{202e}flip",
+        "zero\u{200b}width",
+    ] {
+        assert!(check_title(title).is_err(), "{title:?}");
+    }
+    // A title stored before the rule still encodes on an unrelated update and
+    // decodes: the record validator deliberately does not repeat the check.
+    let mut plan = super::test_support::plan(1, "legacy\n## forged", PlanStatus::Active, 0, 0);
+    plan.status = PlanStatus::Done;
+    let record = NativeRecord::Plan(plan);
+    let encoded = encode_record(&record).unwrap();
+    assert_eq!(decode_record(record.kind(), &encoded).unwrap(), record);
 }

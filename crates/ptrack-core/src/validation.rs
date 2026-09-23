@@ -142,7 +142,7 @@ fn hold_reason_problem(reason: &str) -> Option<HoldReasonProblem> {
 /// mirror can smuggle a whole second sentence into a reason — all of which can
 /// reorder or hide what a reason really says without showing up as a visible
 /// character.
-fn is_forbidden_control(value: char) -> bool {
+pub(crate) fn is_forbidden_control(value: char) -> bool {
     value.is_control()
         || matches!(
             value,
@@ -222,6 +222,25 @@ pub fn check_summary(summary: &str) -> Result<(), String> {
              identifiers and counts belong in notes",
             summary.len()
         ));
+    }
+    Ok(())
+}
+
+/// Checks a milestone, plan, task, or issue title at the write boundary.
+///
+/// A title is one line of plain text: every surface renders it inline, and the
+/// Markdown reports render it inside list items and headings, so a line break
+/// or control character in a title could forge a report section. This check
+/// runs only where a title is typed (create and rename); the record validator
+/// deliberately does not repeat it, so a title stored before the rule existed
+/// still loads, re-encodes on unrelated updates, and renders sanitized.
+///
+/// # Errors
+///
+/// Returns a printable sentence when the title is not single-line text.
+pub fn check_title(title: &str) -> Result<(), String> {
+    if title.chars().any(is_forbidden_control) {
+        return Err("the title must be one line without control characters".to_owned());
     }
     Ok(())
 }
