@@ -469,6 +469,11 @@ class TerminalDock {
   // The stopped pane's labelled start control: the Open control's twin, so it
   // shares its availability.
   readonly #startShell = requiredElement<HTMLButtonElement>("#terminal-start-shell");
+  // The stopped-pane notice. It sits above the body while the body is hidden
+  // and moves into the stopped pane itself when the body stays up (an open
+  // scratchpad keeps it visible), so the start action is always reachable.
+  readonly #empty = requiredElement<HTMLElement>("#terminal-empty");
+  readonly #emptyHome = this.#empty.parentElement;
   readonly #start = requiredElement<HTMLButtonElement>("#terminal-start");
   readonly #popOut = requiredElement<HTMLButtonElement>("#terminal-pop-out");
   readonly #restart = requiredElement<HTMLButtonElement>("#terminal-restart");
@@ -3194,6 +3199,15 @@ class TerminalDock {
     });
   }
 
+  #placeEmptyNotice(stopped: boolean, paneId: string): void {
+    this.#empty.hidden = !stopped;
+    if (!stopped) return;
+    const mount = this.#body.hidden
+      ? this.#emptyHome
+      : this.#splitView.mountForPane(paneId) ?? this.#host;
+    if (mount && this.#empty.parentElement !== mount) mount.append(this.#empty);
+  }
+
   #renderState(): void {
     this.#syncTerminalInputLabels();
     const runtime = this.#activeRuntime();
@@ -3222,6 +3236,12 @@ class TerminalDock {
       singlePane: !activeTab || paneIds(activeTab.root).length === 1,
       scratchpadOpen: this.#scratchpadOpen,
     });
+    // Whenever the dock is expanded around a stopped pane, it says so and offers
+    // Start shell; the collapsed bar keeps only its compact Open control.
+    this.#placeEmptyNotice(
+      runtime.state === "closed" && !poppedOut && (dockInteractionEligible || this.#scratchpadOpen),
+      runtime.paneId,
+    );
     this.#message.textContent = runtime.detail;
     this.#message.hidden = runtime.detail === "";
     const shellLabel = runtime.state === "running" && resources

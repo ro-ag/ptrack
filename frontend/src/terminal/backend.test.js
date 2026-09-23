@@ -41,6 +41,19 @@ describe("terminal dock controls", () => {
     expect(created[0].slice(0, 3)).toEqual([3, "zsh", ""]);
   });
 
+  it("keeps Start shell reachable inside the stopped pane while the scratchpad is open", async () => {
+    harness = await bootApp({ open: {} });
+    const empty = harness.$("#terminal-empty");
+    // A fresh dock is the compact bar; its Open control starts the shell.
+    expect(empty.hidden).toBe(true);
+    await harness.click("#terminal-scratchpad-toggle");
+    // The open scratchpad keeps the terminal body up, so the notice moves
+    // into the stopped pane instead of staying hidden above the body.
+    expect(harness.$("#terminal-body").hidden).toBe(false);
+    expect(empty.hidden).toBe(false);
+    expect(empty.parentElement.className).toBe("terminal-split-leaf-mount");
+  });
+
   it("offers no hidden Unicode checkbox; Settings drives the dock's mode", async () => {
     harness = await bootApp({ open: {}, responses: { SetPreferences: (patch) => ({ storage: "ok", preferences: patch }) } });
     expect(harness.$("#terminal-modern-unicode")).toBeNull();

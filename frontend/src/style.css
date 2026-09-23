@@ -5254,11 +5254,11 @@ button.modal-backdrop:active {
 }
 
 /* A stopped pane says so and offers the one action that helps. */
-.terminal-empty {
+.terminal-empty[hidden] {
   display: none;
 }
 
-.terminal-dock[data-state="closed"]:not([data-layout-interactive="false"]) .terminal-empty:has(+ .terminal-body[hidden]) {
+.terminal-empty {
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
@@ -5272,6 +5272,14 @@ button.modal-backdrop:active {
 
 .terminal-empty p {
   margin: 0;
+}
+
+/* Inside a stopped pane (the body stays up for an open scratchpad), the
+   notice covers the empty renderer area instead of pushing the layout. */
+.terminal-split-leaf-mount > .terminal-empty,
+#terminal-host > .terminal-empty {
+  position: absolute;
+  inset: 0;
 }
 
 /* The title already reads "Stopped"; a second "Closed" label says nothing. */
@@ -5493,6 +5501,7 @@ button.modal-backdrop:active {
 }
 
 .terminal-split-leaf-mount {
+  position: relative;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
