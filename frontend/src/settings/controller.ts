@@ -37,8 +37,7 @@ import {
   type SettingsSectionId,
 } from "./sections";
 
-// Long enough to read the longest status the dialog writes, short enough that
-// it never becomes part of the furniture.
+// Status remains long enough to read, then clears.
 const settingsStatusClearDelay = 6000;
 
 function settingsSectionFromTab(tabId: string): SettingsSectionId | null {
@@ -177,15 +176,8 @@ export function createSettingsController(ctx: AppContext) {
     elements.settingsStorageNotice.hidden = notice === "";
   }
 
-  // The dialog's single live region. It sits outside the aria-busy wrapper, so
-  // a long reset is still announced.
-  //
-  // The element never leaves the DOM — removing it is what breaks announcements —
-  // but its text is transient: a confirmation that stays on screen stops reading
-  // as "that just happened" and starts reading as a permanent label. Clearing the
-  // text does not retract what was already announced. Nothing moves or fades, so
-  // there is no motion for a reduced-motion preference to have an opinion about.
-  // A failure stays until the next action: it is the one thing left to act on.
+  // Keep the live region mounted outside aria-busy so resets are announced.
+  // Clear confirmations after a delay; leave failures until the next action.
   function setSettingsStatus(message: string, failed = false, sticky = false): void {
     clearTimeout(settingsStatusTimer);
     elements.settingsSaveStatus.textContent = message;
@@ -264,10 +256,7 @@ export function createSettingsController(ctx: AppContext) {
     elements.settingsResetWindowLayout.disabled = true;
     try {
       ctx.layout.applyLayoutState(normalizeLayoutState(await api().ResetWindowLayout()));
-      // Sticky: a reset outcome is the result of an explicit destructive action
-      // and the one thing left to read. Clearing it also collapses several
-      // wrapped lines out of the footer, which moves the button underneath it
-      // six seconds after anyone last touched anything.
+      // Keep reset outcomes visible; clearing wrapped text would shift the footer.
       setSettingsStatus("Window layout reset to defaults.", false, true);
     } catch (error) {
       setSettingsStatus(messageFrom(error), true);
@@ -298,8 +287,7 @@ export function createSettingsController(ctx: AppContext) {
       ctx.layout.applyLayoutState(defaultLayoutState());
       await loadPreferences();
       void ctx.updates.refreshUpdateState();
-      // Sticky for the same reason as the layout reset, and more so: this
-      // message is three clauses long and wraps to about four lines.
+      // Keep the reset outcome visible to avoid shifting the footer.
       setSettingsStatus(resetApplicationStateMessage(result), false, true);
     } catch (error) {
       setSettingsStatus(messageFrom(error), true);
@@ -318,9 +306,7 @@ export function createSettingsController(ctx: AppContext) {
     }
   }
 
-  // A word-wrapping "Copy" label is what broke this column, so the control is
-  // an icon that cannot break. Its accessible name says what it copies, and
-  // the title repeats it for pointer users who get no label at all.
+  // The icon avoids wrapping; its accessible name and title identify the value.
   function diagnosticCopyButton(row: DiagnosticsRow, label: string): HTMLButtonElement {
     const copy = document.createElement("button");
     copy.type = "button";

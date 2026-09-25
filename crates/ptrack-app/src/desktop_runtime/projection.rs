@@ -36,9 +36,7 @@ pub(super) struct PlanSummaryView {
     /// marker on the existing row rather than a separate grouping.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) hold_reason: Option<String>,
-    /// Present only while the plan is claimed; carries the resolved display
-    /// label (actor name, else the raw identity ID). Display-only — claims
-    /// are mutated through the CLI only, exactly like holds.
+    /// Present only while claimed; carries the resolved display label.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) claimed_by: Option<String>,
     /// Plan-dep IDs still open, computed snapshot-side so the frontend never
@@ -430,11 +428,7 @@ pub(crate) fn snapshot_board_view(
     })
 }
 
-/// The Overview's Recent Memory is project-global by contract: every note and
-/// commit the project keeps, regardless of which plan the board has selected.
-/// The renderer has no other consumer of `BoardView::activity`, so plan
-/// scoping here only ever emptied the feed — a no-plan selection showed just
-/// the project-level notes.
+/// The Overview's Recent Memory includes project-wide notes and commits.
 pub(super) fn recent_activity(snapshot: &ProjectSnapshot) -> Vec<ActivityView> {
     let mut events = Vec::<(Option<i128>, ActivityView)>::new();
     for note in &snapshot.notes {

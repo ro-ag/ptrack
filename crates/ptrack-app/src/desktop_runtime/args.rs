@@ -1,8 +1,6 @@
 //! Positional argument access for the desktop command parser.
 //!
-//! Every accessor reproduces the exact error text the bridge has always
-//! returned for a missing or mistyped argument, so moving the checks into one
-//! parser changed no message a caller can observe.
+//! Accessors preserve the bridge's error text for missing or mistyped arguments.
 
 use std::path::PathBuf;
 

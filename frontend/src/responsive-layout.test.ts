@@ -91,9 +91,7 @@ describe("responsive desktop layout contracts", () => {
     expect(styles).toMatch(
       /\.updates-automatic-option input\s*\{[^}]*flex:\s*0 0 auto;[^}]*width:\s*16px;[^}]*min-height:\s*16px;[^}]*height:\s*16px;[^}]*padding:\s*0;/,
     );
-    // The Startup and Updates opt-ins use the same card. The base
-    // `input { width: 100% }` gave their checkbox the whole row, and
-    // `.dialog label` flattened the card so the label fell underneath it.
+    // The shared card overrides the base full-width input rule for checkboxes.
     expect(styles).toMatch(
       /\.settings-check input\s*\{[^}]*flex:\s*0 0 auto;[^}]*width:\s*16px;[^}]*min-height:\s*16px;[^}]*height:\s*16px;[^}]*padding:\s*0;/,
     );
@@ -151,10 +149,7 @@ describe("responsive desktop layout contracts", () => {
     expect(styles).toMatch(/\.dialog-help\s*\{[^}]*color:\s*var\(--muted\);/);
   });
 
-  // One field pattern for every settings section. The `.dialog ` prefix is
-  // load-bearing: `.dialog label` outranks a bare `.settings-field`, which is
-  // what used to collapse the grid to a block and leave each control starting
-  // at the end of its own label.
+  // The `.dialog` prefix must outrank `.dialog label` to retain the field grid.
   it("gives every settings field one stacked pattern and one rhythm", () => {
     expect(styles).toMatch(
       /\.dialog \.settings-field\s*\{[^}]*display:\s*grid;[^}]*gap:\s*var\(--space-050\);[^}]*margin-bottom:\s*0;/,

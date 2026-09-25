@@ -372,9 +372,8 @@ fn require_private_directory(path: &Path, label: &str) -> StoreResult<()> {
     }
     // Leaked group/other bits — a restore, a sync, a copy under a default
     // umask — are healed by tightening, never refused: removing access cannot
-    // leak anything, while failing closed locked the whole runtime out
-    // (v0.24.x field reports, file and directory alike). The re-read proves
-    // the tightening took effect on a real directory.
+    // leak anything, while failing closed locked the whole runtime out.
+    // The re-read proves the tightening took effect on a real directory.
     let healed = !metadata.file_type().is_symlink()
         && metadata.is_dir()
         && fs::set_permissions(path, fs::Permissions::from_mode(0o700)).is_ok()

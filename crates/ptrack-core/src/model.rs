@@ -277,14 +277,12 @@ pub struct Meta {
     pub updated_at: Timestamp,
     pub format_version: u64,
     pub last_write_version: String,
-    /// Per-actor active plan: identity ID to plan ID, sorted strictly ascending
-    /// by ID. A stored `0` means that actor explicitly has no active plan; an
-    /// absent entry falls back to [`Meta::active_plan`]. Empty for records
-    /// written before payload schema 3.
+    /// Per-actor active plans, strictly sorted by identity ID; empty before
+    /// schema 3. `0` explicitly selects no plan; an absent entry falls back
+    /// to [`Meta::active_plan`].
     pub active_plans: Vec<(String, u64)>,
-    /// Actor directory: identity ID to last-seen display name, sorted strictly
-    /// ascending by ID. Display-only; nothing resolves permissions through it.
-    /// Empty for records written before payload schema 3.
+    /// Display-only actor directory, strictly sorted by identity ID; empty
+    /// before schema 3. Entries grant no permissions.
     pub actors: Vec<(String, String)>,
     /// The most recent deterministic stack scan. `None` for records written
     /// before payload schema 5 and for projects never scanned.

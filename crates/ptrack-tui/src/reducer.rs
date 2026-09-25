@@ -18,9 +18,7 @@ macro_rules! mutate {
 }
 
 /// Applies one key event and returns at most one explicit application effect.
-/// Modal precedence deliberately matches the Go implementation. In particular,
-/// active text input consumes Ctrl+C; it does not quit despite an older matrix
-/// row's over-broad wording.
+/// Active text input consumes Ctrl+C.
 pub fn update(model: &mut Model, key: &Key) -> Option<Effect> {
     if model.welcome {
         return update_welcome(model, key);

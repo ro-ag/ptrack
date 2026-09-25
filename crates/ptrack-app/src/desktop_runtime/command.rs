@@ -683,8 +683,7 @@ pub(super) enum AgentRegistryCommand<'a> {
 impl<'a> WorkspaceCommand<'a> {
     /// Parses one workspace method.
     ///
-    /// Arguments are read in the order the handlers historically read them,
-    /// so a request with several bad arguments still reports the same one.
+    /// Argument order preserves compatibility for requests with several errors.
     ///
     /// # Errors
     /// Returns `"{method} is unavailable"` for a method no workspace serves,

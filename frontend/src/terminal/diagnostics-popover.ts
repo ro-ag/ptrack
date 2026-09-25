@@ -5,10 +5,7 @@ import {
 } from "./diagnostics";
 import type { StreamState } from "./client";
 
-// The ⓘ diagnostics popover as DOM: the toggle, the content-free rows, and the
-// three ways it closes (its close button, Escape, a press anywhere else). The
-// dock and a detached terminal window each mount one over their own markup and
-// supply the view; the rules behind every row live in ./diagnostics.
+// Shared diagnostics popover DOM for dock and detached windows.
 
 export interface TerminalDiagnosticsElements {
   toggle: HTMLButtonElement;
@@ -44,8 +41,7 @@ export class TerminalDiagnosticsPopover {
   readonly #view: () => TerminalDiagnosticView;
   readonly #disposers: Array<() => void> = [];
   #open = false;
-  // Follows the header while the popover is open: the header wraps with the
-  // surface width, and the popover must stay below it rather than over it.
+  // Keep the popover below a wrapping header.
   #observer: ResizeObserver | null = null;
 
   constructor(elements: TerminalDiagnosticsElements, view: () => TerminalDiagnosticView) {
@@ -67,8 +63,7 @@ export class TerminalDiagnosticsPopover {
       this.setOpen(false, true);
     });
     this.#listen(close, "click", () => this.setOpen(false, true));
-    // A popover: a press anywhere else dismisses it. The toggle is excluded
-    // so its own click handler decides, rather than closing and reopening.
+    // Leave toggle clicks to their own handler.
     this.#listen(document, "pointerdown", (event) => {
       if (!this.#open) return;
       const target = event.target;
@@ -129,9 +124,7 @@ export class TerminalDiagnosticsPopover {
   }
 
   /**
-   * The popover hangs just below the header rows, measured rather than
-   * assumed: at a fixed offset it sat over a wrapped header row and the very
-   * toggle that dismisses it.
+   * Places the popover below the measured header.
    */
   #place(): void {
     const { popover, header, surface } = this.#elements;

@@ -4,10 +4,7 @@ import type { PaneActivitySignal } from "./activity";
 import type { PaneRuntimeState } from "./runtime";
 import { shellStatusLabel, type ShellState } from "./shell-integration";
 
-// The words both terminal surfaces put in their header for the active pane:
-// the dock's toolbar and a detached window's info row read the same state the
-// same way, so a shell that says "Prompt · last 0" in one never says
-// "Running" in the other.
+// Shared active-pane labels for dock and detached window headers.
 
 export interface TerminalStateLabelInput {
   state: PaneRuntimeState;
@@ -49,10 +46,7 @@ export function terminalAssociationBadge(
 }
 
 /**
- * A working directory shown read-only. The start of a long path is the part
- * least worth keeping, so the element truncates from the start (see
- * `.terminal-window-cwd` in style.css); the marks pin the leading separator
- * to the start of the line under that right-to-left layout.
+ * Read-only path marked for start truncation in the right-to-left layout.
  */
 export function terminalWorkingDirectoryText(cwd: string): string {
   return cwd === "" ? "Project root" : `‎${cwd}‎`;

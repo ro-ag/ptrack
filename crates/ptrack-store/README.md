@@ -1,77 +1,25 @@
 # ptrack-store
 
-Versioned, pure-Rust transactional storage for the ptrack rewrite.
+`ptrack-store` owns the project and global redb databases. `ProjectStore` and
+`GlobalStore` expose typed operations through an exact active-runtime binding.
+Closure errors abort record changes and ID allocation. A path identity failure
+after a committed write is reported separately so callers do not retry it.
 
-The crate wraps `redb` and deliberately keeps its database and transaction
-handles private. The ptrack storage or migration executable owns real database
-paths and all writes. Tests create isolated files under the operating system's
-temporary directory; they do not discover or open user databases.
+The current application schema is v4. Opening a database validates its kind,
+manifest, exact table set, and stored records before writable use; it does
+not migrate the database. Native payload schemas 1 through 9 remain readable
+and upgrade one record at a time when written. New project data belongs in an
+existing record at the next payload schema: adding a table would make existing
+databases fail the exact-catalog check.
 
-Safety boundaries:
+New database creation refuses existing paths, symlinks, and the legacy bbolt
+filenames. Project operations retain and recheck the canonical root, private
+`.ptrack` directory, database path, and activation binding. Runtime processes
+hold a shared cutover lease; offline activation or rollback requires the
+exclusive lease. A separate bootstrap lease serializes project additions and
+retirements that preserve the live generation.
 
-- `create_new` refuses every existing destination and all symbolic links.
-- Unix create/import operations pin the original non-symlink parent directory,
-  fence its device/inode identity around absence checks, file creation, every
-  parent sync, and successful return, and verify the created file's identity.
-  Creation remains path-relative rather than descriptor-relative: a detected
-  parent swap immediately after `create_new(2)` can retain a private empty file
-  in the moved directory, but no redb content is written and redirected work is
-  never reported as successful. Non-Unix creation currently fails closed
-  because stable safe `std` cannot provide equivalent directory identity.
-- Once it creates a destination entry, a later initialization error leaves the
-  partial file in place for explicit tool-owned recovery; it never unlinks a
-  pathname that another process could have replaced.
-- The legacy bbolt names `ptrack.db` and `global.db` are always forbidden.
-- `open_existing` snapshots a locked descriptor and runs redb validation or
-  repair only against that in-memory copy before upgrading the same descriptor
-  to a writer. It never upgrades the ptrack application schema.
-- Every successful write uses immediate durability and quick-repair metadata.
-- Closure errors and panics abort both record changes and sequence allocation.
-- Project and global collections, key representations, and sequence ownership
-  are closed enums checked by the wrapper.
-- Schema v4 manifests have exact origin-specific key sets. Standalone imports
-  use `json-stage` origin and atomically commit stage version, source format,
-  batch-manifest SHA-256, per-database JSON SHA-256, quarantine count, and the
-  `ready` state. Schema v1-v3 and newer files are rejected without upgrade.
-- `StagedStore` has no write surface. Explicit activation retains the JSON-stage
-  origin, hashes, source format, and private quarantine while binding the store
-  to an exact nonzero generation, database identity, kind, and canonical path.
-  `ProjectStore` and `GlobalStore` verify that binding on every writable open;
-  the first application mutation records `application_writes=true` in the same
-  transaction as the mutation.
-- Typed project mutations allocate IDs, validate foreign keys, update related
-  rows, and prune replay/audit history in one immediate-durability transaction.
-  Typed reads expose consistent `ProjectSnapshot`, counts, and fixed-limit DTOs.
-- Every typed application write revalidates the persisted activation binding,
-  canonical path, and originally opened file identity before mutation and the
-  file identity again after commit. Capability CRUD cannot mint approval:
-  creation is forced disabled and ordinary edits preserve or revoke approval.
-- Bounded result construction decodes only its retained window; filtered exact
-  totals stream rows without collecting them. Association aggregates bound both
-  requested task IDs and total source rows before scanning.
-- Backups take the store writer barrier, create a private destination without
-  clobbering, copy to an identity-pinned temporary file, reopen and attest its
-  exact kind/binding/provenance, then publish with a no-replace hard link and
-  sync the pinned parent. Failed verification never publishes a final path.
-  Platforms where safe parent identity cannot be proven fail closed.
-- Imports accept canonical native codec/schema payloads for every modeled
-  collection. Only global config and backup values retain the validated raw
-  codec. Every native value is decoded, validated, canonically re-encoded, and
-  bound to its collection key before creation, ordinary writes, and reopen.
-- Invalid legacy capabilities and audits may be preserved only in the private
-  `ptrack.migration.quarantine` table. Its closed reason, source bucket, exact
-  source key, exact gob value, and SHA-256 are verified before creation and on
-  reopen. Ordinary collection APIs cannot address quarantine data.
-- Import parent identity is rechecked inside the transaction immediately before
-  committing provenance plus `ready`. A namespace change after that commit is
-  reported distinctly as a committed-path change; it is never described as an
-  incomplete `importing` database. A final transaction commit error is reported
-  as outcome-unknown rather than as a definitely incomplete import.
-- Unix database files are created as `0600` and insecure existing modes fail
-  closed.
-
-The standalone bbolt-to-JSON exporter and JSON-to-redb importer live outside
-the application. They target distinct staging and `.redb` paths, keep Go
-sources read-only, translate modeled records to the native positional codec,
-and revoke or quarantine legacy authority. Application cutover remains a
-separate explicit operation.
+Database files are private to the current user. On Unix, creation uses mode
+`0600`; an existing file with leaked group or other permission bits is
+tightened and verified on open. Windows checks the file's private ACL. A
+database that cannot meet the private-file policy is refused.

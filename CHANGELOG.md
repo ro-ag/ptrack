@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.41.3] - 2026-09-25
+
+### Changed
+- Simplified source comments while retaining safety and compatibility contracts.
+- Removed superseded implementation plans and Go/Wails design notes, and
+  corrected the storage and terminal acceptance documentation.
+
 ## [0.41.2] - 2026-09-23
 
 ### Added

@@ -375,12 +375,8 @@ impl Manager {
         columns: u16,
     ) -> Result<(), ManagerError> {
         let session = self.get(session_id)?;
-        // ponytail: §3's resize fence is only as strong as what the renderer
-        // presents, and the renderer has no lease to present until the pop-out
-        // UI wires one through. Until then a host resize borrows whichever
-        // lease is live, so a released renderer that presents nothing is still
-        // indistinguishable from the host. Drop this fallback — and pass the
-        // presented lease through — the moment the renderer carries one.
+        // Legacy callers borrow the live lease. This cannot distinguish a stale
+        // renderer from the host; remove the fallback once callers supply leases.
         let lease = lease.or_else(|| session.current_lease());
         session.resize(lease, rows, columns).map_err(Into::into)
     }

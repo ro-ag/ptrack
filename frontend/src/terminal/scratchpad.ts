@@ -3,10 +3,7 @@ import {
   type PersistenceTimerClock,
 } from "../workspace/persistence";
 
-// Pure rules for the terminal scratchpad: snippet bookkeeping, the one-line
-// preview, panel geometry, and the localStorage mirrors. The dock only wires
-// DOM, backend, and the persistence scheduler; every decision lives here so it
-// can be tested without a terminal.
+// Scratchpad rules shared by terminal surfaces.
 
 export interface ScratchpadSnippet {
   id: number;
@@ -50,9 +47,7 @@ export const scratchpadStatus = {
 } as const;
 
 /**
- * The `scratchpad:changed` desktop event: a write landed at `revision` for the
- * workspace at `generation`. Content-free; the record is re-read through the
- * fenced command.
+ * Content-free event for a scratchpad write at a workspace revision.
  */
 export interface ScratchpadChangedEvent {
   generation: number;
@@ -79,9 +74,7 @@ export function utf8ByteLength(text: string): number {
 export const scratchpadTextWarnBytes = 4_096;
 
 /**
- * The note is capped in UTF-8 bytes by the store, which a textarea `maxlength`
- * (UTF-16 code units) cannot express: a note of CJK text or emoji can be well
- * under the character limit and still be refused. `null` means nothing to say.
+ * UTF-8 byte-limit notice, or null when no notice is needed.
  */
 export function scratchpadTextLimitNotice(text: string): string | null {
   const bytes = utf8ByteLength(text);
@@ -130,10 +123,8 @@ function nextSnippetId(snippets: readonly ScratchpadSnippet[]): number {
 }
 
 /**
- * Trim-empty text is ignored; text over 4 096 UTF-8 bytes is refused rather
- * than truncated; text equal to an existing snippet moves that snippet to the
- * top keeping its id, pinned flag, and createdAt; an add past 50 evicts the
- * oldest unpinned snippet, and is refused when all 50 are pinned.
+ * Rejects empty or oversized text; matching text keeps its identity and moves
+ * first. A full list evicts the oldest unpinned snippet or refuses the add.
  */
 export function addSnippet(
   snippets: readonly ScratchpadSnippet[],
@@ -313,13 +304,7 @@ export function writeScratchpadWidth(
   }
 }
 
-// ---------------------------------------------------------------------------
-// ScratchpadSaver
-//
-// The load / dirty / write / conflict state machine, lifted out of the dock so
-// it can be tested without a terminal. It owns the record and the debounce
-// scheduler; the host supplies the backend, the clipboard, and three callbacks
-// that touch the DOM. Nothing here reads `document`.
+// ScratchpadSaver: load, dirty, write, and conflict state.
 
 export interface ScratchpadSaverBackend {
   get(generation: number): Promise<{ generation: number; scratchpad: Scratchpad }>;
@@ -339,9 +324,8 @@ export interface ScratchpadSaverHost {
   /** Writes the saved-state hint. */
   status(text: string): void;
   /**
-   * Installs a record that arrived from the store. Returns the local text that
-   * must win instead (the host is mid-edit and `replaceLocalText` is false), or
-   * null to accept the record as it stands.
+   * Installs a store record. Returns null when it replaces local text; otherwise
+   * returns the local edit that must win because `replaceLocalText` is false.
    */
   applyRecord(record: Scratchpad, replaceLocalText: boolean): string | null;
   reportError(error: unknown): void;
@@ -361,8 +345,7 @@ export function isScratchpadConflict(error: unknown): boolean {
 }
 
 /**
- * The stored record a `ScratchpadConflict` carries, or null when the transport
- * dropped it (then the caller re-reads instead).
+ * Extracts a conflict's stored record when present.
  */
 export function scratchpadConflictRecord(error: unknown): Scratchpad | null {
   const stored = conflictPayload(error);
@@ -441,8 +424,7 @@ export class ScratchpadSaver {
   }
 
   /**
-   * Every status line carries the byte budget when it matters: over the cap
-   * the refusal replaces the hint, near it the remaining bytes follow it.
+   * Adds byte-capacity detail to relevant status messages.
    */
   #status(text: string): void {
     const limit = scratchpadTextLimitNotice(this.#record.text);
@@ -488,9 +470,8 @@ export class ScratchpadSaver {
   }
 
   /**
-   * Starts the write. When the record has already been read the backend call is
-   * issued synchronously, so a flush from `dispose()` reaches the runtime before
-   * the caller tears anything down.
+   * Starts the backend write synchronously when loaded so disposal can flush it
+   * before the runtime is torn down.
    */
   save(): Promise<void> {
     if (!this.enabled) return Promise.resolve();
@@ -498,8 +479,7 @@ export class ScratchpadSaver {
       this.#pending = true;
       return Promise.resolve();
     }
-    // Only a first write needs the stored revision, and only while the instance
-    // is alive: after disposal there is no time left to wait for a read.
+    // Only a live first write waits for the stored revision.
     const wait = this.#loaded || this.#disposed ? null : this.ensureLoaded();
     this.#inflight = this.#run(wait);
     return this.#inflight;
@@ -511,8 +491,7 @@ export class ScratchpadSaver {
       if (wait !== null) {
         await wait;
         if (!this.#loaded) {
-          // The read failed; writing at revision 0 would take the conflict path
-          // for what was a transient error. Stay dirty and retry on the next edit.
+          // Keep the edit dirty; revision zero would turn a read failure into a conflict.
           this.#status(scratchpadNotices.saveFailed);
           return;
         }
@@ -558,8 +537,7 @@ export class ScratchpadSaver {
   }
 
   async #recoverConflict(error: unknown): Promise<void> {
-    // Nothing typed is lost: the local note reaches the clipboard before the
-    // stored record replaces it, and the notice says where it went.
+    // Copy local text before replacing it with the stored record.
     let copied = false;
     try {
       await this.#host.setText(this.#record.text);
@@ -574,12 +552,8 @@ export class ScratchpadSaver {
   }
 
   /**
-   * Another surface — the dock or a terminal window — wrote the record at
-   * `revision`. A clean instance re-reads it, so both show the same note. One
-   * holding an edit keeps its text: its own write then meets the revision
-   * check, and the conflict path keeps the typed note on the clipboard and
-   * says so, so nothing typed is ever dropped in silence. Resolves true when
-   * the stored record replaced the local one.
+   * Refreshes a newer write from another surface unless this instance has a
+   * local edit. Resolves true when the stored record replaced local text.
    */
   async refresh(revision: number): Promise<boolean> {
     if (!this.enabled || this.#disposed || !this.#loaded) return false;
@@ -589,8 +563,7 @@ export class ScratchpadSaver {
     try {
       const result = await this.#host.backend.get(this.#host.generation);
       if (result.generation !== this.#host.generation || this.#disposed) return false;
-      // Typed while the read was in flight: that text stays and is written
-      // at the old revision, where the conflict path takes over.
+      // Preserve edits typed while the read was in flight.
       if (this.#edits !== edits || this.#dirty || this.#saving) return false;
       if (result.scratchpad.revision <= this.#record.revision) return false;
       this.#install(result.scratchpad, true);
@@ -610,9 +583,7 @@ export class ScratchpadSaver {
   }
 
   /**
-   * Writes any pending edit and resolves once every write that was started
-   * has settled. A project switch awaits this before the runtime moves to the
-   * next generation: a write issued after that is fenced out and lost.
+   * Settles pending writes before the runtime changes workspace generation.
    */
   async flushPending(): Promise<void> {
     this.flush();

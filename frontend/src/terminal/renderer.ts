@@ -12,9 +12,7 @@ import {
 } from "./profile-settings";
 
 /**
- * Hands a link to the system browser. A runtime without the bridge (a plain
- * browser preview) has nowhere to send it and stays quiet; a bridge that
- * refuses reports it, so a click that did nothing is never silent.
+ * Opens a link through the desktop bridge when available.
  */
 export function openExternalURL(uri: string): Promise<void> {
   const runtime = (globalThis as { runtime?: { BrowserOpenURL?: (uri: string) => unknown } })
@@ -51,9 +49,7 @@ export interface TerminalRendererParts {
 }
 
 /**
- * The renderer both the dock and the terminal window draw a session with:
- * the same options, the same add-ons, the same link rule. Mounting it and
- * wiring the stream stay with each surface.
+ * Creates the shared renderer configuration for dock and detached windows.
  */
 export function createTerminalRenderer(options: {
   settings: NormalizedTerminalProfileSettings;
@@ -83,10 +79,7 @@ export function createTerminalRenderer(options: {
 }
 
 /**
- * Applies a terminal theme and paints the renderer element with its
- * background. xterm's stylesheet paints the viewport black, which otherwise
- * shows as a strip below the last row whenever the pane is not an exact
- * multiple of the row height (glaring in the light theme).
+ * Applies the theme and background to avoid xterm's black viewport strip.
  */
 export function applyTerminalTheme(terminal: Terminal, theme: ITheme): void {
   terminal.options.theme = theme;

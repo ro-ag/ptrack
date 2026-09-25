@@ -93,14 +93,9 @@ pub(super) fn note_title(note: &Note) -> String {
     )
 }
 
-/// Finds `needle` — already lowercased — in `haystack` ignoring case, and
-/// returns the byte range of the match in `haystack` itself.
+/// Finds an already-lowercased `needle` and returns a byte range in `haystack`.
 ///
-/// Offsets found in `haystack.to_lowercase()` do not address the original:
-/// lowercasing changes byte lengths (`İ` grows, the Kelvin sign `K` and `ẞ`
-/// shrink), so they land on the wrong text or inside a character. Matching the
-/// lowercase expansion of each original character keeps every offset on a
-/// boundary of the string it indexes.
+/// Match each original character because lowercasing can change byte lengths.
 pub(crate) fn find_case_insensitive(haystack: &str, needle: &str) -> Option<(usize, usize)> {
     if needle.is_empty() {
         return None;
@@ -110,9 +105,8 @@ pub(crate) fn find_case_insensitive(haystack: &str, needle: &str) -> Option<(usi
     })
 }
 
-/// The byte length of the shortest prefix of `text` whose lowercase form
-/// begins with `needle`, if any. A needle that ends inside one character's
-/// expansion takes the whole character.
+/// Returns the shortest lowercase-matching prefix length, including a whole
+/// character when `needle` ends inside its expansion.
 pub(super) fn lowercase_match_len(text: &str, needle: &str) -> Option<usize> {
     let mut wanted = needle.chars().peekable();
     for (offset, character) in text.char_indices() {

@@ -1,7 +1,3 @@
-// Composition root: builds the shared context, installs every window
-// controller into it, then binds their listeners. Controllers only reach each
-// other through the context, so creation order is free; binding follows the
-// order the listeners were registered in before the split.
 import { createSettingsController } from "./settings/controller";
 import { createAgentLaunchController } from "./terminal/agent-launch-controller";
 import { createAssociationController } from "./terminal/association-controller";

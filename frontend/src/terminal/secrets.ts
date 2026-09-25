@@ -1,29 +1,26 @@
 /**
- * A copy from a terminal is saved to the project's scratchpad, which lives in
- * the project database. A selection holding a credential must not end up
- * there, so every capture is screened first. The screen is deliberately
- * eager: a false positive only costs one clipboard-strip entry, while a
- * false negative writes a live secret to disk.
+ * Screen terminal copies before saving them to the project scratchpad.
+ * Favor false positives over persisting credentials in the project database.
  */
 const credentialPatterns: readonly RegExp[] = [
-  // PEM private keys of every flavour (RSA, EC, OPENSSH, ENCRYPTED, …).
+  // PEM private keys.
   /-----BEGIN [A-Z0-9 ]*PRIVATE KEY( BLOCK)?-----/,
-  // AWS access key ids, and a secret access key assigned by name.
+  // AWS access keys.
   /\b(?:AKIA|ASIA|AGPA|AIDA|AROA|ANPA|ANVA|AIPA)[0-9A-Z]{16}\b/,
   /aws.{0,20}secret.{0,20}["']?\s*[:=]\s*["']?[A-Za-z0-9/+=]{40}\b/i,
-  // GitHub personal, OAuth, user, server and refresh tokens.
+  // GitHub tokens.
   /\bgh[pousr]_[A-Za-z0-9]{36,}\b/,
   /\bgithub_pat_[A-Za-z0-9_]{22,}/,
   // GitLab personal access tokens.
   /\bglpat-[A-Za-z0-9_-]{20,}/,
-  // Slack bot, user, app and refresh tokens.
+  // Slack tokens.
   /\bxox[abeprs]-[A-Za-z0-9-]{10,}/,
-  // OpenAI/Anthropic-style and Stripe live keys.
+  // Provider and Stripe live keys.
   /\bsk-[A-Za-z0-9_-]{20,}/,
   /\b[rs]k_live_[A-Za-z0-9]{16,}/,
   // Google API keys.
   /\bAIza[0-9A-Za-z_-]{35}\b/,
-  // JSON Web Tokens: a header and a payload, both base64url JSON objects.
+  // JSON Web Tokens.
   /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/,
   // HTTP credentials.
   /\bauthorization\s*:\s*(?:bearer|basic|token)\s+\S{8,}/i,

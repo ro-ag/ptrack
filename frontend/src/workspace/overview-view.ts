@@ -30,15 +30,13 @@ import type {
 } from "./snapshot-types";
 import { severityColors } from "./task-status";
 
-// How many discovered projects the Repository panel lists before summarizing
-// the rest. A Cargo workspace routinely discovers more than a dozen.
+// Repository projects shown before the remainder is summarized.
 const STACK_PANEL_PROJECTS = 12;
 
 const HISTORY_BUCKETS = 100;
 
 type DriftFinding = ReturnType<typeof driftPresentation>["findings"][number];
 
-// What each advisory drift finding means, in the words the Overview shows.
 const driftCopy: Partial<Record<DriftFinding["kind"], readonly [string, string]>> = {
   checkoutChangedPath: ["Shared checkout change", "Project-level and unattributed"],
   untrackedFile: ["Untracked file", "Project-level and unattributed"],
@@ -46,11 +44,7 @@ const driftCopy: Partial<Record<DriftFinding["kind"], readonly [string, string]>
   taskDriftSignal: ["Possible task drift", "Provider-neutral structured evidence indicates a current scope mismatch"],
 };
 
-/**
- * How old the rolling summary is, when the snapshot says. A summary that
- * predates the last release reads very differently from one written this
- * morning; with no summary, or no recorded write, there is nothing to date.
- */
+/** Returns the rolling summary's age label. */
 export function summaryAgeLabel(
   summary: string,
   updatedAt: string | null | undefined,
@@ -67,16 +61,11 @@ function evidenceSignals(count: number): string {
   return `${count} evidence signal${count === 1 ? "" : "s"}`;
 }
 
-// "Rust", "Rust and TypeScript", "Rust, TypeScript and Go" — a list a person
-// reads, rather than one joined by separators.
 export function languageSentence(languages: readonly string[]): string {
   if (languages.length <= 1) return languages[0] ?? "no known language";
   return `${languages.slice(0, -1).join(", ")} and ${languages[languages.length - 1]}`;
 }
 
-// The expanded breakdown: one row per language, largest first. The bar is
-// sized by share, but the count sits beside it — a proportion is never the
-// only thing rendered.
 export function stackBreakdown(rows: readonly StackLanguageRow[]): HTMLDListElement {
   const list = document.createElement("dl");
   list.className = "stack-breakdown";
@@ -93,9 +82,6 @@ export function stackBreakdown(rows: readonly StackLanguageRow[]): HTMLDListElem
     const fill = document.createElement("span");
     fill.style.width = `${Math.max(2, Math.round(row.share * 100))}%`;
     bar.append(fill);
-    // Files, lines, and projects each get their own cell so the digits line up
-    // down the list. A language with no counted lines still emits its cell,
-    // empty, rather than shifting every column left on that row.
     const count = document.createElement("span");
     count.className = "stack-breakdown-count";
     count.textContent = `${row.files.toLocaleString()} file${row.files === 1 ? "" : "s"}`;
@@ -131,16 +117,8 @@ export function activityElement(activity: BoardActivity, expanded = false): HTML
   return item;
 }
 
-// The ring's arc carries a gradient along its own length, dim where the arc
-// starts to bright where it ends, so the eye follows the direction of
-// progress. The stop colours come from CSS so the ring re-tints with the
-// theme; the sweep runs corner to corner because the arc starts at the top and
-// travels clockwise.
 function planRingGradient(): SVGElement {
   const defs = svgElement("defs");
-  // The axis starts at twelve o'clock, where the arc starts, and runs to the
-  // bottom right, so a short arc still travels most of the ramp instead of
-  // sampling a sliver of it in the middle.
   const gradient = svgElement("linearGradient", {
     id: "plan-ring-sweep",
     x1: "0.5",
@@ -199,19 +177,11 @@ export function planRingSvg(done: number, total: number): SVGElement {
   return svg;
 }
 
-/** The daily activity grid, its legend, and the totals row. */
 export function heatmapChart(days: readonly HeatmapDay[]): [HTMLDivElement, HTMLDivElement] {
   const columns = heatmapWeeks([...days]);
-  // The chart is read as a shape, not cell by cell, so the cells are sized for
-  // the shape rather than for pointing at one day. Keeping the block short is
-  // what lets Activity sit beside Status on a wide display instead of taking a
-  // row of its own. The SVG scales, so retina sharpness is unaffected.
   const cell = 7;
   const pitch = 9;
-  // Everything here is in viewBox units and scales with the drawing, labels
-  // included, so the gutters are sized against the label size rather than
-  // against pixels. The right margin exists because the last month label
-  // starts on its column and runs past it.
+  // ViewBox units keep gutters proportional to the labels.
   const left = 16;
   const top = 10;
   const right = 10;
@@ -280,12 +250,7 @@ export function heatmapChart(days: readonly HeatmapDay[]): [HTMLDivElement, HTML
   return [chart, totals];
 }
 
-// Heights are square-rooted before they are drawn. Commit activity is heavily
-// skewed — one release day can carry fifty times a normal one — and against a
-// raw maximum every other week collapses into a flat line at the bottom of the
-// card, which is the opposite of a history. The transform is monotonic, so the
-// busiest period is still unmistakably the tallest; it just stops erasing the
-// rest of the project.
+// Square-root scaling keeps unusually busy periods from flattening the chart.
 export function historyPath(
   buckets: readonly { count: number }[],
   width: number,
@@ -304,15 +269,6 @@ export function historyPath(
   return close ? `${line} L ${width} ${floor} L 0 ${floor} Z` : line;
 }
 
-// ------------------------------------------------------- project history
-//
-// The repository's whole life, read from git rather than from p-track's own
-// commit records: those begin only when the hook was installed, so a chart
-// built from them would draw a project that started the day tracking did.
-//
-// The shape is drawn by hand. A charting library was tried here and removed:
-// at a hundred buckets across the card the curve smoothing it offered is not
-// visible, and it cost a dependency and its own visual idiom.
 export function historySvg(timeline: ProjectTimeline): SVGElement {
   const width = 720;
   const height = 96;
@@ -353,7 +309,6 @@ export function historySvg(timeline: ProjectTimeline): SVGElement {
     svgElement("line", { x1: 0, y1: floor, x2: width, y2: floor, class: "history-axis" }),
   );
 
-  // Releases are the landmarks a reader navigates this by.
   timelineMarkers(timeline).forEach((marker) => {
     const at = marker.position * width;
     const rule = svgElement("line", { x1: at, y1: 4, x2: at, y2: floor, class: "history-marker" });
@@ -444,13 +399,7 @@ export function createOverviewView(ctx: AppContext) {
   let projectHistory: ProjectTimeline | null = null;
   let projectHistoryRequested = false;
 
-  // The Tracked files tile doubles as the breakdown's disclosure control: the
-  // languages live one click away instead of crowding the tile row.
-  //
-  // This is a native <details>, not a button with a click handler. The browser
-  // owns the open/closed state, so the interaction cannot be broken by anything
-  // that happens during a re-render — and it keeps keyboard and screen-reader
-  // behaviour for free.
+  // Native disclosure provides keyboard and screen-reader behavior.
   function stackDisclosure(profile: StackProfile, rows: readonly StackLanguageRow[]): HTMLDetailsElement {
     const details = document.createElement("details");
     details.className = "stat stack-details";
@@ -474,21 +423,14 @@ export function createOverviewView(ctx: AppContext) {
     details.append(summary);
 
     if (rows.length) details.append(stackBreakdown(rows));
-    // Remember the state so a snapshot refresh does not collapse the panel
-    // under the reader.
+    // Preserve the disclosure state across snapshot refreshes.
     details.addEventListener("toggle", () => {
       stackDetailExpanded = details.open;
     });
     return details;
   }
 
-  // Re-rendering the Overview empties several tall lists before refilling them,
-  // and fitRecentMemory reads layout while they are empty. That clamps the
-  // page's scrollTop to the momentarily shorter content, and refilling never
-  // puts it back — so every snapshot, rescan and heatmap load threw the reader
-  // back to the top of the page. Capture the offset around any re-render and
-  // restore it once the DOM is whole, including the frame in which the
-  // late-settling parts finish.
+  // Keep rerenders from clamping scroll position while tall lists are empty.
   function withOverviewScrollPreserved(render: () => void): void {
     const page = elements.overviewPage;
     if (page.hidden) {
@@ -533,17 +475,11 @@ export function createOverviewView(ctx: AppContext) {
     );
   }
 
-  // A summary that keeps to the guide is shown whole, as prose. One written as a
-  // digest of notes cannot be made readable by styling it, so the card folds it
-  // and says which rule it broke instead of pretending it reads.
   function renderSummary(board: Board): void {
     const text = board.summary ?? "";
     const display =
       text || "No rolling summary yet. Agents can update it with ptrack summary set.";
-    // Every snapshot re-renders this card, and folding a summary the reader
-    // deliberately opened is the same bug as scrolling them back to the top.
-    // Only new text earns a fresh fold; the same text keeps the state it was
-    // left in. Read before the write, or the comparison is against itself.
+    // Preserve an expanded summary unless its text changed.
     const unchanged = elements.summary.dataset.source === display;
     const expanded = unchanged && elements.summary.dataset.expanded === "true";
 
@@ -571,8 +507,6 @@ export function createOverviewView(ctx: AppContext) {
     elements.summaryMetrics.textContent = dense && shape ? summaryShapeCaption(shape) : "";
   }
 
-  // The Overview is project-wide: totals never change with the selected plan
-  // (the per-plan numbers stay on the board header).
   function renderProjectStats(board: Board): void {
     const progress = document.createElement("div");
     progress.className = "status-progress";
@@ -583,9 +517,6 @@ export function createOverviewView(ctx: AppContext) {
     ];
     metrics.filter(([, total, label]) => total || label !== "Milestones").forEach(([done, total, label]) => {
       const metric = statElement(`${done}/${total}`, label);
-      // Tasks get no bar: the ring beside this tile is already that bar, drawn
-      // from the same two numbers. The fraction stays as the exact count the
-      // ring rounds off.
       if (label !== "Tasks") {
         const bar = document.createElement("progress");
         bar.max = total || 1;
@@ -602,15 +533,9 @@ export function createOverviewView(ctx: AppContext) {
       statElement(board.stats.tasksBlocked, "Blocked"),
       statElement(board.stats.openIssues, "Open issues"),
       statElement(board.stats.notes, "Notes"),
-      // Commits recorded against tasks, not the repository's Git history (the
-      // Project history chart counts those).
+      // Task-linked commits; the timeline chart counts repository history.
       statElement(board.stats.commits, "Linked commits"),
     );
-    // Tracked files, counted from the manifests git tracks. A line count is not
-    // reported: one vendored directory or generated bundle outweighs the code
-    // that defines the project. The tile expands into the per-language
-    // breakdown rather than spending a tile on each language — a Cargo
-    // workspace discovers a project per crate, and those tiles all read "Rust".
     if (stackProfile?.state === "ready") {
       counts.append(stackDisclosure(stackProfile, stackLanguageRows(stackProfile.projects ?? [])));
       if (stackProfile.incomplete) {
@@ -719,8 +644,7 @@ export function createOverviewView(ctx: AppContext) {
     elements.historyCaption.textContent = historyCaption(timeline);
   }
 
-  // Read once per project and re-read only when a snapshot lands, since the
-  // backend reuses its answer until HEAD moves.
+  // The backend reuses its answer until HEAD moves.
   async function loadProjectHistory(force = false): Promise<void> {
     if (workspaceController.state.status !== "open") return;
     if (projectHistoryRequested && !force) return;
@@ -739,12 +663,7 @@ export function createOverviewView(ctx: AppContext) {
     }
   }
 
-  // The stack profile is re-read on every snapshot and when the Overview is
-  // first shown. A plain read never forces a scan: the backend rescans on its
-  // own only when HEAD moved since the stored profile, so a re-read is usually
-  // a stored read. Only the Repository panel's Rescan control (`rescan`)
-  // forces a full scan. A failed read shows the failure and waits for the next
-  // snapshot's plain read; it never escalates to a forced scan.
+  // Only the Repository Rescan control forces a full scan.
   async function loadStackProfile(rescan = false): Promise<void> {
     if (workspaceController.state.status !== "open") return;
     if (stackRescanInFlight && !rescan) return;
@@ -797,8 +716,7 @@ export function createOverviewView(ctx: AppContext) {
     elements.historyCaption.textContent = "";
   }
 
-  // The heatmap is fetched lazily: only once the Overview is shown, and
-  // again (forced) after a snapshot reload while it is visible.
+  // Fetch the heatmap only for a visible Overview.
   async function loadHeatmap(force = false): Promise<void> {
     if (workspaceController.state.status !== "open") return;
     if (heatmapRequested && !force) return;
@@ -871,8 +789,7 @@ export function createOverviewView(ctx: AppContext) {
       intelligenceItem(
         title,
         `${meaning} · ${evidence} · ${evidenceSignals(finding.evidenceCount)}. This is advisory, not proof of drift.`,
-        // Drift is advisory evidence, never an error: it reads in the info
-        // colour whatever its severity.
+        // Drift is advisory evidence, not an error.
         "advisory",
       ),
     );
@@ -912,18 +829,12 @@ export function createOverviewView(ctx: AppContext) {
 
   function renderStackProjects(projects: StackProfile["projects"] & object): void {
     if (!projects.length) {
-      // Nothing to disclose: a control that opens onto an empty list is worse
-      // than a sentence saying there is nothing there.
       elements.stackProjectsDisclosure.hidden = true;
       elements.stackEmpty.hidden = false;
       return;
     }
     elements.stackProjectsDisclosure.hidden = false;
     elements.stackEmpty.hidden = true;
-    // A workspace discovers a project per crate, so the evidence rows are the
-    // tallest thing on this page by a wide margin. The disclosure line carries
-    // what a reader wants at a glance — how many, in what — and the rows stay
-    // one click away.
     const languages = [
       ...new Set(projects.map((project) => languageLabel(project.language))),
     ];
@@ -931,9 +842,6 @@ export function createOverviewView(ctx: AppContext) {
     elements.stackProjectsSummary.textContent = `${count} discovered project${
       count === 1 ? "" : "s"
     } in ${languageSentence(languages)}`;
-    // The panel is the evidence view, so it stays per-project — but a large
-    // workspace discovers dozens, and the panel is not a place to scroll
-    // through 64 rows. The Overview carries the per-language totals.
     const shown = projects.slice(0, STACK_PANEL_PROJECTS);
     const hidden = projects.length - shown.length;
     shown.forEach((project) => {
@@ -951,9 +859,6 @@ export function createOverviewView(ctx: AppContext) {
     }
   }
 
-  // The Repository panel's stack section. Every state is explicit: a project
-  // that cannot be scanned says so rather than rendering an empty list that
-  // reads as "no code here".
   function renderStackProfile(): void {
     elements.stackSummary.replaceChildren();
     elements.stackProjects.replaceChildren();

@@ -5,8 +5,7 @@ import { terminalLinkActivation } from "./renderer";
 
 describe("terminalPlatform", () => {
   it("treats every Apple platform string the same way", () => {
-    // The terminal window used to test /Mac/ alone, so an iPad-reporting
-    // WebKit got Linux shortcuts there and Mac shortcuts in the dock.
+    // Keep iPad-reporting WebKit aligned with dock Mac shortcuts.
     for (const platform of ["MacIntel", "iPad", "iPhone"]) {
       expect(terminalPlatform(platform)).toBe("mac");
     }

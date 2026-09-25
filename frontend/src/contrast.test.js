@@ -2,9 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-// WCAG 2.x contrast for the design tokens in style.css. The token blocks are
-// parsed from source so a palette edit that drops a text colour below AA fails
-// here instead of in a screenshot review.
+// Parse source tokens so palette edits retain WCAG AA contrast.
 const css = readFileSync(resolve(import.meta.dirname, "style.css"), "utf8");
 
 function tokenBlock(selector) {

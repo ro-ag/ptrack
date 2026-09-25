@@ -75,11 +75,8 @@ pub struct BoundDesktopWorkspace {
     timeline: Mutex<Option<TimelineCache>>,
 }
 
-/// The repository timeline and the HEAD it was read at.
-///
-/// Reading it walks the whole history through git, which is far too expensive
-/// to repeat every time the Overview re-renders — and the answer cannot change
-/// until HEAD does. This is the same trigger the stack scan already uses.
+/// The repository timeline cached by the HEAD it was read at.
+/// Git history cannot change until HEAD changes, so reuse the cached result.
 struct TimelineCache {
     head: Option<String>,
     value: Value,

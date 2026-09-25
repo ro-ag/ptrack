@@ -308,9 +308,8 @@ fn replay_window_is_bounded_sequenced_and_resumed_before_live_output() {
     // The PTY is never stalled by an unattached renderer: the oldest bytes are
     // dropped instead, and the dropped prefix can no longer be replayed.
     assert_eq!(session.replay_bounds(), (8, 16));
-    // A wrapped buffer resumes from the oldest retained byte and reports the
-    // gap: refusing here would make a re-attach impossible to complete, which
-    // §4 forbids. Claiming output the PTY never produced is still refused.
+    // Wrapped replay starts at the oldest retained byte and reports its gap.
+    // Requests beyond produced output remain invalid.
     let wrapped = session.attach_output(0).unwrap();
     assert!(wrapped.gap);
     assert_eq!(wrapped.replay, b"89abcdef");
@@ -432,8 +431,7 @@ fn a_refused_attachment_keeps_the_ticket_and_a_granted_one_burns_it() {
     session.start().unwrap();
     session.set_ticket("ticket".to_owned());
     let held = session.attach_output(0).unwrap();
-    // The lease is held, so the ticket buys nothing — but burning it here would
-    // charge every re-claim race a full round trip for a replacement.
+    // A refused attachment must not spend its ticket.
     assert_eq!(
         session.attach_with_ticket("ticket", 0).err(),
         Some(StreamAttachRefusal::Unavailable)

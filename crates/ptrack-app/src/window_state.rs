@@ -5,10 +5,10 @@
 //! one transaction per write, and a malformed or newer record that reads as
 //! defaults instead of being destroyed.
 //!
-//! The main window's rect stays at the root of the record, exactly where plan
-//! #14 put it, so an existing record keeps working. Terminal windows share one
-//! `terminal` entry: they are interchangeable, minted fresh every run, and none
-//! of them can be matched to the window that wrote a per-label entry last run.
+//! The main window's rect stays at the root of the record for compatibility
+//! with existing records. Terminal windows share one `terminal` entry: they are
+//! interchangeable, minted fresh every run, and none can be matched to the
+//! window that wrote a per-label entry last run.
 //! A capture therefore only ever rewrites the one of the two it came from.
 //!
 //! The window is owned entirely by Rust. Nothing here is reachable from the

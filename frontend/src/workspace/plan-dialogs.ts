@@ -210,10 +210,8 @@ export function createPlanDialogs(ctx: AppContext) {
       closeContextMenu();
     };
     const onFocusOut = (event: FocusEvent) => {
-      // WKWebView never focuses a button on mousedown, so clicking a menu item
-      // blurs the focused item with a null relatedTarget; closing here would
-      // remove the menu before its click ever dispatches. Outside clicks are
-      // covered by the document listener below.
+      // WKWebView blurs without relatedTarget on menu mousedown; wait for click.
+      // The document listener handles outside clicks.
       if (!event.relatedTarget) return;
       if (event.relatedTarget instanceof Node && menu.contains(event.relatedTarget)) return;
       closeContextMenu();

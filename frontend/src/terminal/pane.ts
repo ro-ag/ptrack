@@ -226,7 +226,7 @@ interface TerminalStreamClaim {
   url: string;
   fromSequence: number;
   gap: boolean;
-  /** The session state at mint time; an ended session only replays. */
+  /** State at ticket minting; ended sessions replay only. */
   state?: string;
 }
 
@@ -336,21 +336,17 @@ export interface TerminalDockHandle {
   setVisible(visible: boolean): void;
   setLayoutLocked(locked: boolean): void;
   /**
-   * Applies the stored Unicode mode to every open pane. Settings owns the
-   * preference and has already saved it; the dock only follows it.
+   * Applies the stored Unicode mode to open panes.
    */
   setModernUnicode(enabled: boolean): void;
   /**
-   * Starts the active tab's shell, exactly as the Open control would, and does
-   * nothing while that control is unavailable.
+   * Starts the active tab's shell when available.
    */
   startSession(): void;
   setApplicationOverlayOpen(open: boolean, focusTerminal: false): void;
   /**
-   * Writes pending project-scoped edits (the scratchpad note) and resolves once
-   * they settled, bounded so a stalled write cannot hold a project switch.
-   * Awaited before a workspace transition, while the runtime still accepts
-   * this dock's generation.
+   * Waits, with a bound, for pending scratchpad writes before the workspace
+   * generation changes.
    */
   flushPending(): Promise<void>;
   dispose(): void;
@@ -453,12 +449,9 @@ class TerminalDock {
   readonly #profile = requiredElement<HTMLSelectElement>("#terminal-profile");
   readonly #cwd = requiredElement<HTMLInputElement>("#terminal-cwd");
   readonly #open = requiredElement<HTMLButtonElement>("#terminal-open");
-  // The stopped pane's labelled start control: the Open control's twin, so it
-  // shares its availability.
+  // Stopped-pane start control shares Open availability.
   readonly #startShell = requiredElement<HTMLButtonElement>("#terminal-start-shell");
-  // The stopped-pane notice. It sits above the body while the body is hidden
-  // and moves into the stopped pane itself when the body stays up (an open
-  // scratchpad keeps it visible), so the start action is always reachable.
+  // Stopped-pane notice remains reachable when the body is visible.
   readonly #empty = requiredElement<HTMLElement>("#terminal-empty");
   readonly #emptyHome = this.#empty.parentElement;
   readonly #start = requiredElement<HTMLButtonElement>("#terminal-start");
@@ -597,8 +590,7 @@ class TerminalDock {
   /** Exits that arrive while a tab is moving into its window. */
   readonly #popOutExits = new PopOutExitLedger<TerminalExit>();
   /**
-   * Popped-out sessions whose shell already ended in the window. Their held
-   * pane shows the exit; pop-in only closes them, it never reopens a tab.
+   * Detached sessions that ended; pop-in closes rather than restores them.
    */
   readonly #endedPoppedOut = new Set<string>();
   #authorizedRuntimeRemoval = new Set<string>();
@@ -652,9 +644,7 @@ class TerminalDock {
         body: this.#body,
       },
       {
-        // Zero means "no project is open", which the runtime treats as an
-        // unfenced call: the dock is only mounted with an open workspace's
-        // generation (>= 1), so zero disables scratchpad traffic entirely.
+        // Zero disables scratchpad traffic outside an open workspace.
         generation: this.#workspaceGeneration,
         backend: {
           get: (generation) => this.#backend.GetScratchpadV1(generation),
@@ -662,9 +652,7 @@ class TerminalDock {
             this.#backend.SetScratchpadV1(generation, revision, scratchpad),
         },
         storage: localStorage,
-        // A hidden dock measures zero. Reporting that as the body width would
-        // clamp a stored panel width down to the floor, so an unmeasurable
-        // dock keeps only the lower bound (see `clampScratchpadWidth`).
+        // Preserve stored width while a hidden dock is unmeasurable.
         bodyWidth: () => this.#stage.clientWidth > 0 ? this.#body.clientWidth : 0,
         hasSelection: () => {
           const resources = this.#activeRuntime().resources;
@@ -683,15 +671,12 @@ class TerminalDock {
         clipboardAvailable: () => this.#nativeClipboardAvailable(),
         setClipboardText: (text) => this.#writeClipboard(text),
         openChanged: (open) => {
-          // The dock's closed-and-collapsed CSS rule steps aside while this is
-          // "true", so the panel stays usable with no live session.
+          // Keep the panel usable without a live session.
           this.#dock.dataset.scratchpadOpen = String(open);
           requestAnimationFrame(() => {
             if (!this.#disposed) this.#fitPanes(this.#activeTabPaneIds());
           });
-          // Recomputes `#terminal-body`'s visibility now that the dataset flag
-          // changed; harmless to call again since renderState is otherwise
-          // called right after this during mount.
+          // Recompute body visibility after the panel state changes.
           this.#renderState();
         },
         resized: () => requestAnimationFrame(() => {
@@ -785,9 +770,7 @@ class TerminalDock {
     this.#listen(this.#open, "click", () =>
       void this.#runOperation((runtime) => this.#openTerminal(runtime)),
     );
-    // The tab-row play control is the discoverable session start: it starts
-    // a closed session, restarts an exited or failed one, and hides while a
-    // live session is running.
+    // Start or restart from the tab-row control.
     this.#listen(this.#start, "click", () =>
       void this.#runOperation((runtime) =>
         runtime.state === "closed"
@@ -1176,11 +1159,7 @@ class TerminalDock {
   }
 
   /**
-   * Move the active tab — split tree and all — into its own window (step 3
-   * §3). Every pane's renderer is released first so the window can claim the
-   * leases; if anything fails every session is claimed back here, because a
-   * failed pop-out must never leave any session unowned, and a tab must move
-   * whole or not at all.
+   * Moves the active tab to its own window, reclaiming all sessions on failure.
    */
   async #popOutTab(): Promise<void> {
     const workspace = this.#tabController.workspace;
@@ -1190,16 +1169,13 @@ class TerminalDock {
     for (const paneId of paneIds(tab.root)) {
       const runtime = this.#runtimes.get(paneId);
       const sessionId = runtime?.session?.sessionId;
-      // The control is only shown when every pane is running with a session;
-      // a pane that lost its session since renders the control's gate stale,
-      // and a partial move must be unrepresentable.
+      // Refuse a partial move if a pane lost its session.
       if (!runtime || !sessionId) return;
       panes.push({ paneId, runtime, sessionId });
     }
     if (panes.length === 0) return;
     const shape = structuredClone(tab);
-    // From the teardown on, the pane no longer owns the session and the
-    // window does not yet listen: an exit in between is kept, not dropped.
+    // Record exits during the handoff gap.
     this.#popOutExits.begin(panes.map((pane) => pane.sessionId));
     const result = await popOutTerminal({
       release: () => {
@@ -1208,7 +1184,7 @@ class TerminalDock {
       open: () =>
         this.#backend.OpenTerminalWindow(panes.map((pane) => pane.sessionId), shape),
       reclaim: async () => {
-        // Every pane is tried: one refused claim must not strand the rest.
+        // Reclaim every pane so none is stranded.
         let failure: unknown = null;
         for (const pane of panes) {
           try {
@@ -1245,9 +1221,7 @@ class TerminalDock {
   }
 
   /**
-   * Attach a running session to a pane with a freshly minted ticket. The
-   * sequence asked for is 0: a new renderer has no scrollback, so the server
-   * replays everything it still retains and reports a gap when it kept less.
+   * Attaches a session with a fresh ticket and full retained replay.
    */
   async #claimSessionIntoPane(
     runtime: DockPaneRuntime,
@@ -1289,10 +1263,7 @@ class TerminalDock {
   }
 
   /**
-   * One stream client per attach. The client's single-use rule and its write
-   * generation are what stop input from a released renderer reaching a
-   * re-claimed PTY, so a re-attach mints a fresh ticket and a fresh client
-   * rather than reopening the old one.
+   * Uses a fresh client and ticket per attach to fence released renderers.
    */
   #connectStream(
     runtime: DockPaneRuntime,
@@ -1306,14 +1277,12 @@ class TerminalDock {
     let gapShown = claim?.gap === true;
     const client: TerminalStreamClient = new TerminalStreamClient({
       createWebSocket: (streamUrl) => new WebSocket(streamUrl),
-      // The rendered byte count is the sequence: a re-claim resumes exactly
-      // where the renderer stopped drawing, never where the socket stopped.
+      // Resume from rendered bytes, not the socket position.
       writeOutput: (output, done) => resources.terminal.write(output, () => {
         resources.sequence += output.byteLength;
         done();
       }),
-      // A superseded client says nothing: only the pane's current stream
-      // drives its state.
+      // Ignore superseded stream clients.
       onStateChange: (state) => {
         if (resources.client === client) {
           this.#streamStateChanged(runtime, ticket, sessionId, state);
@@ -1343,9 +1312,7 @@ class TerminalDock {
   }
 
   /**
-   * Claim the session back after the stream ended without anyone asking it to
-   * — a reload, a missed pong, a write stall. Bounded retries inside the
-   * re-claim grace window; after that the session is gone and the pane says so.
+   * Reclaims unexpectedly lost streams within the grace window.
    */
   #scheduleStreamReclaim(
     runtime: DockPaneRuntime,
@@ -1437,11 +1404,8 @@ class TerminalDock {
   }
 
   /**
-   * A terminal window closed and handed its tab back (§6). The panes that
-   * held its place take the sessions — and the shape comes back as the
-   * window last had it, so a split resized there stays resized here. A pane
-   * that is gone or already busy closes its session cleanly rather than
-   * orphaning it.
+   * Restores returned sessions and the detached window's final split shape.
+   * Closes sessions whose holder pane is gone or busy to prevent orphaning.
    */
   #popTerminalBackIn(payload: TerminalWindowClosed): void {
     if (this.#disposed) return;
@@ -1840,12 +1804,7 @@ class TerminalDock {
     });
   }
 
-  /**
-   * The one paste path. Whatever the text comes from — the system clipboard or
-   * a scratchpad snippet — it crosses the same ticket fence, the same
-   * single-flight latch, and the same alternate-screen and multi-line review
-   * decisions, so the two callers cannot drift apart.
-   */
+  /** Shared paste path for clipboard and scratchpad snippets. */
   async #pasteText(
     runtime: DockPaneRuntime,
     resources: PaneResources,
@@ -2323,13 +2282,7 @@ class TerminalDock {
     }
   }
 
-  /**
-   * A popped-out shell ended in its window — closed there, or exited on its
-   * own. The pane that held its place stops holding it: nothing is coming
-   * back, so the notice that kept the pane closed gives way to an ordinary
-   * exited pane the user can restart or close. Without this the held pane
-   * kept promising a terminal until the window itself was closed.
-   */
+  /** Releases a holder when its detached shell ends, allowing restart or close. */
   #releaseHeldPane(result: TerminalExit, paneId: string): void {
     this.#poppedOut.delete(result.sessionId);
     this.#endedPoppedOut.add(result.sessionId);
@@ -2496,11 +2449,6 @@ class TerminalDock {
   }
 
   // ---- Scratchpad -------------------------------------------------------
-  //
-  // The panel is dock furniture: it hides with the dock and refits the panes
-  // whenever its geometry changes. Its DOM wiring is `ScratchpadPanel`, shared
-  // with the detached terminal window; every rule it obeys lives in
-  // ./scratchpad. What follows is the dock's side of that host contract.
 
   #flushScratchpad(): void {
     this.#scratchpad.flush();
@@ -2589,10 +2537,7 @@ class TerminalDock {
       if (this.#isActive(runtime)) this.#renderState();
       return;
     }
-    // A stream that ended without anyone asking for it is not the end of the
-    // session: the PTY is still running and the lease can be claimed back.
-    // One the server closed normally is: the output ended with the shell, so
-    // the pane waits for the exit instead of replaying the same scrollback.
+    // Reclaim unexpected stream loss; normal closure waits for the exit.
     const resources = runtime.resources;
     if (state !== "open" && resources && !resources.disposed) {
       const disposition = streamCloseDisposition({
@@ -2821,13 +2766,9 @@ class TerminalDock {
     }
     this.#dock.dataset.state = runtime.state;
     this.#dock.dataset.layoutInteractive = String(dockInteractionEligible);
-    // The pane holds the popped-out session's place, so it must not be reused
-    // for a new terminal: that would leave the returning session nowhere to go.
+    // Holder panes cannot be reused before their detached session returns.
     const poppedOut = this.#paneIsPoppedOut(runtime.paneId);
-    // An empty pane that is waiting for a window keeps its body, so the notice
-    // saying where its terminal went is actually visible. The scratchpad also
-    // keeps the body up while it is open, even with no session, so its note
-    // and clipboard strip stay reachable before any terminal starts.
+    // Keep the body visible for detached-session notices and scratchpad access.
     this.#body.hidden = !terminalBodyVisible({
       state: runtime.state,
       poppedOut,
@@ -2972,12 +2913,7 @@ class TerminalDock {
     return panesHoldPoppedOutTerminal([paneId], this.#poppedOut.values());
   }
 
-  /**
-   * Refuse a close that would remove a pane holding a popped-out terminal. The
-   * pane has no session, so the close intent never asks about it, and the
-   * window that has the shell would find its place gone and close the session
-   * instead. Both structural closes and the workspace reset come through here.
-   */
+  /** Refuses closes that would remove a detached terminal's holder pane. */
   #poppedOutCloseRefused(closingPaneIds: readonly string[]): boolean {
     if (!panesHoldPoppedOutTerminal(closingPaneIds, this.#poppedOut.values())) {
       return false;

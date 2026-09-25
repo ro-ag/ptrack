@@ -784,7 +784,7 @@ fn plan_hold_and_resume_round_trip_through_every_surface() {
 #[test]
 fn dep_blocked_tasks_surface_in_next_and_context_on_both_formats() {
     let mut application = seeded();
-    // Task #1 (todo) now waits on a fresh open task #3.
+    // Task #1 waits on the newly opened task #3.
     application.snapshot.tasks[0].deps = vec![3];
     application.snapshot.tasks.push(Task {
         id: 3,
@@ -1622,7 +1622,7 @@ fn wip_gate_attributes_a_started_task_to_its_plan_claim_owner() {
     let mut application = seeded();
     application.snapshot.plans[0].claim_owner = Some("me".to_owned());
     application.snapshot.tasks[0].status = TaskStatus::Doing;
-    // A teammate renamed my in-progress task, so they are its last editor.
+    // The teammate who renamed the in-progress task is its last editor.
     application.snapshot.tasks[0].actor = Some("teammate".to_owned());
     application.identity = Some(ActorIdentity {
         id: "me".to_owned(),
@@ -1632,7 +1632,7 @@ fn wip_gate_attributes_a_started_task_to_its_plan_claim_owner() {
     let message = result.expect_err("still my wip").to_string();
     assert!(message.contains("task #1"), "{message}");
 
-    // The same edit history in a plan the teammate claimed never blocks me.
+    // A teammate's claim does not block this identity.
     application.snapshot.plans[0].claim_owner = Some("teammate".to_owned());
     application.snapshot.tasks[0].actor = Some("me".to_owned());
     let (result, _, _) = invoke_with(&mut application, &["ptrack", "task", "add", "my work"]);
@@ -1668,11 +1668,11 @@ fn wip_gate_scopes_to_the_configured_identity() {
         name: "Me".to_owned(),
     });
 
-    // Another agent's in-progress work never blocks this identity.
+    // Another agent's in-progress work does not block this identity.
     let (result, _, _) = invoke_with(&mut application, &["ptrack", "task", "add", "my work"]);
     assert_eq!(result.expect("add"), RunOutcome::ExitSuccess);
 
-    // The caller's own started task does.
+    // The caller's own started task blocks it.
     application.snapshot.tasks[0].actor = Some("me".to_owned());
     let (result, _, _) = invoke_with(&mut application, &["ptrack", "task", "add", "more work"]);
     assert!(result.is_err());

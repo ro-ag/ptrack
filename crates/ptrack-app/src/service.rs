@@ -793,8 +793,8 @@ pub fn integration_task_id(snapshot: &ProjectSnapshot, plan_id: u64) -> Option<u
 /// active plan's integration task waits until it is the only unheld work left.
 ///
 /// `plan add` creates that task first, so by order it would be handed out
-/// before any real work; the goal-anchoring spec makes it the plan's final
-/// task. Once it is already started it is selected like any other task.
+/// before any real work; it is selected after the plan's other work. Once
+/// started, it is selected like any other task.
 ///
 /// # Errors
 /// Returns the core report error when the active plan pointer is dangling.
@@ -2361,7 +2361,7 @@ fn project_label(root: &Path) -> String {
 }
 
 /// Fail-closed target-open refusal: the store's own manifest/schema message,
-/// plus the upgrade hint the spec requires when the target was written by a
+/// plus an upgrade hint when the target was written by a
 /// newer build.
 pub(crate) fn target_open_error(root: &Path, error: &ptrack_store::StoreError) -> AppError {
     let hint = if matches!(

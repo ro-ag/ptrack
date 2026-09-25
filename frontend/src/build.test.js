@@ -6,9 +6,7 @@ import { build } from "vite";
 const frontendRoot = resolve(import.meta.dirname, "..");
 const distRoot = resolve(frontendRoot, "dist");
 
-// Index of the `</tag>` that closes the element opened at `start`, or -1 when
-// the markup never closes it. Depth counting is what makes a nesting claim a
-// nesting claim: every `</tag>` closes the nearest open one.
+// Returns the matching closing tag index, or -1 for unclosed markup.
 function closingIndex(html, start, tag) {
   const tags = new RegExp(`<${tag}\\b|</${tag}>`, "g");
   tags.lastIndex = start;
@@ -93,15 +91,13 @@ describe("production asset layout", () => {
     const versionStyles = styles.match(/\.app-version\{([^}]*)\}/)?.[1];
     expect(versionStyles).toMatch(/(?:^|;)position:relative(?:;|$)/);
     expect(versionStyles).toMatch(/(?:^|;)z-index:1(?:;|$)/);
-    // Tauri never reads the Wails-era drag property; drag regions are
-    // data-tauri-drag-region attributes instead.
+    // Tauri uses data-tauri-drag-region attributes.
     expect(styles).not.toContain("--wails-draggable");
     expect(styles).toMatch(/\.state-card\{[^}]*box-shadow:/);
     expect(styles).not.toMatch(
       /\.state-card\{[^}]*(?:animation|transform|opacity):/,
     );
     // A suspended background WebView may retain the first animation frame.
-    // Landing content must never depend on animation completion to be visible.
     const landingSource = readFileSync(resolve(frontendRoot, "src/landing.css"), "utf8");
     expect(landingSource).not.toMatch(/#welcome-panel\s*\{[^}]*opacity:\s*0(?:;|\s)/);
     expect(landingSource).toContain('prefers-reduced-motion:reduce');
@@ -367,8 +363,7 @@ describe("production asset layout", () => {
     expect(app).toContain("Earlier output was not carried over.");
     expect(app).toContain("This terminal is running in its own window.");
     expect(app).toContain("Reconnecting…");
-    // Step 3: the terminal window carries its whole tab — the bridge speaks
-    // tab shapes, and the window offers the dock's own per-session surfaces.
+    // Detached windows carry complete tab shapes and session controls.
     expect(app).toContain("GetTerminalWindowTab");
     expect(app).toContain("SetTerminalWindowTab");
     expect(index).toMatch(

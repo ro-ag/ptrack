@@ -156,8 +156,7 @@ function terminalWindowView(): TerminalWindowView {
 }
 
 /**
- * The system clipboard this window can write to: the bridge's native
- * clipboard where it is installed, the WebView's otherwise, or null.
+ * Uses the native clipboard, WebView clipboard, or neither.
  */
 function windowClipboard(): ((text: string) => Promise<void>) | null {
   const write = window.runtime?.ClipboardSetText;
@@ -223,13 +222,7 @@ class WindowPane {
 }
 
 /**
- * A terminal window renders its tab's split tree and nothing else: it asks
- * which tab it owns, re-hydrates the shape through the same controller and
- * split view the main window uses, claims one renderer lease per pane, and
- * attaches. Closing the window returns the whole tab to the main window, so
- * the pop-in control is just a window close reachable from the keyboard.
- * Only focus and split resizes may change the shape here; a resize is pushed
- * back into the assignment so pop-in returns the tab as last seen.
+ * Renders an assigned tab and returns its shape to the main window on close.
  */
 class DetachedTerminalWindow {
   readonly #panes = new Map<string, WindowPane>();
@@ -278,9 +271,7 @@ class DetachedTerminalWindow {
     return this.ctx.api();
   }
 
-  // The same stored Settings overrides the main window applies: the shared
-  // profile record plus this origin's localStorage, so a font or scrollback
-  // choice means the same thing in every window (§4).
+  // Apply the same stored profile overrides as the main window.
   settingsForProfile(profileId: string): NormalizedTerminalProfileSettings {
     const overrides = this.#overrides;
     const profile = this.profiles.find((candidate) => candidate.id === profileId);
@@ -344,10 +335,7 @@ class DetachedTerminalWindow {
       },
     );
     this.#panes.set(paneId, pane);
-    // The dock's shell-integration markers, read for the info row only. A
-    // claimed session's nonce stays with the main window, so only the
-    // standard markers speak for it; an agent's output is never read as a
-    // shell's.
+    // Claimed sessions lack the main window nonce; read only standard markers.
     if (!agent) {
       for (const identifier of [7, 133, 633] as const) {
         terminal.parser.registerOscHandler(identifier, (payload) => {
@@ -366,8 +354,7 @@ class DetachedTerminalWindow {
     return pane;
   }
 
-  // One status line for the window: the least-connected pane speaks for it,
-  // and a shell that ended says so in its own scrollback.
+  // The least-connected pane supplies the window status.
   renderStatus(): void {
     const tab = this.currentTab();
     const states = tab ? paneIds(tab.root).map((id) => this.#panes.get(id)?.state || "connecting") : [];
@@ -420,8 +407,7 @@ class DetachedTerminalWindow {
   }
 
   // ---------------------------------------------------------- scratchpad
-  // The dock's panel over this window's markup: the same project record,
-  // generation-fenced; a write from either surface re-reads in the other.
+  // Shared, generation-fenced scratchpad panel.
 
   async writeClipboard(text: string): Promise<void> {
     const write = windowClipboard();
@@ -466,9 +452,7 @@ class DetachedTerminalWindow {
       if (change?.generation !== this.generation) return;
       void panel.refresh(Number(change.revision));
     }, -1);
-    // The note is written before the window goes: closing it is the most
-    // common way to leave the panel, and a closing window may never get to
-    // run the debounce.
+    // Flush before unload because the debounce may not run.
     window.addEventListener("beforeunload", () => panel.flush());
     window.addEventListener("blur", () => panel.flush());
     document.addEventListener("visibilitychange", () => {
@@ -481,8 +465,7 @@ class DetachedTerminalWindow {
     if (!selection) return;
     try {
       await this.writeClipboard(selection);
-      // Only an explicit copy reaches the scratchpad, and only the text the
-      // user selected; a copy that looks like a secret stays on the clipboard.
+      // Only explicit selections reach the scratchpad; secret-looking copies do not.
       this.#scratchpad?.capture(selection);
     } catch (error) {
       this.reportError(error);
@@ -511,8 +494,7 @@ class DetachedTerminalWindow {
 
   saveWindow(): Promise<void> {
     const workspace = this.workspace;
-    // Once the original tab is closed here, the shape keeps its identity but
-    // no tree: pop-in has nothing to hand back to the pane it left behind.
+    // A closed original tab returns without a tree.
     const source = workspace.tabs.find((item) => item.id === this.#originalTab.id) ??
       { id: this.#originalTab.id, title: this.#originalTab.title };
     const ids = workspace.tabs.flatMap((item) => paneIds(item.root));
@@ -526,9 +508,7 @@ class DetachedTerminalWindow {
   }
 
   // ------------------------------------------------- per-session surfaces
-  // The same search, paste guard, and zoom the dock offers (§4). Project
-  // chrome that changes the project — writeback and the association editor —
-  // stays in the main window; the info row above only states it.
+  // Shared search, paste, and zoom controls; project editing stays in main.
   runSearch(incremental: boolean, backwards = false): void {
     const pane = this.activePane();
     if (!pane) return;
@@ -625,9 +605,8 @@ class DetachedTerminalWindow {
     });
   }
 
-  // The dock's paste guard, fed by the event's own clipboard payload. This
-  // window has no shell integration, so the alternate screen alone never
-  // waives the multi-line review: output can enter it at will.
+  // Paste review does not use advisory shell state; alternate-screen output
+  // alone cannot bypass multi-line review.
   bindPanePaste(pane: WindowPane): void {
     pane.terminal.textarea?.addEventListener("paste", (event) => {
       event.preventDefault();
@@ -695,24 +674,19 @@ class DetachedTerminalWindow {
     }
   }
 
-  // One client per attach: the stream ticket is single-use and the client's
-  // write generation is what stops input from a released renderer reaching a
-  // re-claimed PTY, so a re-attach builds a new one instead of reopening it.
+  // Fresh single-use tickets and clients fence released renderers from the PTY.
   attach(pane: WindowPane, url: string, from: number, sessionEnded = false): void {
     pane.sequence = Number(from || 0);
     pane.sessionEnded = sessionEnded;
     const next: TerminalStreamClient = new TerminalStreamClient({
       createWebSocket: (streamUrl) => new WebSocket(streamUrl),
-      // The rendered byte count is the sequence: a re-claim resumes
-      // exactly where the renderer stopped drawing, not where the socket
-      // stopped.
+      // Resume from rendered bytes, not the socket position.
       writeOutput: (output, done) => pane.terminal.write(output, () => {
         pane.sequence += output.byteLength;
         done();
       }),
       onStateChange: (state) => this.onStreamState(pane, next, state),
-      // The replay starts where the server says, even when the buffer
-      // wrapped again after the claim was minted.
+      // Accept the server sequence when replay wrapped after ticket minting.
       onGap: (sequence) => {
         if (pane.client !== next) return;
         if (sequence !== null) pane.sequence = sequence;
@@ -723,8 +697,7 @@ class DetachedTerminalWindow {
     next.connect(url);
   }
 
-  // A stream that ended without the shell ending is recoverable: claim the
-  // lease back from the last rendered sequence, bounded so it cannot spin.
+  // Reclaim unexpected stream loss from the rendered sequence with a bound.
   scheduleReclaim(pane: WindowPane): void {
     if (pane.reclaiming) return;
     pane.reclaiming = true;
@@ -762,8 +735,7 @@ class DetachedTerminalWindow {
     this.attach(pane, claim.url, claim.fromSequence, streamClaimEnded(claim));
   }
 
-  // Listening starts before the first claim: an exit that lands while the
-  // panes connect must reach them, not a window that subscribed too late.
+  // Subscribe before claims so exits during connection are not lost.
   listenForExits(): void {
     window.runtime?.EventsOnMultiple?.("terminal:exit", (payload) => {
       const exit = payload && typeof payload === "object"
@@ -1121,7 +1093,7 @@ export function createTerminalWindow(ctx: AppContext) {
   }
 
   function bind(): void {
-    // The terminal window binds its listeners once it knows which tab it owns.
+    // Listeners bind after the assigned tab is known.
   }
 
   return {

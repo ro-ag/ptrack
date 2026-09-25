@@ -2439,8 +2439,8 @@ fn validate_private_permissions(path: &Path, metadata: &fs::Metadata) -> StoreRe
     }
     // Leaked group/other bits — a git checkout, a copy under a default umask —
     // are healed by tightening, never refused: removing access cannot leak
-    // anything, while failing closed here bricked every command through the
-    // active binding and crashed the desktop at launch (v0.24.0 field report).
+    // anything, while refusing the file blocks every command through the
+    // active binding and prevents desktop startup.
     // The re-read proves the tightening took effect on the same file.
     let healed = fs::set_permissions(path, fs::Permissions::from_mode(0o600)).is_ok()
         && fs::symlink_metadata(path)

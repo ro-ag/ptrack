@@ -1442,8 +1442,7 @@ fn board_view_carries_dep_edges_and_their_computed_open_subset() {
     assert!(board["plans"][1].get("depsOpen").is_none(), "{board}");
 }
 
-/// Fixture builders for the Overview activity contract test. They live at
-/// module scope: inner fns would push the test past clippy's line budget.
+/// Fixture builders for the Overview activity test.
 fn activity_plan(id: u64) -> Plan {
     Plan {
         id,
@@ -1720,7 +1719,7 @@ fn shutdown_is_idempotent_and_fences_future_calls() {
     );
 }
 
-/// Contract section 2: the window assignment map is reachable through the
+/// The window assignment map is reachable through the
 /// bridge with its exact response shapes, and closing the project takes every
 /// terminal window with it.
 #[test]
@@ -3744,10 +3743,8 @@ fn unclaimed_plans_omit_claimed_by_from_the_board_payload() {
 
 #[test]
 fn bounded_workspace_snapshot_follows_the_per_actor_active_plan() {
-    // The bounded snapshot path (GetWorkspaceSnapshot) used to read the raw
-    // stored singleton via store.meta() instead of resolving it through the
-    // configured actor, so a claimed-plan GUI opened the wrong plan and
-    // marked the wrong row active once identities existed.
+    // The bounded snapshot must resolve the current plan through the
+    // configured actor, not the raw legacy singleton.
     let directory = TestDirectory::new("bounded-snapshot-per-actor");
     let (bindings, _task_id) = bound_bindings(&directory);
     let project = bindings.project.as_ref().unwrap();
@@ -3804,14 +3801,12 @@ fn desktop_plan_lifecycle_commands_rename_preview_delete_and_copy_within() {
     );
     let plan_id = 1_u64;
 
-    // Rename.
     workspace
         .invoke(
             "RenamePlanV1",
             &[json!(7), json!(plan_id), json!("Renamed")],
         )
         .unwrap();
-    // Preview (force=false): counts, nothing deleted.
     let preview = workspace
         .invoke("DeletePlanV1", &[json!(7), json!(plan_id), json!(false)])
         .unwrap();
@@ -3837,7 +3832,6 @@ fn desktop_plan_lifecycle_commands_rename_preview_delete_and_copy_within() {
     assert_eq!(copied["summary"]["title"], json!("Second"));
     assert_eq!(copied["summary"]["moved"], json!(false));
 
-    // Delete (force=true) removes it.
     let deleted = workspace
         .invoke("DeletePlanV1", &[json!(7), json!(plan_id), json!(true)])
         .unwrap();
@@ -4087,7 +4081,7 @@ fn scratchpad_commands_read_write_and_fence_their_revision() {
     assert_eq!(bridged["stored"]["text"], "release checklist");
     assert_eq!(bridged["stored"]["snippets"][0]["id"], 1);
 
-    // Both commands are generation-fenced exactly like AddTaskNoteV2.
+    // Both commands are generation-fenced.
     assert_eq!(
         workspace
             .invoke("GetScratchpadV1", &[json!(8)])
@@ -4526,7 +4520,7 @@ fn terminal_windows_reach_only_their_own_commands_and_assignment() {
     };
     let commands = allowed_terminal_window_commands();
     assert!(commands.windows(2).all(|pair| pair[0] < pair[1]));
-    // Exact: widening what a terminal window may call is a reviewed change.
+    // This list pins the terminal window's allowed commands.
     assert_eq!(
         commands,
         [

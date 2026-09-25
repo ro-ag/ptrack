@@ -4,8 +4,7 @@ import { element } from "../workspace/dom";
 import { mountTerminalDock, type TerminalBackend } from "./pane";
 
 /**
- * The dock's backend: the desktop bridge fenced to one workspace generation.
- * A reply from any other generation is refused rather than applied.
+ * Desktop bridge fenced to one workspace generation.
  */
 export function generationTerminalBackend(api: () => Backend, generation: number): TerminalBackend {
   function assertGeneration<T extends { generation: unknown }>(response: T): T {
@@ -38,8 +37,7 @@ export function generationTerminalBackend(api: () => Backend, generation: number
     RollbackLinkedAgent(sessionID) {
       return api().RollbackLinkedAgentLaunchV2(generation, sessionID);
     },
-    // Both are fenced by the workspace generation inside the runtime, so their
-    // responses carry no generation of their own to assert here.
+    // Runtime generation fencing applies to both responses.
     OpenTerminalWindow(sessions, shape) {
       return api().OpenTerminalWindow(sessions, shape);
     },
@@ -111,9 +109,7 @@ export function generationTerminalBackend(api: () => Backend, generation: number
 }
 
 /**
- * Glue between the window and the terminal dock: the dock's backend is the
- * desktop bridge fenced to one workspace generation, and the dock is mounted
- * for one project root at a time.
+ * Mounts a generation-fenced terminal dock for one project root.
  */
 export function createTerminalBackendController(ctx: AppContext) {
   const { api, openHelpDestination, showError, workspaceController } = ctx;
@@ -191,9 +187,7 @@ export function createTerminalBackendController(ctx: AppContext) {
     terminalProjectRoot = "";
   }
 
-  // The working-directory field is narrower than some paths: its tooltip
-  // carries the full path, and when it is not being edited it scrolls to the
-  // end so the project folder name stays visible.
+  // Keep the path tail visible; the tooltip retains the full path.
   function bindWorkingDirectoryTail(): void {
     const cwd = document.querySelector("#terminal-cwd");
     if (!(cwd instanceof HTMLInputElement)) return;

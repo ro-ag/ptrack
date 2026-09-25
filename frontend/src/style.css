@@ -1,5 +1,4 @@
-/* p-track design system — deep space theme with a mint brand accent. */
-/* The dark palette lives in :root; [data-theme="light"] overrides it.   */
+/* Dark palette in :root; light overrides use [data-theme="light"]. */
 
 @font-face {
   font-family: "p-track Nerd Font";
@@ -9,7 +8,7 @@
   font-display: block;
 }
 
-/* ---------------------------------------------------------------- tokens */
+/* Tokens */
 
 :root {
   font-family:
@@ -110,8 +109,7 @@
   --space-400: 32px;
 }
 
-/* The density preference switches the whole spacing scale, so every surface
-   built on the tokens tightens together. */
+/* Density changes the shared spacing scale. */
 :root[data-density="compact"] {
   --space-050: 3px;
   --space-100: 6px;
@@ -208,7 +206,7 @@
   --shadow-lane-drag: 0 12px 32px rgba(15, 23, 42, 0.14);
 }
 
-/* ----------------------------------------------------------------- base */
+/* Base */
 
 * {
   box-sizing: border-box;
@@ -257,7 +255,6 @@ p {
   margin-top: 0;
 }
 
-/* Thin, low-contrast scrollbars that brighten on hover. */
 * {
   scrollbar-color: var(--scrollbar-thumb) transparent;
   scrollbar-width: thin;
@@ -284,7 +281,7 @@ p {
   background-clip: padding-box;
 }
 
-/* -------------------------------------------------------------- buttons */
+/* Buttons */
 
 button {
   min-height: 36px;
@@ -349,7 +346,7 @@ button:disabled {
   box-shadow: var(--highlight-inset), var(--shadow-control);
 }
 
-/* ------------------------------------------------------------- app shell */
+/* App shell */
 
 #app {
   --sidebar-width: 248px;
@@ -739,11 +736,7 @@ button:disabled {
   background: var(--info);
 }
 
-/* The project's current plan is pinned above the list as a recessed "void"
-   card — darker than the rows around it — carrying the only progress meter.
-   It lives outside the scrolling grid on purpose: WebKit sizes a grid track
-   to the card's min-height instead of its wrapped-flex content height, which
-   painted the stats line over the row below. Block flow here is immune. */
+/* Keep the current-plan card outside the scrolling grid; WebKit otherwise sizes its track from min-height and overlaps the next row. */
 .sidebar-current {
   flex: 0 0 auto;
   margin-bottom: var(--space-100);
@@ -919,7 +912,7 @@ button:disabled {
   flex-direction: column;
 }
 
-/* --------------------------------------------------------------- topbar */
+/* Topbar */
 
 .topbar {
   height: 44px;
@@ -959,12 +952,7 @@ button:disabled {
     0 0 42px rgba(var(--accent-rgb), 0.12);
 }
 
-/* The identity block is three lines on one left edge with one rhythm between
-   them, and the mark is sized to the block it marks instead of to a fixed 36px
-   that matched nothing above or below it. The 2px inset is optical, not
-   arithmetic: the eyebrow's line box overshoots its cap height and the project
-   name's overshoots its baseline, so a mark drawn flush to the box reads long
-   at both ends even though the numbers agree. */
+/* Align the three identity lines to one edge. The mark has a 2px optical inset to match visible glyph bounds. */
 .sidebar-brand {
   align-items: stretch;
 }
@@ -987,9 +975,7 @@ button:disabled {
   margin: 0;
 }
 
-/* A button stretched by the grid would centre its own text and break the one
-   left edge the block is built on, and would take a click target as wide as
-   the sidebar with it. */
+/* Prevent the grid from stretching this button beyond the identity text. */
 .sidebar-brand-identity .app-version {
   justify-self: start;
 }
@@ -1108,7 +1094,7 @@ select option {
   background: var(--surface-raised);
 }
 
-/* --------------------------------------------------------- state screen */
+/* State screen */
 
 .workspace {
   min-width: 0;
@@ -1471,7 +1457,7 @@ select option {
   display: none;
 }
 
-/* ------------------------------------------------------------ workspace */
+/* Workspace */
 
 .work-area {
   min-width: 0;
@@ -1573,11 +1559,7 @@ select option {
   line-height: 1.55;
 }
 
-/* The rolling summary is the only text on this page meant to be read rather
-   than scanned, so it is set larger and looser than the labels and tiles
-   around it, on a measure short enough to track from line to line. A summary
-   that keeps to the guide (2-4 sentences, under 1000 bytes) fits here whole,
-   which is why there is no clamp in the default state. */
+/* The rolling summary stays unclamped at the guide length (2–4 sentences, under 1000 bytes). */
 .summary {
   max-width: 68ch;
   margin-bottom: 0;
@@ -1587,9 +1569,7 @@ select option {
   overflow-wrap: anywhere;
 }
 
-/* A summary written as a digest of notes is unreadable by nature: mashed
-   tokens, no sentence breaks, hundreds of characters. Rather than pretend it
-   is prose, the card folds it to five lines and says what is wrong with it. */
+/* Fold summaries that fail prose checks to five lines and show the reason. */
 .summary[data-dense="true"]:not([data-expanded="true"]) {
   display: -webkit-box;
   overflow: hidden;
@@ -1598,9 +1578,7 @@ select option {
   -webkit-line-clamp: 5;
 }
 
-/* The flag borrows the hold tone, the app's existing "needs attention, not
-   broken" colour, and a left rule rather than a badge, matching how the status
-   counts already mark a column. */
+/* Use the advisory hold tone and left rule for summary warnings. */
 .summary-flag {
   flex: 0 0 auto;
   border-left: 2px solid var(--hold);
@@ -1663,10 +1641,7 @@ select option {
   box-shadow: var(--highlight-inset);
 }
 
-/* The tracked-files tile is a native disclosure: the browser owns open and
-   closed, so the interaction survives any re-render of the panel. Closed it
-   sits in the tile row; open it takes the whole row and the breakdown reads
-   underneath it. */
+/* Native disclosure supplies keyboard behavior; the view restores its open state. */
 .stack-details {
   cursor: pointer;
 }
@@ -1924,7 +1899,7 @@ select option {
   padding-bottom: 0;
 }
 
-/* --------------------------------------------------------- intelligence */
+/* Intelligence */
 
 .intelligence-section {
   color: var(--text-soft);
@@ -2116,7 +2091,7 @@ select option {
   color: var(--doing);
 }
 
-/* -------------------------------------------------------------- activity */
+/* Activity */
 
 .activity-list {
   position: relative;
@@ -2185,7 +2160,7 @@ select option {
   text-align: center;
 }
 
-/* -------------------------------------------------------------- overview */
+/* Overview */
 
 .overview-page {
   min-width: 0;
@@ -2196,7 +2171,7 @@ select option {
 }
 
 
-/* ---------------------------------------------------------------- issues */
+/* Issues */
 
 .issues-page {
   min-width: 0;
@@ -2336,11 +2311,7 @@ select option {
   letter-spacing: -0.038em;
 }
 
-/* Wide displays get more cards per row rather than wider cards: on a 2K
-   display a two-column grid stretches every card until a progress bar runs
-   half the width of the screen. The grid is its own query container because
-   it lives in a resizable pane — how much room it has is not a fact about the
-   window. */
+/* Query the resizable pane, so wide displays gain columns without stretching cards. */
 .overview-grid {
   container-type: inline-size;
   display: grid;
@@ -2350,29 +2321,20 @@ select option {
   align-items: start;
 }
 
-/* Status and Activity need about twice a card's width, not the whole row. At
-   two columns that is still full width; from four columns up the two of them
-   share a row instead of stacking, which is where the screen space on a 2K
-   display actually goes. */
+/* Span Status and Activity across two columns when the grid has at least four. */
 .overview-wide {
   min-width: 0;
   grid-column: span 2;
 }
 
-/* Once the grid holds four columns, the north star and the rolling summary
-   take two apiece: both are sentences to read rather than tiles to scan, and a
-   single column sets them to about forty characters a line. The threshold is
-   the width at which a fourth column appears, not a round number. */
+/* At four columns, give each text-heavy card two columns for readable line lengths. */
 @container (min-width: 1300px) {
   .summary-section {
     grid-column: span 2;
   }
 }
 
-/* The north star is one sentence: it gets the whole first row, so the row is
-   exactly as tall as the goal and no card beside it is left half empty. The
-   remaining cards are ordered so the dense grid fills every row at two,
-   three, and four columns. */
+/* Give the north star the first full row; pack remaining cards at each column count. */
 .overview-grid > .north-star {
   grid-column: 1 / -1;
 }
@@ -2473,31 +2435,20 @@ select option {
   gap: var(--space-050);
 }
 
-/* Open issues and Recent memory are lists that grow with the project, and a
-   long one dictated the height of its whole grid row — leaving a hole beside
-   it wherever the neighbouring card was shorter. They scroll within a height
-   that matches the Activity card instead. The full lists live on the Issues
-   page and in memory history, which is where someone reading past the top of
-   either one is going anyway. */
+/* Bound these lists to the Activity card height; full lists have their own views. */
 .overview-page .issue-list,
 .overview-page .activity-list {
   max-height: 232px;
   overflow-y: auto;
 }
 
-/* An expanded panel must not set the height of its whole grid row. On a busy
-   repository the branch list alone ran seven hundred pixels, which left a
-   third of the page empty beside it and pushed everything below out of sight.
-   Each list scrolls within a bound instead. */
+/* Bound expanded lists so one long branch list does not stretch its entire grid row. */
 .overview-page .intelligence-section .intelligence-list {
   max-height: 264px;
   overflow-y: auto;
 }
 
-/* A branch name, a path and a SHA all want monospace. A note body does not:
-   it is prose, and at this size the monospace turned the panel into a wall
-   nobody could read. Two lines each, in the reading face, with the whole note
-   a click away in memory history. */
+/* Use monospace for identifiers, regular text for note bodies, and limit the preview to two lines. */
 .overview-page #overview-blockers .intelligence-detail,
 .overview-page #overview-notes .intelligence-detail {
   display: -webkit-box;
@@ -2539,12 +2490,7 @@ select option {
   gap: var(--space-100);
 }
 
-/* The ring is the one figure on this page meant to be read from across a desk,
-   so it is sized to fill the height the status tiles beside it produce. It is
-   deliberately NOT stretched to the flex line: with an aspect ratio, a
-   stretched item resolves its width from its own max constraint and then
-   forces the row to match, which inflates the panel and leaves a void under
-   the tiles. A fixed square keeps the tiles in charge of the card's height. */
+/* Keep the ring square and fixed-size so its aspect ratio cannot stretch the status row. */
 .plan-ring {
   flex: 0 0 auto;
   width: 140px;
@@ -2572,10 +2518,7 @@ select option {
   transition: stroke-dashoffset 300ms var(--ease);
 }
 
-/* The same three notes the north star card plays — deep teal, green, mint —
-   but along the arc rather than down an edge. Two stops read as flat at this
-   size: the ramp needs a dark end to travel from, so it starts part
-   transparent over the card and arrives at the brightest accent. */
+/* Use a three-stop teal-to-mint ramp along the progress arc. */
 .plan-ring-sweep-from {
   stop-color: var(--accent-dim);
   stop-opacity: 0.3;
@@ -2700,7 +2643,7 @@ select option {
   font-size: 0.9375rem;
 }
 
-/* ----------------------------------------------------------------- board */
+/* Board */
 
 .board-shell {
   min-width: 0;
@@ -2851,7 +2794,7 @@ select option {
   gap: var(--space-100);
 }
 
-/* -------------------------------------------------------- form controls */
+/* Form controls */
 
 input,
 textarea {
@@ -2908,7 +2851,7 @@ textarea::placeholder {
   white-space: nowrap;
 }
 
-/* ----------------------------------------------------------- board lanes */
+/* Board lanes */
 
 .board {
   min-height: 0;
@@ -3083,7 +3026,7 @@ textarea::placeholder {
   flex: 0 0 auto;
 }
 
-/* ----------------------------------------------------------------- cards */
+/* Cards */
 
 .card {
   margin-bottom: var(--space-100);
@@ -3291,7 +3234,7 @@ textarea::placeholder {
   font-size: 0.75rem;
 }
 
-/* ---------------------------------------------------------------- modals */
+/* Modals */
 
 .modal {
   position: fixed;
@@ -3544,7 +3487,7 @@ button.modal-backdrop:active {
   font-weight: 700;
 }
 
-/* ------------------------------------------------------ about and settings */
+/* About and settings */
 
 .about-identity {
   border: 1px solid var(--line);
@@ -3667,20 +3610,7 @@ button.modal-backdrop:active {
   margin-top: 0;
 }
 
-/* One field pattern for every section: the label above a full-width control,
-   with its help text under the control in the same single column. Stacked
-   rather than a label column because this dialog has to reflow at 320 CSS
-   pixels and at 400% zoom, where any two-column grid collapses to exactly this
-   anyway, and because a free-text field like the terminal font family wants the
-   whole width. One column also means the label, the control, its native select
-   chevron, and the help text all share a left and a right edge with no width to
-   tune per row.
-
-   The specificity matters: `.dialog label` is more specific than a bare
-   `.settings-field`, so the grid here used to lose to its `display: block` and
-   `margin-bottom: 6px`. That is what left every control starting at the end of
-   its own label, text inputs stacked while selects sat inline, and one extra
-   6px under every field the panel gap knew nothing about. */
+/* Use one-column fields so controls retain width at 320 CSS px and 400% zoom. The `.dialog` prefix outranks `.dialog label`, preserving the grid and field spacing. */
 .dialog .settings-field {
   display: grid;
   gap: var(--space-050);
@@ -3706,10 +3636,7 @@ button.modal-backdrop:active {
   box-shadow: none;
 }
 
-/* Quiet at rest, asserting under the pointer and under focus. What relaxes at
-   rest is the inset shadow, which carries no meaning; the boundary itself stays
-   on --control-border, contrast-tested at 3:1, because an edge nobody can find
-   is not a softer control, it is a missing one. */
+/* Keep the control edge on the 3:1 border token at rest; only its inset shadow relaxes. */
 .dialog .settings-field select:hover,
 .dialog .settings-field input:hover {
   border-color: var(--text-soft);
@@ -3723,13 +3650,7 @@ button.modal-backdrop:active {
     0 0 0 4px rgba(var(--accent-rgb), 0.22);
 }
 
-/* The boolean pattern: a checkbox beside its own label in a card. Same
-   `.dialog ` prefix as the value fields and for the same reason — `.dialog
-   label` outranks the bare class and was flattening this row to a block, which
-   is what dropped the label underneath its own checkbox.
-
-   The card groups the control, it is not the control's own boundary, so it can
-   rest quieter than a control edge and still assert on approach. */
+/* Use a checkbox card with `.dialog` specificity so `.dialog label` cannot flatten its row. */
 .dialog .settings-check {
   display: flex;
   align-items: flex-start;
@@ -3806,9 +3727,7 @@ button.modal-backdrop:active {
   font-weight: 650;
 }
 
-/* The value column carries the value, an optional line of context under it, and
-   the copy control in a track of its own — so a long path can shrink to nothing
-   without ever squeezing the control beside it. */
+/* Give long values a shrinkable track and the copy control its own track. */
 .settings-diagnostic dd {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -3834,9 +3753,7 @@ button.modal-backdrop:active {
   line-height: 1.4;
 }
 
-/* An icon rather than the word "Copy", which is what used to break to "Cop y"
-   when the value beside it grew. Named by aria-label, titled for the pointer,
-   and 26px square so the target clears the 24px floor. */
+/* Icon-only copy control with accessible name and a 26px target. */
 .settings-diagnostic-copy {
   grid-area: 1 / 2 / 2 / 3;
   align-self: center;
@@ -3846,9 +3763,7 @@ button.modal-backdrop:active {
   height: 26px;
   display: grid;
   place-items: center;
-  /* Same rule as every other control boundary in this dialog: --control-border,
-     contrast-tested at 3:1. --line is ~1.2:1 on the dialog, and an edge nobody
-     can find is not a softer control, it is a missing one. */
+  /* Use the 3:1 control border; `--line` has insufficient contrast on the dialog. */
   border: 1px solid var(--control-border);
   border-radius: 7px;
   color: var(--text-soft);
@@ -3857,11 +3772,7 @@ button.modal-backdrop:active {
   box-shadow: none;
 }
 
-/* Only a row that carries a detail has a second line to centre against, and it
-   is the one the control used to sit too high on. A row without one is a single
-   line the control already matches, and spanning it there would push the value
-   up off the control's centre. The detail precedes the control in the DOM, so
-   the sibling combinator is what "this row has two lines" looks like in CSS. */
+/* Span the copy control only when a detail line exists; otherwise spanning lifts the value off center. */
 .settings-diagnostic-detail ~ .settings-diagnostic-copy {
   grid-row: 1 / -1;
 }
@@ -3889,8 +3800,7 @@ button.modal-backdrop:active {
   gap: var(--space-100);
 }
 
-/* The status and the reset are one row, not two fragments pinned to opposite
-   corners: a confirmation belongs beside the action that produced it. */
+/* Keep reset status beside its action. */
 .settings-dialog-footer {
   display: flex;
   flex-wrap: wrap;
@@ -3960,7 +3870,7 @@ button.modal-backdrop:active {
   margin-top: var(--space-250);
 }
 
-/* -------------------------------------------------------- plan lifecycle */
+/* Plan lifecycle */
 
 .context-menu {
   position: fixed;
@@ -4081,7 +3991,7 @@ button.modal-backdrop:active {
   line-height: 1.45;
 }
 
-/* ---------------------------------------------------- command palette */
+/* Command palette */
 
 .palette-modal {
   place-items: start center;
@@ -4246,7 +4156,7 @@ button.modal-backdrop:active {
   text-align: center;
 }
 
-/* ---------------------------------------------------------------- drawer */
+/* Drawer */
 
 #task-drawer.modal,
 #issue-drawer.modal {
@@ -4556,7 +4466,7 @@ button.modal-backdrop:active {
   font-size: 0.75rem;
 }
 
-/* ----------------------------------------------------------------- toast */
+/* Toast */
 
 .notice-stack {
   position: fixed;
@@ -4627,7 +4537,7 @@ button.modal-backdrop:active {
   min-height: 30px;
 }
 
-/* ---------------------------------------------------------- terminal dock */
+/* Terminal dock */
 
 .terminal-dock {
   --terminal-dock-height: 300px;
@@ -5837,7 +5747,7 @@ button.modal-backdrop:active {
   overflow-wrap: anywhere;
 }
 
-/* --------------------------------------------------- terminal context menu */
+/* Terminal context menu */
 
 .terminal-context-menu {
   position: fixed;
@@ -5916,7 +5826,7 @@ button.modal-backdrop:active {
   outline-offset: -2px;
 }
 
-/* ------------------------------------------------------------- animations */
+/* Animations */
 
 @keyframes fade-in {
   from {
@@ -5967,7 +5877,7 @@ button.modal-backdrop:active {
   }
 }
 
-/* ------------------------------------------------------- terminal window */
+/* Terminal window */
 
 /* The mode marker is set before first paint, so the workspace never renders
    in a terminal window and none of its controls join the focus order. */
@@ -6331,7 +6241,7 @@ html[data-window-mode="terminal"] #app {
   }
 }
 
-/* ------------------------------------------------------------ responsive */
+/* Responsive */
 
 @media (max-width: 1180px) {
   .board-shell {
@@ -6542,7 +6452,7 @@ html[data-window-mode="terminal"] #app {
   border: 0;
 }
 
-/* ------------------------------------------------------- project history */
+/* Project history */
 
 .project-history {
   min-width: 0;

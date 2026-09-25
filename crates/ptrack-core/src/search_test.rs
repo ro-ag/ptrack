@@ -171,7 +171,7 @@ fn note_results_show_a_bounded_single_line_snippet_around_the_match() {
     );
     assert!(!snippet.contains('\n'));
 
-    // A short body shows whole, without ellipses.
+    // A short body is shown in full.
     data.notes[0].body = "short needle note".to_owned();
     assert!(
         search(&data, "NEEDLE")

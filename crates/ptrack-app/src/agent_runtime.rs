@@ -308,7 +308,7 @@ pub trait AgentRuntimeService {
     fn shutdown(&self) -> AppResult<()>;
 }
 
-/// Narrow launch hook for the future terminal host. Tokens remain opaque and
+/// Launch hook for the terminal host. Tokens remain opaque and
 /// association pointers remain descriptive; this interface spawns nothing.
 #[allow(clippy::missing_errors_doc)]
 pub trait LaunchedEventAuthority {
@@ -342,7 +342,7 @@ pub trait LaunchedEventAuthority {
     ) -> AppResult<bool>;
 }
 
-/// Narrow #70 lifecycle seam. It exposes exact outcomes and opaque guards/CAS
+/// Lifecycle interface exposing exact outcomes and opaque guards/CAS
 /// records, never the underlying registry or its authority-bearing tokens.
 #[allow(clippy::missing_errors_doc)]
 pub trait LinkedAgentRuntimeHooks {
