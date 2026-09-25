@@ -392,10 +392,8 @@ fn convert_task_to_plan_carries_the_hold_reason_only_when_set() {
     assert_eq!(promoted.status, PlanStatus::Active);
     assert_eq!(promoted.hold_reason.as_deref(), Some("waiting on review"));
 
-    // A done task cannot be held today, so this pins the mapping rather than
-    // the guard: `convert_task_to_plan` now filters the carried hold through
-    // `plan_status_can_hold`, so a future status mapping that sends a held task
-    // to a done or archived plan still cannot mint a done-and-held record.
+    // The hold filter also prevents future status mappings from creating a
+    // done-and-held plan.
     let done = store.add_task(parent.id, "done").unwrap();
     store.set_task_status(done.id, TaskStatus::Done).unwrap();
     let promoted_done = store.convert_task_to_plan(done.id).unwrap();
@@ -1151,7 +1149,7 @@ fn terminal_status_transitions_clear_the_hold_reason() {
     store.set_task_status(task.id, TaskStatus::Done).unwrap();
     assert_eq!(store.task(task.id).unwrap().hold_reason, None);
 
-    // The compare-and-set path has the same hole and the same fix.
+    // The compare-and-set path also clears the hold.
     store.set_task_status(task.id, TaskStatus::Todo).unwrap();
     store
         .set_task_hold(task.id, Some("blocked upstream".to_owned()))
@@ -1179,9 +1177,8 @@ fn terminal_status_transitions_clear_the_hold_reason() {
     }
 }
 
-/// The regression the reviewer caught: opening an existing database
-/// re-validates every stored record, so a build that pinned the current payload
-/// schema there refused every database written before the bump.
+/// Opening an existing database revalidates every stored record. The accepted
+/// schema range must include older payloads so those databases still open.
 #[test]
 fn a_database_of_schema_1_records_opens_reads_and_upgrades_on_write() {
     let temp = Temp::new();

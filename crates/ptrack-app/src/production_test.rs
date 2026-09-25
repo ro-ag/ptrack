@@ -534,7 +534,7 @@ fn routed_init_registers_a_new_project_beside_a_live_runtime() {
         })
         .unwrap();
 
-    // `running` still holds the shared runtime lease, exactly like an open app.
+    // `running` still holds the shared runtime lease.
     let mut second = RoutedApplication::new(home.clone(), second_project.clone(), "test");
     let result = second
         .initialize(InitRequest {
@@ -2898,7 +2898,7 @@ fn desktop_initializes_a_second_project_after_the_first_one_is_open() {
         .enumerate()
     {
         if index > 0 {
-            // The product rule: a new project is initialized with no workspace
+            // A new project is initialized with no workspace
             // open, exactly as the Welcome flow does it.
             desktop
                 .invoke(desktop_request("CloseProject", vec![serde_json::json!("")]))

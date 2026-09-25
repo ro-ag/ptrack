@@ -1,7 +1,6 @@
 import type { PaneRuntimeState } from "./runtime";
 
-/// Terminal windows load the same document with this fragment, so the mode
-/// marker is the whole difference between the two windows at load time.
+/// Fragment that identifies a detached terminal window.
 const terminalWindowFragment = "#terminal-window=";
 const terminalWindowLabelPattern = /^terminal-\d+$/;
 
@@ -13,9 +12,7 @@ export function terminalWindowLabel(hash: string): string | null {
 }
 
 /**
- * Where the pop-out control is shown (step 3 §1). The unit of movement is the
- * tab: the control is present when every pane of the tab is running with a
- * session, because a tab moves whole or not at all.
+ * Whether a whole tab can move to a detached window.
  */
 export function terminalPopOutControl(input: {
   panes: ReadonlyArray<{ state: PaneRuntimeState; hasSession: boolean }>;
@@ -30,7 +27,7 @@ export function terminalPopOutControl(input: {
 }
 
 export interface TerminalPopOutSteps {
-  /** Release the renderer lease and tear the renderer down. The PTY keeps running. */
+  /** Release the renderer lease; the PTY keeps running. */
   release(): void | Promise<void>;
   open(): Promise<{ label: string }>;
   /** Re-claim the session into the pane it was about to leave. */
@@ -49,9 +46,7 @@ export interface TerminalPopOutResult {
 }
 
 /**
- * The move (§4), in order: release, then open the window. A failure at either
- * step re-claims the session, because a failed pop-out must never leave a
- * session with no owner.
+ * Releases sessions before opening the window and reclaims them on failure.
  */
 export async function popOutTerminal(
   steps: TerminalPopOutSteps,
@@ -71,9 +66,7 @@ export async function popOutTerminal(
 }
 
 /**
- * Backoff for re-claiming a stream the renderer lost without being asked to.
- * Four attempts inside 17.5s, comfortably inside the 30s re-claim grace window
- * after which the session is genuinely gone: retrying past it would only spin.
+ * Reclaim backoff stays within the server's 30-second grace window.
  */
 export const streamReclaimDelays: readonly number[] = [500, 2000, 5000, 10_000];
 
@@ -83,9 +76,7 @@ export function streamReclaimDelay(attempt: number): number | null {
 }
 
 /**
- * Whether a stream that just ended should be claimed back. A terminal the user
- * closed, a pane being torn down, and a shell that exited are all deliberate
- * endings: only a live pane that still owns its session reconnects.
+ * Only live panes that still own a session reclaim lost streams.
  */
 export function streamLossIsRecoverable(input: {
   state: PaneRuntimeState;
@@ -104,8 +95,7 @@ export interface StreamClaim {
   fromSequence: number;
   gap: boolean;
   /**
-   * The session state when the ticket was minted. An exited session still
-   * replays what it kept, but its stream then ends for good.
+   * State at ticket minting; ended sessions replay only.
    */
   state?: string;
 }
@@ -116,10 +106,7 @@ export function streamClaimEnded(claim: Pick<StreamClaim, "state">): boolean {
 }
 
 /**
- * What a renderer does once its stream closed. A normal closure is the
- * server saying the output ended — the shell exited — so re-claiming would
- * only replay the same scrollback forever; any other loss of a live pane is
- * worth claiming back.
+ * Normal closure marks ended output; other live stream losses are reclaimed.
  */
 export function streamCloseDisposition(input: {
   outputEnded: boolean;
@@ -134,11 +121,7 @@ export function streamCloseDisposition(input: {
 export const streamOutputEndedNotice = "Output ended";
 
 /**
- * Exits that arrive while a tab is between its pane and its window. Tearing
- * the pane down clears its session, and the window has not subscribed yet,
- * so an exit in that gap reached nobody and the held pane kept promising a
- * terminal that was already gone. The dock records it here instead and
- * applies it once the move settled, whichever way it went.
+ * Records exits during a pop-out before either surface owns the session.
  */
 export class PopOutExitLedger<Exit extends { sessionId: string }> {
   #moving: Map<string, Exit | null> | null = null;
@@ -174,10 +157,7 @@ export interface ReturnedWindowTab {
 }
 
 /**
- * Tabs a terminal window created itself have no pane in the main window
- * holding their place. Pop-in hands each of them back as a new tab instead of
- * closing a running shell the user never asked to stop. Sessions are listed
- * in the window's pane order, which is how they pair with the returned tabs.
+ * Tabs created in a detached window return as new dock tabs in pane order.
  */
 export function returnedWindowTabs(
   payload: { sessions?: readonly string[]; shape?: unknown },
@@ -227,7 +207,7 @@ export function returnedWindowTabs(
 }
 
 export interface StreamReclaimSteps {
-  /** Whether re-claiming is still worth it: the pane is live and still owns the session. */
+  /** Whether the live pane still owns the session. */
   recoverable(): boolean;
   /** The last sequence the renderer drew, so nothing is replayed twice. */
   sequence(): number;
@@ -239,16 +219,13 @@ export interface StreamReclaimSteps {
 }
 
 /**
- * Claim a lost stream back, bounded. Shared by the dock and the terminal
- * window: a renderer that lost its socket for any reason other than a
- * deliberate ending gets the session back, or says plainly that it could not.
+ * Reclaims a lost stream with bounded retries for both terminal surfaces.
  */
 export async function reclaimStream(
   steps: StreamReclaimSteps,
   firstAttempt = 0,
 ): Promise<"attached" | "abandoned" | "exhausted"> {
-  // The budget carries across attaches and is reset only by a stream that
-  // actually opened, so a socket that dies the moment it connects cannot spin.
+  // Reset only after a stream opens to prevent reconnect loops.
   for (let attempt = firstAttempt; ; attempt += 1) {
     if (!steps.recoverable()) return "abandoned";
     const delay = streamReclaimDelay(attempt);
@@ -288,9 +265,7 @@ export const streamReclaimFailedNotice =
   "Terminal stream disconnected and could not be re-claimed";
 
 /**
- * Said whenever the replay ring wrapped past what a renderer asked for. It is
- * a statement of fact, not a failure: the shell is fine, the scrollback simply
- * predates the move.
+ * Reports scrollback omitted after the replay buffer wrapped.
  */
 export const terminalGapNotice =
   "Earlier output was not carried over. The shell kept running; only " +
@@ -301,8 +276,7 @@ export const poppedOutPaneNotice =
   "This terminal is running in its own window. Close that window to bring it back here.";
 
 /**
- * Whether any of these panes is holding a popped-out terminal's place.
- * `holders` are the panes sessions were popped out of.
+ * Whether a holder pane appears in the closing set.
  */
 export function panesHoldPoppedOutTerminal(
   paneIds: readonly string[],
@@ -313,23 +287,13 @@ export function panesHoldPoppedOutTerminal(
 }
 
 /**
- * Said when a close would remove a pane holding a popped-out terminal. Such a
- * pane has no session of its own, so no close path ever asks about it — and
- * with the pane gone the window's pop-in has nowhere to hand the session back
- * to and closes the shell instead. Refusing is the only answer that keeps a
- * running shell from dying without a confirmation; the window is where that
- * terminal is closed.
+ * Refuses closes that would strand a detached terminal's return target.
  */
 export const poppedOutCloseRefusedNotice =
   "Close the terminal's own window before closing this pane.";
 
 /**
- * Closing a tab inside a terminal window. The original tab — the one the
- * window was opened for — closes like any other once the window holds more
- * than one tab; refusing it left a shell the user could not stop from the
- * window that shows it. Alone, it keeps the window's own close as its way out
- * (the window has no permission to close itself). A shell that has already
- * ended needs no confirmation.
+ * Closing policy for tabs in a detached terminal window.
  */
 export function detachedTabCloseIntent(input: {
   tabCount: number;
@@ -340,16 +304,13 @@ export function detachedTabCloseIntent(input: {
 }
 
 /**
- * Title of the close control on the only tab left in a terminal window.
- * Closing the window returns every tab it holds, including ones opened there.
+ * Title for closing the final tab via the window close control.
  */
 export const detachedLastTabCloseTitle =
   "Close this window to return its tabs to p-track.";
 
 /**
- * Said in the pane a popped-out terminal left behind once its shell ended in
- * the window — closed there, or exited on its own. The pane stops holding
- * the terminal's place: nothing is coming back to it.
+ * Notice shown when a detached shell ends and its holder is released.
  */
 export function poppedOutExitNotice(exit: {
   exitCode: number;

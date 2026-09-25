@@ -355,10 +355,7 @@ describe("clampScratchpadWidth", () => {
 
 describe("terminalBodyVisible", () => {
   it("stays visible while the scratchpad is open, regardless of session state", () => {
-    // The scratchpad note and clipboard strip must be reachable even with no
-    // live terminal session and no popped-out window — the whole point of
-    // this rule is that opening the panel overrides the closed-and-collapsed
-    // case below.
+    // An open scratchpad keeps the body reachable without a terminal session.
     expect(
       terminalBodyVisible({
         state: "closed",
@@ -618,8 +615,7 @@ describe("ScratchpadSaver", () => {
   });
 
   it("flushes on dispose and actually issues the write", async () => {
-    // The defect this pins: dispose() used to suspend on the pending read and
-    // bail once the dock marked itself disposed, so the last note never left.
+    // Disposal must issue the final write without waiting for a pending read.
     const h = saverHarness({ record: stored("stored", 2) });
     await h.saver.ensureLoaded();
     h.saver.markText("typed just before quitting");

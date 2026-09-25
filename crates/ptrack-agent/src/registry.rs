@@ -1394,10 +1394,8 @@ fn run_sweeper(
     wake.notify_all();
 }
 
-/// Writes the run history at most once per debounce window while events keep
-/// arriving, so the event path never waits on a whole-file rewrite and fsync.
-/// The write itself still runs under the registry mutex, which keeps its
-/// ordering with the synchronous lifecycle saves trivially correct.
+/// Debounces history writes so events do not wait for rewriting and fsyncing.
+/// Writes remain under the registry mutex to order them with lifecycle saves.
 fn run_flusher(inner: &Weak<RegistryInner>, signal: &FlushSignal, debounce: Duration) {
     let (request, wake) = &**signal;
     loop {

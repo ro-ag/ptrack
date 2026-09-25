@@ -2,8 +2,7 @@
 //!
 //! The transport owns framing, the initialize handshake, and the JSON-RPC
 //! envelope; the caller supplies the tool surface and the handler that runs a
-//! call. It moved here from the retired capability broker crate, which no
-//! longer exists, with its protocol behavior unchanged.
+//! call.
 
 use std::fmt;
 use std::io::{BufRead, BufReader, Read, Write};

@@ -463,8 +463,7 @@ export interface AgentActivitySectionPresentation {
 	workflowTargetsIncomplete?: unknown;
 }
 
-// Keep the browser-side view bounded and explicit about omitted rows even if
-// it receives a partial or malformed snapshot during an app upgrade.
+// Keep the browser-side view bounded for partial upgrade snapshots.
 export function agentActivityPresentation(
   section: AgentActivitySectionPresentation | null | undefined,
 ): {
@@ -989,11 +988,7 @@ export function driftPresentation(section: unknown): {
   };
 }
 
-// commandShortcut routes primary-modifier (⌘/Ctrl) chords. "palette" and
-// "settings" are global — Settings is an application dialog that opens with
-// no project open; the caller decides whether the view shortcuts are blocked
-// by an input, a modal, or the terminal. The view numbers follow the sidebar
-// order (Overview, Board, Issues) and match the native View menu.
+// Palette and Settings are global; callers gate view shortcuts by context.
 export function commandShortcut(
   input: ShortcutInput,
 ): "palette" | "settings" | "board" | "overview" | "issues" | "addTask" | "terminal" | null {
@@ -1054,8 +1049,7 @@ export interface PaletteGroup {
   items: PaletteResult[];
 }
 
-// groupSearchResults buckets flat SearchV2 hits into display groups,
-// always in Plans → Tasks → Notes order, skipping empty groups.
+// Groups SearchV2 hits in Plans → Tasks → Notes order.
 export function groupSearchResults(results: PaletteResult[]): PaletteGroup[] {
   const labels: Record<PaletteResult["kind"], string> = {
     plan: "Plans",
@@ -1075,9 +1069,6 @@ export type PaletteTarget =
   | { view: "issues"; planId: number; taskId: number; issueId: number }
   | { view: "board" | "overview"; planId: number; taskId: number; issueId?: undefined };
 
-// paletteTarget maps a result to its activation: plans and tasks land on
-// the board (tasks also open their detail drawer), notes land on the
-// overview's Recent memory.
 export function paletteTarget(result: PaletteResult): PaletteTarget {
   if (result.kind === "issue") return { view: "issues", planId: 0, taskId: 0, issueId: result.id };
   if (result.kind === "note") return { view: "overview", planId: 0, taskId: 0 };
@@ -1093,10 +1084,8 @@ export interface LaneInfo {
   taskCount: number;
 }
 
-// collapsedLaneStatuses picks the lanes that render as slim rails. Empty
-// lanes collapse by default (unless re-expanded this session); populated
-// lanes collapse only when the user folded them manually. An all-empty
-// board stays expanded — an all-rails board would be useless.
+// Empty lanes collapse by default; populated lanes require a user action.
+// An all-empty board stays expanded.
 export function collapsedLaneStatuses(
   lanes: LaneInfo[],
   expanded: ReadonlySet<string>,
@@ -1111,13 +1100,8 @@ export function collapsedLaneStatuses(
     .map((lane) => lane.status);
 }
 
-// A collapsed lane stays a real drop target and keeps its rotated label
-// legible, so the rail is never narrower than this.
 export const collapsedLaneWidth = 56;
 
-// Grid tracks for the board: collapsed lanes get the fixed rail and every
-// expanded lane shares the remaining width equally, so a lane with one card
-// is never wider than a lane with ten.
 export function boardGridColumns(
   statuses: readonly string[],
   collapsed: ReadonlySet<string>,
@@ -1142,13 +1126,8 @@ export interface SummaryShape {
   problem: "" | "over-limit" | "joined-tokens" | "no-sentences";
 }
 
-// The guide asks for 2-4 sentences of handoff narrative and the store refuses
-// anything over 1000 bytes on write, so a summary that still reads as a digest
-// of notes is either older than those rules or was assembled to slip under
-// them. Three signals catch it: past the byte bound, an unbroken token long
-// enough to be several words run together, or a long stretch with no sentence
-// end. Counting a sentence end only when the mark is followed by whitespace or
-// the end of the text keeps "v0.38.0" from reading as three sentences.
+// Flag summaries over 1000 bytes, with joined words, or without sentence ends.
+// Count punctuation as a sentence end only before whitespace or end of text.
 const SUMMARY_MAX_BYTES = 1000;
 const SUMMARY_PROSE_LIMIT = 400;
 const SUMMARY_RUN_LIMIT = 40;
@@ -1161,8 +1140,7 @@ export function summaryShape(text: string): SummaryShape {
   const longestRun = (text.match(/\S+/g) ?? [])
     .filter((token) => !/^[(\[]?[0-9a-f]{7,64}[)\].,;:!?]*$/i.test(token))
     .reduce((longest, token) => Math.max(longest, new TextEncoder().encode(token).length), 0);
-  // Length first: when a summary is both too long and badly written, its
-  // length is the part the writer has to fix before anything else matters.
+  // Report length first when several summary rules fail.
   let problem: SummaryShape["problem"] = "";
   const bytes = new TextEncoder().encode(text).length;
   if (bytes > SUMMARY_MAX_BYTES) {
@@ -1175,10 +1153,7 @@ export function summaryShape(text: string): SummaryShape {
   return { characters, bytes, sentences, longestRun, problem };
 }
 
-// The card notes, in neutral terms, why a summary is folded. It is read by
-// whoever opens the Overview, not only by the agent that wrote the summary,
-// so it states the measurement and never instructs. Sizes are in bytes, the
-// unit the store's bound is written in.
+// State measured reasons for folding; sizes use the store's byte unit.
 export function summaryShapeCaption(shape: SummaryShape): string {
   const bytes = `${shape.bytes.toLocaleString("en-US")} bytes`;
   switch (shape.problem) {

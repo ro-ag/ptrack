@@ -10,10 +10,7 @@ import {
 } from "./session-info";
 import type { ShellState } from "./shell-integration";
 
-// A detached terminal window's info row: the dock's header facts for the
-// active tab, read-only. Association editing, writeback, and the descriptor
-// editors need commands a terminal window may not call, so they stay in the
-// main window; this row states what they currently say.
+// Read-only active-pane details; editing requires main-window commands.
 
 export interface TerminalWindowInfoElements {
   state: HTMLElement;
@@ -49,9 +46,7 @@ export function detachedPaneState(pane: DetachedPaneFacts | null): PaneRuntimeSt
 }
 
 /**
- * The same content-free diagnostics the dock shows. A detached pane always
- * has a session, draws with the DOM renderer, and shows the layout it was
- * handed; restart, renderer retry, and force stop belong to the main window.
+ * Diagnostic input for detached panes; actions remain in the main window.
  */
 export function detachedDiagnosticInput(input: {
   pane: DetachedPaneFacts | null;

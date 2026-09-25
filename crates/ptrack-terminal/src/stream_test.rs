@@ -547,8 +547,7 @@ async fn a_refused_attachment_leaves_the_ticket_unspent() {
     let fixture = fixture(Vec::new()).await;
     let held = dial(&fixture.url, "wails://wails").await.unwrap();
     let retry = fixture.mint(0);
-    // The lease is held, so this ticket buys nothing — but it must survive the
-    // refusal, or every re-claim race costs a full round trip for a new one.
+    // A refused attachment must not spend its ticket.
     assert_dial_status(&retry, "wails://wails", 409).await;
     drop(held);
     await_released(&fixture.session).await;

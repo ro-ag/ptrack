@@ -36,7 +36,6 @@ export function contextChip(count: number, singular: string, extraClass = ""): H
   return chip;
 }
 
-// Accent check chip marking a completed plan in the sidebar.
 export function planDoneTick(): HTMLSpanElement {
   const svg = svgElement("svg", { viewBox: "0 0 12 12", "aria-hidden": "true" });
   svg.append(svgElement("path", { d: "M2 6.5 4.8 9 10 3.5" }));
@@ -49,9 +48,7 @@ export function planDoneTick(): HTMLSpanElement {
   return tick;
 }
 
-// Status dots beside a sidebar plan name. Each one is named for screen
-// readers and carries the same words as its tooltip. "On hold" parks the
-// plan without changing its status; it never means blocked.
+// Status dots use the same words in screen-reader labels and tooltips.
 export function planFlagElements(plan: BoardPlan): HTMLSpanElement[] {
   const flags: HTMLSpanElement[] = [];
   const flag = (kind: string, label: string) => {
@@ -87,13 +84,10 @@ export function appendCardBadges(dragZone: HTMLElement, task: BoardTask): void {
     dragZone.append(linked);
   }
 
-  // Hold is orthogonal to status: the card keeps its lane and gains a badge.
-  // Drag and drop stay enabled — a held task can still change status.
   if (task.holdReason) {
     const hold = document.createElement("span");
     hold.className = "card-hold";
     hold.textContent = "⏸ On hold";
-    // Parked, not blocked: the status and the lane are unchanged.
     hold.title = `On hold: ${task.holdReason}`;
     dragZone.append(hold);
     dragZone.setAttribute(
@@ -102,8 +96,6 @@ export function appendCardBadges(dragZone: HTMLElement, task: BoardTask): void {
     );
   }
 
-  // Open deps are orthogonal to status too: the card keeps its lane and gains
-  // a badge; the blocking IDs are the badge's tooltip.
   if (task.depsOpen?.length) {
     const deps = document.createElement("span");
     deps.className = "card-deps";
@@ -187,15 +179,11 @@ export function createBoardView(ctx: AppContext) {
   let addTaskPending = false;
   let dragJustEndedAt = 0;
 
-  // Same gear as the board header's plan-actions trigger, cloned so the icon
-  // path lives in index.html exactly once.
   function gearIcon(): Node {
     return element("svg", SVGSVGElement, elements.planTitleMenu).cloneNode(true);
   }
 
   function cardMenuButton(task: BoardTask): HTMLButtonElement {
-    // Same gear trigger as the plan rows, tucked at the meta line's end so it
-    // never collides with the Drag hint; revealed on hover alongside it.
     const cardMenu = document.createElement("button");
     cardMenu.type = "button";
     cardMenu.className = "card-menu";
@@ -217,13 +205,11 @@ export function createBoardView(ctx: AppContext) {
   }
 
   function bindCardInteractions(card: HTMLElement, dragZone: HTMLElement, task: BoardTask): void {
-    // Anywhere on the card except its own controls opens the task drawer.
     card.addEventListener("click", (event) => {
       if (event.target instanceof Element && event.target.closest("button, a, input, select, textarea")) {
         return;
       }
-      // A click that ends a drag, or the first click of a double-click rename,
-      // must not open the drawer.
+      // Do not open the drawer after a drag or while renaming.
       if (Date.now() - dragJustEndedAt < 300) return;
       window.clearTimeout(drawerOpenTimer);
       drawerOpenTimer = window.setTimeout(() => {
@@ -256,7 +242,6 @@ export function createBoardView(ctx: AppContext) {
       card.classList.remove("dragging");
       document.querySelectorAll(".drag-over").forEach((node) => node.classList.remove("drag-over"));
     });
-    // Right-click opens the same task menu as the gear trigger.
     card.addEventListener("contextmenu", (event) => {
       event.preventDefault();
       ctx.planDialogs.openTaskContextMenu(task, { x: event.clientX, y: event.clientY });
@@ -273,9 +258,7 @@ export function createBoardView(ctx: AppContext) {
     dragZone.className = "card-drag-zone";
     dragZone.draggable = true;
     dragZone.tabIndex = 0;
-    // The label names the task; the visible card carries the rest. Body text
-    // and runtime details stay out of the label or screen readers announce a
-    // full paragraph before every card.
+    // Keep body text and runtime details out of the accessible name.
     dragZone.setAttribute(
       "aria-label",
       `Task #${task.id}, ${task.status}: ${task.title}`,
@@ -292,9 +275,6 @@ export function createBoardView(ctx: AppContext) {
     appendCardBadges(dragZone, task);
     bindCardInteractions(card, dragZone, task);
 
-    // The lane already shows the status, so the card carries no status
-    // control of its own: drag it, use the drawer's status field, or pick
-    // "Move to …" from the ⋯ / right-click menu.
     card.append(dragZone);
     return card;
   }
@@ -311,7 +291,6 @@ export function createBoardView(ctx: AppContext) {
     ctx.layout.recordProjectLayout();
   }
 
-  // Slim rail for an empty lane: rotated title + count, click to expand.
   function collapsedLane(lane: HTMLElement, column: BoardColumn): void {
     lane.setAttribute("role", "button");
     lane.tabIndex = 0;
@@ -402,12 +381,7 @@ export function createBoardView(ctx: AppContext) {
     return draggedTask !== null;
   }
 
-  // Choosing a plan makes it the project's current plan — the same pointer
-  // `ptrack plan use` moves — and only then shows its board. A done or
-  // archived plan cannot be current, so choosing one only views it, and a
-  // plan that is already current needs no call. A refused change (a plan
-  // claimed by someone else, one that vanished, a stale workspace) leaves the
-  // board on the plan it showed.
+  // Finished plans are view-only; a refused current-plan change leaves the board intact.
   async function activatePlan(planId: number): Promise<void> {
     const plan = ctx.state.board?.plans.find((candidate) => Number(candidate.id) === Number(planId));
     if (!plan || plan.isActive || planIsViewOnly(plan)) {
@@ -419,8 +393,6 @@ export function createBoardView(ctx: AppContext) {
       const reply = await api().SetActivePlanV1(ticket.generation, Number(planId));
       if (!workspaceController.accepts(ticket, Number(reply.generation))) return;
     } catch (error) {
-      // A task the palette or an issue asked to open stays unopened with the
-      // plan it lives in.
       ctx.drawer.clearPendingTaskDetail();
       showError(error);
       setStatus(`Could not make plan #${planId} the current plan`);
@@ -434,9 +406,7 @@ export function createBoardView(ctx: AppContext) {
     void activatePlan(planId);
   }
 
-  // Selecting and opening the plan menu from a plan row or the current-plan
-  // card. Keys bubbling up from the nested gear button (Enter/Space there
-  // should trigger it) never also select the row.
+  // Nested gear-button keys must not also select the plan row.
   function bindPlanSelection(target: HTMLElement, title: HTMLElement, plan: BoardPlan): void {
     target.addEventListener("click", () => selectPlan(plan.id));
     target.addEventListener("keydown", (event) => {
@@ -468,8 +438,7 @@ export function createBoardView(ctx: AppContext) {
   }
 
   function planRow(plan: BoardPlan, selectedPlanId: number): HTMLElement {
-    // Not a native <button>: it hosts the nested "⋯" plan-actions button
-    // below, and interactive content can't nest inside a real button.
+    // Hosts a nested action button, which HTML buttons cannot contain.
     const item = document.createElement("div");
     item.setAttribute("role", "button");
     item.tabIndex = 0;
@@ -487,7 +456,6 @@ export function createBoardView(ctx: AppContext) {
     const title = document.createElement("span");
     title.className = "sidebar-plan-title";
     title.textContent = `#${plan.id} ${plan.title}`;
-    // The row truncates long names; the full name rides on the title too.
     title.title = `#${plan.id} ${plan.title}`;
     item.append(title);
     bindPlanMotion(item, title);
@@ -509,12 +477,7 @@ export function createBoardView(ctx: AppContext) {
       : [];
     const filtered = Boolean(board) &&
       (elements.planSearch.value.trim() !== "" || elements.planStatusFilter.value !== "all");
-    // The project's current plan is pinned above the list as its own card, so
-    // the scrollable rows carry everyone else. Pinning also keeps the expanded
-    // card out of the grid track sizing that painted it over the next row.
-    // The card survives filtering on purpose: it is the project's active
-    // context, and the filters only reshape the browsing list below it.
-    // A view-only plan open on the board stays in the rows, highlighted.
+    // The current-plan card remains outside filtered, scrollable rows.
     const pinned = board ? pinnedPlanSelection(board.plans, board.planId) : 0;
     const { current } = board ? splitCurrentPlan(board.plans, pinned) : { current: undefined };
     const { rest } = splitCurrentPlan(plans, pinned);
@@ -561,8 +524,6 @@ export function createBoardView(ctx: AppContext) {
     card.append(stats);
   }
 
-  // A finished plan that is still active asks to be closed right here,
-  // instead of staying pinned as "current" with nothing left to do.
   function currentPlanCloseout(card: HTMLElement, plan: BoardPlan): void {
     const closeout = currentPlanCloseoutLabel(plan);
     if (!closeout) return;
@@ -577,11 +538,7 @@ export function createBoardView(ctx: AppContext) {
     card.append(close);
   }
 
-  // The project's single current plan, pinned above the plan rows in a void
-  // card. Rendered in plain block flow — never as a grid row — so its height
-  // always follows its content. A done plan that is still the current plan
-  // keeps the meter: a full aurora bar reads as "complete, wrap it up", and
-  // the ✓ tick rides inline before the title.
+  // Keep the current-plan card out of the rows grid so its height follows content.
   function renderCurrentPlan(plan: BoardPlan | undefined): void {
     elements.sidebarCurrentSlot.replaceChildren();
     if (!plan) {
@@ -600,8 +557,6 @@ export function createBoardView(ctx: AppContext) {
     for (const flag of planFlagElements(plan)) card.title = `${card.title} · ${flag.title}`;
     const row = document.createElement("span");
     row.className = "sidebar-current-title-row";
-    // The tick leads the title so it can't collide with the gear pinned at
-    // the card's top-right corner.
     if (plan.status === "done") row.append(planDoneTick());
     const title = document.createElement("span");
     title.className = "sidebar-current-title";
@@ -621,10 +576,6 @@ export function createBoardView(ctx: AppContext) {
     if (!board) return;
     elements.projectName.textContent = board.projectName;
     elements.planTitle.textContent = board.planTitle || "No active plan";
-    // One plan concept: the plan on the board is the current plan, the same
-    // one the sidebar pins and the one Add task writes to.
-    // A done or archived plan open for reading says so, instead of claiming
-    // to be the plan new work goes to.
     const shown = board.plans.find((plan) => Number(plan.id) === Number(board.planId));
     elements.planEyebrow.hidden = board.planId === 0;
     elements.planEyebrow.textContent = shown && planIsViewOnly(shown)
@@ -735,9 +686,7 @@ export function createBoardView(ctx: AppContext) {
     }
   }
 
-  // While AddTaskV2 is pending the field is read-only (it keeps focus, so the
-  // user's place survives) and the button is disabled; the in-flight key
-  // refuses a second Enter. The title clears only once the task was added.
+  // Keep the field focused and prevent duplicate submissions while AddTaskV2 runs.
   function setAddTaskPending(pending: boolean): void {
     addTaskPending = pending;
     if (pending) elements.addForm.setAttribute("aria-busy", "true");

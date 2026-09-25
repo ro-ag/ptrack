@@ -1,8 +1,7 @@
 # Terminal acceptance matrix
 
-This matrix is the repeatable support gate for p-track's existing Go PTY,
-loopback stream, and xterm renderer. It deliberately excludes the deferred
-Rust, Tauri, native-IPC, and Ghostty recode.
+This matrix is the repeatable support gate for p-track's native Rust PTY and
+loopback stream, Tauri desktop window, and xterm renderer.
 
 Record only the result fields below. Do not paste terminal output, commands,
 clipboard contents, environment values, credentials, prompts, or transcripts
@@ -28,7 +27,10 @@ issue_ids: <IDs only, or none>
 rows have current passing evidence on that platform. Never turn an unavailable
 tool into a hidden skip or claim interactive support from compilation alone.
 
-## Plan 6 result records
+## Historical Go Plan 6 result records
+
+These records cover the former Go implementation. Run the matrix again on the
+current Rust/Tauri candidate before claiming support for that revision.
 
 ```text
 date_utc: 2026-08-11
@@ -68,12 +70,15 @@ issue_ids: none
 
 ## Setup
 
-1. Start from a clean checkout and build the application with `make build`.
+1. Start from a clean checkout and build the desktop application with
+   `npm --prefix frontend ci` followed by
+   `npm --prefix frontend run tauri -- build --no-bundle --ci`.
 2. Record only the runner OS, architecture, webview, and which harmless shell
    fixtures are available. Omit paths, versions, environment values, and
    authentication state.
-3. Open the checkout with the built p-track GUI. Use a disposable project and
-   safe fixture text. Do not use a shell containing production credentials.
+3. Launch the built `ptrack` binary with `gui` and open the checkout. Use a
+   disposable project and safe fixture text. Do not use a shell containing
+   production credentials.
 4. Run the automated validation block at the end of this document before the
    interactive rows.
 
@@ -104,9 +109,9 @@ Use only disposable sessions and never save inspector output:
 
 1. **Disconnected stream:** with a harmless shell running, terminate only its
    WebSocket from the webview inspector without copying its URL. Diagnostics
-   must report a disconnected or failed stream. **Restart terminal** must close
-   the old session idempotently and create a fresh process and one-shot stream;
-   no reconnect action is offered.
+   must report a disconnected or failed stream, then automatically reclaim the
+   same session from its last rendered byte. Retries are bounded; normal shell
+   exit must not trigger a reconnect loop.
 2. **Renderer fallback:** request `WEBGL_lose_context` for the selected xterm
    canvas when the inspector exposes it, or run the packaged Linux fixture with
    WebGL unavailable. After three bounded retries diagnostics must report DOM

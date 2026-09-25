@@ -160,9 +160,8 @@ impl BoundDesktopWorkspace {
             .resize(
                 self.generation,
                 session_id,
-                // The renderer holds no lease to present until the pop-out
-                // window work wires one through; the manager names that gap
-                // and borrows the live lease meanwhile.
+                // This caller has no renderer lease; the manager uses the
+                // current live lease for the resize.
                 None,
                 rows,
                 columns,

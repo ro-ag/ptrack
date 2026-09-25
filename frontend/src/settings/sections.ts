@@ -60,9 +60,7 @@ export interface ResetConfirmationCopy {
   readonly submit: string;
 }
 
-// Both resets live only in Data & Diagnostics. Reset Window Layout is
-// non-destructive; Reset Application State names what survives because a
-// reset that reads as "erase everything" is one nobody dares run.
+// Both resets live in Data & Diagnostics; application reset names what survives.
 export const resetWindowLayoutConfirmation: ResetConfirmationCopy = {
   eyebrow: "Window layout",
   heading: "Reset the window layout?",
@@ -143,8 +141,7 @@ function text(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-// The whole path is too long to hear read out on every copy control, so one
-// segment of it distinguishes one otherwise identical button from the next.
+// Name copy controls with a distinguishing path segment, not the full path.
 function segment(path: string, fromEnd: number): string {
   const parts = path.split(/[\\/]/).filter((part) => part !== "");
   return parts[parts.length - 1 - fromEnd] ?? parts[parts.length - 1] ?? path;
@@ -156,9 +153,7 @@ function absentValue(key: string): string {
   return key === "project" ? "No project open" : "Not available";
 }
 
-// The ledger carries RFC3339 with microsecond precision, which nobody reads as
-// a date. Trimmed to the second in UTC — never rounded up to a precision the
-// record does not have. An unparsable stamp is reported as unknown, not guessed.
+// Show ledger timestamps to the second in UTC; report invalid stamps as unknown.
 function readableTime(value: string): string {
   if (value === "") return "Unknown time";
   const parsed = new Date(value);
@@ -221,10 +216,7 @@ function receiptRows(value: unknown): DiagnosticsRow[] {
   if (receipts.length === 0) {
     return [{ group: "Global", label: "Migration receipts", value: "None recorded", copy: null }];
   }
-  // Every receipt is `<migrations>/<id>/receipt.json`, so the file name names
-  // all 25 of them the same thing. The migration id — the parent directory —
-  // is the only part that tells one row, one button, and one copy
-  // confirmation apart from the next.
+  // Name receipt rows and copy controls by migration id; every file is receipt.json.
   return receipts.slice(0, 25).map((path) => {
     const id = segment(path, 1);
     return {
@@ -306,15 +298,8 @@ const globalPathLabels: Record<string, string> = {
 };
 const runtimeLabels: Record<string, string> = { status: "Runtime status", detail: "Runtime detail" };
 
-// The report is read top to bottom, so where things are is a decision rather
-// than whatever order the serializer happened to emit: Global (home, database,
-// backups, migrations, runtime), then This project (root, database). A section
-// the runtime adds later still renders, after the ones this dialog was
-// designed around.
-//
-// The realistic worst case is 61 rows — 8 paths, 1 runtime, 25 backups,
-// 2 quarantine stores, 25 receipts — which left the old cap of 64 a few
-// backend fields of headroom. The cap is a runaway guard, not a budget.
+// Keep Global before This project; append unknown fields after known ones.
+// The row cap guards runaway reports, not normal reports (up to 61 rows).
 const maxDiagnosticsRows = 128;
 
 export function diagnosticsRows(report: unknown): DiagnosticsRow[] {

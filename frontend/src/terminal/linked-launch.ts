@@ -26,9 +26,8 @@ export interface LinkedLaunchRequest {
   association: AssociationPointerV1;
 }
 
-// The dock flushes its last committed workspace before entering a linked-tab
-// stage. Persistence callbacks remain suppressed until that stage is released,
-// so an unattached descriptor can never reach project storage.
+// Suppress persistence while a linked tab is staged so an unattached
+// descriptor cannot reach project storage.
 export class LinkedLaunchPersistenceStage {
   #active = 0;
 
@@ -101,10 +100,8 @@ interface LinkedLaunchTransactionOptions<TSession, TTab> {
   rollbackTab(tab: TTab): void;
 }
 
-// completeLinkedLaunchTransaction keeps live authority out of persistence:
-// the backend session is created first, then the authority-free tab pointer is
-// committed. Any tab or renderer failure force-closes the session and removes
-// the staged descriptor.
+// Creates the backend session before committing the authority-free tab pointer;
+// failures close the session and remove the staged descriptor.
 export async function completeLinkedLaunchTransaction<TSession, TTab>(
   options: LinkedLaunchTransactionOptions<TSession, TTab>,
 ): Promise<{ session: TSession; tab: TTab }> {

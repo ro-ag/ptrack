@@ -41,21 +41,17 @@ export interface ClipboardPasteRequest {
 }
 
 /**
- * Where a paste is going. The alternate screen is entered by program output,
- * so on its own it proves nothing: any `cat`-ed file can switch to it. Only
- * authenticated shell integration saying a command is running makes it the
- * mark of a full-screen program that owns the input.
+ * Paste context. Alternate-screen mode is trusted only with authenticated
+ * shell integration that confirms a command is running.
  */
 export interface PasteTarget {
   alternateScreen: boolean;
   shell?: { quality: string; phase: string } | null;
 }
 
-// The markers a bracketed paste is wrapped in: a copy containing the closing
-// one ends the bracket early, and whatever follows runs as typed input.
+// Strip bracketed-paste markers to prevent pasted text ending the wrapper early.
 const bracketedPasteMarkers = /\x1b\[20[01]~/g;
-// Every C0 control but tab and newline, DEL, and C1: carriage returns were
-// already folded into newlines, and anything else is a keystroke, not text.
+// Strip controls other than tab and newline; other controls are keystrokes.
 const pasteControlCharacters = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
 
 /** Whether a multi-line paste may skip review because a program owns the input. */
@@ -128,8 +124,7 @@ export function prepareClipboardPaste(
     preview,
     previewTruncated,
     controlCharactersRemoved,
-    // Removed controls always mean a look: what arrives differs from what
-    // was copied, and a copy hiding keystrokes is exactly the one to review.
+    // Review text after stripping controls because input changed.
     requiresConfirmation: controlCharactersRemoved > 0 ||
       (!multiLinePasteReviewBypassed(target) && text.includes("\n")),
   };

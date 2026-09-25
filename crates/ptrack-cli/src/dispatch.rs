@@ -347,8 +347,7 @@ fn hold_error(error: ptrack_app::AppError) -> CliError {
     )
 }
 
-/// Store claim refusals already read as sentences; drop the layer prefix
-/// rather than restate them, exactly like `hold_error`.
+/// Store claim refusals already read as sentences; drop the layer prefix.
 fn claim_error(error: ptrack_app::AppError) -> CliError {
     let message = error.to_string();
     CliError::message(
@@ -399,7 +398,7 @@ fn plan(
         }
         "list" => {
             let snapshot = application.snapshot()?;
-            // Per-plan open/done task counts, as the query-surface spec asks.
+            // Count open and done tasks separately for each plan.
             let counts = |plan_id: u64| {
                 snapshot
                     .tasks_for_plan(plan_id)
@@ -753,16 +752,9 @@ fn task_dep(
     Ok(RunOutcome::ExitSuccess)
 }
 
-/// The started task blocking new work, when one exists: the caller's own when
-/// an identity is configured, otherwise any (single-agent projects).
-///
-/// A held task is parked, so it never blocks, exactly as the gate's own
-/// refusal promises. Ownership follows the plan claim (goal-anchoring spec,
-/// piece 5): a task in a plan claimed by the caller is the caller's no matter
-/// who last edited it, and a task in someone else's claimed plan never is.
-/// Only an unclaimed plan falls back to the task's last editor.
-/// ponytail: check-then-act, not atomic with the mutation; single-writer local
-/// DB makes the race window irrelevant.
+/// Returns the started task blocking new work: the caller's when identified,
+/// otherwise any task in a single-agent project. Held tasks never block.
+/// Plan claims determine ownership; unclaimed plans use the last editor.
 fn wip_task(
     application: &mut dyn ApplicationPort,
     exempt: u64,
@@ -2014,11 +2006,9 @@ fn short(sha: &str) -> &str {
     sha.get(..8).unwrap_or(sha)
 }
 
-/// The task a commit subject names: the first `#N` that is an existing task.
+/// Returns the first existing task `#N` in a commit subject.
 ///
-/// A trailing `(#N)` is the pull-request number GitHub appends on squash
-/// merge, not a task, so it never links — otherwise `fix: thing #12 (#154)`
-/// would land on task #154.
+/// Ignores a trailing GitHub squash-merge pull-request number.
 fn task_reference(subject: &str, exists: impl Fn(u64) -> bool) -> Option<u64> {
     let trimmed = subject.trim_end();
     let pull_request = trimmed

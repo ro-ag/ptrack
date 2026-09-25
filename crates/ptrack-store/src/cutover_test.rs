@@ -50,7 +50,7 @@ fn leaked_global_home_permissions_are_healed_on_use() {
     // A home directory that leaked group/other bits — a restore, a sync, a
     // copy under a default umask — is tightened to owner-only, never refused:
     // removing access cannot leak anything, while failing closed locked the
-    // whole runtime out (v0.24.x field reports, file and directory alike).
+    // whole runtime out.
     let temp = Temp::new();
     fs::set_permissions(&temp.0, fs::Permissions::from_mode(0o755)).unwrap();
     drop(acquire_cutover_lock(&temp.0, CutoverLockMode::Shared).unwrap());

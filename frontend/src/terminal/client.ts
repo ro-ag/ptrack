@@ -18,18 +18,15 @@ interface TerminalStreamClientOptions {
   onStateChange(state: StreamState): void;
   onOutput?(byteLength: number): void;
   /**
-   * The replay was truncated. `sequence` is where it actually resumes — the
-   * renderer's own count restarts there — or null from a server too old to say.
+   * Sequence where truncated replay resumes, or null if the server omits it.
    */
   onGap?(sequence: number | null): void;
 }
 
 const outputWindowBytes = 512 * 1024;
-// The one control frame the server sends, once, before a truncated replay,
-// naming the sequence the replay resumes from.
+// Control frame preceding a truncated replay.
 const gapControl = /^\{"type":"gap"(?:,"sequence":(0|[1-9][0-9]{0,15}))?\}$/;
-// The server closes with 1000 only once the session's output ended: the
-// shell exited or its PTY closed. Nothing is left to re-claim.
+// Code 1000 means session output ended and must not be reclaimed.
 const normalClosure = 1000;
 
 function gapSequence(data: unknown): number | null | undefined {

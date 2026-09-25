@@ -151,7 +151,7 @@ fn a_capture_stores_the_contract_shape_in_logical_coordinates() {
     assert_eq!(bytes, record);
 }
 
-/// Contract section 5: a terminal window's capture must not overwrite the main
+/// A terminal window's capture must not overwrite the main
 /// window's rect, and the record keeps one version and one transaction.
 #[test]
 fn per_window_entries_are_isolated_and_bounded() {
@@ -475,7 +475,7 @@ fn a_window_spanning_two_displays_keeps_the_size_it_was_quit_at() {
     );
 }
 
-/// Contract section 8: display removal.
+/// Restores a window after its display is removed.
 #[test]
 fn a_removed_display_discards_the_position_and_centers_the_clamped_size() {
     let document = record(
@@ -578,7 +578,7 @@ fn fullscreen_is_never_restored_and_maximized_only_where_the_work_area_admits_it
     );
 }
 
-/// Contract section 8: DPI change. A rect captured on a scale 2.0 display
+/// A rect captured on a scale 2.0 display
 /// replays at the same logical place on a scale 1.0 display.
 #[test]
 fn a_rect_captured_at_scale_two_restores_at_scale_one() {

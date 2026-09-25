@@ -62,14 +62,7 @@ impl DesktopEventSink for TauriEventSink {
     }
 }
 
-/// The bare-string form the frontend reads for a failure that carries no
-/// structured state of its own.
-///
-/// An [`AppError`] converts itself instead (`serde_json::Value::from`): almost
-/// every one of those is also a bare message, but one that carries state the
-/// caller would otherwise have to fetch again — a scratchpad revision conflict
-/// carrying the stored record — becomes an object whose `message` is the same
-/// text, so a single error path serves both shapes.
+/// Converts an unstructured error message to the frontend's expected shape.
 fn bridge_message(message: &str) -> serde_json::Value {
     serde_json::Value::String(message.to_owned())
 }
@@ -88,10 +81,7 @@ async fn gui_invoke(
     let runtime = Arc::clone(runtime.inner());
     let notifications = Arc::clone(app.state::<Arc<NativeNotificationController>>().inner());
     let shell_command = request.method == "InstallShellCommand";
-    // Every command that answers with the whole normalized preference document
-    // resyncs the native chrome. The read is in the set because
-    // `ResetApplicationState` clears the record behind its own result shape and
-    // the client reloads afterwards, so one resync point covers every writer.
+    // Preference reads and writes resync native chrome after a reset.
     let appearance = matches!(
         request.method.as_str(),
         "GetPreferences" | "SetPreferences" | "ResetPreferences"
@@ -128,9 +118,7 @@ async fn gui_invoke(
         } else {
             runtime.invoke(request).map_err(serde_json::Value::from)?
         };
-        // Switching or closing a project takes its terminal windows with it:
-        // the sessions they showed died with the workspace. The sweep is a
-        // lock and a comparison while nothing changed.
+        // Switching projects invalidates their terminal-window assignments.
         close_windows(&app, runtime.expire_terminal_windows());
         if terminal_window {
             let label = result["label"].as_str().unwrap_or_default().to_owned();
@@ -158,10 +146,7 @@ async fn gui_invoke(
     .map_err(|error| bridge_message(&error.to_string()))?
 }
 
-/// Maps the stored appearance preference onto the native window theme. `None`
-/// is "follow the OS": an unset preferred appearance is how every platform
-/// spells that, and it is what keeps `"system"` tracking later OS flips without
-/// the shell hearing about them.
+/// Maps the stored appearance preference to a native theme; `None` follows the OS.
 fn preferred_theme(preferences: &serde_json::Value) -> Option<tauri::Theme> {
     match preferences["appearance"]["theme"].as_str() {
         Some("dark") => Some(tauri::Theme::Dark),
@@ -170,17 +155,8 @@ fn preferred_theme(preferences: &serde_json::Value) -> Option<tauri::Theme> {
     }
 }
 
-/// Repaints the native chrome to match the app theme. macOS paints its own
-/// titlebar out of `NSApp.effectiveAppearance`, which follows the *system*
-/// Dark/Light setting and not the app's theme, so a dark app on a light system
-/// gets a light titlebar around a dark window. `set_theme` routes to
-/// `NSApplication setAppearance:`, which covers the titlebar, the menu bar, and
-/// the native dialogs at once; on Windows it repaints the frame and on Linux it
-/// sets the GTK preference. Best effort: chrome that stays a shade off is never
-/// worth failing a preference write over.
-///
-/// Every window is repainted, not the hard-coded `main`: a popped-out terminal
-/// window left on the old theme is the same defect on a second frame.
+/// Repaints every native window to match the app theme. On macOS, `set_theme`
+/// updates the titlebar, menu bar, and dialogs; this is best effort.
 fn apply_theme<R: Runtime>(app: &AppHandle<R>, preferences: &serde_json::Value) {
     let theme = preferred_theme(preferences);
     for window in app.webview_windows().values() {
@@ -193,17 +169,11 @@ const TERMINAL_WINDOW_BUILD_TIMEOUT: Duration = Duration::from_secs(10);
 /// A popped-out terminal must not read as a second project workspace.
 const TERMINAL_WINDOW_TITLE: &str = "p-track Terminal";
 
-/// Builds one terminal window and waits for the result.
+/// Builds a terminal window on the main thread and waits for the result.
 ///
-/// `WebviewWindowBuilder::build` deadlocks when it is called synchronously on
-/// Windows and `gui_invoke` runs on `spawn_blocking`, so the build is
-/// dispatched with `run_on_main_thread`.
-///
-/// A window must never outlive its assignment. The build re-checks the
-/// assignment once the window exists and destroys a window whose assignment
-/// is already gone — a project switch expired it while the build was queued —
-/// and a build that times out schedules the same destruction behind itself,
-/// because the queued build can still run after the caller gave up on it.
+/// Building synchronously deadlocks on Windows. Recheck the assignment after
+/// the queued build because it can finish after its caller timed out and needs
+/// cleanup if the assignment has expired.
 fn build_terminal_window(app: &AppHandle, label: &str) -> Result<(), String> {
     let handle = app.clone();
     let owned = label.to_owned();
@@ -496,9 +466,7 @@ fn main() {
 /// coalesced into one trailing write per second.
 const WINDOW_CAPTURE_INTERVAL: Duration = Duration::from_secs(1);
 
-/// Per-window capture bookkeeping. Both flags are label-scoped: with a second
-/// window open, sealing every window on the first terminal flush would throw
-/// away the rect the other one really closed at.
+/// Per-window capture bookkeeping; flags must remain label-scoped.
 #[derive(Default)]
 struct WindowCaptureState {
     sealed: bool,
@@ -507,10 +475,8 @@ struct WindowCaptureState {
 
 struct WindowStateCapture {
     version: String,
-    /// `sealed` is set by a window's terminal flush. A trailing capture that
-    /// wakes up after it must not put its stale rect back, so the flag and the
-    /// write share one lock and a late capture is dropped instead of ordered
-    /// behind it.
+    /// The seal check and write share this lock so a trailing capture cannot
+    /// overwrite a terminal flush.
     windows: Mutex<BTreeMap<String, WindowCaptureState>>,
 }
 
@@ -522,11 +488,8 @@ impl WindowStateCapture {
         }
     }
 
-    /// Coalesces one window event into a trailing write on its own thread: the
-    /// global store retries a busy lock for up to a second per open, and the
-    /// event loop this drag runs on cannot afford to wait for it. One trailing
-    /// write is pending per window at a time, and it is redundant whenever a
-    /// later event or the exit flush beats it.
+    /// Coalesces drag events into one background write per window.
+    /// Store lock retries must not block the event loop.
     fn schedule_trailing<R: Runtime>(self: &Arc<Self>, window: &tauri::Window<R>) {
         let label = window.label().to_owned();
         {
@@ -561,14 +524,10 @@ impl WindowStateCapture {
         }
     }
 
-    /// Writes the window's current geometry now. `seal` marks that window's
-    /// last write of the process: the exit flushes stay synchronous because an
-    /// async write dies with the process, and sealing keeps a late trailing
-    /// capture from landing after them.
+    /// Writes current geometry; `seal` makes this the final write for a window.
     fn flush<R: Runtime>(&self, window: &tauri::Window<R>, seal: bool) {
-        // The geometry is read before the lock is taken. The window getters hop
-        // to the main thread, so a background capture holding the lock while it
-        // waits for a main thread blocked on that same lock would deadlock.
+        // Read before locking: getters hop to the main thread, which could be
+        // waiting for this lock and deadlock with a background capture.
         let state = window_geometry(window);
         self.guarded(window.label(), seal, |label| {
             if let Some(state) = state {
@@ -687,10 +646,7 @@ fn record_startup_failure(error: &str) -> Option<PathBuf> {
     write_startup_failure(Path::new(&home), error).ok()
 }
 
-/// A setup failure must never unwind out of the platform's nounwind launch
-/// callback — that is an `abort()` with no message anywhere (macOS crash report
-/// B841AEC7, v0.24.0). The error is recorded, said out loud, and the process
-/// leaves in an orderly way.
+/// Records and reports setup failure instead of unwinding through launch.
 fn fail_startup(app: &tauri::AppHandle, error: &str) -> ! {
     let recorded = record_startup_failure(error);
     let detail = recorded
@@ -727,11 +683,8 @@ fn run_desktop(initial_path: Option<PathBuf>, initial_plan: u64) {
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
             app.manage(Arc::clone(&notifications_setup));
-            // The window is configured hidden so the restored rect is the first
-            // one painted instead of a visible jump from the default geometry.
-            // Restore and show run before every fallible step below: no `?` and
-            // no early return can leave the window invisible, and a restore that
-            // decides to leave the configured geometry alone still shows it.
+            // Restore and show before any fallible step, so an early return
+            // cannot leave the initially hidden window invisible.
             if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
                 restore_window_state(&window, &capture.version);
                 let _ = window.show();
@@ -740,10 +693,8 @@ fn run_desktop(initial_path: Option<PathBuf>, initial_plan: u64) {
                 app: app.handle().clone(),
                 notifications: Arc::clone(&notifications_events),
             });
-            // Nothing below may return Err: tauri turns a setup error into a
-            // panic inside the platform's nounwind launch callback, which is
-            // an abort() with no diagnostics. Failures go through
-            // `fail_startup` instead.
+            // A Tauri setup `Err` panics in its nounwind launch callback and
+            // aborts without diagnostics; report errors through `fail_startup`.
             let runtime = (|| -> Result<_, String> {
                 let global_home = resolve_global_home().map_err(|error| error.to_string())?;
                 // Preserve Welcome as a startup decision; an inherited working
@@ -768,10 +719,7 @@ fn run_desktop(initial_path: Option<PathBuf>, initial_plan: u64) {
                 Ok(runtime) => runtime,
                 Err(error) => fail_startup(app.handle(), &error),
             };
-            // The stored preference is only reachable once the runtime is bound,
-            // and the window contract fixes that after the show. The webview has
-            // not painted yet either way, so the first frame the user reads
-            // already carries the right chrome.
+            // The webview has not painted yet, so its first frame gets this theme.
             let mut preferences = runtime
                 .invoke(DesktopCommandRequest {
                     method: "GetPreferences".to_owned(),
@@ -810,36 +758,19 @@ fn run_desktop(initial_path: Option<PathBuf>, initial_plan: u64) {
                 // Not sealed: a prevented close leaves the window alive, and
                 // the exit flush below is the one that ends the session.
                 capture_events.flush(window, false);
-                // A terminal window must never begin shutdown: that would kill
-                // the whole app runtime and leave the main window a shell whose
-                // every command fails. Its session pops back in on `Destroyed`.
+                // Terminal windows reattach their session on `Destroyed`.
                 if window.label() != MAIN_WINDOW_LABEL {
-                    // `Builder::menu` shares one native menu across every
-                    // window, and on Windows `DestroyWindow` destroys the menu
-                    // still attached to the dying window. Left attached, the
-                    // first pop-in kills the shared handle and every window
-                    // built afterwards paints without a menu bar. Detached
-                    // here, the menu survives the close. Windows only: macOS
-                    // has one application-global menu no window can take down,
-                    // and a GTK window owns its own menubar widget.
+                    // On Windows, `DestroyWindow` destroys the attached shared
+                    // menu, so detach it before closing a terminal window.
                     #[cfg(windows)]
                     let _ = window.remove_menu();
                     return;
                 }
-                // The close is always held here and finished by the teardown
-                // thread: a teardown that waits out a terminal or an agent
-                // would otherwise freeze the event loop for its whole bound.
+                // Teardown runs off the event loop.
                 api.prevent_close();
                 close_main_window(window.app_handle(), &closing_events);
             }
-            // The pop-in waits for the webview to be gone. Its stream socket
-            // drops with it, and only then does the session release its output
-            // lease: claiming on the close request instead makes the main
-            // window's re-attach race that release and lose it about half the
-            // time, which the reclaim loop then papers over with a visible
-            // "Reconnecting…". The assignment is still the token — a window
-            // destroyed by a project switch or by app quit had its assignment
-            // cleared first, so this finds nothing and reports nothing.
+            // Wait for the destroyed webview to release its output lease.
             WindowEvent::Destroyed => {
                 notifications_windows.remove_window(window.label());
                 if window.label() != MAIN_WINDOW_LABEL {
@@ -861,22 +792,9 @@ fn run_desktop(initial_path: Option<PathBuf>, initial_plan: u64) {
         }
     };
     application.run(move |app, event| {
-        // macOS quits through the Quit menu role and its Cmd-Q accelerator by
-        // terminating the application, which tao reports as
-        // `applicationWillTerminate` and Tauri as `RunEvent::Exit`: no window
-        // ever sees `CloseRequested`. Both exit events flush, so the most
-        // common quit gesture cannot leave a stale rect behind.
-        //
-        // Whichever window is destroyed last varies once a terminal window
-        // exists, so the flush enumerates whatever is still registered instead
-        // of assuming `main` is.
-        //
-        // Both exit events also tear the runtime down, bounded, exactly like a
-        // main-window close: terminals get their SIGTERM/SIGKILL escalation,
-        // agents and scratchpad writes settle, and an update install finishes
-        // or stops cleanly. A prevented `ExitRequested` runs it off the main
-        // thread and exits again once it is done; `Exit` cannot be prevented,
-        // so it waits on the main thread, never longer than the bound.
+        // Cmd-Q reaches `RunEvent::Exit` without `CloseRequested`; flush every
+        // registered window because terminal destruction order varies.
+        // Exit requests run bounded teardown off the main thread when possible.
         match event {
             tauri::RunEvent::ExitRequested { api, code, .. } => match exit_gate.request() {
                 ExitStep::Proceed => flush_all(app, &capture_exit),
@@ -1090,18 +1008,7 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
     };
     match menu_dispatch(id) {
         MenuDispatch::Event(event) => {
-            // `Builder::menu` applies one menu to every window and `emit`
-            // broadcasts to every webview, so a broadcast fires each command
-            // once per window — "Open Project…" would open two dialogs. Every
-            // command in the allowlist acts on the project workspace, and a
-            // terminal window has no board, no palette and no dialogs, so the
-            // main window answers wherever the command was invoked from.
-            // Targeting the focused window instead made every accelerator a
-            // silent no-op while a terminal window was in front: that window
-            // listens for `terminal:exit` and nothing else.
-            //
-            // Raised first, because an answer painted behind the window the
-            // user is looking at is the same dead accelerator with extra steps.
+            // The shared menu must target one capable webview, never broadcast.
             if let Some(main) = app.get_webview_window(MAIN_WINDOW_LABEL) {
                 let _ = main.set_focus();
             }

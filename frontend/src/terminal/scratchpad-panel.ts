@@ -20,12 +20,7 @@ import {
 } from "./scratchpad";
 import { looksLikeSecret, secretCaptureNotice } from "./secrets";
 
-// The scratchpad side panel as DOM: the toggle, the resizable column, the
-// note with its byte-limit status, and the clipboard strip. The dock and a
-// detached terminal window each mount one over their own markup; every rule
-// it obeys lives in ./scratchpad, and everything surface-specific — which
-// pane is active, how a snippet is pasted, how panes refit — comes from the
-// host.
+// Shared scratchpad-panel DOM; hosts provide surface-specific behavior.
 
 export interface ScratchpadPanelElements {
   toggle: HTMLButtonElement;
@@ -117,9 +112,7 @@ export class ScratchpadPanel {
       toggle.focus();
     });
     this.#listen(text, "input", () => this.#saver.markText(text.value));
-    // Leaving the note writes it now. A project switch is reached by clicking
-    // away first, and the runtime fences a write issued after the generation
-    // has already moved, so the earlier the note lands the better.
+    // Flush on blur before a project switch can fence the write.
     this.#listen(text, "blur", () => this.flush());
     this.#listen(add, "click", () => {
       const selection = this.#host.selection();
@@ -165,16 +158,14 @@ export class ScratchpadPanel {
   }
 
   /**
-   * Another surface wrote the scratchpad. A clean panel shows the new record;
-   * one holding an edit keeps it (see `ScratchpadSaver.refresh`).
+   * Refreshes another surface's write unless this panel has an edit.
    */
   refresh(revision: number): Promise<boolean> {
     return this.#saver.refresh(revision);
   }
 
   /**
-   * An explicit copy from a pane. The scratchpad is stored in the project
-   * database: a copy that looks like a credential stays on the clipboard only.
+   * Captures an explicit pane selection after credential screening.
    */
   capture(text: string): void {
     if (this.#disposed) return;
@@ -182,8 +173,7 @@ export class ScratchpadPanel {
       this.#setStatus(secretCaptureNotice);
       return;
     }
-    // A capture must not race the first read: adding to an unread record would
-    // save revision 0 over the stored one and lose it to a conflict.
+    // Load the stored revision before capture to avoid a revision-zero conflict.
     if (!this.#saver.loaded && this.#saver.enabled) {
       void this.#saver.ensureLoaded().then(() => {
         if (this.#disposed) return;
@@ -250,8 +240,7 @@ export class ScratchpadPanel {
    * that must win when the user is typing into the note right now.
    */
   #applyRecord(record: Scratchpad, replaceLocalText: boolean): string | null {
-    // A conflict reload can land after the surface is gone; there is nothing
-    // left to render, and the record is still the one the final write carries.
+    // A disposed surface has no DOM to update; its final write keeps the record.
     if (this.#disposed) return null;
     this.#renderSnippets();
     const { text } = this.#elements;
@@ -260,8 +249,7 @@ export class ScratchpadPanel {
       return text.value;
     }
     if (text.value !== record.text) {
-      // A focused note keeps its caret where it was, as near as the new text
-      // allows, so a reload from another window does not throw it to the end.
+      // Preserve the focused caret across a reload when possible.
       const start = text.selectionStart ?? 0;
       const end = text.selectionEnd ?? 0;
       text.value = record.text;
@@ -309,8 +297,7 @@ export class ScratchpadPanel {
     const button = list.querySelector<HTMLButtonElement>(
       `[data-snippet-id="${focus.id}"] [data-scratchpad-action="${focus.action}"]`,
     );
-    // A deleted row takes its buttons with it; the strip's own control is the
-    // nearest place a keyboard user can carry on from.
+    // Move focus to the strip when its deleted row owned it.
     if (button && !button.disabled) button.focus();
     else if (!add.disabled) add.focus();
     else text.focus();

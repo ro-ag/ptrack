@@ -18,13 +18,8 @@ export function filterPlans<T extends SidebarPlan>(plans: T[], query: string, st
   });
 }
 
-/// Splits the current plan out of the list so the sidebar can pin it above
-/// the scrollable rows. The current plan is the one the board shows: picking
-/// a plan in the list makes it current, so the pinned card and the board
-/// heading always name the same plan. With no plan on the board, the
-/// project's `isActive` plan is current. A selected plan that is not among
-/// the loaded rows pins nothing rather than a different plan. The rest keep
-/// their order.
+/// Returns the current plan separately for the pinned sidebar card.
+/// Falls back to `isActive` when no plan is shown; an unloaded selection pins nothing.
 export function splitCurrentPlan<T extends SidebarPlan>(
   plans: T[],
   selectedPlanId: number | string = 0,

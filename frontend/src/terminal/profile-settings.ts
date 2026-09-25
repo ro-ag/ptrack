@@ -30,9 +30,7 @@ export const defaultTerminalProfileSettings: NormalizedTerminalProfileSettings =
   exitBehavior: "keep",
 };
 
-// Shell prompts use private-use Nerd Font glyphs that emoji fonts don't cover.
-// Keep the bundled face behind the text face so the fallback doesn't change
-// the terminal's ordinary lettering or cell metrics.
+// Preserve text metrics while falling back for Nerd Font prompt glyphs.
 const terminalFontFallbacks =
   '"p-track Nerd Font", "Apple Color Emoji", "Segoe UI Emoji", monospace';
 const defaultFontStack =
@@ -109,8 +107,7 @@ export function terminalProfileFontFamily(fontFamily: string): string {
 }
 
 export async function loadTerminalFont(): Promise<void> {
-  // Canvas renderers cache glyphs. Load the bundled face before the first
-  // terminal paints, rather than letting a missing-glyph box enter its atlas.
+  // Load before canvas renderers cache missing glyphs.
   await document.fonts.load('14px "p-track Nerd Font"', "\ue718");
 }
 

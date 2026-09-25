@@ -33,11 +33,7 @@ fn project_picker_cancellation_is_an_exact_no_selection_result() {
     );
 }
 
-/// Non-terminal captures run on their own thread, so one can wake up after the
-/// exit flush has already written the rect the window really closed at. That
-/// late write must be dropped, not ordered behind the good one — and the seal
-/// covers only the window it came from, because with two windows open the
-/// other one has not closed yet.
+/// A late trailing capture must not overwrite an exit flush or seal other windows.
 #[test]
 fn a_capture_that_wakes_after_the_exit_flush_never_writes() {
     let capture = WindowStateCapture::new();
@@ -57,9 +53,7 @@ fn a_capture_that_wakes_after_the_exit_flush_never_writes() {
     assert!(!capture.guarded("terminal-1", false, |_| {}));
 }
 
-/// `"system"`, an absent record, and anything unreadable all resolve to no
-/// pinned appearance, which is the only value that keeps the native chrome
-/// following the OS after the process has started.
+/// Only explicit themes pin native chrome; all other values follow the OS.
 #[test]
 fn the_native_chrome_is_pinned_only_by_an_explicit_theme() {
     assert_eq!(
@@ -88,9 +82,7 @@ fn external_url_gate_remains_available_to_the_native_shell_tests() {
     assert!(validate_external_url("file:///tmp/help").is_err());
 }
 
-/// A startup failure must leave evidence that survives the process: the log
-/// records every failure in order, and the writer never replaces what an
-/// earlier launch recorded.
+/// Startup-failure logs append so evidence survives later launches.
 #[test]
 fn startup_failures_are_recorded_and_appended() {
     let root = std::env::temp_dir().join(format!("ptrack-startup-log-{}", std::process::id()));
@@ -107,10 +99,7 @@ fn startup_failures_are_recorded_and_appended() {
     assert!(first < second, "entries append in order");
 }
 
-/// One teardown per process: the first exit request starts it and is held,
-/// requests arriving meanwhile are held too, and only the exit the teardown
-/// issues itself goes through. The final `Exit` runs the teardown only when
-/// no teardown ever finished — the Cmd-Q path, which sees no request at all.
+/// Exit requests hold until one teardown completes; Cmd-Q starts it from `Exit`.
 #[test]
 fn the_exit_gate_runs_exactly_one_teardown_before_letting_the_exit_through() {
     let gate = ExitGate::default();

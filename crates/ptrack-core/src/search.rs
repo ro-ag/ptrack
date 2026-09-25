@@ -167,13 +167,8 @@ impl SearchView {
     }
 }
 
-/// Returns at most [`SEARCH_SNIPPET_CHARS`] characters of `body` around the
-/// first case-insensitive match of `term`, on one line, with `…` marking each
-/// side that was cut.
-///
-/// The match is located in the lowercased copy, whose characters correspond
-/// one to one with the original's, so the window is cut on the original's
-/// character boundaries even where lowercasing changes a character's width.
+/// Returns a one-line snippet around the first case-insensitive match, bounded
+/// to [`SEARCH_SNIPPET_CHARS`] and marked with `…` where truncated.
 fn snippet(body: &str, term: &str) -> String {
     let lowered = simple_lowercase(body);
     let hit = lowered

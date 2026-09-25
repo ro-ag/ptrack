@@ -2150,8 +2150,7 @@ fn deps_line(deps: &[u64], open: &[u64]) -> String {
 }
 
 /// Claim marker naming the identity holding a plan's claim, or nothing when
-/// it is unclaimed. Claims are display-only here — mutated through the CLI
-/// only, exactly like holds.
+/// it is unclaimed. Claims are display-only here.
 fn claim_span(owner: Option<&str>) -> Span<'static> {
     Span::styled(
         owner.map_or_else(String::new, |owner| format!("🔒{owner} ")),

@@ -511,9 +511,7 @@ fn truncate_utf8(value: &str, limit: usize) -> (String, bool) {
     )
 }
 
-/// Renders a hold as `on hold: <reason>`, the same sentence every other p-track
-/// surface shows, so a launched agent reads the hold instead of having to infer
-/// it from a status that a hold deliberately leaves alone.
+/// Renders a hold as `on hold: <reason>` because holds do not change status.
 fn hold_line(reason: Option<&str>) -> (Option<String>, bool) {
     let Some(reason) = reason else {
         return (None, false);

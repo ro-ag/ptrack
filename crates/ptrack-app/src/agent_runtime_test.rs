@@ -799,7 +799,7 @@ fn git_mapping_is_bounded_content_free_and_go_compatible() {
 }
 
 #[test]
-#[allow(clippy::too_many_lines)] // One exact #70 lifecycle contract and revision ledger.
+#[allow(clippy::too_many_lines)] // Exercises the lifecycle and revision ledger together.
 fn linked_terminal_hooks_are_opaque_exact_and_revisioned() {
     let directory = TestDirectory::new("terminal-hooks");
     let (endpoint, plan_id, task_id) = endpoint(&directory);
@@ -1171,10 +1171,8 @@ fn blocked_integration_and_concurrent_shutdown_waiters_are_bounded_and_stable() 
     let first = waiters.remove(0).join().expect("first shutdown waiter");
     let second = waiters.remove(0).join().expect("second shutdown waiter");
     assert_eq!(first, second);
-    // The exact message is what proves neither bounded wait was entered: an
-    // operation drain or registry timeout would join its own line onto this
-    // one. That is what the wall clock used to stand in for, without the
-    // clock, which a loaded runner could exceed while nothing was wrong.
+    // A drain or registry timeout would append its own line to this message;
+    // the assertion avoids a timing-dependent check on a loaded runner.
     assert_eq!(
         first,
         "AgentRun integration shutdown: injected integration shutdown timeout"

@@ -1,6 +1,3 @@
-// Working the board with pointer and keyboard: cards open the drawer, moves
-// go through the drawer or menu, a second submit is refused, and a finished
-// plan asks to be closed without taking focus from someone typing.
 import { afterEach, describe, expect, it } from "vitest";
 
 import { board, bootApp, holdTimers, plan, snapshot, task } from "../test-support/app-harness";
@@ -211,4 +208,3 @@ describe("native close refusal", () => {
     expect(harness.toast()).toBe("Could not install the shell command: permission denied");
   });
 });
-

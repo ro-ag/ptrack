@@ -1,5 +1,3 @@
-// The Settings dialog driven through the window: what it loads, what each
-// control writes, and how its one live region reports the outcome.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { board, bootApp, holdTimers, snapshot } from "../test-support/app-harness";
@@ -174,4 +172,3 @@ describe("Settings", () => {
     expect(harness.$("#settings-save-status").textContent).toBe("Settings reset to defaults.");
   });
 });
-

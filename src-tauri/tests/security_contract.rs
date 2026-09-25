@@ -91,9 +91,9 @@ fn main_window_has_only_one_way_event_subscription_authority() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let capability = read_json(&manifest_dir.join("capabilities/main-window.json"));
 
-    // Plan #15 widens the label list to admit runtime-created terminal
-    // windows. The window-drag permissions below are the deliberate exception
-    // to event-only authority: the Overlay title bar style leaves nothing
+    // Runtime-created terminal windows need their own labels. The window-drag
+    // permissions are the exception to event-only authority: the Overlay
+    // title bar style leaves nothing
     // native to grab, so the frontend's data-tauri-drag-region strips need
     // start-dragging (and internal toggle-maximize for double-click zoom).
     // Everything else stays forbidden.

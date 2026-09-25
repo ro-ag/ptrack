@@ -6,8 +6,8 @@ Observe agent work, keep project state durable, and pass bounded context to
 the next agent—without a hosted service or cloud account.
 
 [![Rust](https://img.shields.io/badge/Rust-1.89%2B-CE6A3D?logo=rust&logoColor=white)](https://www.rust-lang.org/)
-[![Release](https://img.shields.io/badge/release-v0.41.2-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.41.2)
-[![Help Center](https://img.shields.io/badge/help-v0.41.2-3DD6A3)](https://ro-ag.github.io/ptrack/help/)
+[![Release](https://img.shields.io/badge/release-v0.41.3-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.41.3)
+[![Help Center](https://img.shields.io/badge/help-v0.41.3-3DD6A3)](https://ro-ag.github.io/ptrack/help/)
 [![License](https://img.shields.io/badge/License-Apache--2.0-3DD6A3)](LICENSE)
 [![Storage](https://img.shields.io/badge/Storage-local--first-AFA8FF)](#storage-and-safety)
 
@@ -783,8 +783,8 @@ npm --prefix frontend run build
 cargo build --locked --release --package ptrack-desktop --bin ptrack
 ```
 
-Architecture and product design notes live in
-[`docs/superpowers/`](docs/superpowers/). The approved all-Rust runtime, Tauri
+Current product design contracts live in
+[`docs/superpowers/specs/`](docs/superpowers/specs/). The approved all-Rust runtime, Tauri
 boundary, storage activation contract, and fail-closed cutover design are
 captured in [`docs/tauri-rust-recode.md`](docs/tauri-rust-recode.md).
 
