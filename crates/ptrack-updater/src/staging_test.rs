@@ -363,7 +363,10 @@ fn load_accepts_a_stage_whose_signed_manifest_is_intact() {
     let cancellation = CancellationToken::new();
     let root = private_temp_dir();
     let (stage, key) = signed_linux_stage(&root);
-    assert_eq!(load_stage_with_key(&cancellation, &root, &key).unwrap(), stage);
+    assert_eq!(
+        load_stage_with_key(&cancellation, &root, &key).unwrap(),
+        stage
+    );
     cleanup(&root);
 }
 
@@ -443,7 +446,9 @@ fn load_refuses_a_manifest_signed_by_another_key() {
     let root = private_temp_dir();
     let (_stage, key) = signed_linux_stage(&root);
     assert_eq!(
-        load_stage_with_key(&cancellation, &root, &key).unwrap().root,
+        load_stage_with_key(&cancellation, &root, &key)
+            .unwrap()
+            .root,
         root
     );
     let other = test_key_pair(0x42);

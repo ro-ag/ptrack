@@ -1296,11 +1296,7 @@ fn git_show_truncates_a_huge_patch_with_an_explicit_marker() {
     let directory = TestDirectory::new("git-show-cap");
     let (mut application, endpoint) = configured(&directory, true);
     git(&endpoint.root, &["init", "-q"]);
-    std::fs::write(
-        endpoint.root.join("big.txt"),
-        "x".repeat(5 * 1024 * 1024),
-    )
-    .unwrap();
+    std::fs::write(endpoint.root.join("big.txt"), "x".repeat(5 * 1024 * 1024)).unwrap();
     git(&endpoint.root, &["add", "big.txt"]);
     git(
         &endpoint.root,

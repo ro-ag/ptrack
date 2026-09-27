@@ -2071,7 +2071,10 @@ fn cli_output_neutralizes_legacy_control_characters() {
         ulid: None,
     });
     let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "note", "list"]);
-    assert!(!stdout.contains('\x1b') && !stdout.contains('\r'), "{stdout}");
+    assert!(
+        !stdout.contains('\x1b') && !stdout.contains('\r'),
+        "{stdout}"
+    );
     assert!(stdout.contains("note [2Jbody X"), "{stdout}");
 
     application.snapshot.commits.push(Commit {

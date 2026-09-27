@@ -3708,7 +3708,13 @@ fn add_commit_refuses_unusable_sha_or_multiline_subject() {
     .unwrap();
     // A sha that is not an object name — too short, non-hex, option-shaped,
     // or past the bound — is refused at the store boundary.
-    for sha in ["abc", "zzzzzzzz", "--output=/tmp/x", "HEAD~1", &"a".repeat(65)] {
+    for sha in [
+        "abc",
+        "zzzzzzzz",
+        "--output=/tmp/x",
+        "HEAD~1",
+        &"a".repeat(65),
+    ] {
         let error = store
             .add_commit(sha, "subject", 0, 0)
             .unwrap_err()
@@ -3716,7 +3722,12 @@ fn add_commit_refuses_unusable_sha_or_multiline_subject() {
         assert!(error.contains("commit.sha"), "{sha}: {error}");
     }
     // A subject must stay one printable line.
-    for subject in ["line1\nline2", "sub\x1bject", "trail\rhidden", "para\u{2028}break"] {
+    for subject in [
+        "line1\nline2",
+        "sub\x1bject",
+        "trail\rhidden",
+        "para\u{2028}break",
+    ] {
         let error = store
             .add_commit("abcd1234", subject, 0, 0)
             .unwrap_err()
@@ -3743,7 +3754,9 @@ fn note_and_issue_bodies_are_capped_on_write() {
     .unwrap();
     let at_cap = "x".repeat(MAX_BODY_BYTES);
     let over_cap = "x".repeat(MAX_BODY_BYTES + 1);
-    store.add_note(NoteTarget::Project, 0, at_cap.as_str()).unwrap();
+    store
+        .add_note(NoteTarget::Project, 0, at_cap.as_str())
+        .unwrap();
     let error = store
         .add_note(NoteTarget::Project, 0, over_cap.as_str())
         .unwrap_err()

@@ -4590,7 +4590,9 @@ fn terminal_windows_reach_only_their_own_commands_and_assignment() {
         Value::Null,
     ] {
         assert_eq!(
-            terminal("SetPreferences", vec![patch.clone()]).unwrap_err().to_string(),
+            terminal("SetPreferences", vec![patch.clone()])
+                .unwrap_err()
+                .to_string(),
             "this window may only set appearance preferences",
             "{patch}"
         );
@@ -4600,9 +4602,7 @@ fn terminal_windows_reach_only_their_own_commands_and_assignment() {
         json!({ "startup": { "restoreLastProject": true } }),
         json!({ "notifications": { "runCompletion": true } }),
     ] {
-        assert!(
-            scope_request_to_window("main", request("SetPreferences", vec![patch])).is_ok()
-        );
+        assert!(scope_request_to_window("main", request("SetPreferences", vec![patch])).is_ok());
     }
     for method in [
         "MoveTaskV3",
@@ -4770,7 +4770,10 @@ fn terminal_window_commands_address_only_the_sessions_their_window_shows() {
         runtime
             .invoke_from_window(
                 "terminal-1",
-                request("SetPreferences", vec![json!({ "startup": { "restoreLastProject": true } })])
+                request(
+                    "SetPreferences",
+                    vec![json!({ "startup": { "restoreLastProject": true } })]
+                )
             )
             .unwrap_err()
             .to_string(),

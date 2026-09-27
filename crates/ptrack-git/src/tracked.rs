@@ -129,7 +129,10 @@ fn parse_line_counts(output: &[u8]) -> Vec<(String, u32)> {
 fn parse_tracked_paths(output: &[u8]) -> (Vec<String>, usize) {
     let mut paths = Vec::new();
     let mut unrepresentable = 0_usize;
-    for entry in output.split(|byte| *byte == 0).filter(|entry| !entry.is_empty()) {
+    for entry in output
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+    {
         match str::from_utf8(entry) {
             Ok(value) if !value.chars().any(char::is_control) => paths.push(value.to_owned()),
             _ => unrepresentable += 1,

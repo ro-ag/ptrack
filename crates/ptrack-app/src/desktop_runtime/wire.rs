@@ -200,11 +200,12 @@ pub(super) fn scope_preference_patch(patch: Option<&Value>) -> AppResult<()> {
         return Err(window_preference_refusal());
     };
     for (key, value) in patch {
-        let appearance = key == "appearance" && value.as_object().is_some_and(|appearance| {
-            appearance
-                .keys()
-                .all(|key| TERMINAL_WINDOW_APPEARANCE_KEYS.contains(&key.as_str()))
-        });
+        let appearance = key == "appearance"
+            && value.as_object().is_some_and(|appearance| {
+                appearance
+                    .keys()
+                    .all(|key| TERMINAL_WINDOW_APPEARANCE_KEYS.contains(&key.as_str()))
+            });
         if !appearance {
             return Err(window_preference_refusal());
         }

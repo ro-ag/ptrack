@@ -343,10 +343,7 @@ fn join_if_finished(reader: thread::JoinHandle<bool>) -> bool {
 /// after the bounded grace is abandoned: its capacity slot is reclaimed on
 /// the spot, so one descendant that escaped the kill cannot wedge every later
 /// git command, while its thread stays until that pipe closes.
-fn join_readers(
-    readers: [thread::JoinHandle<bool>; 2],
-    slots: [ReaderSlot; 2],
-) -> [bool; 2] {
+fn join_readers(readers: [thread::JoinHandle<bool>; 2], slots: [ReaderSlot; 2]) -> [bool; 2] {
     let deadline = Instant::now() + READER_JOIN_GRACE;
     while readers.iter().any(|reader| !reader.is_finished()) && Instant::now() < deadline {
         thread::sleep(POLL_INTERVAL);

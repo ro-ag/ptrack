@@ -17,9 +17,8 @@ use crate::error::CliError;
 /// text is untrusted: a record written before validation existed must not be
 /// able to repaint a terminal, forge a line, or hide part of what it prints.
 fn sanitize(value: &str) -> Cow<'_, str> {
-    let forbidden = |character: char| {
-        is_forbidden_control(character) && character != '\n' && character != '\t'
-    };
+    let forbidden =
+        |character: char| is_forbidden_control(character) && character != '\n' && character != '\t';
     if value.chars().any(forbidden) {
         Cow::Owned(
             value

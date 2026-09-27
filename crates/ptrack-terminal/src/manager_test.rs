@@ -355,10 +355,7 @@ async fn per_launch_environment_carries_the_denylist_except_for_host_keys() {
             "PTRACK_AGENT_EVENT_TOKEN_V1".to_owned(),
             "opaque".to_owned(),
         ),
-        (
-            "PTRACK_LAUNCH_CONTEXT_V1".to_owned(),
-            "context".to_owned(),
-        ),
+        ("PTRACK_LAUNCH_CONTEXT_V1".to_owned(), "context".to_owned()),
     ]);
     manager
         .create_with_env("shell-default", None, 24, 80, &host)

@@ -209,8 +209,7 @@ impl DesktopRuntime {
         window_label: &str,
         request: DesktopCommandRequest,
     ) -> AppResult<Value> {
-        let terminal_window =
-            crate::terminal_windows::is_terminal_window_label(window_label);
+        let terminal_window = crate::terminal_windows::is_terminal_window_label(window_label);
         if terminal_window {
             self.require_owned_terminal_session(window_label, &request)?;
             if request.method == "SetPreferences" {

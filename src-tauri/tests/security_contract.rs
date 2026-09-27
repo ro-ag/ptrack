@@ -71,7 +71,9 @@ fn shell_has_only_the_bounded_adapter_commands() {
         .expect("shell command result must use the native dialog");
     assert!(shell_dialog_lease < shell_invoke && shell_invoke < shell_dialog);
     assert_eq!(
-        source.matches(".invoke_from_window(&window_label, request)").count(),
+        source
+            .matches(".invoke_from_window(&window_label, request)")
+            .count(),
         2,
         "both bridge dispatches must carry the calling window"
     );
@@ -396,9 +398,11 @@ fn external_url_gate_rejects_non_web_credentialed_and_unlisted_hosts() {
     assert!(source.contains("parsed.password().is_some()"));
     // The browser opens only the hosts the help system maps its destinations
     // to — the docs site and the issue tracker — and refuses everything else.
-    assert!(source.contains(
-        "const EXTERNAL_URL_HOSTS: [&str; 2] = [\"github.com\", \"ro-ag.github.io\"]"
-    ));
+    assert!(
+        source.contains(
+            "const EXTERNAL_URL_HOSTS: [&str; 2] = [\"github.com\", \"ro-ag.github.io\"]"
+        )
+    );
     assert!(source.contains("EXTERNAL_URL_HOSTS.contains(&host)"));
 }
 
@@ -408,7 +412,9 @@ fn external_url_gate_rejects_non_web_credentialed_and_unlisted_hosts() {
 fn native_window_actions_are_main_window_only() {
     let source = shell_source();
     assert_eq!(
-        source.matches("require_main_window_label(window.label())?").count(),
+        source
+            .matches("require_main_window_label(window.label())?")
+            .count(),
         2,
         "both native window actions must be main-window scoped"
     );
@@ -417,10 +423,7 @@ fn native_window_actions_are_main_window_only() {
         let body = source
             .split_once(signature)
             .and_then(|(_, rest)| rest.split_once("{\n"))
-            .map_or_else(
-                || panic!("{signature} must be findable"),
-                |(_, body)| body,
-            );
+            .map_or_else(|| panic!("{signature} must be findable"), |(_, body)| body);
         assert!(
             body.starts_with("    require_main_window_label(window.label())?;"),
             "{signature} must gate on the calling window first"

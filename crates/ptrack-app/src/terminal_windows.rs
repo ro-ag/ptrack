@@ -26,7 +26,9 @@ pub const TERMINAL_WINDOW_PREFIX: &str = "terminal-";
 pub fn is_terminal_window_label(label: &str) -> bool {
     label
         .strip_prefix(TERMINAL_WINDOW_PREFIX)
-        .is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()))
+        .is_some_and(|suffix| {
+            !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+        })
 }
 /// Bounded so a runaway caller cannot open windows without end.
 const TERMINAL_WINDOW_LIMIT: usize = 16;

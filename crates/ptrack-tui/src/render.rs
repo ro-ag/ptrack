@@ -1384,7 +1384,10 @@ fn detail_content(model: &Model) -> (String, Vec<DetailRow>) {
         }
         DetailTarget::Milestone(id) => {
             let Some(milestone) = model.snapshot.milestone(id) else {
-                return (format!("Milestone #{id}"), vec![text_row(missing("milestone"))]);
+                return (
+                    format!("Milestone #{id}"),
+                    vec![text_row(missing("milestone"))],
+                );
             };
             let mut rows = vec![
                 text_row(Line::styled(
@@ -1450,7 +1453,10 @@ fn detail_content(model: &Model) -> (String, Vec<DetailRow>) {
                 text_row(line_kv("Severity", issue.severity.as_str())),
             ];
             if let Some(task) = model.snapshot.task(issue.task_id) {
-                rows.push(text_row(line_kv("Task", &format!("#{} {}", task.id, task.title))));
+                rows.push(text_row(line_kv(
+                    "Task",
+                    &format!("#{} {}", task.id, task.title),
+                )));
             }
             rows.extend([
                 text_row(line_kv("Created", &format_timestamp(issue.created_at))),

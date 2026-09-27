@@ -330,7 +330,10 @@ fn a_concurrent_start_is_refused_while_the_first_still_launches() {
     let second = session.start().expect_err("concurrent start refused");
     assert!(second.to_string().contains("already starting"), "{second}");
     gate.open();
-    first.join().expect("first start thread").expect("first start");
+    first
+        .join()
+        .expect("first start thread")
+        .expect("first start");
     assert_eq!(session.state(), SessionState::Running);
     assert_eq!(fake.starts.lock().unwrap().len(), 1, "second PTY spawned");
 }
@@ -342,16 +345,33 @@ fn a_stuck_live_consumer_drops_its_chunk_instead_of_blocking_the_reader() {
     let (sender, mut receiver) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
     sender.try_send(b"first".to_vec()).expect("queue has room");
     let started = Instant::now();
-    assert!(!deliver_chunk(&sender, b"second".to_vec(), &AtomicBool::new(false)));
+    assert!(!deliver_chunk(
+        &sender,
+        b"second".to_vec(),
+        &AtomicBool::new(false)
+    ));
     let waited = started.elapsed();
-    assert!(waited >= LIVE_OUTPUT_DELIVERY_GRACE, "gave up early: {waited:?}");
-    assert!(waited < Duration::from_secs(2), "spun past the bound: {waited:?}");
+    assert!(
+        waited >= LIVE_OUTPUT_DELIVERY_GRACE,
+        "gave up early: {waited:?}"
+    );
+    assert!(
+        waited < Duration::from_secs(2),
+        "spun past the bound: {waited:?}"
+    );
     assert_eq!(receiver.try_recv().expect("first chunk"), b"first");
-    assert!(receiver.try_recv().is_err(), "dropped chunk reached the consumer");
+    assert!(
+        receiver.try_recv().is_err(),
+        "dropped chunk reached the consumer"
+    );
     // A closing session stops waiting at once even with a full queue.
     sender.try_send(b"third".to_vec()).expect("queue has room");
     let closing_started = Instant::now();
-    assert!(!deliver_chunk(&sender, b"fourth".to_vec(), &AtomicBool::new(true)));
+    assert!(!deliver_chunk(
+        &sender,
+        b"fourth".to_vec(),
+        &AtomicBool::new(true)
+    ));
     assert!(closing_started.elapsed() < LIVE_OUTPUT_DELIVERY_GRACE);
 }
 

@@ -452,10 +452,10 @@ pub(crate) fn load_stage_with_key(
     // came from the release key; `state.json` is unsigned and proves nothing.
     let manifest_path = root.join("checksums.txt");
     let signature_path = root.join(SIGNATURE_ASSET_NAME);
-    let manifest =
-        read_private_file(cancellation, &manifest_path, MAX_MANIFEST_BYTES).map_err(|error| signature_chain(&error))?;
-    let signature =
-        read_private_file(cancellation, &signature_path, SIGNATURE_BYTES).map_err(|error| signature_chain(&error))?;
+    let manifest = read_private_file(cancellation, &manifest_path, MAX_MANIFEST_BYTES)
+        .map_err(|error| signature_chain(&error))?;
+    let signature = read_private_file(cancellation, &signature_path, SIGNATURE_BYTES)
+        .map_err(|error| signature_chain(&error))?;
     verify_manifest_signature(public_key, &manifest, &signature)?;
     let state_path = root.join("state.json");
     validate_private_path(&state_path, false).map_err(|_| UpdateError::InvalidStage)?;
