@@ -4514,6 +4514,7 @@ fn initialization_refuses_when_an_open_published_during_its_drain() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // One scoping row per command and preference shape.
 fn terminal_windows_reach_only_their_own_commands_and_assignment() {
     let terminal = |method: &str, arguments: Vec<Value>| {
         scope_request_to_window("terminal-3", request(method, arguments))
@@ -4554,10 +4555,54 @@ fn terminal_windows_reach_only_their_own_commands_and_assignment() {
     }
     for method in commands {
         assert!(allowed_desktop_commands().contains(method), "{method}");
+        // A terminal window's one shared write is its theme toggle; every
+        // other command carries its own shape here.
+        let arguments = if *method == "SetPreferences" {
+            vec![json!({ "appearance": { "theme": "dark" } })]
+        } else {
+            vec![json!("terminal-9")]
+        };
+        assert!(terminal(method, arguments).is_ok(), "{method}");
+    }
+    // Only the appearance section is reachable from a terminal window.
+    for patch in [
+        json!({ "appearance": { "theme": "dark" } }),
+        json!({ "appearance": { "density": "compact", "reducedMotion": "always" } }),
+        json!({ "appearance": {} }),
+        json!({}),
+    ] {
         assert!(
-            terminal(method, vec![json!("terminal-9")]).is_ok(),
-            "{method}"
+            terminal("SetPreferences", vec![patch.clone()]).is_ok(),
+            "{patch}"
         );
+    }
+    for patch in [
+        json!({ "startup": { "restoreLastProject": true } }),
+        json!({ "startup": { "lastProjectRoot": "/tmp/project" } }),
+        json!({ "notifications": { "handoffArrival": true } }),
+        json!({ "terminal": { "fontSize": 20 } }),
+        json!({ "appearance": { "theme": "dark" }, "startup": { "restoreLastProject": true } }),
+        json!({ "appearance": { "theme": "dark" }, "terminal": { "scrollback": 10_000 } }),
+        json!({ "appearance": { "fontSize": 20 } }),
+        json!({ "appearance": "dark" }),
+        json!({ "version": 99 }),
+        json!("dark"),
+        Value::Null,
+    ] {
+        assert_eq!(
+            terminal("SetPreferences", vec![patch.clone()])
+                .unwrap_err()
+                .to_string(),
+            "this window may only set appearance preferences",
+            "{patch}"
+        );
+    }
+    // The main window keeps the whole record.
+    for patch in [
+        json!({ "startup": { "restoreLastProject": true } }),
+        json!({ "notifications": { "runCompletion": true } }),
+    ] {
+        assert!(scope_request_to_window("main", request("SetPreferences", vec![patch])).is_ok());
     }
     for method in [
         "MoveTaskV3",
@@ -4589,6 +4634,151 @@ fn terminal_windows_reach_only_their_own_commands_and_assignment() {
             "{label}"
         );
     }
+}
+
+/// Pins `invoke_from_window`'s session-ownership rule for terminal-window
+/// terminal commands.
+#[test]
+#[allow(clippy::too_many_lines)] // One ownership row per window and session.
+fn terminal_window_commands_address_only_the_sessions_their_window_shows() {
+    let root = TestDirectory::new("terminal-session-scope");
+    let workspace = FakeWorkspace::new(&root.0, 1);
+    let runtime = DesktopRuntime::new(DesktopRuntimeConfig {
+        version: "test".to_owned(),
+        factory: Arc::new(FakeFactory::default()),
+        event_sink: None,
+        initial_workspace: Some(workspace),
+        recent_projects: Arc::new(super::desktop_runtime::NoRecentProjectsProvider),
+        initialization: Arc::new(super::desktop_runtime::NoDesktopInitializationService),
+        update_service: super::update_runtime::UnavailableUpdateService::new("test"),
+        confirmation_ttl: Duration::from_secs(60),
+    });
+    runtime
+        .invoke(request(
+            "OpenTerminalWindow",
+            vec![json!(["session-a", "session-b"]), json!({ "id": "tab-1" })],
+        ))
+        .unwrap();
+    runtime
+        .invoke(request(
+            "OpenTerminalWindow",
+            vec![json!(["session-c"]), json!({ "id": "tab-2" })],
+        ))
+        .unwrap();
+
+    for (method, arguments) in [
+        (
+            "CloseTerminalV2",
+            vec![json!(1), json!("session-a"), json!(false)],
+        ),
+        (
+            "ResizeTerminalV2",
+            vec![json!(1), json!("session-b"), json!(24), json!(80)],
+        ),
+        ("ClaimTerminalStream", vec![json!("session-a"), json!(0)]),
+    ] {
+        assert!(
+            runtime
+                .invoke_from_window("terminal-1", request(method, arguments))
+                .is_ok(),
+            "{method}"
+        );
+    }
+    // Another window's session, one no window shows, and a label that owns
+    // nothing are all refused before the workspace sees them.
+    for (window, method, arguments) in [
+        (
+            "terminal-1",
+            "CloseTerminalV2",
+            vec![json!(1), json!("session-c"), json!(false)],
+        ),
+        (
+            "terminal-1",
+            "ResizeTerminalV2",
+            vec![json!(1), json!("session-z"), json!(24), json!(80)],
+        ),
+        (
+            "terminal-1",
+            "ClaimTerminalStream",
+            vec![json!("session-z"), json!(0)],
+        ),
+        (
+            "terminal-2",
+            "ClaimTerminalStream",
+            vec![json!("session-a"), json!(0)],
+        ),
+        (
+            "terminal-9",
+            "ClaimTerminalStream",
+            vec![json!("session-a"), json!(0)],
+        ),
+    ] {
+        assert_eq!(
+            runtime
+                .invoke_from_window(window, request(method, arguments))
+                .unwrap_err()
+                .to_string(),
+            "terminal session is not in this window",
+            "{window} {method}"
+        );
+    }
+    // The window's own second session keeps working from its window.
+    assert!(
+        runtime
+            .invoke_from_window(
+                "terminal-2",
+                request("ClaimTerminalStream", vec![json!("session-c"), json!(0)])
+            )
+            .is_ok()
+    );
+    // The main window — and the trusted host entry — stay unrestricted.
+    for session in ["session-a", "session-c", "session-z"] {
+        assert!(
+            runtime
+                .invoke_from_window(
+                    "main",
+                    request("ClaimTerminalStream", vec![json!(session), json!(0)])
+                )
+                .is_ok(),
+            "{session}"
+        );
+        assert!(
+            runtime
+                .invoke(request(
+                    "CloseTerminalV2",
+                    vec![json!(1), json!(session), json!(false)]
+                ))
+                .is_ok(),
+            "{session}"
+        );
+    }
+    // A command that mints a session addresses none, so creation is untouched.
+    assert!(
+        runtime
+            .invoke_from_window(
+                "terminal-1",
+                request(
+                    "CreateTerminalV2",
+                    vec![json!(1), json!("default"), json!(""), json!(24), json!(80)]
+                )
+            )
+            .is_ok()
+    );
+    // The preference scope and this one compose: a terminal window's shared
+    // write is still appearance-only whatever sessions it owns.
+    assert_eq!(
+        runtime
+            .invoke_from_window(
+                "terminal-1",
+                request(
+                    "SetPreferences",
+                    vec![json!({ "startup": { "restoreLastProject": true } })]
+                )
+            )
+            .unwrap_err()
+            .to_string(),
+        "this window may only set appearance preferences"
+    );
 }
 
 #[test]

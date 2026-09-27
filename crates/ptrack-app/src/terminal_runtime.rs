@@ -410,7 +410,7 @@ struct RuntimeGate {
     idle: Condvar,
 }
 
-struct RuntimeOperation(Arc<RuntimeGate>);
+pub(crate) struct RuntimeOperation(Arc<RuntimeGate>);
 
 impl Drop for RuntimeOperation {
     fn drop(&mut self) {
@@ -488,7 +488,7 @@ impl TerminalRuntime {
         }))
     }
 
-    fn begin(&self, expected_generation: u64) -> AppResult<RuntimeOperation> {
+    pub(crate) fn begin(&self, expected_generation: u64) -> AppResult<RuntimeOperation> {
         if expected_generation != 0 && expected_generation != self.generation {
             return Err(AppError::Message("stale workspace generation".to_owned()));
         }
@@ -1151,7 +1151,9 @@ impl TerminalRuntime {
     }
 
     fn push_monitor(&self, monitor: JoinHandle<()>) {
-        lock(&self.monitors).push(monitor);
+        let mut monitors = lock(&self.monitors);
+        reap_finished_monitors(&mut monitors);
+        monitors.push(monitor);
     }
 
     /// Stops admission, revokes session authority, shuts the listener first,
@@ -1160,18 +1162,25 @@ impl TerminalRuntime {
     /// # Errors
     /// Returns terminal manager shutdown failures.
     pub async fn shutdown(&self) -> AppResult<()> {
-        {
-            let mut state = lock(&self.gate.state);
+        // The gate drain waits on a blocking condvar. Parking the async
+        // caller's thread on it would stall whichever runtime drives this
+        // future, so the wait runs on the blocking pool and only its result is
+        // awaited. The drain is unchanged: `closing` is set first and the
+        // teardown continues only once every operation has finished.
+        let gate = Arc::clone(&self.gate);
+        tokio::task::spawn_blocking(move || {
+            let mut state = lock(&gate.state);
             state.closing = true;
             while state.operations != 0 {
-                state = self
-                    .gate
+                state = gate
                     .idle
                     .wait(state)
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
             }
             drop(state);
-        }
+        })
+        .await
+        .map_err(|error| AppError::Message(error.to_string()))?;
         self.cancellation.cancel();
         for session_id in self.manager.lifecycle_session_ids() {
             self.identity.revoke_session(self.generation, &session_id);
@@ -1210,6 +1219,12 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Drops the handles of monitors that already finished, so the list is bounded
+/// by the monitors still running instead of every one ever spawned.
+pub(crate) fn reap_finished_monitors(monitors: &mut Vec<JoinHandle<()>>) {
+    monitors.retain(|monitor| !monitor.is_finished());
 }
 
 fn increment_revision(revision: &AtomicU64) {

@@ -2,7 +2,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
 import { WebLinksAddon } from "@xterm/addon-web-links";
-import { type ITheme, Terminal } from "@xterm/xterm";
+import { type ILinkHandler, type ITheme, Terminal } from "@xterm/xterm";
 
 import type { TerminalPlatform } from "./paste";
 import { terminalPlatform } from "./platform";
@@ -41,6 +41,23 @@ export function terminalLinkActivation(options: {
   };
 }
 
+/**
+ * OSC 8 hyperlinks activate through the same modifier-gated path as detected
+ * links, so xterm's default `confirm()` + `window.open()` handler never runs.
+ * `allowNonHttpProtocols` stays false so only http(s) targets ever reach
+ * `activate` at all.
+ */
+export function terminalLinkHandler(options: {
+  onError(error: unknown): void;
+  open?: (uri: string) => Promise<void>;
+  platform?: () => TerminalPlatform;
+}): ILinkHandler {
+  return {
+    allowNonHttpProtocols: false,
+    activate: terminalLinkActivation(options),
+  };
+}
+
 export interface TerminalRendererParts {
   terminal: Terminal;
   fit: FitAddon;
@@ -62,6 +79,7 @@ export function createTerminalRenderer(options: {
     cursorBlink: true,
     rescaleOverlappingGlyphs: true,
     ...terminalRendererOptions(options.settings, options.fontSize),
+    linkHandler: terminalLinkHandler({ onError: options.onLinkError }),
   });
   const fit = new FitAddon();
   terminal.loadAddon(fit);

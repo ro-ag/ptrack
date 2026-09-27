@@ -10,8 +10,8 @@ use ptrack_app::{
     RelocateRequest, RelocateResult, RunState, RuntimeAssociation,
 };
 use ptrack_core::{
-    Commit, MemoryKind, Meta, Milestone, MilestoneStatus, Note, Plan, PlanStatus, ProjectRef,
-    ProjectSnapshot, Task, TaskStatus, Timestamp, would_create_cycle,
+    Commit, MemoryKind, Meta, Milestone, MilestoneStatus, Note, NoteTarget, Plan, PlanStatus,
+    ProjectRef, ProjectSnapshot, Task, TaskStatus, Timestamp, would_create_cycle,
 };
 
 use crate::{Io, RunOutcome, run};
@@ -2040,4 +2040,54 @@ fn checkpoint_reports_the_active_plan_milestone_progress() {
     );
     let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "checkpoint", "--json"]);
     assert!(stdout.contains("\"milestone\""), "{stdout}");
+}
+
+#[test]
+fn cli_output_neutralizes_legacy_control_characters() {
+    // Records stored before validation existed can hold anything; none of it
+    // may reach a terminal as an escape, a carriage return, or a bidi
+    // override. Line breaks and tabs survive — they are real content.
+    let mut application = FakeApplication::default();
+    application.snapshot.meta.goal = "ship\x1b[2J\x07now".to_owned();
+    application.snapshot.meta.summary = "sum\u{202e}mary".to_owned();
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "goal", "show"]);
+    assert_eq!(stdout, "ship [2J now\n");
+    assert!(!stdout.contains('\x1b') && !stdout.contains('\x07'));
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "summary", "show"]);
+    assert_eq!(stdout, "sum mary\n");
+
+    application.snapshot.meta.goal = "multi\nline\tgoal".to_owned();
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "goal", "show"]);
+    assert_eq!(stdout, "multi\nline\tgoal\n");
+
+    application.snapshot.notes.push(Note {
+        id: 1,
+        target: NoteTarget::Project,
+        target_id: 0,
+        kind: MemoryKind::Legacy,
+        body: "note\x1b[2Jbody\rX".to_owned(),
+        created_at: Timestamp::Zero,
+        actor: None,
+        ulid: None,
+    });
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "note", "list"]);
+    assert!(
+        !stdout.contains('\x1b') && !stdout.contains('\r'),
+        "{stdout}"
+    );
+    assert!(stdout.contains("note [2Jbody X"), "{stdout}");
+
+    application.snapshot.commits.push(Commit {
+        id: 1,
+        sha: "abcd1234".to_owned(),
+        subject: "sub\x1bject".to_owned(),
+        plan_id: 0,
+        task_id: 0,
+        created_at: Timestamp::Zero,
+        actor: None,
+        ulid: None,
+    });
+    let (_, stdout, _) = invoke_with(&mut application, &["ptrack", "commit", "list"]);
+    assert!(!stdout.contains('\x1b'), "{stdout}");
+    assert!(stdout.contains("sub ject"), "{stdout}");
 }

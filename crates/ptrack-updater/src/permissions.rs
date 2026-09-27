@@ -191,7 +191,7 @@ mod platform {
             return Err(io::Error::last_os_error());
         }
         let mut information = BY_HANDLE_FILE_INFORMATION::default();
-        if unsafe { GetFileInformationByHandle(handle, &mut information) } == 0 {
+        if unsafe { GetFileInformationByHandle(handle, ptr::from_mut(&mut information)) } == 0 {
             let error = io::Error::last_os_error();
             unsafe { CloseHandle(handle) };
             return Err(error);
@@ -208,12 +208,22 @@ mod platform {
 
     fn protect_current_user(handle: HANDLE, directory: bool) -> io::Result<()> {
         let mut token = ptr::null_mut();
-        if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, ptr::from_mut(&mut token)) }
+            == 0
+        {
             return Err(io::Error::last_os_error());
         }
         let result = (|| {
             let mut required = 0;
-            unsafe { GetTokenInformation(token, TokenUser, ptr::null_mut(), 0, &mut required) };
+            unsafe {
+                GetTokenInformation(
+                    token,
+                    TokenUser,
+                    ptr::null_mut(),
+                    0,
+                    ptr::from_mut(&mut required),
+                )
+            };
             let words = usize::try_from(required)
                 .unwrap_or_default()
                 .div_ceil(std::mem::size_of::<usize>());
@@ -227,7 +237,7 @@ mod platform {
                     TokenUser,
                     buffer.as_mut_ptr().cast(),
                     required,
-                    &mut required,
+                    ptr::from_mut(&mut required),
                 )
             } == 0
             {
@@ -251,7 +261,14 @@ mod platform {
                 },
             };
             let mut acl = ptr::null_mut();
-            let status = unsafe { SetEntriesInAclW(1, &access, ptr::null(), &mut acl) };
+            let status = unsafe {
+                SetEntriesInAclW(
+                    1,
+                    ptr::from_ref(&access),
+                    ptr::null(),
+                    ptr::from_mut(&mut acl),
+                )
+            };
             if status != 0 || acl.is_null() {
                 return Err(io::Error::from_raw_os_error(status.cast_signed()));
             }

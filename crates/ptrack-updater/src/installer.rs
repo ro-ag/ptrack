@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::future::Future;
 #[cfg(any(target_os = "linux", test))]
 use std::io;
@@ -13,7 +14,7 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
-use crate::discovery::{Target, UpdateError};
+use crate::discovery::{Target, UpdateError, compare_versions};
 use crate::staging::{StageKind, StagedUpdate, validate_stage};
 
 /// Upper bound for a trust check over a staged package (`hdiutil verify`,
@@ -25,11 +26,13 @@ pub(crate) const VERIFY_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
 pub(crate) const HANDOFF_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 /// Upper bound for the `ptrack version` smoke test of a replaced binary.
-#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) const SMOKE_TEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long pipe readers may run on after the command itself has exited.
 const PIPE_DRAIN_GRACE: Duration = Duration::from_secs(2);
 const MAX_COMMAND_OUTPUT: usize = 4096;
+/// How much failed-command stderr is kept for diagnostics.
+const MAX_ERROR_STDERR: usize = 512;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -85,6 +88,7 @@ pub struct Installer {
     #[cfg(any(target_os = "linux", test))]
     current_executable: Arc<dyn Fn() -> io::Result<PathBuf> + Send + Sync>,
     runner: Arc<dyn CommandRunner>,
+    current_version: Option<String>,
 }
 
 impl Default for Installer {
@@ -100,13 +104,24 @@ impl Installer {
             #[cfg(any(target_os = "linux", test))]
             current_executable: Arc::new(std::env::current_exe),
             runner: Arc::new(ProductionCommandRunner),
+            current_version: None,
         }
     }
 
-    /// Revalidates and applies or hands off a stage for the running host only.
+    /// Pins the running version so [`Installer::apply`] can refuse downgrades.
+    #[must_use]
+    pub fn with_current_version(mut self, version: impl Into<String>) -> Self {
+        self.current_version = Some(version.into());
+        self
+    }
+
+    /// Revalidates and applies or hands off a stage for the running host
+    /// only, and only when the stage is strictly newer than the running
+    /// version.
     ///
     /// # Errors
-    /// Returns a validation, target, command, replacement, or cancellation error.
+    /// Returns a validation, target, command, replacement, or cancellation
+    /// error, and refuses a stage that does not upgrade the running version.
     pub async fn apply(
         &self,
         cancellation: &CancellationToken,
@@ -116,8 +131,22 @@ impl Installer {
         if stage.os != host.os || stage.arch != host.arch {
             return Err(UpdateError::InstallRefused);
         }
+        self.require_upgrade(&stage.version)?;
         validate_stage(cancellation, stage)?;
         platform::apply(self, cancellation, stage).await
+    }
+
+    /// Anti-downgrade gate: the staged version must be strictly newer than
+    /// the running version, which is only ever known through the builder.
+    fn require_upgrade(&self, staged: &str) -> Result<(), UpdateError> {
+        let current = self
+            .current_version
+            .as_deref()
+            .ok_or(UpdateError::InstallRefused)?;
+        match compare_versions(staged, current) {
+            Ok(Ordering::Greater) => Ok(()),
+            Ok(Ordering::Less | Ordering::Equal) | Err(_) => Err(UpdateError::InstallRefused),
+        }
     }
 
     #[cfg(test)]
@@ -128,6 +157,7 @@ impl Installer {
         Self {
             current_executable: executable,
             runner,
+            current_version: None,
         }
     }
 
@@ -194,11 +224,16 @@ pub(crate) async fn run_bounded_command(
     };
     let mut output = stdout.map_err(|_| UpdateError::InstallRefused)??;
     let stderr = stderr.map_err(|_| UpdateError::InstallRefused)??;
+    if !status.success() {
+        let detail = String::from_utf8_lossy(&stderr[..stderr.len().min(MAX_ERROR_STDERR)]);
+        return Err(UpdateError::Message(format!(
+            "update command {} failed: {}",
+            program.display(),
+            detail.trim()
+        )));
+    }
     let remaining = MAX_COMMAND_OUTPUT.saturating_sub(output.len());
     output.extend_from_slice(&stderr[..stderr.len().min(remaining)]);
-    if !status.success() {
-        return Err(UpdateError::InstallRefused);
-    }
     Ok(output)
 }
 
@@ -345,8 +380,13 @@ mod platform {
         if stage.kind != StageKind::WindowsZip {
             return Err(UpdateError::InstallRefused);
         }
-        let mut buffer = [0_u16; 32_768];
-        let length = unsafe { GetWindowsDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) };
+        let mut buffer = vec![0_u16; 32_768].into_boxed_slice();
+        let length = unsafe {
+            GetWindowsDirectoryW(
+                buffer.as_mut_ptr(),
+                u32::try_from(buffer.len()).unwrap_or(u32::MAX),
+            )
+        };
         if length == 0 || usize::try_from(length).unwrap_or(usize::MAX) >= buffer.len() {
             return Err(UpdateError::InstallRefused);
         }
@@ -366,6 +406,9 @@ mod platform {
         })
     }
 
+    // Matches the Linux `recover` signature: the platform module presents one
+    // interface to its caller even though only Linux recovery can do work.
+    #[allow(clippy::unnecessary_wraps)]
     pub(super) fn recover(
         _cancellation: &CancellationToken,
         _stage_root: &Path,
@@ -392,7 +435,8 @@ pub(crate) mod linux {
     use sha2::{Digest, Sha256};
 
     use crate::permissions::{open_private_regular, secure_private_path, validate_private_path};
-    use crate::staging::load_stage;
+    use crate::signature::RELEASE_SIGNING_PUBLIC_KEY;
+    use crate::staging::load_stage_with_key;
 
     use super::{
         ApplyAction, ApplyResult, CancellationToken, Installer, Path, PathBuf, SMOKE_TEST_TIMEOUT,
@@ -531,6 +575,7 @@ pub(crate) mod linux {
             &|cancellation, program| {
                 run_blocking_command(cancellation, program, &["version"], SMOKE_TEST_TIMEOUT)
             },
+            &RELEASE_SIGNING_PUBLIC_KEY,
         )
     }
 
@@ -547,8 +592,9 @@ pub(crate) mod linux {
         stage_root: &Path,
         executable: &Path,
         smoke_test: SmokeTest<'_>,
+        public_key: &[u8; 32],
     ) -> Result<bool, UpdateError> {
-        let stage = load_stage(cancellation, stage_root)?;
+        let stage = load_stage_with_key(cancellation, stage_root, public_key)?;
         if stage.kind != StageKind::LinuxBinary
             || stage.os != "linux"
             || stage.arch != Target::host().arch

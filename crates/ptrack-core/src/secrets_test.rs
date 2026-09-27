@@ -121,7 +121,9 @@ fn span_redaction_keeps_the_key_and_drops_the_value() {
     for (value, expected) in [
         ("Bearer TOP_SECRET", "Bearer [redacted]"),
         ("token=SECOND_SECRET", "token=[redacted]"),
-        ("DB_PASSWORD=hunter2 next", "DB_PASSWORD=[redacted] next"),
+        // A bare unquoted value spans its whole multi-word run (L8): the tail
+        // is value, not prose, so nothing of it survives the span.
+        ("DB_PASSWORD=hunter2 next", "DB_PASSWORD=[redacted]"),
         (
             "AWS_SECRET_ACCESS_KEY=wJalr/XUtn OPENAI_API_KEY=abc",
             "AWS_SECRET_ACCESS_KEY=[redacted] OPENAI_API_KEY=[redacted]",
@@ -137,6 +139,68 @@ fn span_redaction_keeps_the_key_and_drops_the_value() {
     assert_eq!(
         redact_url_userinfo("postgres://app:hunter2@db/app and https://a@b"),
         "postgres://[redacted]@db/app and https://a@b"
+    );
+}
+
+#[test]
+fn span_redaction_covers_the_whole_unquoted_multi_word_value() {
+    for (value, expected) in [
+        ("password=my secret value", "password=[redacted]"),
+        ("token: hunter 2  spaces", "token=[redacted]"),
+        // A following assignment or URL is never swallowed into the value;
+        // each side keeps its own redaction.
+        (
+            "password=my secret value AWS_SECRET_ACCESS_KEY=wJalr/XUtn",
+            "password=[redacted] AWS_SECRET_ACCESS_KEY=[redacted]",
+        ),
+        (
+            "Authorization: Basic dXNlcjpwYXNz then postgres://app:hunter2@db/app",
+            "Authorization=[redacted] then postgres://[redacted]@db/app",
+        ),
+    ] {
+        assert_eq!(
+            redact_url_userinfo(&redact_credential_assignments(value)),
+            expected,
+            "{value:?}"
+        );
+    }
+}
+
+#[test]
+fn multi_line_key_value_assignments_are_detected_and_redacted() {
+    for value in [
+        "db_password:\n  hunter2",
+        "\"db_password\":\n  \"hunter2\"",
+        "DB_PASSWORD:\n\thunter2",
+        "api_key:\n  first\n  second",
+    ] {
+        assert!(contains_credential(value), "missed credential in {value:?}");
+    }
+    assert_eq!(
+        redact_credential_lines("db_password:\n  hunter2"),
+        format!("db_password:\n{REDACTED_CREDENTIAL}")
+    );
+    assert_eq!(
+        redact_credential_lines("\"db_password\":\n  \"hunter2\""),
+        format!("\"db_password\":\n{REDACTED_CREDENTIAL}")
+    );
+    assert_eq!(
+        redact_credential_lines("api_key:\n  first\n  second\nport: 8080"),
+        format!("api_key:\n{REDACTED_CREDENTIAL}\n{REDACTED_CREDENTIAL}\nport: 8080")
+    );
+    // A key-only line with no indented value under it is not a credential,
+    // and lines at the key's own indent belong to the parent scope.
+    for value in [
+        "token:",
+        "password:   ",
+        "db_password:\nhunter2",
+        "config:\n  db_password:\n  port: 8080",
+    ] {
+        assert!(!contains_credential(value), "false positive on {value:?}");
+    }
+    assert_eq!(
+        redact_credential_lines("config:\n  db_password:\n  port: 8080"),
+        "config:\n  db_password:\n  port: 8080"
     );
 }
 

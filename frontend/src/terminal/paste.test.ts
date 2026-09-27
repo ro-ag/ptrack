@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   commitClipboardPaste,
   isTerminalCompositionEvent,
+  maximumPasteCharacters,
   pasteReviewSummary,
   prepareClipboardPaste,
   terminalTextToBytes,
@@ -102,6 +103,14 @@ describe("prepareClipboardPaste", () => {
     expect(request.preview).toBe(input);
     expect(request.lineCount).toBe(1);
   });
+
+  it("refuses text over the paste size limit instead of feeding a shell", () => {
+    const oversize = prepareClipboardPaste("x".repeat(maximumPasteCharacters + 1), promptTarget);
+    expect(oversize.oversize).toBe(true);
+    expect(oversize.text).toBe("");
+    expect(prepareClipboardPaste("x".repeat(maximumPasteCharacters), promptTarget))
+      .toMatchObject({ oversize: false, text: "x".repeat(maximumPasteCharacters) });
+  });
 });
 
 describe("commitClipboardPaste", () => {
@@ -112,6 +121,16 @@ describe("commitClipboardPaste", () => {
     await expect(
       commitClipboardPaste(prepareClipboardPaste("", promptTarget), confirm, paste),
     ).resolves.toBe(false);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(paste).not.toHaveBeenCalled();
+  });
+
+  it("never pastes an over-sized request, even when confirmed", async () => {
+    const confirm = vi.fn(async () => true);
+    const paste = vi.fn();
+    const oversize = prepareClipboardPaste("x".repeat(maximumPasteCharacters + 1), promptTarget);
+
+    await expect(commitClipboardPaste(oversize, confirm, paste)).resolves.toBe(false);
     expect(confirm).not.toHaveBeenCalled();
     expect(paste).not.toHaveBeenCalled();
   });

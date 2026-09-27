@@ -39,4 +39,19 @@ describe("looksLikeSecret", () => {
   ])("keeps %s", (_label, text) => {
     expect(looksLikeSecret(text)).toBe(false);
   });
+
+  it("handles a multi-megabyte non-matching capture without stalling", () => {
+    const huge = "lorem ipsum dolor sit amet ".repeat(200_000); // ~5.4 MiB
+    expect(looksLikeSecret(huge)).toBe(false);
+    // A secret at either edge of an over-sized capture is still caught.
+    expect(looksLikeSecret(`filler ${"x".repeat(200_000)} token=${"a".repeat(40)}`)).toBe(true);
+    expect(looksLikeSecret(`token=${"a".repeat(40)} ${"x".repeat(200_000)} filler`)).toBe(true);
+  });
+
+  it("caps the scan at the edges of an over-sized capture", () => {
+    // Past the edge window the detector does not read: the cap is what keeps
+    // the scan linear on huge selections.
+    const hidden = `middle ${"y".repeat(20_000)} token=${"a".repeat(40)} ${"z".repeat(20_000)}`;
+    expect(looksLikeSecret(hidden)).toBe(false);
+  });
 });

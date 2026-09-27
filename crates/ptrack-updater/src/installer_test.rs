@@ -7,11 +7,19 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 use super::installer::{CommandFuture, CommandRunner, Installer};
+use super::staging::{StageKind, StagedUpdate};
+use super::{Target, UpdateError};
 
 #[cfg(target_os = "macos")]
-use super::staging::{StageKind, StagedUpdate, hash_regular_file, write_stage_record};
+use super::staging::{hash_regular_file, write_stage_record};
 
 struct NoopRunner;
+
+impl NoopRunner {
+    fn executable() -> std::io::Result<PathBuf> {
+        Err(std::io::Error::other("unused"))
+    }
+}
 
 impl CommandRunner for NoopRunner {
     fn run<'a>(
@@ -32,6 +40,63 @@ fn installer_owns_explicit_executable_and_command_dependencies() {
     let installer =
         Installer::with_parts(Arc::new(move || Ok(captured.clone())), Arc::new(NoopRunner));
     assert_eq!(installer.current_executable_for_test().unwrap(), expected);
+}
+
+/// Pins the anti-downgrade gate: `apply` refuses a stage that is not
+/// strictly newer than the running version, before any platform work.
+#[tokio::test(flavor = "current_thread")]
+async fn apply_refuses_a_stage_that_is_not_newer_than_the_running_version() {
+    let host = Target::host();
+    let kind = match host.os.as_str() {
+        "darwin" => StageKind::DarwinDmg,
+        "windows" => StageKind::WindowsZip,
+        _ => StageKind::LinuxBinary,
+    };
+    let stage_for = |version: &str| StagedUpdate {
+        root: PathBuf::from("/unused"),
+        asset_path: PathBuf::from("/unused/asset"),
+        payload_path: PathBuf::from("/unused/payload"),
+        state_path: PathBuf::from("/unused/state.json"),
+        version: version.to_owned(),
+        asset_name: "asset".to_owned(),
+        os: host.os.clone(),
+        arch: host.arch.clone(),
+        sha256: "00".repeat(32),
+        size_bytes: 1,
+        payload_sha256: "00".repeat(32),
+        payload_size_bytes: 1,
+        kind,
+    };
+    let installer = |current: Option<&str>| {
+        let installer =
+            Installer::with_parts(Arc::new(NoopRunner::executable), Arc::new(NoopRunner));
+        match current {
+            Some(version) => installer.with_current_version(version),
+            None => installer,
+        }
+    };
+    for (current, staged) in [
+        (Some("1.2.4"), "1.2.3"),
+        (Some("1.2.4"), "1.2.4"),
+        (Some("1.2.5"), "1.2.4"),
+        (None, "9.9.9"),
+    ] {
+        let error = installer(current)
+            .apply(&CancellationToken::new(), &stage_for(staged))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error,
+            UpdateError::InstallRefused,
+            "accepted stage {staged} over current {current:?}"
+        );
+    }
+    // A strictly newer stage passes the gate and fails later validation.
+    let error = installer(Some("1.2.4"))
+        .apply(&CancellationToken::new(), &stage_for("9.9.9"))
+        .await
+        .unwrap_err();
+    assert_ne!(error, UpdateError::InstallRefused);
 }
 
 #[cfg(target_os = "macos")]
@@ -71,7 +136,8 @@ async fn macos_handoff_runs_exact_pinned_trust_chain_before_open() {
             ))
         }),
         runner.clone(),
-    );
+    )
+    .with_current_version("1.2.3");
     let result = installer.apply(&cancellation, &stage).await.unwrap();
     assert!(result.manual_install);
     assert_eq!(
@@ -193,6 +259,22 @@ mod bounded_command {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn a_failed_command_reports_bounded_stderr() {
+        let error = run_bounded_command(
+            &CancellationToken::new(),
+            Path::new("/bin/sh"),
+            &shell("echo verify-detail >&2; exit 3"),
+            Duration::from_secs(10),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&error, UpdateError::Message(message) if message.contains("verify-detail")),
+            "missing stderr diagnostics in {error:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn cancellation_stops_a_running_command() {
         let cancellation = CancellationToken::new();
         let trigger = cancellation.clone();
@@ -248,6 +330,7 @@ mod linux_installer {
 
     use super::super::installer::linux::{self, ApplyLock};
     use super::super::installer::{CommandFuture, CommandRunner, Installer};
+    use super::super::signature::SIGNATURE_ASSET_NAME;
     use super::super::staging::{StageKind, StagedUpdate, hash_regular_file, write_stage_record};
     use super::super::{ApplyAction, Target, UpdateError};
 
@@ -261,6 +344,7 @@ mod linux_installer {
         install: PathBuf,
         target: PathBuf,
         stage: StagedUpdate,
+        key: [u8; 32],
     }
 
     impl Fixture {
@@ -269,17 +353,24 @@ mod linux_installer {
             Self::layout(payload)
         }
 
-        /// Stage that passes `load_stage` (ELF payload, durable record), for
-        /// recovery tests.
+        /// Stage that passes `load_stage` (ELF payload, real signed package),
+        /// for recovery tests.
         fn with_loadable_stage() -> Self {
             let host = Target::host();
-            let mut fixture = Self::layout(&fake_elf(&host.arch));
-            write_private(&fixture.stage.asset_path, b"verified archive");
+            let payload = fake_elf(&host.arch);
+            let mut fixture = Self::layout(&payload);
+            // The package must be a real archive of the staged payload so the
+            // signed manifest can re-derive what installation hands over.
+            make_tar(&fixture.stage.asset_path, &payload);
             let cancellation = CancellationToken::new();
             let stage = &mut fixture.stage;
             (stage.sha256, stage.size_bytes) =
                 hash_regular_file(&cancellation, &stage.asset_path, 512 << 20).unwrap();
             write_stage_record(stage).unwrap();
+            let manifest = format!("{}  {}\n", stage.sha256, stage.asset_name).into_bytes();
+            let signature = sign_manifest(&manifest);
+            write_private(&fixture.stage.root.join("checksums.txt"), &manifest);
+            write_private(&fixture.stage.root.join(SIGNATURE_ASSET_NAME), &signature);
             fixture
         }
 
@@ -318,6 +409,7 @@ mod linux_installer {
                 install,
                 target,
                 stage,
+                key: public_key(&test_key_pair(0x5c)),
             }
         }
 
@@ -622,6 +714,7 @@ mod linux_installer {
             &fixture.stage.root,
             &fixture.target,
             &|cancellation, program| smoke.run(cancellation, program),
+            &fixture.key,
         )
     }
 
@@ -753,6 +846,46 @@ mod linux_installer {
     fn write_private(path: &Path, bytes: &[u8]) {
         let _ = fs::remove_file(path);
         fs::write(path, bytes).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    /// Signs with a throwaway key derived from a fixed seed; no private key
+    /// is ever stored on disk.
+    fn sign_manifest(manifest: &[u8]) -> Vec<u8> {
+        test_key_pair(0x5c).sign(manifest).as_ref().to_vec()
+    }
+
+    fn test_key_pair(seed: u8) -> ring::signature::Ed25519KeyPair {
+        ring::signature::Ed25519KeyPair::from_seed_unchecked(&[seed; 32]).unwrap()
+    }
+
+    fn public_key(key_pair: &ring::signature::Ed25519KeyPair) -> [u8; 32] {
+        use ring::signature::KeyPair as _;
+        key_pair.public_key().as_ref().try_into().unwrap()
+    }
+
+    fn make_tar(path: &Path, payload: &[u8]) {
+        let file = fs::File::create(path).unwrap();
+        let gzip = flate2::write::GzEncoder::new(file, flate2::Compression::fast());
+        let mut archive = tar::Builder::new(gzip);
+        for (name, data) in [
+            ("ptrack", payload),
+            ("README.md", b"readme".as_slice()),
+            ("LICENSE", b"license".as_slice()),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(data.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            archive.append_data(&mut header, name, data).unwrap();
+        }
+        archive
+            .into_inner()
+            .unwrap()
+            .finish()
+            .unwrap()
+            .sync_all()
+            .unwrap();
         fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
     }
 

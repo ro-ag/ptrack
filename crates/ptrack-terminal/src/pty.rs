@@ -21,53 +21,29 @@ pub struct StartRequest {
     pub columns: u16,
 }
 
+// Every method here returns `io::Result`; the OS error is the whole story.
+#[allow(clippy::missing_errors_doc)]
 pub trait PtyFactory: Send + Sync + 'static {
     /// Start one process attached to a native pseudo-terminal.
-    ///
-    /// # Errors
-    ///
-    /// Returns a contextual I/O error when allocation or process start fails.
     fn start(&self, request: StartRequest) -> io::Result<Box<dyn PtyProcess>>;
 }
 
+#[allow(clippy::missing_errors_doc)]
 pub trait PtyProcess: Send + Sync + 'static {
     fn pid(&self) -> u32;
     /// Read terminal output.
-    ///
-    /// # Errors
-    ///
-    /// Returns an OS I/O error.
     fn read(&self, buffer: &mut [u8]) -> io::Result<usize>;
     /// Write terminal input.
-    ///
-    /// # Errors
-    ///
-    /// Returns an OS I/O error.
     fn write(&self, buffer: &[u8]) -> io::Result<usize>;
     /// Resize the terminal.
-    ///
-    /// # Errors
-    ///
-    /// Returns an OS PTY error.
     fn resize(&self, rows: u16, columns: u16) -> io::Result<()>;
-    /// Wait for and report the process exit code.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error only when no process status can be obtained.
+    /// Wait for and report the process exit code. Errors only when no process
+    /// status can be obtained.
     fn wait(&self) -> io::Result<i32>;
     /// Request graceful process-tree termination. It must never signal a
     /// leader that `wait` already reaped: its pid may belong to someone else.
-    ///
-    /// # Errors
-    ///
-    /// Returns an OS signalling error.
     fn terminate(&self) -> io::Result<()>;
     /// Force process-tree termination.
-    ///
-    /// # Errors
-    ///
-    /// Returns an OS signalling error.
     fn kill(&self) -> io::Result<()>;
     /// Whether any process of the terminal's tree may still be running,
     /// including background jobs that outlived the leader. An implementation
@@ -76,10 +52,6 @@ pub trait PtyProcess: Send + Sync + 'static {
         false
     }
     /// Close PTY resources and process containment.
-    ///
-    /// # Errors
-    ///
-    /// Returns an OS teardown error.
     fn close(&self) -> io::Result<()>;
 }
 

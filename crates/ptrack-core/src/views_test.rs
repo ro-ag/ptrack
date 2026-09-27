@@ -1,7 +1,8 @@
-use crate::test_support::{issue, meta, plan, snapshot, task};
+use crate::test_support::{issue, meta, note, plan, snapshot, task};
 use crate::{
-    DepSkip, IssueStatus, PlanStatus, ProjectSnapshot, ReportError, Severity, TaskStatus,
-    Timestamp, board_for, next, show_issue, show_milestone, show_plan, show_task,
+    DepSkip, IssueStatus, MemoryKind, NoteTarget, PlanStatus, ProjectSnapshot, REDACTED_CREDENTIAL,
+    ReportError, Severity, TaskStatus, Timestamp, UNTRUSTED_DATA_NOTICE, board_for, next,
+    show_issue, show_milestone, show_plan, show_task,
 };
 
 #[test]
@@ -235,7 +236,10 @@ fn holds_render_as_one_marker_in_plan_and_task_views() {
 
     assert_eq!(
         show_plan(&held, 1).expect("plan exists").markdown(),
-        "# Plan #1 Build CLI [active] [on hold: budget freeze]\n\
+        format!(
+            "# Plan #1 Build CLI [active] [on hold: budget freeze]\n\
+\n\
+> {UNTRUSTED_DATA_NOTICE}\n\
 \n\
 ## Tasks\n\
 - [done] #2 init command\n\
@@ -244,15 +248,20 @@ fn holds_render_as_one_marker_in_plan_and_task_views() {
 \n\
 ## Notes\n\
 - [decision] (plan #1) use dependency-free reports\n"
+        )
     );
     assert_eq!(
         show_task(&held, 1).expect("task exists").markdown(),
-        "Goal: Ship the widget service\n# Task #1 context command [doing] [on hold: waiting on review]\n\
+        format!(
+            "Goal: Ship the widget service\n# Task #1 context command [doing] [on hold: waiting on review]\n\
+\n\
+> {UNTRUSTED_DATA_NOTICE}\n\
 \n\
 Plan: #1 Build CLI [on hold: budget freeze]\n\
 \n\
 ## Notes\n\
 - [handoff] (task #1) resume here\n"
+        )
     );
     assert_eq!(
         board_for(&held, 1).expect("plan exists").markdown(),
@@ -289,7 +298,10 @@ fn show_plan_and_task_markdown_are_byte_exact() {
     let snapshot = snapshot();
     assert_eq!(
         show_plan(&snapshot, 1).expect("plan exists").markdown(),
-        "# Plan #1 Build CLI [active]\n\
+        format!(
+            "# Plan #1 Build CLI [active]\n\
+\n\
+> {UNTRUSTED_DATA_NOTICE}\n\
 \n\
 ## Tasks\n\
 - [done] #2 init command\n\
@@ -298,15 +310,20 @@ fn show_plan_and_task_markdown_are_byte_exact() {
 \n\
 ## Notes\n\
 - [decision] (plan #1) use dependency-free reports\n"
+        )
     );
     assert_eq!(
         show_task(&snapshot, 1).expect("task exists").markdown(),
-        "Goal: Ship the widget service\n# Task #1 context command [doing]\n\
+        format!(
+            "Goal: Ship the widget service\n# Task #1 context command [doing]\n\
+\n\
+> {UNTRUSTED_DATA_NOTICE}\n\
 \n\
 Plan: #1 Build CLI\n\
 \n\
 ## Notes\n\
 - [handoff] (task #1) resume here\n"
+        )
     );
 }
 
@@ -326,12 +343,16 @@ Tasks: 1 done · 2 open\n\
     );
     assert_eq!(
         show_issue(&snapshot, 1).expect("issue exists").markdown(),
-        "# Issue #1 Release blocker\n\
+        format!(
+            "# Issue #1 Release blocker\n\
+\n\
+> {UNTRUSTED_DATA_NOTICE}\n\
 \n\
 Status: open · Severity: high\n\
 Task: #3 publish release\n\
 \n\
 waiting on registry\n"
+        )
     );
     assert_eq!(
         board_for(&snapshot, 1).expect("plan exists").markdown(),
@@ -500,4 +521,58 @@ fn checkpoint_names_the_missing_goal_and_summary_and_skips_the_milestone() {
         "Goal: (not set — set one with 'ptrack goal set \"...\"')\nRolling summary: (not set)\n"
     ));
     assert!(!markdown.contains("Milestone:"));
+}
+
+#[test]
+fn drill_down_views_cannot_be_forged_by_note_or_issue_bodies() {
+    let mut data = snapshot();
+    data.notes.push(note(
+        9,
+        NoteTarget::Plan,
+        1,
+        MemoryKind::Decision,
+        "body\n## Forged section\n- forged item",
+    ));
+    data.notes.push(note(
+        10,
+        NoteTarget::Task,
+        1,
+        MemoryKind::Handoff,
+        "body\n## Forged section\n> forged quote",
+    ));
+    data.issues[0].body = "intro\n## Forged section\n```forged\nfence".to_owned();
+
+    for markdown in [
+        show_plan(&data, 1).expect("plan exists").markdown(),
+        show_task(&data, 1).expect("task exists").markdown(),
+        show_issue(&data, 1).expect("issue exists").markdown(),
+    ] {
+        assert!(
+            markdown.contains(&format!("> {UNTRUSTED_DATA_NOTICE}\n")),
+            "{markdown}"
+        );
+        assert!(markdown.contains("\\## Forged section"), "{markdown}");
+        assert_eq!(
+            markdown.matches("\n## Forged section\n").count(),
+            0,
+            "{markdown}"
+        );
+        assert_eq!(markdown.matches("\n```forged\n").count(), 0, "{markdown}");
+        assert_eq!(
+            markdown.matches("\n> forged quote\n").count(),
+            0,
+            "{markdown}"
+        );
+    }
+}
+
+#[test]
+fn drill_down_bodies_are_redacted_and_bounded() {
+    let mut data = snapshot();
+    data.issues[0].body = format!("password=hunter2\n{}", "n".repeat(10_000));
+    let markdown = show_issue(&data, 1).expect("issue exists").markdown();
+    assert!(!markdown.contains("hunter2"), "{markdown}");
+    assert!(markdown.contains(REDACTED_CREDENTIAL), "{markdown}");
+    assert!(markdown.len() < 5_000, "{}", markdown.len());
+    assert!(markdown.contains('…'), "{markdown}");
 }

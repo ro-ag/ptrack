@@ -28,7 +28,8 @@ pub struct TrackedPath {
 pub struct TrackedPaths {
     /// Repository-relative paths, sorted, at most [`MAX_TRACKED_PATHS`].
     pub paths: Vec<TrackedPath>,
-    /// The listing hit the cap and was truncated.
+    /// The listing hit the cap and was truncated, or left out entries that
+    /// cannot be shown (a non-UTF-8 or control-bearing path).
     pub incomplete: bool,
     /// Line counts were collected. False when the repository has no commit yet
     /// or the count could not run, in which case every count is zero.
@@ -52,9 +53,9 @@ impl RepositoryService {
             root.as_ref(),
             &args(["ls-files", "-z", "--deduplicate"]),
         )?;
-        let mut paths = parse_tracked_paths(&output)?;
+        let (mut paths, unrepresentable) = parse_tracked_paths(&output);
         paths.sort();
-        let incomplete = paths.len() > MAX_TRACKED_PATHS;
+        let incomplete = paths.len() > MAX_TRACKED_PATHS || unrepresentable > 0;
         paths.truncate(MAX_TRACKED_PATHS);
 
         // Counting lines is a second, independently failing pass: a repository
@@ -121,14 +122,21 @@ fn parse_line_counts(output: &[u8]) -> Vec<(String, u32)> {
 }
 
 /// Splits a NUL-delimited `ls-files` listing into repository-relative paths.
-fn parse_tracked_paths(output: &[u8]) -> Result<Vec<String>, RepositoryError> {
-    output
+///
+/// A path that is not UTF-8 or carries control characters is skipped and
+/// counted like `PathSet` does for status, so one unusual file cannot blank
+/// the whole scan; the skipped count leaves the listing `incomplete`.
+fn parse_tracked_paths(output: &[u8]) -> (Vec<String>, usize) {
+    let mut paths = Vec::new();
+    let mut unrepresentable = 0_usize;
+    for entry in output
         .split(|byte| *byte == 0)
         .filter(|entry| !entry.is_empty())
-        .map(|entry| {
-            str::from_utf8(entry)
-                .map(str::to_owned)
-                .map_err(|_| RepositoryError::InvalidData("tracked path is not UTF-8"))
-        })
-        .collect()
+    {
+        match str::from_utf8(entry) {
+            Ok(value) if !value.chars().any(char::is_control) => paths.push(value.to_owned()),
+            _ => unrepresentable += 1,
+        }
+    }
+    (paths, unrepresentable)
 }

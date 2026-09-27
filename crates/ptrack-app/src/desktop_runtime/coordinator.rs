@@ -166,6 +166,9 @@ impl DesktopRuntime {
 
     /// Dispatches one size-bounded allowlisted desktop request.
     ///
+    /// This is the trusted entry: every caller here is host Rust code, never a
+    /// window. Window traffic goes through [`Self::invoke_from_window`].
+    ///
     /// # Errors
     /// Returns validation, lifecycle, or command-specific errors.
     #[allow(clippy::needless_pass_by_value)]
@@ -190,6 +193,54 @@ impl DesktopRuntime {
                 }
                 Ok(reply)
             }
+        }
+    }
+
+    /// Dispatches one request on behalf of the window that sent it. A terminal
+    /// window's terminal commands may address only the sessions its own
+    /// assignment shows, and its one shared write may touch only the appearance
+    /// preferences; the main window (and host code standing in for it) is
+    /// unrestricted.
+    ///
+    /// # Errors
+    /// Returns the window-scope refusal, or any error [`Self::invoke`] returns.
+    pub fn invoke_from_window(
+        self: &Arc<Self>,
+        window_label: &str,
+        request: DesktopCommandRequest,
+    ) -> AppResult<Value> {
+        let terminal_window = crate::terminal_windows::is_terminal_window_label(window_label);
+        if terminal_window {
+            self.require_owned_terminal_session(window_label, &request)?;
+            if request.method == "SetPreferences" {
+                super::wire::scope_preference_patch(request.arguments.first())?;
+            }
+        }
+        self.invoke(request)
+    }
+
+    /// Rejects a terminal-window command whose session is not in the calling
+    /// window's assignment. The assignment is the same map `set_tab` guards
+    /// session ownership with, so one window can never close, resize, or claim
+    /// another window's session — or one no window owns. Commands that mint a
+    /// new session are untouched: `CreateTerminalV2` addresses no session yet.
+    fn require_owned_terminal_session(
+        &self,
+        window_label: &str,
+        request: &DesktopCommandRequest,
+    ) -> AppResult<()> {
+        let Some(session_id) = addressed_session(&request.method, &request.arguments) else {
+            return Ok(());
+        };
+        let owned = self
+            .terminal_window_tab(window_label)
+            .is_some_and(|tab| tab.sessions.iter().any(|held| held == session_id));
+        if owned {
+            Ok(())
+        } else {
+            Err(AppError::Message(
+                "terminal session is not in this window".to_owned(),
+            ))
         }
     }
 
@@ -626,4 +677,16 @@ fn help_destination(name: &str) -> AppResult<&'static str> {
         "report-issue" => Ok("https://github.com/ro-ag/ptrack/issues/new"),
         _ => Err(AppError::Message("unknown Help destination".to_owned())),
     }
+}
+
+/// The session one terminal command addresses, or `None` when the method
+/// addresses none or the request is malformed — a malformed request fails the
+/// bridge parse with its exact arity error either way.
+fn addressed_session<'a>(method: &str, arguments: &'a [Value]) -> Option<&'a str> {
+    let index = match method {
+        "ClaimTerminalStream" => 0,
+        "CloseTerminalV2" | "ResizeTerminalV2" => 1,
+        _ => return None,
+    };
+    arguments.get(index)?.as_str()
 }

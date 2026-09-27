@@ -76,14 +76,23 @@ fn an_empty_listing_yields_no_paths() {
 }
 
 #[test]
-fn a_non_utf8_path_is_rejected_without_leaking_it() {
-    let error = service(Ok(b"Cargo.toml\0src/\xff\xfe.rs\0".to_vec()))
+fn a_non_utf8_path_is_skipped_and_counted_without_leaking_it() {
+    let listing = service(Ok(b"Cargo.toml\0src/\xff\xfe.rs\0src/lib.rs\0".to_vec()))
         .capture_tracked_paths(&CancellationToken::new(), std::path::Path::new("/repo"))
-        .expect_err("invalid data");
-    assert_eq!(
-        error,
-        RepositoryError::InvalidData("tracked path is not UTF-8")
-    );
+        .expect("capture");
+    // One unusual file cannot blank the whole scan: the rest still lists, the
+    // bad entry never surfaces, and the listing is marked incomplete.
+    assert_eq!(path_names(&listing), vec!["Cargo.toml", "src/lib.rs"]);
+    assert!(listing.incomplete);
+}
+
+#[test]
+fn a_control_bearing_path_is_skipped_like_status_does() {
+    let listing = service(Ok(b"src/lib.rs\0src/evil\x1ename.rs\0".to_vec()))
+        .capture_tracked_paths(&CancellationToken::new(), std::path::Path::new("/repo"))
+        .expect("capture");
+    assert_eq!(path_names(&listing), vec!["src/lib.rs"]);
+    assert!(listing.incomplete);
 }
 
 #[test]

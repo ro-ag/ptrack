@@ -43,6 +43,7 @@ import {
   binaryStringToBytes,
   commitClipboardPaste,
   isTerminalCompositionEvent,
+  oversizePasteNotice,
   pasteReviewSummary,
   prepareClipboardPaste,
   splitTerminalInput,
@@ -126,6 +127,7 @@ import {
   initialShellState,
   nextShellCWDValidation,
   parseShellOSC,
+  safeTitle,
   type ShellIntegrationDescriptor,
   type ShellSignal,
   type ShellState,
@@ -1823,6 +1825,10 @@ class TerminalDock {
         alternateScreen: resources.terminal.buffer.active.type === "alternate",
         shell: resources.shellState,
       });
+      if (request.oversize) {
+        this.#showError(new Error(oversizePasteNotice));
+        return;
+      }
       await commitClipboardPaste(
         request,
         (pending) => this.#confirmPaste(pending),
@@ -2150,8 +2156,8 @@ class TerminalDock {
       }),
       terminal.onTitleChange((title) => {
         if (this.#accepts(runtime, ticket) && title) {
-          runtime.title = title;
-          if (this.#isActive(runtime)) this.#title.textContent = title;
+          runtime.title = safeTitle(title);
+          if (this.#isActive(runtime)) this.#title.textContent = runtime.title;
         }
       }),
       search.onDidChangeResults((result) => {

@@ -49,9 +49,10 @@ pub use recent::ProductionRecentProjects;
 pub use routed::RoutedApplication;
 pub use runtime::{ActiveRuntime, RuntimeBindingState, resolve_global_home};
 pub use startup::{StartupProjectV1, resolved_startup_project, startup_project};
+#[cfg(all(test, unix))]
+pub(crate) use test_support::{set_guide_before_commit_hook, set_guide_before_publish_hook};
 #[cfg(test)]
 pub(crate) use test_support::{
-    set_guide_before_commit_hook, set_guide_before_publish_hook,
     set_initialization_after_bootstrap_plan_hook, set_initialization_after_started_hook,
     set_initialization_before_commit_hook, set_startup_initialization_inference_hook,
 };
@@ -67,10 +68,15 @@ const DESKTOP_INITIALIZATION_LOCK: &str = "desktop-initialization.lock";
 const DESKTOP_INITIALIZATION_LIMIT: u64 = 64 * 1024;
 const DESKTOP_INITIALIZATION_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 const GUIDE_FILES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
+#[cfg_attr(not(unix), allow(dead_code))]
 const GUIDE_FILE_LIMIT: u64 = 32 * 1024;
+#[cfg_attr(not(unix), allow(dead_code))]
 const GUIDE_OUTPUT_LIMIT: usize = 64 * 1024;
+#[cfg_attr(not(unix), allow(dead_code))]
 const GUIDE_DIFF_LIMIT: usize = 64 * 1024;
+#[cfg_attr(not(unix), allow(dead_code))]
 const GUIDE_DIFF_LINE_LIMIT: usize = 4_096;
+#[cfg_attr(not(unix), allow(dead_code))]
 const GUIDE_PREVIEW_LIMIT: usize = 8;
 const GUIDE_PREVIEW_STALE: &str = "project-guide-preview-stale";
 const GUIDE_PARTIALLY_APPLIED: &str = "project-guide-partially-applied";
@@ -98,6 +104,8 @@ fn path_is_present(path: &Path) -> AppResult<bool> {
     }
 }
 
+// Used by the unix guide publisher through `guide`'s `super::` import.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn content_digest(bytes: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(sha256_digest(bytes))
 }

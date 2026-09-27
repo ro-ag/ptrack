@@ -132,10 +132,11 @@ fn handoff_event_line(event: &Event) -> String {
 }
 
 fn safe_handoff_summary(value: &str) -> String {
-    if contains_reasoning_marker(value) || contains_rejected_summary_credential(value) {
+    let summary = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if contains_reasoning_marker(&summary) || contains_rejected_summary_credential(&summary) {
         return String::new();
     }
-    let summary = redact_summary(&value.split_whitespace().collect::<Vec<_>>().join(" "));
+    let summary = redact_summary(&summary);
     if summary.is_empty() || !valid_text(&summary, true) {
         String::new()
     } else {

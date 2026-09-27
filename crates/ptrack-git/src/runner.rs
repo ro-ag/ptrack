@@ -193,12 +193,15 @@ impl Runner for ExecRunner {
         let [stdout_permit, stderr_permit] =
             acquire_reader_permits(self.reader_counter, self.reader_limit)
                 .ok_or_else(|| terminate_spawn_failure(&mut child))?;
-        let stdout_reader = spawn_reader(stdout, Arc::clone(&output), true, stdout_permit)
-            .map_err(|_| terminate_spawn_failure(&mut child))?;
-        let Ok(stderr_reader) = spawn_reader(stderr, Arc::clone(&output), false, stderr_permit)
+        let (stdout_reader, stdout_slot) =
+            spawn_reader(stdout, Arc::clone(&output), true, stdout_permit)
+                .map_err(|_| terminate_spawn_failure(&mut child))?;
+        let Ok((stderr_reader, stderr_slot)) =
+            spawn_reader(stderr, Arc::clone(&output), false, stderr_permit)
         else {
             let _ = kill_and_reap(&mut child);
             join_if_finished(stdout_reader);
+            stdout_slot.release();
             return Err(RepositoryError::CommandFailed);
         };
         let started = Instant::now();
@@ -241,7 +244,8 @@ impl Runner for ExecRunner {
             thread::sleep(POLL_INTERVAL);
         };
 
-        let [stdout_ok, stderr_ok] = join_readers([stdout_reader, stderr_reader]);
+        let [stdout_ok, stderr_ok] =
+            join_readers([stdout_reader, stderr_reader], [stdout_slot, stderr_slot]);
         let status = status
             .unwrap_or(Err(RepositoryError::CommandFailed))
             .map_err(|_| RepositoryError::CommandFailed)?;
@@ -293,7 +297,29 @@ fn kill_process_group(child: &Child) {
     }
 }
 
-#[cfg(not(unix))]
+/// The `taskkill` invocation that kills a whole command tree on Windows.
+/// The PID is safe to name while the leader is still unreaped.
+#[cfg(any(windows, test))]
+pub(crate) fn kill_process_tree_command(pid: u32) -> Command {
+    let mut command = Command::new("taskkill");
+    command
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .env_clear()
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command
+}
+
+#[cfg(windows)]
+fn kill_process_group(child: &Child) {
+    // The runner forbids unsafe code, so the tree is killed through the
+    // system `taskkill` utility instead of a Job Object: `/T` stops every
+    // descendant from keeping an inherited pipe (and its reader slot) open.
+    let _ = kill_process_tree_command(child.id()).status();
+}
+
+#[cfg(not(any(unix, windows)))]
 fn kill_process_group(_child: &Child) {}
 
 fn reap_if_running(child: &mut Child, status: &mut Option<Result<ExitStatus, RepositoryError>>) {
@@ -312,15 +338,22 @@ fn join_if_finished(reader: thread::JoinHandle<bool>) -> bool {
 }
 
 /// Joins both pipe readers once the command is gone. Killing the process
-/// group closes every pipe a descendant inherited, so the readers normally
-/// finish at once; the bounded grace covers only a descendant that left the
-/// group, whose reader then keeps its slot until that pipe closes.
-fn join_readers(readers: [thread::JoinHandle<bool>; 2]) -> [bool; 2] {
+/// group (and on Windows the process tree) closes every pipe a descendant
+/// inherited, so the readers normally finish at once. A reader still blocked
+/// after the bounded grace is abandoned: its capacity slot is reclaimed on
+/// the spot, so one descendant that escaped the kill cannot wedge every later
+/// git command, while its thread stays until that pipe closes.
+fn join_readers(readers: [thread::JoinHandle<bool>; 2], slots: [ReaderSlot; 2]) -> [bool; 2] {
     let deadline = Instant::now() + READER_JOIN_GRACE;
     while readers.iter().any(|reader| !reader.is_finished()) && Instant::now() < deadline {
         thread::sleep(POLL_INTERVAL);
     }
-    readers.map(join_if_finished)
+    let mut drained = [false, false];
+    for (index, (reader, slot)) in readers.into_iter().zip(slots).enumerate() {
+        drained[index] = join_if_finished(reader);
+        slot.release();
+    }
+    drained
 }
 
 fn spawn_reader<R: Read + Send + 'static>(
@@ -328,8 +361,9 @@ fn spawn_reader<R: Read + Send + 'static>(
     output: Arc<Mutex<CommandOutput>>,
     stdout: bool,
     permit: ReaderPermit,
-) -> std::io::Result<thread::JoinHandle<bool>> {
-    thread::Builder::new()
+) -> std::io::Result<(thread::JoinHandle<bool>, ReaderSlot)> {
+    let slot = permit.slot();
+    let reader = thread::Builder::new()
         .name("ptrack-git-pipe".to_owned())
         .spawn(move || {
             let _permit = permit;
@@ -345,21 +379,56 @@ fn spawn_reader<R: Read + Send + 'static>(
                     Err(_) => return false,
                 }
             }
-        })
+        })?;
+    Ok((reader, slot))
 }
 
+/// A pipe reader's claim on the bounded reader capacity. The claim releases
+/// exactly once, either when this permit drops with its reader thread or
+/// through the caller's [`ReaderSlot`] when that thread is abandoned.
 #[derive(Debug)]
-struct ReaderPermit {
+pub(crate) struct ReaderPermit {
     counter: &'static AtomicUsize,
+    released: Arc<AtomicBool>,
+}
+
+impl ReaderPermit {
+    pub(crate) fn slot(&self) -> ReaderSlot {
+        ReaderSlot {
+            counter: self.counter,
+            released: Arc::clone(&self.released),
+        }
+    }
+
+    fn release(&self) {
+        if !self.released.swap(true, Ordering::AcqRel) {
+            self.counter.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
 }
 
 impl Drop for ReaderPermit {
     fn drop(&mut self) {
-        self.counter.fetch_sub(1, Ordering::AcqRel);
+        self.release();
     }
 }
 
-fn acquire_reader_permits(
+/// The caller's handle to one reader's capacity claim.
+#[derive(Debug)]
+pub(crate) struct ReaderSlot {
+    counter: &'static AtomicUsize,
+    released: Arc<AtomicBool>,
+}
+
+impl ReaderSlot {
+    pub(crate) fn release(self) {
+        if !self.released.swap(true, Ordering::AcqRel) {
+            self.counter.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+}
+
+pub(crate) fn acquire_reader_permits(
     counter: &'static AtomicUsize,
     limit: usize,
 ) -> Option<[ReaderPermit; 2]> {
@@ -370,7 +439,18 @@ fn acquire_reader_permits(
         }
         match counter.compare_exchange_weak(active, active + 2, Ordering::AcqRel, Ordering::Acquire)
         {
-            Ok(_) => return Some([ReaderPermit { counter }, ReaderPermit { counter }]),
+            Ok(_) => {
+                return Some([
+                    ReaderPermit {
+                        counter,
+                        released: Arc::new(AtomicBool::new(false)),
+                    },
+                    ReaderPermit {
+                        counter,
+                        released: Arc::new(AtomicBool::new(false)),
+                    },
+                ]);
+            }
             Err(observed) => active = observed,
         }
     }

@@ -1,5 +1,5 @@
 use ptrack_core::{
-    Meta, NativeRecord, ProjectRef, RecordKind, Timestamp, decode_record, encode_record,
+    Commit, Meta, NativeRecord, ProjectRef, RecordKind, Timestamp, decode_record, encode_record,
 };
 
 use super::{
@@ -14,6 +14,17 @@ fn native(record: NativeRecord) -> RecordEnvelope {
         NATIVE_PAYLOAD_SCHEMA,
         encode_record(&record).unwrap(),
     )
+}
+
+/// Replaces one same-length byte window in an encoded payload, the way a
+/// record written before a field rule existed would differ from a fresh one.
+fn splice(payload: &mut [u8], from: &[u8], to: &[u8]) {
+    assert_eq!(from.len(), to.len());
+    let index = payload
+        .windows(from.len())
+        .position(|window| window == from)
+        .expect("marker bytes in payload");
+    payload[index..index + from.len()].copy_from_slice(to);
 }
 
 #[test]
@@ -100,4 +111,54 @@ fn raw_global_records_match_the_go_api_contract() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn commit_payloads_with_unusable_sha_or_multiline_subject_fail_open_validation() {
+    let record = |sha: &str, subject: &str| {
+        NativeRecord::Commit(Commit {
+            id: 1,
+            sha: sha.to_owned(),
+            subject: subject.to_owned(),
+            plan_id: 0,
+            task_id: 0,
+            created_at: Timestamp::Zero,
+            actor: None,
+            ulid: None,
+        })
+    };
+    // The write path refuses the bad shapes at encode time.
+    assert!(encode_record(&record("zzzzzzzz", "subject")).is_err());
+    assert!(encode_record(&record("--output=/tmp/x", "subject")).is_err());
+    assert!(encode_record(&record("abcd1234", "line1\nline2")).is_err());
+    // A well-formed record still validates end to end.
+    let payload = encode_record(&record("abcd1234", "line1Xline2")).unwrap();
+    validation::record(
+        Collection::Commits,
+        &OwnedRecordKey::Id(1),
+        &RecordEnvelope::new(NATIVE_CODEC, NATIVE_PAYLOAD_SCHEMA, payload),
+    )
+    .unwrap();
+    // A record stored before the rule existed can hold anything, so open
+    // validation is what refuses it: corrupt one field of a well-formed
+    // payload in place, exactly as such a record would sit in an old database.
+    let mut payload = encode_record(&record("abcd1234", "line1Xline2")).unwrap();
+    splice(&mut payload, b"abcd1234", b"zzzzzzzz");
+    let error = validation::record(
+        Collection::Commits,
+        &OwnedRecordKey::Id(1),
+        &RecordEnvelope::new(NATIVE_CODEC, NATIVE_PAYLOAD_SCHEMA, payload),
+    )
+    .unwrap_err();
+    assert!(error.contains("commit.sha"), "{error}");
+
+    let mut payload = encode_record(&record("abcd1234", "line1Xline2")).unwrap();
+    splice(&mut payload, b"line1Xline2", b"line1\nline2");
+    let error = validation::record(
+        Collection::Commits,
+        &OwnedRecordKey::Id(1),
+        &RecordEnvelope::new(NATIVE_CODEC, NATIVE_PAYLOAD_SCHEMA, payload),
+    )
+    .unwrap_err();
+    assert!(error.contains("commit.subject"), "{error}");
 }

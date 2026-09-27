@@ -4,7 +4,7 @@ use serde_json::json;
 
 use super::{
     ExitGate, ExitStep, ProjectPickerPurpose, WindowStateCapture, preferred_theme,
-    project_picker_result, validate_external_url, write_startup_failure,
+    project_picker_result, require_main_window_label, validate_external_url, write_startup_failure,
 };
 
 #[test]
@@ -77,9 +77,34 @@ fn the_native_chrome_is_pinned_only_by_an_explicit_theme() {
 }
 
 #[test]
-fn external_url_gate_remains_available_to_the_native_shell_tests() {
-    assert!(validate_external_url("https://example.com/help").is_ok());
+fn external_url_gate_rejects_non_web_credentialed_and_unlisted_hosts() {
+    for allowed in [
+        "https://github.com/ro-ag/ptrack/issues/new",
+        "https://ro-ag.github.io/ptrack/help/",
+    ] {
+        assert!(validate_external_url(allowed).is_ok(), "{allowed}");
+    }
     assert!(validate_external_url("file:///tmp/help").is_err());
+    assert!(validate_external_url("https://example.com/help").is_err());
+    for refused in [
+        "https://evil.example/ro-ag.github.io/",
+        "https://github.com.evil.example/issues",
+        "https://ro-ag.github.io.evil.example/help/",
+        "https://user:pass@github.com/ro-ag/ptrack",
+        "https://user@ro-ag.github.io/ptrack/help/",
+    ] {
+        assert!(validate_external_url(refused).is_err(), "{refused}");
+    }
+}
+
+/// The directory picker and the external browser are main-window actions: a
+/// terminal window's script reaches neither.
+#[test]
+fn native_window_actions_are_restricted_to_the_main_window() {
+    assert!(require_main_window_label("main").is_ok());
+    for refused in ["terminal-1", "terminal-", "terminal-x", "other", ""] {
+        assert!(require_main_window_label(refused).is_err(), "{refused}");
+    }
 }
 
 /// Startup-failure logs append so evidence survives later launches.

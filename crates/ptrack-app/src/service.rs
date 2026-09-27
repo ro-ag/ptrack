@@ -5,17 +5,18 @@ use std::io::Read;
 #[cfg(unix)]
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
 use ptrack_agent::{AgentHandoffInbox, AgentObservationClient, AgentRunObservationV1, AgentRunsV2};
 use ptrack_core::{
-    CheckpointView, Commit, Issue, IssueStatus, Milestone, MilestoneStatus, Note, NoteTarget, Plan,
-    PlanStatus, ProjectRef, ProjectSnapshot, Scratchpad, ScratchpadSnippet, Severity, Task,
-    TaskStatus, Timestamp, Validate, check_summary, check_title, checkpoint, id_list, render_guide,
+    CheckpointView, Commit, Issue, IssueStatus, MAX_BODY_BYTES, Milestone, MilestoneStatus, Note,
+    NoteTarget, Plan, PlanStatus, ProjectRef, ProjectSnapshot, Scratchpad, ScratchpadSnippet,
+    Severity, Task, TaskStatus, Timestamp, Validate, check_summary, check_title, checkpoint,
+    id_list, is_forbidden_control, render_guide,
 };
 use ptrack_store::{
     ActiveBinding, ActorIdentity, Clock, GlobalStore, PinnedProjectDirectory, PlanDeleteSummary,
@@ -734,6 +735,49 @@ fn typed_title(title: &str) -> AppResult<()> {
     check_title(title).map_err(AppError::Message)
 }
 
+/// Refuses typed single-line text — a commit subject — carrying any character
+/// `check_title` would refuse in a title, so a subject can never break a list
+/// line or fire a terminal escape. Deliberately reuses the title rule rather
+/// than a second copy that could drift.
+fn typed_single_line(what: &str, value: &str) -> AppResult<()> {
+    if value.chars().any(is_forbidden_control) {
+        Err(AppError::Message(format!(
+            "the {what} must be one line without control characters"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+/// Refuses typed multi-line text — a goal, summary, note body, or issue body —
+/// carrying terminal escapes, bidi controls, or separators. Line breaks and
+/// tabs stay legal: those fields are prose that spans lines by design.
+fn typed_multiline(what: &str, value: &str) -> AppResult<()> {
+    if value
+        .chars()
+        .any(|character| is_forbidden_control(character) && character != '\n' && character != '\t')
+    {
+        Err(AppError::Message(format!(
+            "the {what} must not contain control characters"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+/// Refuses a typed note or issue body that is hostile prose or past
+/// [`MAX_BODY_BYTES`]; the store enforces the same cap as its backstop.
+fn typed_body(what: &str, value: &str) -> AppResult<()> {
+    typed_multiline(what, value)?;
+    if value.len() > MAX_BODY_BYTES {
+        return Err(AppError::Message(format!(
+            "the {what} body is {} bytes; the limit is {MAX_BODY_BYTES}",
+            value.len()
+        )));
+    }
+    Ok(())
+}
+
 /// Title prefix shared by both forms of the integration task.
 const INTEGRATION_TASK_PREFIX: &str = "Integrate and verify against";
 
@@ -918,6 +962,93 @@ pub struct ProcessOutput {
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
     pub exit_code: Option<i32>,
+}
+
+/// Resource bounds for `git show`, mirroring the ptrack-git runner's own
+/// 4 MiB / 3 s policy. Unlike the runner, which refuses oversized snapshot
+/// output outright, a show is streamed to a terminal: it is truncated in
+/// place with an explicit marker instead of refused, and killed on timeout.
+const GIT_SHOW_TIMEOUT: Duration = Duration::from_secs(3);
+const GIT_SHOW_MAX_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
+
+/// Runs one spawned command with bounded wall time and bounded memory: each
+/// pipe keeps at most `max_output_bytes`, and the rest is drained to
+/// end-of-file so the child can never block on a full pipe. A stream that
+/// lost bytes ends with an explicit truncation marker. On timeout the child
+/// is killed and the error names the timeout.
+///
+/// # Errors
+/// Returns [`AppError::Io`] when the command cannot be spawned or reaped and
+/// [`AppError::Message`] when it exceeds `timeout`.
+pub(crate) fn bounded_process_output(
+    mut command: Command,
+    timeout: Duration,
+    max_output_bytes: usize,
+) -> AppResult<ProcessOutput> {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(AppError::from)?;
+    let stdout = child.stdout.take().expect("stdout is piped");
+    let stderr = child.stderr.take().expect("stderr is piped");
+    let stdout_reader = std::thread::spawn(move || drain_bounded(stdout, max_output_bytes));
+    let stderr_reader = std::thread::spawn(move || drain_bounded(stderr, max_output_bytes));
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break Err(AppError::Message("git command timed out".to_owned()));
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break Err(AppError::from(error));
+            }
+        }
+    };
+    let (mut stdout_bytes, stdout_truncated) = stdout_reader.join().unwrap_or_default();
+    let (mut stderr_bytes, stderr_truncated) = stderr_reader.join().unwrap_or_default();
+    let status = status?;
+    for (bytes, truncated) in [
+        (&mut stdout_bytes, stdout_truncated),
+        (&mut stderr_bytes, stderr_truncated),
+    ] {
+        if truncated {
+            bytes.extend_from_slice(
+                format!("\n[output truncated at {max_output_bytes} bytes]\n").as_bytes(),
+            );
+        }
+    }
+    Ok(ProcessOutput {
+        stdout: stdout_bytes,
+        stderr: stderr_bytes,
+        exit_code: status.code(),
+    })
+}
+
+/// Copies at most `max_output_bytes` of one pipe into memory and drains the
+/// remainder to end-of-file, reporting whether anything was discarded.
+fn drain_bounded<R: Read>(mut reader: R, max_output_bytes: usize) -> (Vec<u8>, bool) {
+    let mut stored = Vec::new();
+    let mut truncated = false;
+    let mut chunk = vec![0; 64 * 1024].into_boxed_slice();
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(read) => {
+                let keep = (max_output_bytes - stored.len()).min(read);
+                stored.extend_from_slice(&chunk[..keep]);
+                truncated |= keep < read;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => break,
+        }
+    }
+    (stored, truncated)
 }
 
 /// The single use-case seam consumed by CLI, TUI, and Tauri adapters.
@@ -1433,10 +1564,12 @@ impl ApplicationPort for LocalApplication {
         self.with_project(|store| {
             let result = match mutation {
                 Mutation::SetGoal(value) => {
+                    typed_multiline("goal", &value)?;
                     store.set_goal(value)?;
                     MutationResult::None
                 }
                 Mutation::SetSummary(value) => {
+                    typed_multiline("summary", &value)?;
                     check_summary(&value).map_err(AppError::Message)?;
                     store.set_summary(value)?;
                     MutationResult::None
@@ -1483,6 +1616,9 @@ impl ApplicationPort for LocalApplication {
                 Mutation::SetPlanStatusWithNotes { id, status, notes } => {
                     // Status and notes commit in one claim-gated store transaction,
                     // so a refused change leaves no orphan notes.
+                    for note in &notes {
+                        typed_body("note", note)?;
+                    }
                     MutationResult::Notes(store.set_plan_status_with_notes(id, status, &notes)?)
                 }
                 Mutation::SetPlanHold { id, reason } => {
@@ -1525,6 +1661,9 @@ impl ApplicationPort for LocalApplication {
                 Mutation::SetTaskStatusWithNotes { id, status, notes } => {
                     // Status and notes commit in one claim-gated store transaction,
                     // so a refused change leaves no orphan notes.
+                    for note in &notes {
+                        typed_body("note", note)?;
+                    }
                     MutationResult::Notes(store.set_task_status_with_notes(id, status, &notes)?)
                 }
                 Mutation::SetTaskHold { id, reason } => {
@@ -1558,6 +1697,7 @@ impl ApplicationPort for LocalApplication {
                     task_id,
                 } => {
                     typed_title(&title)?;
+                    typed_body("issue", &body)?;
                     MutationResult::Issue(store.add_issue(title, body, severity, task_id)?)
                 }
                 Mutation::SetIssueStatus { id, status } => {
@@ -1587,6 +1727,7 @@ impl ApplicationPort for LocalApplication {
                     if store.issue(id)?.title.trim() != title.trim() {
                         typed_title(&title)?;
                     }
+                    typed_body("issue", &body)?;
                     MutationResult::Issue(store.update_issue(
                         id,
                         expected_updated_at,
@@ -1625,7 +1766,10 @@ impl ApplicationPort for LocalApplication {
                     target,
                     target_id,
                     body,
-                } => MutationResult::Note(store.add_note(target, target_id, body)?),
+                } => {
+                    typed_body("note", &body)?;
+                    MutationResult::Note(store.add_note(target, target_id, body)?)
+                }
                 Mutation::AddCommit {
                     sha,
                     subject,
@@ -1633,6 +1777,7 @@ impl ApplicationPort for LocalApplication {
                     task_id,
                 } => {
                     check_commit_sha(&sha)?;
+                    typed_single_line("commit subject", &subject)?;
                     MutationResult::Commit(store.add_commit(sha, subject, plan_id, task_id)?)
                 }
             };
@@ -1788,14 +1933,10 @@ impl ApplicationPort for LocalApplication {
         }
         args.push(OsString::from("--end-of-options"));
         args.push(OsString::from(reference));
-        let mut command = ptrack_git::hardened_git_command(&root, &args);
-        command.stdout(Stdio::piped()).stderr(Stdio::piped());
-        let output = command.output()?;
-        Ok(ProcessOutput {
-            stdout: output.stdout,
-            stderr: output.stderr,
-            exit_code: output.status.code(),
-        })
+        // Hardened options above stay exactly as they are; only the capture
+        // is bounded, so a huge or hung `show` cannot exhaust the process.
+        let command = ptrack_git::hardened_git_command(&root, &args);
+        bounded_process_output(command, GIT_SHOW_TIMEOUT, GIT_SHOW_MAX_OUTPUT_BYTES)
     }
 }
 

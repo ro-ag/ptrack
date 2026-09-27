@@ -783,10 +783,50 @@ npm --prefix frontend run build
 cargo build --locked --release --package ptrack-desktop --bin ptrack
 ```
 
+### Architecture
+
+One all-Rust runtime ships the CLI, terminal dashboard, desktop GUI,
+background services, terminal host, and updater. There is one policy path for
+an operation regardless of whether it begins in the CLI, TUI, or GUI:
+
+```text
+ptrack CLI -----------+
+ptrack TUI -----------+--> ptrack-app services --> ptrack-store --> redb
+Tauri WebView --> IPC-+          |       |
+                                 |       +--> bounded git / agent / PTY
+                                 |
+                                 +--> updater verifier --> platform handoff
+```
+
+Tauri is the native window and IPC boundary, not an authority shortcut:
+frontend commands reach application services, and those services alone reach
+storage, process, network, terminal, and updater boundaries. Tauri commands
+remain thin, typed adapters; the shell starts with no shell, filesystem, HTTP,
+process, dialog, or updater plugin authority.
+
+Workspace crates own narrow boundaries and depend inward:
+
+| Crate / directory | Owns |
+|---|---|
+| `src-tauri/` | Tauri shell, menus, lifecycle, command/event adapter |
+| `crates/ptrack-core/` | Models, validation, search, reports, pure services |
+| `crates/ptrack-store/` | redb schema, typed transactions, paths, backups |
+| `crates/ptrack-app/` | Use cases, workspace generations, authorization seams |
+| `crates/ptrack-git/` | Bounded repository and worktree inspection |
+| `crates/ptrack-agent/` | Run evidence, associations, handoffs, drift, proposals |
+| `crates/ptrack-terminal/` | PTYs, profiles, streams, shell integration, cleanup |
+| `crates/ptrack-updater/` | Discovery, verified staging, recovery, native handoff |
+| `crates/ptrack-cli/` | Command parsing, output and exit compatibility |
+| `crates/ptrack-tui/` | Terminal UI presentation and input flows |
+
+`ptrack-core` has no platform or storage authority; CLI, TUI, and Tauri depend
+on `ptrack-app`, never directly on redb or an executor. Capability brokering
+has been retired to the companion project pam — see
+[Capabilities (retired)](#capabilities-retired); no broker starts and
+terminals receive no capability tokens.
+
 Current product design contracts live in
-[`docs/superpowers/specs/`](docs/superpowers/specs/). The approved all-Rust runtime, Tauri
-boundary, storage activation contract, and fail-closed cutover design are
-captured in [`docs/tauri-rust-recode.md`](docs/tauri-rust-recode.md).
+[`docs/superpowers/specs/`](docs/superpowers/specs/).
 
 ## License
 

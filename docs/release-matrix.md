@@ -4,8 +4,8 @@ This document defines the supported OS/architecture targets for p-track and
 the criteria that must be true before a target ships. It is not a release
 procedure: it does not publish, tag, or upload anything. See
 `.github/workflows/release.yml` for the mechanics (tag-triggered only) and
-`docs/updater-acceptance.md` / `docs/terminal-acceptance.md` for the related
-interactive matrices.
+`docs/updater-security.md` / `docs/terminal-acceptance.md` for the related
+acceptance criteria.
 
 ## Supported targets
 
@@ -55,13 +55,12 @@ secret is missing.
 A target does not ship unless all of the following hold for the tagged
 revision:
 
-1. **CI test job green.** The `test` job in `release.yml` (ubuntu-24.04)
-   passes: frontend tests/build, `cargo fmt --check`, `cargo test --workspace`,
-   `cargo clippy -D warnings`, `cargo doc -D warnings`, and
-   `tools.release_contract_test` / `tools.help_check_test` plus
-   `tools/help_check.py all` (this cross-checks the newest CHANGELOG version
-   against the README badges, `tauri.conf.json`, `Cargo.toml`, and the help
-   pages — it does not compare that version against the pushed tag).
+1. **Release gates pass.** The `validate` job in `release.yml` (ubuntu-24.04)
+   checks three things: the tag is canonical stable SemVer (`vX.Y.Z`), the tag
+   commit is an ancestor of `origin/main`, and that exact commit has a green
+   `native-acceptance` run on `main`. The full test suite runs in
+   `native-acceptance.yml`, not in `release.yml`: a release re-validates
+   release metadata, it does not redo CI.
 2. **Build succeeds for that target.** The matching row of the `build` job
    compiles, and for macOS also signs and notarizes successfully.
 3. **Release contract validates.** `tools/release_contract.py validate-binary`
@@ -80,8 +79,8 @@ revision:
    - macOS: the `native-macos` job, which is label-gated
      (`native-acceptance-approved`) on pull requests and otherwise runs on
      push to `main`.
-6. **Updater handoff criteria met** per `docs/updater-acceptance.md`'s
-   native handoff table for that platform (signed/notarized DMG passes
+6. **Updater handoff criteria met** per `docs/updater-security.md`'s
+   platform handoff contract for that platform (signed/notarized DMG passes
    checksum + `hdiutil` + pinned-team `codesign` + Gatekeeper on macOS;
    verified ZIP selected in Explorer on Windows; atomic replace with
    rollback on Linux).

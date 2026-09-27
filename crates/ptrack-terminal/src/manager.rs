@@ -10,7 +10,7 @@ use serde::Serialize;
 use tokio::sync::Notify;
 
 use crate::profile::{
-    CwdPolicy, Profile, ProfileKind, build_environment, resolve_cwd, safe_environment_entry,
+    CwdPolicy, Profile, ProfileKind, build_environment, resolve_cwd, safe_launch_environment_entry,
     sort_profiles, validate_profile,
 };
 use crate::pty::{NativePtyFactory, PtyFactory, StartRequest};
@@ -293,7 +293,7 @@ impl Manager {
             .map_err(|error| ManagerError::new(ManagerErrorKind::Launch, error.to_string()))?;
         let mut overrides = profile.env.clone();
         for (key, value) in extra_environment {
-            if !safe_environment_entry(key, value) {
+            if !safe_launch_environment_entry(key, value) {
                 return Err(ManagerError::new(
                     ManagerErrorKind::Launch,
                     format!("unsafe per-launch environment override {key:?}"),
@@ -554,6 +554,9 @@ impl Manager {
             ));
         }
         let values = sessions.into_values().collect::<Vec<_>>();
+        // Release the session-map lock before the callback: any callback that
+        // re-enters Manager would otherwise deadlock on the non-reentrant mutex.
+        drop(inner);
         Ok(use_snapshot(&values))
     }
 

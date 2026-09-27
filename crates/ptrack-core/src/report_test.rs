@@ -264,6 +264,12 @@ fn context_bounds_project_wide_lists_and_uses_newest_notes() {
             .collect::<Vec<_>>(),
         vec![7, 6, 5, 4, 3]
     );
+    assert_eq!(digest.recent_notes_more, 2);
+    assert!(
+        digest
+            .markdown()
+            .contains("- … +2 more (use `ptrack note list`)")
+    );
     assert!(
         digest
             .markdown()
@@ -464,6 +470,22 @@ fn multi_line_values_keep_their_lines_but_cannot_open_a_heading() {
 }
 
 #[test]
+fn multi_line_values_cannot_open_lists_blockquotes_or_fences() {
+    let mut data = snapshot();
+    data.meta.summary =
+        "- item\n> quote\n```rust code\n~~~\n1. ordered\n2) also\n* star\n+ plus\nok".to_owned();
+    let digest = context(&data);
+    assert_eq!(
+        digest.summary,
+        "\\- item\n\\> quote\n\\```rust code\n\\~~~\n\\1. ordered\n\\2) also\n\\* star\n\\+ plus\nok"
+    );
+    let markdown = digest.markdown();
+    for forged in ["\n- item\n", "\n> quote\n", "\n```rust code\n", "\n~~~\n"] {
+        assert_eq!(markdown.matches(forged).count(), 0, "{markdown}");
+    }
+}
+
+#[test]
 fn each_value_is_capped_in_bytes_on_a_character_boundary() {
     let mut data = snapshot();
     data.meta.goal = "é".repeat(4096);
@@ -524,4 +546,73 @@ fn the_whole_digest_stays_under_its_byte_ceiling() {
     )));
     assert!(digest.truncated);
     assert!(markdown.contains("## Inventory"));
+}
+
+#[test]
+fn shrink_reports_recent_notes_and_stack_in_their_more_counters() {
+    // Oversized stack roots force the byte fit; with no open tasks to trim
+    // first, the notes and stack buckets absorb the drops and must surface
+    // them in their `*_more` counters like every other list.
+    let notes = (1..=7)
+        .map(|id| {
+            note(
+                id,
+                NoteTarget::Project,
+                0,
+                MemoryKind::Decision,
+                &format!("note {id}"),
+            )
+        })
+        .collect();
+    let projects = (1..=4)
+        .map(|index| StackProject {
+            root: "r".repeat(15_000),
+            language: LanguageId::Rust,
+            evidence: vec!["Cargo.toml".to_owned()],
+            depth: index,
+            files: 1,
+            lines: 1,
+        })
+        .collect();
+    let snapshot = ProjectSnapshot::new(
+        meta(1),
+        Vec::new(),
+        vec![plan(1, "plan", PlanStatus::Done, 0, 0)],
+        Vec::new(),
+        Vec::new(),
+        notes,
+        Vec::new(),
+    );
+    let mut data = snapshot;
+    data.meta.stack = Some(StackProfile {
+        projects,
+        scanned_head: "abc123".to_owned(),
+        scanned_at: Timestamp::Zero,
+        tracked_files: 4,
+        lines: 4,
+        lines_counted: true,
+        incomplete: false,
+        future_fields: Vec::new(),
+    });
+
+    let digest = context(&data);
+    let markdown = digest.markdown();
+    assert!(
+        markdown.len() <= MAX_CONTEXT_DIGEST_BYTES,
+        "{}",
+        markdown.len()
+    );
+    assert!(digest.truncated);
+    assert!(digest.recent_notes.is_empty());
+    assert_eq!(digest.recent_notes_more, 7);
+    assert!(digest.stack_more > 0);
+    assert_eq!(digest.stack.len() + digest.stack_more, 4);
+    assert!(markdown.contains(&format!(
+        "- … +{} more (use `ptrack note list`)",
+        digest.recent_notes_more
+    )));
+    assert!(markdown.contains(&format!(
+        "- … +{} more projects not shown",
+        digest.stack_more
+    )));
 }

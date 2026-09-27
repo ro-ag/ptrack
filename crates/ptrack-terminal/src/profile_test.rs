@@ -8,9 +8,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::profile::profile_executable_is_available;
 use crate::profile::{
     CwdPolicy, DEFAULT_PROFILE_FONT_FAMILY, DEFAULT_PROFILE_FONT_SIZE, DEFAULT_PROFILE_SCROLLBACK,
-    DEFAULT_PROFILE_THEME, ExitBehavior, MAX_PROFILE_FONT_SIZE, Profile, ProfileKind,
-    build_environment_for_os, discover_profiles_with, resolve_cwd, sort_profiles,
-    validate_profile_with,
+    DEFAULT_PROFILE_THEME, ExitBehavior, HOST_LAUNCH_ENVIRONMENT_KEYS, MAX_PROFILE_FONT_SIZE,
+    Profile, ProfileKind, build_environment_for_os, discover_profiles_with, pathext_probe,
+    resolve_cwd, safe_launch_environment_entry, sort_profiles, validate_profile_with,
 };
 
 fn profile(id: &str, kind: ProfileKind, executable: &Path) -> Profile {
@@ -408,6 +408,54 @@ fn working_directory_resolution_defaults_and_rejects_non_directories() {
     assert!(resolve_cwd(&directory, Some(&file)).is_err());
     assert!(resolve_cwd(&directory, Some(&directory.join("missing"))).is_err());
     remove_test_directory(&directory);
+}
+
+#[test]
+fn per_launch_overrides_carry_the_profile_denylist_except_for_host_keys() {
+    // The launcher's own keys may carry `PTRACK_*` names...
+    for key in HOST_LAUNCH_ENVIRONMENT_KEYS {
+        assert!(safe_launch_environment_entry(key, "opaque"), "{key}");
+    }
+    // ...and nothing else may, not even a case variant of them.
+    for key in [
+        "PTRACK_ANYTHING",
+        "PTRACK_AGENT_EVENT_TOKEN_V2",
+        "ptrack_agent_event_token_v1",
+        "ptrack_launch_context_v1",
+        "AWS_SECRET_ACCESS_KEY",
+        "DB_PASSWORD",
+        "MY_TOKEN",
+    ] {
+        assert!(!safe_launch_environment_entry(key, "value"), "{key}");
+    }
+    // Every override, host keys included, stays free of NUL bytes.
+    assert!(!safe_launch_environment_entry(
+        "PTRACK_AGENT_EVENT_TOKEN_V1",
+        "bad\0value"
+    ));
+    assert!(!safe_launch_environment_entry("", "value"));
+    assert!(safe_launch_environment_entry("PAGER", "less"));
+}
+
+#[test]
+fn pathext_probe_appends_to_the_file_name_instead_of_replacing_its_extension() {
+    assert_eq!(
+        pathext_probe(Path::new("C:\\shells\\my.tool"), ".EXE"),
+        PathBuf::from("C:\\shells\\my.tool.EXE")
+    );
+    assert_eq!(
+        pathext_probe(Path::new("C:\\shells\\tool"), ".COM"),
+        PathBuf::from("C:\\shells\\tool.COM")
+    );
+    // A bare entry without its leading dot still probes the same file.
+    assert_eq!(
+        pathext_probe(Path::new("C:\\shells\\my.tool"), "CMD"),
+        PathBuf::from("C:\\shells\\my.tool.CMD")
+    );
+    assert_eq!(
+        pathext_probe(Path::new("C:\\shells\\my.tool"), ""),
+        PathBuf::from("C:\\shells\\my.tool")
+    );
 }
 
 static TEST_DIRECTORY_COUNTER: AtomicU64 = AtomicU64::new(0);

@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 
 use crate::runner::{
     CancellationToken, ExecRunner, NO_EXTERNAL_DIFF_ARGS, RepositoryError, Runner,
-    git_command_args, git_environment, hardened_git_command,
+    acquire_reader_permits, git_command_args, git_environment, hardened_git_command,
+    kill_process_tree_command,
 };
 
 #[test]
@@ -85,6 +86,34 @@ fn reader_capacity_exhaustion_fails_closed() {
         ),
         Err(RepositoryError::CommandFailed)
     );
+}
+
+#[test]
+fn an_abandoned_reader_reclaims_its_slot_exactly_once() {
+    static READERS: AtomicUsize = AtomicUsize::new(0);
+    let [permit_a, permit_b] = acquire_reader_permits(&READERS, 2).expect("reader capacity");
+    let slot = permit_a.slot();
+    let stuck = std::thread::spawn(move || {
+        let _permit = permit_a;
+        // Stands in for a reader blocked on a descendant's inherited pipe.
+        std::thread::sleep(Duration::from_millis(30));
+    });
+    assert_eq!(READERS.load(Ordering::Acquire), 2);
+    slot.release();
+    assert_eq!(READERS.load(Ordering::Acquire), 1, "slot not reclaimed");
+    stuck.join().expect("stuck reader thread");
+    // The thread's own permit drop must not release the claim a second time.
+    assert_eq!(READERS.load(Ordering::Acquire), 1, "claim released twice");
+    drop(permit_b);
+    assert_eq!(READERS.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn kill_process_tree_command_carries_the_tree_kill_policy() {
+    let command = kill_process_tree_command(4242);
+    assert_eq!(command.get_program(), "taskkill");
+    let arguments: Vec<_> = command.get_args().collect();
+    assert_eq!(arguments, ["/PID", "4242", "/T", "/F"]);
 }
 
 #[cfg(unix)]

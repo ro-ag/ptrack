@@ -1,5 +1,8 @@
 const maximumInputFrameBytes = 64 * 1024;
 const defaultPreviewCharacters = 4_096;
+/** A paste is a command: anything larger is refused rather than fed to a shell. */
+export const maximumPasteCharacters = 2 * 1024 * 1024;
+export const oversizePasteNotice = "Not pasted: clipboard text is over the paste size limit";
 const utf8Encoder = new TextEncoder();
 
 export type TerminalPlatform = "mac" | "windows" | "linux";
@@ -37,6 +40,8 @@ export interface ClipboardPasteRequest {
   previewTruncated: boolean;
   /** Control characters and bracketed-paste markers removed from the text. */
   controlCharactersRemoved: number;
+  /** The input was over [`maximumPasteCharacters`]; nothing may be pasted. */
+  oversize: boolean;
   requiresConfirmation: boolean;
 }
 
@@ -100,6 +105,17 @@ export function prepareClipboardPaste(
   target: PasteTarget,
   maximumPreviewCharacters = defaultPreviewCharacters,
 ): ClipboardPasteRequest {
+  if (input.length > maximumPasteCharacters) {
+    return {
+      text: "",
+      lineCount: 0,
+      preview: "",
+      previewTruncated: true,
+      controlCharactersRemoved: 0,
+      oversize: true,
+      requiresConfirmation: false,
+    };
+  }
   const normalized = input.replace(/\r\n?/g, "\n");
   const unbracketed = normalized.replace(bracketedPasteMarkers, "");
   const text = unbracketed.replace(pasteControlCharacters, "");
@@ -124,6 +140,7 @@ export function prepareClipboardPaste(
     preview,
     previewTruncated,
     controlCharactersRemoved,
+    oversize: false,
     // Review text after stripping controls because input changed.
     requiresConfirmation: controlCharactersRemoved > 0 ||
       (!multiLinePasteReviewBypassed(target) && text.includes("\n")),

@@ -7,7 +7,8 @@ use std::time::{Duration, Instant};
 use crate::profile::ProfileKind;
 use crate::pty::{PtyFactory, PtyProcess, StartRequest};
 use crate::session::{
-    Session, SessionMetadata, SessionOptions, SessionState, TerminalAssociationPointer,
+    LIVE_OUTPUT_DELIVERY_GRACE, Session, SessionMetadata, SessionOptions, SessionState,
+    TerminalAssociationPointer, deliver_chunk,
 };
 use crate::shell_integration::ShellIntegrationDescriptor;
 use crate::stream::StreamAttachRefusal;
@@ -216,7 +217,12 @@ fn harness(options: SessionOptions) -> (Arc<Session>, Arc<FakeProcess>, Arc<Fake
         process: Arc::clone(&process),
         starts: Mutex::new(Vec::new()),
     });
-    let session = Session::new_with_options(
+    let session = session_with_factory(factory.clone(), options);
+    (session, process, factory)
+}
+
+fn session_with_factory(factory: Arc<dyn PtyFactory>, options: SessionOptions) -> Arc<Session> {
+    Session::new_with_options(
         StartRequest {
             executable: "/bin/test".to_owned(),
             args: vec!["--owned".to_owned()],
@@ -233,10 +239,50 @@ fn harness(options: SessionOptions) -> (Arc<Session>, Arc<FakeProcess>, Arc<Fake
             cwd: "/tmp".to_owned(),
             shell_integration: ShellIntegrationDescriptor::none(),
         },
-        factory.clone(),
+        factory,
         options,
-    );
-    (session, process, factory)
+    )
+}
+
+/// A launch gate a test controls, standing in for a slow PTY spawn.
+struct LaunchGate {
+    open: Mutex<bool>,
+    changed: Condvar,
+}
+
+impl LaunchGate {
+    fn new() -> Self {
+        Self {
+            open: Mutex::new(false),
+            changed: Condvar::new(),
+        }
+    }
+
+    fn pass_through(&self) {
+        let mut open = self.open.lock().unwrap();
+        while !*open {
+            open = self.changed.wait(open).unwrap();
+        }
+    }
+
+    fn open(&self) {
+        *self.open.lock().unwrap() = true;
+        self.changed.notify_all();
+    }
+}
+
+struct BlockingFactory {
+    inner: Arc<FakeFactory>,
+    entered: std::sync::mpsc::Sender<()>,
+    gate: Arc<LaunchGate>,
+}
+
+impl PtyFactory for BlockingFactory {
+    fn start(&self, request: StartRequest) -> io::Result<Box<dyn PtyProcess>> {
+        self.entered.send(()).expect("test observes factory entry");
+        self.gate.pass_through();
+        self.inner.start(request)
+    }
 }
 
 fn wait_for_output(session: &Session, sequence: u64) {
@@ -257,6 +303,76 @@ fn session_state_values_are_frozen() {
     assert_eq!(SessionState::Closing.to_string(), "closing");
     assert_eq!(SessionState::Closed.to_string(), "closed");
     assert_eq!(SessionState::Failed.to_string(), "failed");
+}
+
+#[test]
+fn a_concurrent_start_is_refused_while_the_first_still_launches() {
+    let process = Arc::new(FakeProcess::default());
+    let fake = Arc::new(FakeFactory {
+        process: Arc::clone(&process),
+        starts: Mutex::new(Vec::new()),
+    });
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let gate = Arc::new(LaunchGate::new());
+    let factory: Arc<dyn PtyFactory> = Arc::new(BlockingFactory {
+        inner: Arc::clone(&fake),
+        entered: entered_tx,
+        gate: Arc::clone(&gate),
+    });
+    let session = session_with_factory(factory, SessionOptions::default());
+    let first = {
+        let session = Arc::clone(&session);
+        thread::spawn(move || session.start())
+    };
+    entered_rx.recv().expect("first start reached the factory");
+    // The first start owns the launch and has not finished it; a second
+    // start must refuse rather than spawn a second PTY beside it.
+    let second = session.start().expect_err("concurrent start refused");
+    assert!(second.to_string().contains("already starting"), "{second}");
+    gate.open();
+    first
+        .join()
+        .expect("first start thread")
+        .expect("first start");
+    assert_eq!(session.state(), SessionState::Running);
+    assert_eq!(fake.starts.lock().unwrap().len(), 1, "second PTY spawned");
+}
+
+#[test]
+fn a_stuck_live_consumer_drops_its_chunk_instead_of_blocking_the_reader() {
+    use std::sync::atomic::AtomicBool;
+
+    let (sender, mut receiver) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
+    sender.try_send(b"first".to_vec()).expect("queue has room");
+    let started = Instant::now();
+    assert!(!deliver_chunk(
+        &sender,
+        b"second".to_vec(),
+        &AtomicBool::new(false)
+    ));
+    let waited = started.elapsed();
+    assert!(
+        waited >= LIVE_OUTPUT_DELIVERY_GRACE,
+        "gave up early: {waited:?}"
+    );
+    assert!(
+        waited < Duration::from_secs(2),
+        "spun past the bound: {waited:?}"
+    );
+    assert_eq!(receiver.try_recv().expect("first chunk"), b"first");
+    assert!(
+        receiver.try_recv().is_err(),
+        "dropped chunk reached the consumer"
+    );
+    // A closing session stops waiting at once even with a full queue.
+    sender.try_send(b"third".to_vec()).expect("queue has room");
+    let closing_started = Instant::now();
+    assert!(!deliver_chunk(
+        &sender,
+        b"fourth".to_vec(),
+        &AtomicBool::new(true)
+    ));
+    assert!(closing_started.elapsed() < LIVE_OUTPUT_DELIVERY_GRACE);
 }
 
 #[test]
