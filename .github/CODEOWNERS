@@ -1,5 +1,4 @@
-# Review requirements for release-critical paths. Replace the team handle
-# below with the real owning team if it differs.
-# Release pipeline changes must never land unreviewed:
-/.github/workflows/ @ro-ag/ptrack-maintainers
-/tools/release_contract.py @ro-ag/ptrack-maintainers
+# Review requirements for release-critical paths. Release pipeline changes
+# must never land unreviewed:
+/.github/workflows/ @ro-ag
+/tools/release_contract.py @ro-ag
