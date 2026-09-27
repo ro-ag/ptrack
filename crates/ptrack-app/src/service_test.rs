@@ -2,9 +2,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ptrack_core::{NoteTarget, PlanStatus, TaskStatus};
-use ptrack_store::{
-    ActiveBinding, GlobalStore, PinnedProjectDirectory, ProjectStore, StoreError, StoreKind,
-};
+#[cfg(unix)]
+use ptrack_store::PinnedProjectDirectory;
+use ptrack_store::{ActiveBinding, GlobalStore, ProjectStore, StoreError, StoreKind};
 
 use crate::{
     AppError, ApplicationPort, INVALID_HOLD_PREFIX, InitRequest, LocalApplication, Mutation,

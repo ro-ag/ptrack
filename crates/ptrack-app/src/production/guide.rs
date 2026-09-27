@@ -1,6 +1,10 @@
 //! Project guide manifests: the consent record a preview produces, its
 //! validation, and applying or installing it through the pinned publisher.
 
+// Most of this module is exercised through the unix pinned publisher; on
+// other targets the shared types stay compiled so the desktop manifest
+// surface matches, and the unix-only helpers are simply not called.
+#![cfg_attr(not(unix), allow(dead_code))]
 use std::io::Read;
 use std::path::Path;
 
@@ -167,7 +171,7 @@ pub(super) fn validate_guide_before_commit(
     #[cfg(not(unix))]
     {
         let _ = home;
-        return Err(AppError::Message("project-guide-unavailable".to_owned()));
+        Err(AppError::Message("project-guide-unavailable".to_owned()))
     }
     #[cfg(unix)]
     {
@@ -202,7 +206,7 @@ pub(super) fn apply_guide_manifest(
     #[cfg(not(unix))]
     {
         let _ = (home, pinned);
-        return Err(AppError::Message("project-guide-unavailable".to_owned()));
+        Err(AppError::Message("project-guide-unavailable".to_owned()))
     }
     #[cfg(unix)]
     {
@@ -276,6 +280,9 @@ pub(super) fn guide_root_has_applied_output(
     Ok(false)
 }
 
+// On non-unix targets the body is a constant, but the signature matches the
+// unix publisher so callers stay portable.
+#[cfg_attr(not(unix), allow(clippy::unnecessary_wraps))]
 pub(super) fn guide_manifest_has_applied_output(
     manifest: &DesktopGuideManifest,
 ) -> AppResult<bool> {
@@ -284,7 +291,7 @@ pub(super) fn guide_manifest_has_applied_output(
     }
     #[cfg(not(unix))]
     {
-        return Ok(false);
+        Ok(false)
     }
     #[cfg(unix)]
     {
@@ -349,6 +356,8 @@ pub(crate) fn install_project_guide_pinned(
 }
 
 #[cfg(not(unix))]
+// Keeps the unix signature: only the unix publisher can produce written names.
+#[allow(clippy::unnecessary_wraps)]
 pub(crate) fn install_project_guide_pinned(
     _pinned: &PinnedProjectDirectory,
     _extra: &str,

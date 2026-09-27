@@ -260,6 +260,8 @@ fn same_profile(left: &std::fs::File, right: &std::fs::File) -> std::io::Result<
 }
 
 #[cfg(not(unix))]
+// Keeps the unix signature; off unix there is nothing to compare.
+#[allow(clippy::unnecessary_wraps)]
 fn same_profile(_left: &std::fs::File, _right: &std::fs::File) -> std::io::Result<bool> {
     Ok(true)
 }

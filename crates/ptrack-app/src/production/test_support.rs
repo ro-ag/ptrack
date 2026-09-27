@@ -17,6 +17,7 @@ std::thread_local! {
         std::cell::RefCell::new(None);
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) fn set_guide_before_publish_hook(hook: impl FnOnce() + 'static) {
     GUIDE_BEFORE_PUBLISH_HOOK.with(|slot| {
         *slot.borrow_mut() = Some(Box::new(hook));
@@ -31,6 +32,7 @@ pub(super) fn run_guide_before_publish_hook() {
     });
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) fn set_guide_before_commit_hook(hook: impl FnOnce() + 'static) {
     GUIDE_BEFORE_COMMIT_HOOK.with(|slot| {
         *slot.borrow_mut() = Some(Box::new(hook));
