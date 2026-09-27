@@ -1,4 +1,3 @@
-#![cfg(windows)]
 #![allow(unsafe_code)]
 
 use std::ffi::c_void;

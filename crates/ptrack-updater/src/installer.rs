@@ -380,7 +380,7 @@ mod platform {
         if stage.kind != StageKind::WindowsZip {
             return Err(UpdateError::InstallRefused);
         }
-        let mut buffer = [0_u16; 32_768];
+        let mut buffer = vec![0_u16; 32_768].into_boxed_slice();
         let length = unsafe { GetWindowsDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) };
         if length == 0 || usize::try_from(length).unwrap_or(usize::MAX) >= buffer.len() {
             return Err(UpdateError::InstallRefused);
