@@ -24,6 +24,7 @@ pub(crate) fn set_guide_before_publish_hook(hook: impl FnOnce() + 'static) {
     });
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(super) fn run_guide_before_publish_hook() {
     GUIDE_BEFORE_PUBLISH_HOOK.with(|slot| {
         if let Some(hook) = slot.borrow_mut().take() {

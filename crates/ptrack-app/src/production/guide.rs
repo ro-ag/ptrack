@@ -4,7 +4,7 @@
 // Most of this module is exercised through the unix pinned publisher; on
 // other targets the shared types stay compiled so the desktop manifest
 // surface matches, and the unix-only helpers are simply not called.
-#![cfg_attr(not(unix), allow(dead_code))]
+#![cfg_attr(not(unix), allow(dead_code, unused_imports))]
 use std::io::Read;
 use std::path::Path;
 

@@ -658,6 +658,8 @@ fn target_open_failures_are_fail_closed_and_only_stale_schemas_get_the_upgrade_h
     assert!(!busy.contains("upgrade ptrack"), "{busy}");
 }
 
+// Only the unix guide-hook tests drive a real git repository.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn git(root: &Path, args: &[&str]) {
     let status = std::process::Command::new("git")
         .arg("-C")

@@ -26,7 +26,7 @@ pub(crate) const VERIFY_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
 pub(crate) const HANDOFF_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 /// Upper bound for the `ptrack version` smoke test of a replaced binary.
-#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) const SMOKE_TEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long pipe readers may run on after the command itself has exited.
 const PIPE_DRAIN_GRACE: Duration = Duration::from_secs(2);

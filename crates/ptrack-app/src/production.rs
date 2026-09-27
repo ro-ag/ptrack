@@ -104,6 +104,8 @@ fn path_is_present(path: &Path) -> AppResult<bool> {
     }
 }
 
+// Used by the unix guide publisher through `guide`'s `super::` import.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn content_digest(bytes: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(sha256_digest(bytes))
 }
