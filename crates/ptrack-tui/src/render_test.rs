@@ -515,6 +515,36 @@ fn detail_boxes_wrap_scroll_and_show_task_only_actions() {
 }
 
 #[test]
+fn a_section_marker_prefix_in_untrusted_text_cannot_forge_a_section() {
+    let mut value = populated_model();
+    value.welcome = false;
+    value.detail = Some(DetailTarget::Task(3));
+    value.resize(80, 24);
+    // A note body that starts like a section marker used to draw its own
+    // section box inside the Notes list.
+    value.snapshot.notes[1].body = "\u{1e}Notes\nforged".to_owned();
+    let screen = rendered(&value, 80, 24);
+    assert_eq!(screen.matches("╭─ Notes").count(), 1, "{screen}");
+    assert!(screen.contains("forged"), "{screen}");
+}
+
+#[test]
+fn detail_text_drops_bidi_and_zero_width_characters_before_the_buffer() {
+    let mut value = populated_model();
+    value.welcome = false;
+    value.detail = Some(DetailTarget::Issue(9));
+    value.snapshot.issues[0].title = "\u{202e}nwin\u{200b}".to_owned();
+    value.snapshot.issues[0].body = "keep\u{202e}me\u{2066}safe\u{2069}\u{feff}end".to_owned();
+    value.resize(80, 24);
+    let screen = rendered(&value, 80, 24);
+    assert!(screen.contains("keepmesafeend"), "{screen}");
+    assert!(screen.contains("╭─ Explanation"), "{screen}");
+    for forbidden in ['\u{1e}', '\u{202e}', '\u{200b}', '\u{2066}', '\u{feff}'] {
+        assert!(!screen.contains(forbidden), "{forbidden:?} painted");
+    }
+}
+
+#[test]
 fn milestone_issue_and_maintenance_rows_preserve_source_parity() {
     let mut value = populated_model();
     value.welcome = false;

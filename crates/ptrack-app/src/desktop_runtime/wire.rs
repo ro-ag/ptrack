@@ -124,6 +124,11 @@ const TERMINAL_WINDOW_COMMANDS: [&str; 12] = [
 /// The commands that address the calling terminal window's own assignment.
 const TERMINAL_WINDOW_SELF_COMMANDS: [&str; 2] = ["GetTerminalWindowTab", "SetTerminalWindowTab"];
 
+/// The only preference keys a terminal window may write. Its theme toggle
+/// changes the shared appearance record and nothing else: startup restore, the
+/// last project root, and the notification opt-ins stay main-window writes.
+const TERMINAL_WINDOW_APPEARANCE_KEYS: [&str; 3] = ["density", "reducedMotion", "theme"];
+
 /// How one bounded runtime teardown ended.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ShutdownOutcome {
@@ -153,7 +158,10 @@ pub const fn allowed_terminal_window_commands() -> &'static [&'static str] {
 /// address a terminal window's own assignment. A terminal window reaches only
 /// the commands it uses, and those two always address the caller: the label
 /// in the payload is replaced by the caller's, so one terminal window can never
-/// read or rewrite another's tab. Any other label is refused.
+/// read or rewrite another's tab. Any other label is refused. Its one shared
+/// write is `SetPreferences`, and its patch may touch only the appearance keys
+/// — the theme toggle — so a terminal-window script can never flip startup
+/// restore, the last project root, or the notification opt-ins.
 ///
 /// # Errors
 /// Returns an error when the calling window may not send the method.
@@ -169,18 +177,43 @@ pub fn scope_request_to_window(
         }
         return Ok(request);
     }
-    let terminal_window = window_label
-        .strip_prefix(crate::terminal_windows::TERMINAL_WINDOW_PREFIX)
-        .is_some_and(|suffix| {
-            !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
-        });
-    if !terminal_window || TERMINAL_WINDOW_COMMANDS.binary_search(&method).is_err() {
+    if !crate::terminal_windows::is_terminal_window_label(window_label)
+        || TERMINAL_WINDOW_COMMANDS.binary_search(&method).is_err()
+    {
         return Err(window_refusal(method));
     }
     if self_addressed && let Some(label) = request.arguments.first_mut() {
         *label = Value::String(window_label.to_owned());
     }
+    if method == "SetPreferences" {
+        scope_preference_patch(request.arguments.first())?;
+    }
     Ok(request)
+}
+
+/// Restricts a terminal window's preference patch to `appearance.*`. The
+/// patch is an object whose only top-level member is `appearance`, and whose
+/// appearance members are the appearance keys themselves; anything else could
+/// reach `startup` or `notifications` through the shared merge.
+pub(super) fn scope_preference_patch(patch: Option<&Value>) -> AppResult<()> {
+    let Some(patch) = patch.and_then(Value::as_object) else {
+        return Err(window_preference_refusal());
+    };
+    for (key, value) in patch {
+        let appearance = key == "appearance" && value.as_object().is_some_and(|appearance| {
+            appearance
+                .keys()
+                .all(|key| TERMINAL_WINDOW_APPEARANCE_KEYS.contains(&key.as_str()))
+        });
+        if !appearance {
+            return Err(window_preference_refusal());
+        }
+    }
+    Ok(())
+}
+
+fn window_preference_refusal() -> AppError {
+    AppError::Message("this window may only set appearance preferences".to_owned())
 }
 
 fn window_refusal(method: &str) -> AppError {

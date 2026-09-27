@@ -7,8 +7,8 @@ use std::time::Instant;
 
 use ptrack_core::{
     Capability, CapabilityAuditPolicy, CapabilityKind, CapabilityLimits, Digest32, GitScope,
-    LanguageId, MIN_NATIVE_PAYLOAD_SCHEMA, MemoryKind, NativeRecord, NoteTarget, Plan, PlanStatus,
-    RecordKind, SCRATCHPAD_PAYLOAD_SCHEMA, SCRATCHPAD_TEXT_MAX_BYTES,
+    LanguageId, MAX_BODY_BYTES, MIN_NATIVE_PAYLOAD_SCHEMA, MemoryKind, NativeRecord, NoteTarget,
+    Plan, PlanStatus, RecordKind, SCRATCHPAD_PAYLOAD_SCHEMA, SCRATCHPAD_TEXT_MAX_BYTES,
     SUMMARY_UPDATED_PAYLOAD_SCHEMA, Scratchpad, ScratchpadSnippet, StackProfile, StackProject,
     StackSummary, TaskStatus, Timestamp, decode_record, encode_record_at_schema,
 };
@@ -335,7 +335,7 @@ fn typed_project_mutations_conversion_cas_and_snapshot_are_atomic() {
         .add_note(NoteTarget::Task, task.id, "decision")
         .unwrap();
     store
-        .add_commit("abc", "subject", parent.id, task.id)
+        .add_commit("abcd", "subject", parent.id, task.id)
         .unwrap();
     store.add_issue("issue", "", None, task.id).unwrap();
 
@@ -3693,4 +3693,120 @@ fn status_changes_with_notes_commit_together_or_not_at_all() {
     assert_eq!(done.status, PlanStatus::Done);
     assert_eq!(done.claim_owner, None);
     assert_eq!(alice.notes().unwrap().len(), 3);
+}
+
+#[test]
+fn add_commit_refuses_unusable_sha_or_multiline_subject() {
+    let temp = Temp::new();
+    let path = temp.path("commit-shape.redb");
+    let store = ProjectStore::create_new_with_clock(
+        &path,
+        binding(&path, StoreKind::Project, "commit-shape"),
+        "test",
+        clock(),
+    )
+    .unwrap();
+    // A sha that is not an object name — too short, non-hex, option-shaped,
+    // or past the bound — is refused at the store boundary.
+    for sha in ["abc", "zzzzzzzz", "--output=/tmp/x", "HEAD~1", &"a".repeat(65)] {
+        let error = store
+            .add_commit(sha, "subject", 0, 0)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("commit.sha"), "{sha}: {error}");
+    }
+    // A subject must stay one printable line.
+    for subject in ["line1\nline2", "sub\x1bject", "trail\rhidden", "para\u{2028}break"] {
+        let error = store
+            .add_commit("abcd1234", subject, 0, 0)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("commit.subject"), "{subject:?}: {error}");
+    }
+    store.add_commit("0123", "shortest", 0, 0).unwrap();
+    store.add_commit("ABCD1234ef", "mixed case", 0, 0).unwrap();
+    store.add_commit("a".repeat(64), "longest", 0, 0).unwrap();
+    assert_eq!(store.commits().unwrap().len(), 3);
+}
+
+#[test]
+fn note_and_issue_bodies_are_capped_on_write() {
+    use ptrack_core::{IssueStatus, Severity};
+    let temp = Temp::new();
+    let path = temp.path("body-cap.redb");
+    let store = ProjectStore::create_new_with_clock(
+        &path,
+        binding(&path, StoreKind::Project, "body-cap"),
+        "test",
+        clock(),
+    )
+    .unwrap();
+    let at_cap = "x".repeat(MAX_BODY_BYTES);
+    let over_cap = "x".repeat(MAX_BODY_BYTES + 1);
+    store.add_note(NoteTarget::Project, 0, at_cap.as_str()).unwrap();
+    let error = store
+        .add_note(NoteTarget::Project, 0, over_cap.as_str())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("note body is 65537 bytes; the limit is 65536"),
+        "{error}"
+    );
+
+    store.add_issue("ok", at_cap.as_str(), None, 0).unwrap();
+    let error = store
+        .add_issue("big", over_cap.as_str(), None, 0)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("issue body is 65537 bytes; the limit is 65536"),
+        "{error}"
+    );
+
+    let issue = store.add_issue("edit", "", None, 0).unwrap();
+    let error = store
+        .update_issue(
+            issue.id,
+            issue.updated_at,
+            "edit",
+            over_cap.as_str(),
+            Severity::Low,
+            IssueStatus::Open,
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("issue body is 65537 bytes; the limit is 65536"),
+        "{error}"
+    );
+    store
+        .update_issue(
+            issue.id,
+            issue.updated_at,
+            "edit",
+            at_cap.as_str(),
+            Severity::Low,
+            IssueStatus::Open,
+        )
+        .unwrap();
+
+    // A typed write-back body becomes a note, so the same cap bounds it.
+    let plan = store.add_plan("plan", 0).unwrap();
+    let task = store.add_task(plan.id, "task").unwrap();
+    let request = MemoryWriteRequest {
+        request_id: "request-big".to_owned(),
+        kind: MemoryKind::Decision,
+        body: over_cap,
+        target: NoteTarget::Task,
+        target_id: task.id,
+        plan_id: plan.id,
+        workspace_generation: 7,
+        session_id: "session".to_owned(),
+        association_revision: 1,
+    };
+    let error = store.write_memory(request).unwrap_err().to_string();
+    assert!(
+        error.contains("note body is 65537 bytes; the limit is 65536"),
+        "{error}"
+    );
 }

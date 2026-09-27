@@ -1150,3 +1150,181 @@ fn a_multi_line_goal_yields_a_one_line_integration_task_title() {
     );
     assert!(ptrack_core::check_title(&crate::integration_task_title("a\nb")).is_ok());
 }
+
+#[test]
+fn mutations_refuse_control_characters_in_stored_text() {
+    let directory = TestDirectory::new("control-bytes");
+    let (mut application, _) = configured(&directory, true);
+    for value in [
+        "esc\x1b[2J",
+        "bel\x07",
+        "cr\rhidden",
+        "bidi\u{202e}x",
+        "sep\u{2028}x",
+        "tag\u{e0001}x",
+    ] {
+        let error = application
+            .mutate(Mutation::SetGoal(value.to_owned()))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("the goal must not contain control characters"),
+            "{value:?}: {error}"
+        );
+        let error = application
+            .mutate(Mutation::SetSummary(value.to_owned()))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("the summary must not contain control characters"),
+            "{value:?}: {error}"
+        );
+    }
+    // Line breaks and tabs are structural prose in these fields.
+    application
+        .mutate(Mutation::SetGoal("line1\nline2\tend".to_owned()))
+        .unwrap();
+    application
+        .mutate(Mutation::SetSummary("line1\nline2".to_owned()))
+        .unwrap();
+
+    for value in ["note\x1b[2J", "note\x07", "note\rhidden"] {
+        let error = application
+            .mutate(Mutation::AddNote {
+                target: NoteTarget::Project,
+                target_id: 0,
+                body: value.to_owned(),
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("the note must not contain control characters"),
+            "{value:?}: {error}"
+        );
+    }
+    for value in ["issue\x1b[2J", "issue\u{202e}x"] {
+        let error = application
+            .mutate(Mutation::AddIssue {
+                title: "title".to_owned(),
+                body: value.to_owned(),
+                severity: None,
+                task_id: 0,
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("the issue must not contain control characters"),
+            "{value:?}: {error}"
+        );
+    }
+    // A commit subject is a single line: even a newline is refused.
+    for subject in ["sub\x1bject", "two\nlines", "trail\rhidden"] {
+        let error = application
+            .mutate(Mutation::AddCommit {
+                sha: "abcd1234".to_owned(),
+                subject: subject.to_owned(),
+                plan_id: 0,
+                task_id: 0,
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("the commit subject must be one line without control characters"),
+            "{subject:?}: {error}"
+        );
+    }
+}
+
+#[test]
+fn note_and_issue_body_writes_are_capped_at_the_application_boundary() {
+    use ptrack_core::MAX_BODY_BYTES;
+    let directory = TestDirectory::new("body-cap-app");
+    let (mut application, _) = configured(&directory, true);
+    let over = "x".repeat(MAX_BODY_BYTES + 1);
+    let error = application
+        .mutate(Mutation::AddNote {
+            target: NoteTarget::Project,
+            target_id: 0,
+            body: over.clone(),
+        })
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("the note body is 65537 bytes; the limit is 65536"),
+        "{error}"
+    );
+    let error = application
+        .mutate(Mutation::AddIssue {
+            title: "title".to_owned(),
+            body: over,
+            severity: None,
+            task_id: 0,
+        })
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("the issue body is 65537 bytes; the limit is 65536"),
+        "{error}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn bounded_process_output_truncates_and_times_out() {
+    use std::process::Command;
+    use std::time::Duration;
+
+    let mut command = Command::new("sh");
+    command.args(["-c", "printf 1234567890"]);
+    let output =
+        crate::service::bounded_process_output(command, Duration::from_secs(3), 4).unwrap();
+    assert_eq!(output.stdout, b"1234\n[output truncated at 4 bytes]\n");
+    assert!(output.stderr.is_empty());
+    assert_eq!(output.exit_code, Some(0));
+
+    let mut command = Command::new("sleep");
+    command.arg("5");
+    let error = crate::service::bounded_process_output(command, Duration::from_millis(50), 1024)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("timed out"), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+fn git_show_truncates_a_huge_patch_with_an_explicit_marker() {
+    let directory = TestDirectory::new("git-show-cap");
+    let (mut application, endpoint) = configured(&directory, true);
+    git(&endpoint.root, &["init", "-q"]);
+    std::fs::write(
+        endpoint.root.join("big.txt"),
+        "x".repeat(5 * 1024 * 1024),
+    )
+    .unwrap();
+    git(&endpoint.root, &["add", "big.txt"]);
+    git(
+        &endpoint.root,
+        &[
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-q",
+            "-m",
+            "big",
+        ],
+    );
+    let result = application.git_show("HEAD", false).unwrap();
+    assert_eq!(result.exit_code, Some(0));
+    assert!(
+        result.stdout.len() <= 4 * 1024 * 1024 + 64,
+        "captured {} bytes",
+        result.stdout.len()
+    );
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(
+        stdout.ends_with("[output truncated at 4194304 bytes]\n"),
+        "missing truncation marker"
+    );
+}

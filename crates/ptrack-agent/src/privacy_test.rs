@@ -305,6 +305,46 @@ fn kind_scoped_fields_and_notifications_are_closed() {
 }
 
 #[test]
+fn reasoning_markers_are_checked_after_whitespace_normalization() {
+    let now = Timestamp::from_unix_nanoseconds(1_800_000_000_000_000_000);
+    let mut policy = default_event_privacy_policy();
+    policy.allow_summaries = true;
+    for (content, expected) in [
+        (
+            "chain\nof\nthought was X",
+            "agent event summary contains disallowed reasoning content",
+        ),
+        (
+            "internal  reasoning: steps",
+            "agent event summary contains disallowed reasoning content",
+        ),
+        (
+            "step\tby\tstep reasoning",
+            "agent event summary contains disallowed reasoning content",
+        ),
+        (
+            "thought\u{00a0}process: hidden",
+            "agent event summary contains disallowed reasoning content",
+        ),
+        (
+            "private\ndeliberation: hidden",
+            "agent event summary contains disallowed reasoning content",
+        ),
+    ] {
+        let mut value = observation();
+        value.kind = EventKind::Summary;
+        value.phase = EventPhase::Completed;
+        value.paths.clear();
+        value.summary = content.to_owned();
+        let error = normalize_event_observation("/project", now, policy, value)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(error, expected, "{content:?}");
+        assert!(!error.contains(content), "{content:?}");
+    }
+}
+
+#[test]
 fn prefixed_and_quoted_keys_are_redacted_in_summaries() {
     let now = Timestamp::from_unix_nanoseconds(1_800_000_000_000_000_000);
     let mut policy = default_event_privacy_policy();

@@ -18,6 +18,9 @@ const CONTEXT_SUMMARY_BYTES: usize = 2 * 1024;
 const CONTEXT_TITLE_BYTES: usize = 256;
 const CONTEXT_HOLD_BYTES: usize = 256;
 const CONTEXT_NOTE_BYTES: usize = 1024;
+/// Per-body byte cap for a drill-down view (`plan show`, `task show`,
+/// `issue show`): larger than a digest note line, but still bounded.
+const VIEW_BODY_BYTES: usize = 4 * 1024;
 const TRUNCATION_MARKER: &str = "…";
 
 /// Hard ceiling on the rendered context digest, in bytes.
@@ -92,10 +95,14 @@ pub struct Digest {
     pub scheduled_issues: Vec<IssueLine>,
     pub scheduled_issues_more: usize,
     pub recent_notes: Vec<NoteLine>,
+    /// Notes held back beyond the shown window or dropped to fit the digest.
+    pub recent_notes_more: usize,
     pub inventory: Counts,
     /// Discovered projects and their tracked-file counts, absent until the
     /// desktop has scanned this project.
     pub stack: Vec<StackProject>,
+    /// Stack projects dropped to fit the digest.
+    pub stack_more: usize,
     /// The scan hit its path cap, so the counts below it are partial.
     pub stack_incomplete: bool,
     /// A value was shortened to its byte cap or list entries were dropped to
@@ -207,8 +214,11 @@ pub fn context(snapshot: &ProjectSnapshot) -> Digest {
         context_issues(snapshot, &mut fence, |issue| issue.task_id == 0);
     let (scheduled_issues, scheduled_issues_more) =
         context_issues(snapshot, &mut fence, |issue| issue.task_id != 0);
-    let recent_notes = snapshot
-        .recent_notes(CONTEXT_RECENT_NOTES)
+    let recent = snapshot.recent_notes(CONTEXT_RECENT_NOTES);
+    // The shown window is bounded, so the notes it never took count as held
+    // back alongside whatever `fit_digest` drops later.
+    let recent_notes_more = snapshot.notes.len().saturating_sub(recent.len());
+    let recent_notes = recent
         .into_iter()
         .map(|note| NoteLine {
             body: fence.block(&note.body, CONTEXT_NOTE_BYTES),
@@ -233,8 +243,10 @@ pub fn context(snapshot: &ProjectSnapshot) -> Digest {
         scheduled_issues,
         scheduled_issues_more,
         recent_notes,
+        recent_notes_more,
         inventory: snapshot.counts(),
         stack,
+        stack_more: 0,
         stack_incomplete,
         truncated: fence.truncated,
     };
@@ -334,11 +346,30 @@ impl Fence {
             return value;
         }
         self.truncated = true;
-        let mut end = cap.saturating_sub(TRUNCATION_MARKER.len());
-        while !value.is_char_boundary(end) {
-            end -= 1;
-        }
-        format!("{}{TRUNCATION_MARKER}", &value[..end])
+        cap_bytes(&value, cap)
+    }
+}
+
+/// Shortens `value` to `cap` bytes on a character boundary, marked with
+/// [`TRUNCATION_MARKER`].
+fn cap_bytes(value: &str, cap: usize) -> String {
+    let mut end = cap.saturating_sub(TRUNCATION_MARKER.len());
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{TRUNCATION_MARKER}", &value[..end])
+}
+
+/// The drill-down rendering of a stored note or issue body: redacted with the
+/// shared detector, heading-proof like every agent-facing multi-line value,
+/// and bounded to [`VIEW_BODY_BYTES`].
+pub(crate) fn view_body(value: &str) -> String {
+    let redacted = redact_credential_lines(value);
+    let escaped = block_text(&redacted);
+    if escaped.len() <= VIEW_BODY_BYTES {
+        escaped
+    } else {
+        cap_bytes(&escaped, VIEW_BODY_BYTES)
     }
 }
 
@@ -365,8 +396,10 @@ pub(crate) fn inline_text(value: &str) -> Cow<'_, str> {
 }
 
 /// Keeps a multi-line value's line breaks and tabs but escapes any line that
-/// Markdown would read as a heading (`# …`, or a `===`/`---` underline), so a
-/// goal, summary, or note cannot forge a digest section.
+/// Markdown would read as block structure: an ATX heading (`# …`), a setext
+/// underline (`===`/`---`), a list item, a blockquote (`> …`), or a code fence
+/// (a run of three backticks or tildes). A goal, summary, note, or issue body
+/// then cannot forge a digest section or open a block of its own.
 fn block_text(value: &str) -> String {
     value
         .split('\n')
@@ -381,11 +414,7 @@ fn block_text(value: &str) -> String {
                     }
                 })
                 .collect();
-            let trimmed = line.trim();
-            let underline = !trimmed.is_empty()
-                && (trimmed.chars().all(|character| character == '=')
-                    || trimmed.chars().all(|character| character == '-'));
-            if line.trim_start().starts_with('#') || underline {
+            if line_starts_block(&line) {
                 let indent = line.len() - line.trim_start().len();
                 format!("{}\\{}", &line[..indent], &line[indent..])
             } else {
@@ -394,6 +423,37 @@ fn block_text(value: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Whether Markdown would read the start of `line` as block structure.
+fn line_starts_block(line: &str) -> bool {
+    let trimmed = line.trim();
+    let underline = !trimmed.is_empty()
+        && (trimmed.chars().all(|character| character == '=')
+            || trimmed.chars().all(|character| character == '-'));
+    underline
+        || trimmed.starts_with('#')
+        || trimmed.starts_with('>')
+        || trimmed.starts_with("```")
+        || trimmed.starts_with("~~~")
+        || list_marker(trimmed)
+}
+
+/// Whether `trimmed` opens a bullet (`- `, `* `, `+ `) or ordered (`1. `,
+/// `1) `) list item; a bare marker with nothing after it is escaped too.
+fn list_marker(trimmed: &str) -> bool {
+    let rest = match trimmed.chars().next() {
+        Some(marker @ ('-' | '*' | '+')) => &trimmed[marker.len_utf8()..],
+        Some(marker) if marker.is_ascii_digit() => {
+            let rest = trimmed.trim_start_matches(|c: char| c.is_ascii_digit());
+            match rest.strip_prefix(['.', ')']) {
+                Some(rest) => rest,
+                None => return false,
+            }
+        }
+        _ => return false,
+    };
+    rest.is_empty() || rest.starts_with([' ', '\t'])
 }
 
 /// Drops whole list entries from the end of the least important lists until
@@ -423,10 +483,9 @@ fn shrink_digest(digest: &mut Digest, excess: usize) -> bool {
             |task| task.title.len() + 24,
         );
     }
-    let mut dropped = 0;
     removed += drain_tail(
         &mut digest.recent_notes,
-        &mut dropped,
+        &mut digest.recent_notes_more,
         excess.saturating_sub(removed),
         |note| note.body.len() + 24,
     );
@@ -462,7 +521,7 @@ fn shrink_digest(digest: &mut Digest, excess: usize) -> bool {
     );
     removed += drain_tail(
         &mut digest.stack,
-        &mut dropped,
+        &mut digest.stack_more,
         excess.saturating_sub(removed),
         |project| project.root.len() + 48,
     );
@@ -539,8 +598,13 @@ impl Digest {
             &self.scheduled_issues,
             self.scheduled_issues_more,
         );
-        write_recent_notes(&mut output, &self.recent_notes);
-        write_stack(&mut output, &self.stack, self.stack_incomplete);
+        write_recent_notes(&mut output, &self.recent_notes, self.recent_notes_more);
+        write_stack(
+            &mut output,
+            &self.stack,
+            self.stack_incomplete,
+            self.stack_more,
+        );
         write_inventory(&mut output, self.inventory);
         output
     }
@@ -685,23 +749,27 @@ fn write_issue_bucket(output: &mut String, heading: &str, issues: &[IssueLine], 
     output.push('\n');
 }
 
-fn write_recent_notes(output: &mut String, notes: &[NoteLine]) {
+fn write_recent_notes(output: &mut String, notes: &[NoteLine], more: usize) {
     output.push_str("## Recent decisions\n");
-    if notes.is_empty() {
+    if notes.is_empty() && more == 0 {
         output.push_str("_none_\n");
-    } else {
-        for note in notes {
-            output.push_str("- ");
-            output.push_str(&note_markdown(note));
-            output.push('\n');
-        }
+        return;
+    }
+    for note in notes {
+        output.push_str("- ");
+        output.push_str(&note_markdown(note));
+        output.push('\n');
+    }
+    if more > 0 {
+        writeln!(output, "- … +{more} more (use `ptrack note list`)")
+            .expect("writing to String cannot fail");
     }
 }
 
 /// Writes the discovered stack, omitting the section entirely when no scan has
 /// run: an empty heading would read as "this project has no code".
-fn write_stack(output: &mut String, projects: &[StackProject], incomplete: bool) {
-    if projects.is_empty() {
+fn write_stack(output: &mut String, projects: &[StackProject], incomplete: bool, more: usize) {
+    if projects.is_empty() && more == 0 {
         return;
     }
     output.push_str("\n## Stack\n");
@@ -729,6 +797,10 @@ fn write_stack(output: &mut String, projects: &[StackProject], incomplete: bool)
     }
     if incomplete {
         output.push_str("_partial: the tracked-file scan hit its path cap_\n");
+    }
+    if more > 0 {
+        writeln!(output, "- … +{more} more projects not shown")
+            .expect("writing to String cannot fail");
     }
 }
 
@@ -881,16 +953,21 @@ pub(crate) fn note_line(note: &Note) -> NoteLine {
     }
 }
 
+/// Renders one note row. The body is run through [`view_body`] on the way out,
+/// so no surface that renders a note row can leak a raw stored body: the
+/// digest pre-applies the same rules (they are idempotent), while drill-down
+/// views and search reach this helper with stored text.
 pub(crate) fn note_markdown(note: &NoteLine) -> String {
     let kind = if note.kind.is_empty() {
         String::new()
     } else {
         format!("[{}] ", note.kind)
     };
+    let body = view_body(&note.body);
     if note.target_id == 0 {
-        format!("{kind}({}) {}", note.target, note.body)
+        format!("{kind}({}) {}", note.target, body)
     } else {
-        format!("{kind}({} #{}) {}", note.target, note.target_id, note.body)
+        format!("{kind}({} #{}) {}", note.target, note.target_id, body)
     }
 }
 

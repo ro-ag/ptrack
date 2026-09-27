@@ -408,15 +408,16 @@ impl UpdateRuntime {
             return Err("updates are unavailable".to_owned());
         }
         let client = Client::new().map_err(|_| "updates are unavailable".to_owned())?;
+        let current_version: String = current_version.into();
         Ok(Self::with_backend(
-            current_version.into(),
+            current_version.clone(),
             target,
             root,
             preferences,
             event_sink,
             Arc::new(ProductionUpdateBackend {
                 client,
-                installer: Installer::new(),
+                installer: Installer::new().with_current_version(current_version),
             }),
         ))
     }

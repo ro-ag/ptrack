@@ -339,6 +339,59 @@ async fn manager_defensively_owns_launch_data_and_validates_cwd_and_env() {
 }
 
 #[tokio::test]
+async fn per_launch_environment_carries_the_denylist_except_for_host_keys() {
+    let root = TempDirectory::new();
+    let starts = Arc::new(Mutex::new(Vec::new()));
+    let factory = Arc::new(ManagerFactory {
+        starts: Arc::clone(&starts),
+    });
+    let executable = if cfg!(windows) { "cmd.exe" } else { "/bin/sh" };
+    let manager = Manager::new(&root.0, vec![profile(executable)], factory)
+        .await
+        .unwrap();
+
+    let host = BTreeMap::from([
+        (
+            "PTRACK_AGENT_EVENT_TOKEN_V1".to_owned(),
+            "opaque".to_owned(),
+        ),
+        (
+            "PTRACK_LAUNCH_CONTEXT_V1".to_owned(),
+            "context".to_owned(),
+        ),
+    ]);
+    manager
+        .create_with_env("shell-default", None, 24, 80, &host)
+        .unwrap();
+    let launch = starts.lock().unwrap()[0].clone();
+    assert!(
+        launch
+            .env
+            .iter()
+            .any(|entry| entry == "PTRACK_AGENT_EVENT_TOKEN_V1=opaque")
+    );
+    assert!(
+        launch
+            .env
+            .iter()
+            .any(|entry| entry == "PTRACK_LAUNCH_CONTEXT_V1=context")
+    );
+
+    for key in [
+        "PTRACK_AGENT_EVENT_TOKEN_V2",
+        "ptrack_launch_context_v1",
+        "DB_PASSWORD",
+    ] {
+        let hostile = BTreeMap::from([(key.to_owned(), "value".to_owned())]);
+        let error = manager
+            .create_with_env("shell-default", None, 24, 80, &hostile)
+            .unwrap_err();
+        assert_eq!(error.kind(), ManagerErrorKind::Launch, "{key}");
+    }
+    manager.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn synchronous_shutdown_request_fences_admission_and_remains_joinable() {
     let root = TempDirectory::new();
     let manager = Manager::new(
@@ -469,5 +522,29 @@ async fn a_ticket_for_an_exited_session_says_so() {
         serde_json::to_value(&ticket).unwrap()["state"],
         serde_json::json!("exited")
     );
+    manager.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn snapshot_callback_may_reenter_the_manager() {
+    let root = TempDirectory::new();
+    let manager = Manager::new(
+        &root.0,
+        vec![profile(if cfg!(windows) { "cmd.exe" } else { "/bin/sh" })],
+        Arc::new(ExitedFactory),
+    )
+    .await
+    .unwrap();
+    let session = manager.create("shell-default", None, 24, 80).unwrap();
+    let session_id = session.id().to_owned();
+    // The callback re-enters Manager. This deadlocks if it still runs under the
+    // session-map lock, which is a non-reentrant std::sync::Mutex.
+    let reentered = manager
+        .with_exact_session_snapshot(8, |sessions| {
+            assert!(!sessions.is_empty());
+            manager.get(&session_id).map(|s| s.id().to_owned())
+        })
+        .unwrap();
+    assert_eq!(reentered.unwrap(), session_id);
     manager.shutdown().await.unwrap();
 }

@@ -1,16 +1,45 @@
+use std::borrow::Cow;
 use std::io::Write;
 
+use ptrack_core::is_forbidden_control;
 use serde::Serialize;
 
 use crate::error::CliError;
 
+/// Neutralizes terminal escapes and other invisible controls in one output
+/// line before it reaches a terminal.
+///
+/// Line breaks and tabs are structural whitespace real output already
+/// contains — a goal, summary, or note body spans lines by design — so they
+/// pass through. Every other character `is_forbidden_control` refuses (C0/C1
+/// including CR and ESC, the line and paragraph separators, the bidi
+/// controls, and the zero-width and tag characters) becomes a space. Stored
+/// text is untrusted: a record written before validation existed must not be
+/// able to repaint a terminal, forge a line, or hide part of what it prints.
+fn sanitize(value: &str) -> Cow<'_, str> {
+    let forbidden = |character: char| {
+        is_forbidden_control(character) && character != '\n' && character != '\t'
+    };
+    if value.chars().any(forbidden) {
+        Cow::Owned(
+            value
+                .chars()
+                .map(|character| if forbidden(character) { ' ' } else { character })
+                .collect(),
+        )
+    } else {
+        Cow::Borrowed(value)
+    }
+}
+
 pub fn text(output: &mut dyn Write, value: &str) -> Result<(), CliError> {
-    output.write_all(value.as_bytes())?;
+    output.write_all(sanitize(value).as_bytes())?;
     Ok(())
 }
 
 pub fn line(output: &mut dyn Write, value: impl std::fmt::Display) -> Result<(), CliError> {
-    writeln!(output, "{value}")?;
+    let value = value.to_string();
+    writeln!(output, "{}", sanitize(&value))?;
     Ok(())
 }
 

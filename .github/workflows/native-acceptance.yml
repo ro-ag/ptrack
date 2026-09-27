@@ -6,6 +6,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/native-acceptance.yml"
+      - ".github/workflows/release.yml"
       - "Cargo.lock"
       - "Cargo.toml"
       - "crates/**"
@@ -18,14 +19,13 @@ on:
       - "build/**"
       - "assets/brand/**"
       - "docs/help/**"
-      - "docs/rust-parity-matrix.md"
       - "docs/terminal-acceptance.md"
-      - "docs/updater-acceptance.md"
   push:
     branches:
       - main
     paths:
       - ".github/workflows/native-acceptance.yml"
+      - ".github/workflows/release.yml"
       - "Cargo.lock"
       - "Cargo.toml"
       - "crates/**"
@@ -38,9 +38,7 @@ on:
       - "build/**"
       - "assets/brand/**"
       - "docs/help/**"
-      - "docs/rust-parity-matrix.md"
       - "docs/terminal-acceptance.md"
-      - "docs/updater-acceptance.md"
   workflow_dispatch:
 
 permissions:
@@ -139,6 +137,7 @@ jobs:
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master 2026-08-05
         with:
           toolchain: "1.89.0"
+          components: clippy
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
@@ -181,6 +180,13 @@ jobs:
             -p ptrack-store \
             -p ptrack-terminal \
             -p ptrack-updater
+
+      # Windows-only: Linux workspace clippy already runs in the portable job,
+      # but Windows-only cfg code is never linted without a Windows run.
+      - name: Clippy on the native Windows host
+        if: runner.os == 'Windows'
+        shell: bash
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Build and smoke Linux candidate
         if: runner.os == 'Linux'

@@ -708,6 +708,26 @@ fn safe_profile_environment_entry(key: &str, value: &str) -> bool {
     .any(|marker| upper.contains(marker))
 }
 
+/// The per-launch keys the launcher sets on its own authority to wire agent
+/// events and the launch context. They are the one `PTRACK_*` exception to
+/// the environment denylist, matched exactly: a case variant is still a
+/// forbidden override.
+pub(crate) const HOST_LAUNCH_ENVIRONMENT_KEYS: [&str; 3] = [
+    "PTRACK_AGENT_EVENT_ENDPOINT_V1",
+    "PTRACK_AGENT_EVENT_TOKEN_V1",
+    "PTRACK_LAUNCH_CONTEXT_V1",
+];
+
+/// Whether a per-launch environment override may enter the terminal. The
+/// profile denylist applies in full — `PTRACK_*` and credential-named keys
+/// stay the host's alone — except for [`HOST_LAUNCH_ENVIRONMENT_KEYS`].
+pub(crate) fn safe_launch_environment_entry(key: &str, value: &str) -> bool {
+    if !safe_environment_entry(key, value) {
+        return false;
+    }
+    HOST_LAUNCH_ENVIRONMENT_KEYS.contains(&key) || safe_profile_environment_entry(key, value)
+}
+
 fn is_stable_name(value: &str) -> bool {
     let mut bytes = value.bytes();
     bytes
@@ -754,9 +774,7 @@ fn look_path(name: &str) -> io::Result<PathBuf> {
             .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".to_owned())
             .split(';')
         {
-            if let Ok(path) =
-                executable_path(&candidate.with_extension(extension.trim_start_matches('.')))
-            {
+            if let Ok(path) = executable_path(&pathext_probe(&candidate, extension)) {
                 return Ok(path);
             }
         }
@@ -765,6 +783,20 @@ fn look_path(name: &str) -> io::Result<PathBuf> {
         io::ErrorKind::NotFound,
         format!("executable {name:?} not found"),
     ))
+}
+
+/// The file a `PATHEXT` probe asks the filesystem for. The extension is
+/// appended to the file name rather than replacing it: probing `my.tool` must
+/// ask for `my.tool.EXE`, not `my.EXE`.
+#[cfg(any(windows, test))]
+pub(crate) fn pathext_probe(candidate: &Path, extension: &str) -> PathBuf {
+    let extension = extension.trim().trim_start_matches('.');
+    let mut probe = candidate.as_os_str().to_owned();
+    if !extension.is_empty() {
+        probe.push(".");
+        probe.push(extension);
+    }
+    probe.into()
 }
 
 fn executable_path(path: &Path) -> io::Result<PathBuf> {

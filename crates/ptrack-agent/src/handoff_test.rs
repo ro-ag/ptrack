@@ -115,6 +115,18 @@ fn preview_drops_nbsp_separated_legacy_assigned_scalar_value() {
 }
 
 #[test]
+fn preview_drops_whitespace_variant_reasoning_summaries() {
+    let mut reasoning = event(1, EventKind::Summary, EventPhase::Completed);
+    reasoning.summary = "chain\nof\nthought was X".to_owned();
+    let mut spaced = event(2, EventKind::Summary, EventPhase::Completed);
+    spaced.summary = "internal  reasoning: steps".to_owned();
+    let value = build_handoff_preview(&run(), &[reasoning, spaced]);
+    assert!(value.included_event_ids.is_empty());
+    assert!(!value.text.contains("thought"), "{}", value.text);
+    assert!(!value.text.contains("reasoning"), "{}", value.text);
+}
+
+#[test]
 fn preview_applies_event_and_utf8_byte_limits() {
     let mut events = Vec::new();
     for sequence in 1..=10 {

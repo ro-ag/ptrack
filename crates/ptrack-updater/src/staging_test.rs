@@ -13,9 +13,11 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use zip::write::SimpleFileOptions;
 
+use super::signature::{RELEASE_SIGNING_PUBLIC_KEY, SIGNATURE_ASSET_NAME};
 use super::staging::{
-    StageKind, StagedUpdate, checksum_for, extract_tar_payload, extract_zip_payload,
-    hash_regular_file, load_stage, validate_download_url, validate_stage, write_stage_record,
+    StageKind, StagedUpdate, checksum_for, discard_stage, extract_tar_payload, extract_zip_payload,
+    hash_regular_file, load_stage, load_stage_with_key, validate_download_url, validate_stage,
+    write_stage_record,
 };
 use super::{Asset, Candidate, Client, Target, UpdateError};
 
@@ -280,8 +282,13 @@ fn linux_archive_stage_round_trips_and_rejects_payload_tampering() {
         kind: StageKind::LinuxBinary,
     };
     write_stage_record(&stage).unwrap();
+    let key_pair = test_key_pair(0x19);
+    write_signed_manifest(&root, &stage.asset_name, &stage.sha256, &key_pair);
     validate_stage(&cancellation, &stage).unwrap();
-    assert_eq!(load_stage(&cancellation, &root).unwrap(), stage);
+    assert_eq!(
+        load_stage_with_key(&cancellation, &root, &public_key(&key_pair)).unwrap(),
+        stage
+    );
 
     write_private_replace(&payload_path, &fake_elf(62));
     File::options()
@@ -342,8 +349,142 @@ fn durable_record_is_exact_bounded_json_and_unknown_fields_fail_closed() {
     );
     let tampered = exact.replacen("\"kind\"", "\"unknown\":true,\"kind\"", 1);
     write_private_replace(&stage.state_path, tampered.as_bytes());
-    assert!(load_stage(&cancellation, &root).is_err());
+    let key_pair = test_key_pair(0x23);
+    write_signed_manifest(&root, &stage.asset_name, &stage.sha256, &key_pair);
+    assert_eq!(
+        load_stage_with_key(&cancellation, &root, &public_key(&key_pair)).unwrap_err(),
+        UpdateError::InvalidStage
+    );
     cleanup(&root);
+}
+
+#[test]
+fn load_accepts_a_stage_whose_signed_manifest_is_intact() {
+    let cancellation = CancellationToken::new();
+    let root = private_temp_dir();
+    let (stage, key) = signed_linux_stage(&root);
+    assert_eq!(load_stage_with_key(&cancellation, &root, &key).unwrap(), stage);
+    cleanup(&root);
+}
+
+#[test]
+fn load_refuses_a_stage_whose_payload_and_record_were_rewritten_together() {
+    let cancellation = CancellationToken::new();
+    let root = private_temp_dir();
+    let (mut stage, key) = signed_linux_stage(&root);
+    // Same-UID tampering rewrites the installed payload and rewrites the
+    // unsigned record to match; only the signed manifest stays honest.
+    write_private_replace(&stage.payload_path, &fake_elf(62));
+    File::options()
+        .append(true)
+        .open(&stage.payload_path)
+        .unwrap()
+        .write_all(b"tamper")
+        .unwrap();
+    (stage.payload_sha256, stage.payload_size_bytes) =
+        hash_regular_file(&cancellation, &stage.payload_path, 128 << 20).unwrap();
+    fs::remove_file(&stage.state_path).unwrap();
+    write_stage_record(&stage).unwrap();
+    assert_eq!(
+        load_stage_with_key(&cancellation, &root, &key).unwrap_err(),
+        UpdateError::InvalidStage
+    );
+    cleanup(&root);
+}
+
+#[test]
+fn load_refuses_a_stage_whose_package_and_record_were_rewritten_together() {
+    let cancellation = CancellationToken::new();
+    let root = private_temp_dir();
+    let (mut stage, key) = signed_linux_stage(&root);
+    make_tar(&stage.asset_path, &fake_elf(183));
+    fs::remove_file(&stage.payload_path).unwrap();
+    extract_tar_payload(&cancellation, &stage.asset_path, &stage.payload_path).unwrap();
+    (stage.sha256, stage.size_bytes) =
+        hash_regular_file(&cancellation, &stage.asset_path, 512 << 20).unwrap();
+    (stage.payload_sha256, stage.payload_size_bytes) =
+        hash_regular_file(&cancellation, &stage.payload_path, 128 << 20).unwrap();
+    fs::remove_file(&stage.state_path).unwrap();
+    write_stage_record(&stage).unwrap();
+    assert_eq!(
+        load_stage_with_key(&cancellation, &root, &key).unwrap_err(),
+        UpdateError::InvalidStage
+    );
+    cleanup(&root);
+}
+
+#[test]
+fn load_refuses_a_stage_without_the_manifest_signature() {
+    let cancellation = CancellationToken::new();
+    let root = private_temp_dir();
+    let (stage, key) = signed_linux_stage(&root);
+    fs::remove_file(root.join(SIGNATURE_ASSET_NAME)).unwrap();
+    assert_eq!(
+        load_stage_with_key(&cancellation, &root, &key).unwrap_err(),
+        UpdateError::InvalidSignature
+    );
+    write_signed_manifest(
+        &root,
+        &stage.asset_name,
+        &stage.sha256,
+        &test_key_pair(0x31),
+    );
+    fs::remove_file(root.join("checksums.txt")).unwrap();
+    assert_eq!(
+        load_stage_with_key(&cancellation, &root, &key).unwrap_err(),
+        UpdateError::InvalidSignature
+    );
+    cleanup(&root);
+}
+
+#[test]
+fn load_refuses_a_manifest_signed_by_another_key() {
+    let cancellation = CancellationToken::new();
+    let root = private_temp_dir();
+    let (_stage, key) = signed_linux_stage(&root);
+    assert_eq!(
+        load_stage_with_key(&cancellation, &root, &key).unwrap().root,
+        root
+    );
+    let other = test_key_pair(0x42);
+    assert_eq!(
+        load_stage_with_key(&cancellation, &root, &public_key(&other)).unwrap_err(),
+        UpdateError::InvalidSignature
+    );
+    // The public loader pins the compiled-in release key.
+    assert_eq!(
+        load_stage(&cancellation, &root).unwrap_err(),
+        UpdateError::InvalidSignature
+    );
+    assert_ne!(key, RELEASE_SIGNING_PUBLIC_KEY);
+    cleanup(&root);
+}
+
+#[test]
+fn discard_removes_a_private_stage_under_its_base() {
+    let base = private_temp_dir();
+    let root = base.join(".stage-0123456789abcdef0123456789abcdef");
+    fs::create_dir(&root).unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    discard_stage(&root).unwrap();
+    assert!(!root.exists());
+    cleanup(&base);
+}
+
+#[cfg(unix)]
+#[test]
+fn discard_refuses_a_stage_directory_outside_a_private_base() {
+    let base = private_temp_dir();
+    let outside = base.join("shared");
+    fs::create_dir(&outside).unwrap();
+    fs::set_permissions(&outside, fs::Permissions::from_mode(0o755)).unwrap();
+    let root = outside.join(".stage-0123456789abcdef0123456789abcdef");
+    fs::create_dir(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(discard_stage(&root), Err(UpdateError::InvalidStage));
+    assert!(root.exists(), "a stage outside the base was deleted");
+    cleanup(&base);
 }
 
 fn make_tar(path: &Path, payload: &[u8]) {
@@ -539,6 +680,47 @@ fn test_key_pair(seed: u8) -> Ed25519KeyPair {
 
 fn public_key(key_pair: &Ed25519KeyPair) -> [u8; 32] {
     key_pair.public_key().as_ref().try_into().unwrap()
+}
+
+/// Writes `checksums.txt` and its detached signature into `root`.
+fn write_signed_manifest(root: &Path, asset_name: &str, digest: &str, key_pair: &Ed25519KeyPair) {
+    let manifest = format!("{digest}  {asset_name}\n").into_bytes();
+    let signature = key_pair.sign(&manifest);
+    write_private(&root.join("checksums.txt"), &manifest);
+    write_private(&root.join(SIGNATURE_ASSET_NAME), signature.as_ref());
+}
+
+/// A complete Linux stage with a signed manifest chain in the stage root.
+fn signed_linux_stage(root: &Path) -> (StagedUpdate, [u8; 32]) {
+    let cancellation = CancellationToken::new();
+    let version = "1.2.5";
+    let asset_name = format!("ptrack_{version}_linux_amd64.tar.gz");
+    let asset_path = root.join(&asset_name);
+    make_tar(&asset_path, &fake_elf(62));
+    let payload_path = root.join("ptrack");
+    extract_tar_payload(&cancellation, &asset_path, &payload_path).unwrap();
+    let (sha256, size_bytes) = hash_regular_file(&cancellation, &asset_path, 512 << 20).unwrap();
+    let (payload_sha256, payload_size_bytes) =
+        hash_regular_file(&cancellation, &payload_path, 128 << 20).unwrap();
+    let stage = StagedUpdate {
+        root: root.to_path_buf(),
+        asset_path,
+        payload_path,
+        state_path: root.join("state.json"),
+        version: version.to_owned(),
+        asset_name,
+        os: "linux".to_owned(),
+        arch: "amd64".to_owned(),
+        sha256,
+        size_bytes,
+        payload_sha256,
+        payload_size_bytes,
+        kind: StageKind::LinuxBinary,
+    };
+    write_stage_record(&stage).unwrap();
+    let key_pair = test_key_pair(0x31);
+    write_signed_manifest(root, &stage.asset_name, &stage.sha256, &key_pair);
+    (stage, public_key(&key_pair))
 }
 
 fn linux_amd64() -> Target {

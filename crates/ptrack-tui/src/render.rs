@@ -1145,25 +1145,39 @@ pub(crate) fn detail_scroll_max(model: &Model) -> usize {
         .saturating_sub(viewport)
 }
 
+/// One logical detail row. A section header is structural, never a text
+/// prefix, so untrusted content starting with a marker byte cannot forge a
+/// section: every stored string stays an ordinary text row.
+enum DetailRow {
+    Section(&'static str),
+    Text(Line<'static>),
+}
+
+fn text_row(line: Line<'static>) -> DetailRow {
+    DetailRow::Text(line)
+}
+
 fn detail_display_rows(model: &Model, width: usize) -> Vec<Line<'static>> {
     let (_, logical) = detail_content(model);
     let mut rows = Vec::new();
     let mut section_open = false;
-    for (index, line) in logical.iter().enumerate() {
-        let plain = line.to_string();
-        if let Some(name) = plain.strip_prefix('\u{1e}') {
-            if section_open {
-                rows.push(section_bottom(width));
+    for (index, row) in logical.iter().enumerate() {
+        let line = match row {
+            DetailRow::Section(name) => {
+                if section_open {
+                    rows.push(section_bottom(width));
+                }
+                rows.push(section_top(name, width));
+                section_open = true;
+                continue;
             }
-            rows.push(section_top(name, width));
-            section_open = true;
-            continue;
-        }
+            DetailRow::Text(line) => line,
+        };
         if section_open
-            && plain.is_empty()
+            && line.to_string().is_empty()
             && logical
                 .get(index + 1)
-                .is_some_and(|next| next.to_string().starts_with('\u{1e}'))
+                .is_some_and(|next| matches!(next, DetailRow::Section(_)))
         {
             continue;
         }
@@ -1187,44 +1201,47 @@ fn detail_display_rows(model: &Model, width: usize) -> Vec<Line<'static>> {
 }
 
 #[allow(clippy::too_many_lines)]
-fn detail_content(model: &Model) -> (String, Vec<Line<'static>>) {
+fn detail_content(model: &Model) -> (String, Vec<DetailRow>) {
     match model.detail.expect("detail exists") {
         DetailTarget::Task(id) => {
             let Some(task) = model.snapshot.task(id) else {
-                return (format!("Task #{id}"), vec![missing("task")]);
+                return (format!("Task #{id}"), vec![text_row(missing("task"))]);
             };
             let mut rows = vec![
-                Line::styled(
+                text_row(Line::styled(
                     task.title.clone(),
                     Style::default()
                         .fg(task_color(task.status))
                         .add_modifier(Modifier::BOLD),
-                ),
-                Line::raw(""),
-                line_kv(
+                )),
+                text_row(Line::raw("")),
+                text_row(line_kv(
                     "Status",
                     &format!("{} {}", task_icon(task.status), task.status),
-                ),
+                )),
             ];
             if let Some(reason) = task.hold_reason.as_deref() {
-                rows.push(line_kv("On hold", &format!("⏸ {reason}")));
+                rows.push(text_row(line_kv("On hold", &format!("⏸ {reason}"))));
             }
             if !task.deps.is_empty() {
                 let open = open_task_deps(&model.snapshot, task);
-                rows.push(line_kv("Deps", &deps_line(&task.deps, &open)));
+                rows.push(text_row(line_kv("Deps", &deps_line(&task.deps, &open))));
             }
             if let Some(plan) = model.snapshot.plan(task.plan_id) {
-                rows.push(line_kv("Plan", &format!("#{} {}", plan.id, plan.title)));
+                rows.push(text_row(line_kv(
+                    "Plan",
+                    &format!("#{} {}", plan.id, plan.title),
+                )));
             }
             rows.extend([
-                line_kv("Created", &format_timestamp(task.created_at)),
-                line_kv("Updated", &format_timestamp(task.updated_at)),
-                Line::raw(""),
-                section("Notes"),
+                text_row(line_kv("Created", &format_timestamp(task.created_at))),
+                text_row(line_kv("Updated", &format_timestamp(task.updated_at))),
+                text_row(Line::raw("")),
+                DetailRow::Section("Notes"),
             ]);
             let notes: Vec<_> = model.snapshot.notes_for_task(id).collect();
             if notes.is_empty() {
-                rows.push(missing("none"));
+                rows.push(text_row(missing("none")));
             } else {
                 rows.extend(notes.into_iter().map(|note| {
                     let kind = if note.kind == MemoryKind::Legacy {
@@ -1232,17 +1249,17 @@ fn detail_content(model: &Model) -> (String, Vec<Line<'static>>) {
                     } else {
                         format!("[{}] ", note.kind)
                     };
-                    Line::from(vec![
+                    text_row(Line::from(vec![
                         Span::raw("• "),
                         Span::styled(
                             format!("{}  ", format_timestamp(note.created_at)),
                             Style::default().fg(DIM),
                         ),
                         Span::styled(format!("{kind}{}", note.body), Style::default().fg(TEXT)),
-                    ])
+                    ]))
                 }));
             }
-            rows.extend([Line::raw(""), section("Commits")]);
+            rows.extend([text_row(Line::raw("")), DetailRow::Section("Commits")]);
             let commits: Vec<_> = model
                 .snapshot
                 .commits
@@ -1251,61 +1268,61 @@ fn detail_content(model: &Model) -> (String, Vec<Line<'static>>) {
                 .filter(|commit| commit.task_id == id)
                 .collect();
             if commits.is_empty() {
-                rows.push(missing("none"));
+                rows.push(text_row(missing("none")));
             } else {
                 rows.extend(commits.into_iter().map(|commit| {
                     let sha: String = commit.sha.chars().take(8).collect();
-                    Line::from(vec![
+                    text_row(Line::from(vec![
                         Span::raw("• "),
                         Span::styled(sha, Style::default().fg(AMBER)),
                         Span::styled(format!("  {}", commit.subject), Style::default().fg(TEXT)),
-                    ])
+                    ]))
                 }));
             }
             (format!("Task #{id}"), rows)
         }
         DetailTarget::Plan(id) => {
             let Some(plan) = model.snapshot.plan(id) else {
-                return (format!("Plan #{id}"), vec![missing("plan")]);
+                return (format!("Plan #{id}"), vec![text_row(missing("plan"))]);
             };
             let mut rows = vec![
-                Line::styled(
+                text_row(Line::styled(
                     plan.title.clone(),
                     Style::default()
                         .fg(plan_color(plan.status))
                         .add_modifier(Modifier::BOLD),
-                ),
-                Line::raw(""),
-                line_kv("Status", plan.status.as_str()),
+                )),
+                text_row(Line::raw("")),
+                text_row(line_kv("Status", plan.status.as_str())),
             ];
             if let Some(reason) = plan.hold_reason.as_deref() {
-                rows.push(line_kv("On hold", &format!("⏸ {reason}")));
+                rows.push(text_row(line_kv("On hold", &format!("⏸ {reason}"))));
             }
             if !plan.deps.is_empty() {
                 let open = open_plan_deps(&model.snapshot, plan);
-                rows.push(line_kv("Deps", &deps_line(&plan.deps, &open)));
+                rows.push(text_row(line_kv("Deps", &deps_line(&plan.deps, &open))));
             }
             if let Some(owner) = plan.claim_owner.as_deref() {
                 let name = model.snapshot.meta.actor_name(owner).unwrap_or(owner);
-                rows.push(line_kv("Claimed by", &format!("🔒 {name}")));
+                rows.push(text_row(line_kv("Claimed by", &format!("🔒 {name}"))));
             }
             if let Some(milestone) = model.snapshot.milestone(plan.milestone_id) {
-                rows.push(line_kv(
+                rows.push(text_row(line_kv(
                     "Milestone",
                     &format!("#{} {}", milestone.id, milestone.title),
-                ));
+                )));
             }
             rows.extend([
-                line_kv("Created", &format_timestamp(plan.created_at)),
-                Line::raw(""),
-                section("Tasks"),
+                text_row(line_kv("Created", &format_timestamp(plan.created_at))),
+                text_row(Line::raw("")),
+                DetailRow::Section("Tasks"),
             ]);
             let tasks: Vec<_> = model.snapshot.tasks_for_plan(id).collect();
             if tasks.is_empty() {
-                rows.push(missing("none"));
+                rows.push(text_row(missing("none")));
             } else {
                 rows.extend(tasks.into_iter().map(|task| {
-                    Line::from(vec![
+                    text_row(Line::from(vec![
                         Span::raw("  "),
                         Span::styled(
                             task_icon(task.status),
@@ -1317,13 +1334,13 @@ fn detail_content(model: &Model) -> (String, Vec<Line<'static>>) {
                             format!("#{} {}", task.id, task.title),
                             Style::default().fg(TEXT),
                         ),
-                    ])
+                    ]))
                 }));
             }
-            rows.extend([Line::raw(""), section("Notes")]);
+            rows.extend([text_row(Line::raw("")), DetailRow::Section("Notes")]);
             let notes: Vec<_> = model.snapshot.notes_for_plan(id).collect();
             if notes.is_empty() {
-                rows.push(missing("none"));
+                rows.push(text_row(missing("none")));
             } else {
                 rows.extend(notes.into_iter().map(|note| {
                     let kind = if note.kind == MemoryKind::Legacy {
@@ -1331,17 +1348,17 @@ fn detail_content(model: &Model) -> (String, Vec<Line<'static>>) {
                     } else {
                         format!("[{}] ", note.kind)
                     };
-                    Line::from(vec![
+                    text_row(Line::from(vec![
                         Span::raw("• "),
                         Span::styled(
                             format!("{}  ", format_timestamp(note.created_at)),
                             Style::default().fg(DIM),
                         ),
                         Span::styled(format!("{kind}{}", note.body), Style::default().fg(TEXT)),
-                    ])
+                    ]))
                 }));
             }
-            rows.extend([Line::raw(""), section("Commits")]);
+            rows.extend([text_row(Line::raw("")), DetailRow::Section("Commits")]);
             let commits: Vec<_> = model
                 .snapshot
                 .commits
@@ -1350,27 +1367,27 @@ fn detail_content(model: &Model) -> (String, Vec<Line<'static>>) {
                 .filter(|commit| commit.plan_id == id)
                 .collect();
             if commits.is_empty() {
-                rows.push(missing("none"));
+                rows.push(text_row(missing("none")));
             } else {
                 rows.extend(commits.into_iter().map(|commit| {
-                    Line::from(vec![
+                    text_row(Line::from(vec![
                         Span::raw("• "),
                         Span::styled(
                             commit.sha.chars().take(8).collect::<String>(),
                             Style::default().fg(AMBER),
                         ),
                         Span::styled(format!("  {}", commit.subject), Style::default().fg(TEXT)),
-                    ])
+                    ]))
                 }));
             }
             (format!("Plan #{id}"), rows)
         }
         DetailTarget::Milestone(id) => {
             let Some(milestone) = model.snapshot.milestone(id) else {
-                return (format!("Milestone #{id}"), vec![missing("milestone")]);
+                return (format!("Milestone #{id}"), vec![text_row(missing("milestone"))]);
             };
             let mut rows = vec![
-                Line::styled(
+                text_row(Line::styled(
                     milestone.title.clone(),
                     Style::default()
                         .fg(if milestone.status == MilestoneStatus::Done {
@@ -1379,26 +1396,26 @@ fn detail_content(model: &Model) -> (String, Vec<Line<'static>>) {
                             TEXT
                         })
                         .add_modifier(Modifier::BOLD),
-                ),
-                Line::raw(""),
-                line_kv("Status", milestone.status.as_str()),
+                )),
+                text_row(Line::raw("")),
+                text_row(line_kv("Status", milestone.status.as_str())),
             ];
             if let Some(date) = milestone.due.stored_date() {
-                rows.push(line_kv("Due", &date.to_string()));
+                rows.push(text_row(line_kv("Due", &date.to_string())));
             }
-            rows.extend([Line::raw(""), section("Plans")]);
+            rows.extend([text_row(Line::raw("")), DetailRow::Section("Plans")]);
             let mut found = false;
             let mut done = 0;
             let mut open = 0;
             for plan in model.snapshot.plans_for_milestone(id) {
                 found = true;
-                rows.push(Line::from(vec![
+                rows.push(text_row(Line::from(vec![
                     Span::styled(
                         format!("  #{} {} ", plan.id, plan.title),
                         Style::default().fg(TEXT),
                     ),
                     Span::styled(format!("[{}]", plan.status), Style::default().fg(DIM)),
-                ]));
+                ])));
                 for task in model.snapshot.tasks_for_plan(plan.id) {
                     if task.status == TaskStatus::Done {
                         done += 1;
@@ -1408,46 +1425,46 @@ fn detail_content(model: &Model) -> (String, Vec<Line<'static>>) {
                 }
             }
             if !found {
-                rows.push(missing("none"));
+                rows.push(text_row(missing("none")));
             }
-            rows.push(Line::raw(""));
-            rows.push(Line::styled(
+            rows.push(text_row(Line::raw("")));
+            rows.push(text_row(Line::styled(
                 format!("tasks: {done} done · {open} open"),
                 Style::default().fg(DIM),
-            ));
+            )));
             (format!("Milestone #{id}"), rows)
         }
         DetailTarget::Issue(id) => {
             let Some(issue) = model.snapshot.issue(id) else {
-                return (format!("Issue #{id}"), vec![missing("issue")]);
+                return (format!("Issue #{id}"), vec![text_row(missing("issue"))]);
             };
             let mut rows = vec![
-                Line::styled(
+                text_row(Line::styled(
                     issue.title.clone(),
                     Style::default()
                         .fg(severity_color(issue.severity))
                         .add_modifier(Modifier::BOLD),
-                ),
-                Line::raw(""),
-                line_kv("Status", issue.status.as_str()),
-                line_kv("Severity", issue.severity.as_str()),
+                )),
+                text_row(Line::raw("")),
+                text_row(line_kv("Status", issue.status.as_str())),
+                text_row(line_kv("Severity", issue.severity.as_str())),
             ];
             if let Some(task) = model.snapshot.task(issue.task_id) {
-                rows.push(line_kv("Task", &format!("#{} {}", task.id, task.title)));
+                rows.push(text_row(line_kv("Task", &format!("#{} {}", task.id, task.title))));
             }
             rows.extend([
-                line_kv("Created", &format_timestamp(issue.created_at)),
-                Line::raw(""),
-                section("Explanation"),
+                text_row(line_kv("Created", &format_timestamp(issue.created_at))),
+                text_row(Line::raw("")),
+                DetailRow::Section("Explanation"),
             ]);
-            rows.push(if issue.body.is_empty() {
+            rows.push(text_row(if issue.body.is_empty() {
                 Line::styled(
                     "  (none — add with 'ptrack issue add ... --body \"...\"')",
                     Style::default().fg(DIM),
                 )
             } else {
                 Line::styled(issue.body.clone(), Style::default().fg(TEXT))
-            });
+            }));
             (format!("Issue #{id}"), rows)
         }
     }
@@ -1708,10 +1725,6 @@ fn line_kv(key_name: &str, value: &str) -> Line<'static> {
     ])
 }
 
-fn section(name: &str) -> Line<'static> {
-    Line::raw(format!("\u{1e}{name}"))
-}
-
 fn section_top(name: &str, width: usize) -> Line<'static> {
     if width < 6 {
         return Line::styled(
@@ -1862,6 +1875,31 @@ fn wrap_plain(value: &str, width: usize) -> Vec<String> {
         .collect()
 }
 
+/// Mirrors `ptrack_core`'s forbidden set (`is_forbidden_control` there is not
+/// exported): control characters and the invisible/bidi ones that reorder or
+/// hide what a line displays as. Stored strings are untrusted, and the buffer
+/// only strips control characters at paint time, so bidi and zero-width
+/// characters are dropped here instead — once, at the model→render boundary.
+pub(crate) fn is_forbidden_control(value: char) -> bool {
+    value.is_control()
+        || matches!(
+            value,
+            '\u{2028}'
+                | '\u{2029}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{061c}'
+                | '\u{200b}'..='\u{200f}'
+                | '\u{feff}'
+                | '\u{2060}'
+                | '\u{180e}'
+                | '\u{e0000}'..='\u{e007f}'
+        )
+}
+
+/// Wraps one logical row to `width` display cells, dropping the characters
+/// [`is_forbidden_control`] rejects. Every detail row funnels through here,
+/// so no stored string can smuggle a control or bidi override to the buffer.
 fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
     if width == 0 {
         return vec![Line::raw("")];
@@ -1873,6 +1911,9 @@ fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
     for span in line.spans {
         let style = base_style.patch(span.style);
         for character in span.content.chars() {
+            if is_forbidden_control(character) {
+                continue;
+            }
             let character_width = character.width().unwrap_or(0);
             if used > 0 && used + character_width > width {
                 rows.push(Line::from(std::mem::take(&mut spans)));

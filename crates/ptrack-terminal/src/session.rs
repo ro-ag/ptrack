@@ -33,6 +33,9 @@ const CLOSE_EXIT_WAIT: Duration = Duration::from_secs(5);
 /// Upper bound on joining one worker thread. A reader stuck in a platform
 /// read that cannot be cancelled is detached rather than joined forever.
 const WORKER_JOIN_WAIT: Duration = Duration::from_secs(2);
+/// How long a full live-output queue blocks the reader before the chunk is
+/// dropped; the replay ring retains the history for the next attach.
+pub(crate) const LIVE_OUTPUT_DELIVERY_GRACE: Duration = Duration::from_millis(250);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -218,6 +221,9 @@ impl ReplayRing {
 #[allow(clippy::struct_excessive_bools)]
 struct SessionInner {
     state: SessionState,
+    /// A `start` call owns the launch. Flipped under the same lock hold as
+    /// the state check so a concurrent `start` can never spawn a second PTY.
+    start_claimed: bool,
     process: Option<Arc<dyn PtyProcess>>,
     pid: u32,
     rows: u16,
@@ -307,6 +313,7 @@ impl Session {
             options,
             inner: Mutex::new(SessionInner {
                 state: SessionState::Starting,
+                start_claimed: false,
                 process: None,
                 pid: 0,
                 rows,
@@ -345,7 +352,7 @@ impl Session {
     /// Returns the PTY start error and transitions the session to `failed`.
     pub fn start(self: &Arc<Self>) -> Result<(), SessionError> {
         {
-            let inner = self
+            let mut inner = self
                 .inner
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -355,6 +362,10 @@ impl Session {
                     inner.state.to_string()
                 )));
             }
+            if inner.start_claimed {
+                return Err(SessionError::new("terminal session is already starting"));
+            }
+            inner.start_claimed = true;
         }
         let process = match self.factory.start(self.request.clone()) {
             Ok(process) => Arc::<dyn PtyProcess>::from(process),
@@ -1060,19 +1071,7 @@ impl Session {
             inner.live_sender.clone()
         };
         if let Some(sender) = sender {
-            let mut pending = output;
-            loop {
-                match sender.try_send(pending) {
-                    Ok(()) | Err(tokio_mpsc::error::TrySendError::Closed(_)) => break,
-                    Err(tokio_mpsc::error::TrySendError::Full(output)) => {
-                        if self.closing.load(Ordering::Acquire) {
-                            break;
-                        }
-                        pending = output;
-                        thread::sleep(Duration::from_millis(2));
-                    }
-                }
-            }
+            deliver_chunk(&sender, output, &self.closing);
         }
     }
 
@@ -1179,6 +1178,31 @@ impl StreamSession for Session {
     fn write_input(&self, lease: u64, input: &[u8]) -> Result<(), StreamSessionError> {
         self.write_input(lease, input)
             .map_err(|error| StreamSessionError(error.to_string()))
+    }
+}
+
+/// Offers one output chunk to a live consumer, waiting while its queue is
+/// full but never past [`LIVE_OUTPUT_DELIVERY_GRACE`] (or a closing session).
+/// Past the bound the chunk is dropped: the replay ring still holds the
+/// history, so an attach can recover it. Returns whether it was delivered.
+pub(crate) fn deliver_chunk(
+    sender: &tokio_mpsc::Sender<Vec<u8>>,
+    mut pending: Vec<u8>,
+    closing: &AtomicBool,
+) -> bool {
+    let deadline = Instant::now() + LIVE_OUTPUT_DELIVERY_GRACE;
+    loop {
+        match sender.try_send(pending) {
+            Ok(()) => return true,
+            Err(tokio_mpsc::error::TrySendError::Closed(_)) => return false,
+            Err(tokio_mpsc::error::TrySendError::Full(output)) => {
+                if closing.load(Ordering::Acquire) || Instant::now() >= deadline {
+                    return false;
+                }
+                pending = output;
+                thread::sleep(Duration::from_millis(2));
+            }
+        }
     }
 }
 

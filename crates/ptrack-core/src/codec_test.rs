@@ -408,8 +408,11 @@ fn go_encoder_golden_payloads_decode_and_reencode_exactly() {
             "000000000000000600000001690000000162020400000000000000030100000000000000010000000200000e100100000000000000010000000200000e10",
         ),
         (
+            // The sha is a minimal in-domain value (`abcd`): the payload schema
+            // is what this golden pins, not a short test id. `Validate for
+            // Commit` rejects anything outside 4-64 hex digits.
             RecordKind::Commit,
-            "000000000000000700000001610000000163000000000000000200000000000000030100000000000000010000000200000e10",
+            "000000000000000700000004616263640000000163000000000000000200000000000000030100000000000000010000000200000e10",
         ),
         (
             RecordKind::Capability,

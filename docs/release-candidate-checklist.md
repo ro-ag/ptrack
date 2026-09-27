@@ -66,8 +66,8 @@ Releases publish via GitHub Actions on tag push only
 
 ## 3. Release contract and artifact validation
 
-- [ ] Run the release contract and help-check unit tests (the same pair CI
-      runs in the `test` job):
+- [ ] Run the release contract and help-check unit tests (the same pair the
+      `portable` job runs in `.github/workflows/native-acceptance.yml`):
 
   ```sh
   python3 -B -m unittest tools.help_check_test tools.release_contract_test
@@ -76,12 +76,12 @@ Releases publish via GitHub Actions on tag push only
   Expected: `OK`.
 - [ ] `validate-dist` and `checksums` are **CI-only**, not runnable from
       this checklist's local artifacts: `validate-dist` requires the dist
-      directory to contain exactly all 8 package names across the six
-      release targets (`tools/release_contract.py:141-145`), and
-      `checksums` calls `validate-dist` first. Section 5 below only
+      directory to contain exactly all 6 package names across the five
+      release targets (`tools/release_contract.py`'s `package_names()`),
+      and `checksums` calls `validate-dist` first. Section 5 below only
       produces the host machine's own DMG + tar.gz, so both steps fail
       closed on a local run. They run for real in the `release` job
-      against the complete downloaded artifact set from all six `build`
+      against the complete downloaded artifact set from all five `build`
       matrix legs:
 
   ```sh
@@ -165,10 +165,10 @@ Releases publish via GitHub Actions on tag push only
 
 ## 6. Updater and manual acceptance pointers
 
-- [ ] Updater-specific automated + manual acceptance: run the minimal
-      command block in `docs/updater-acceptance.md` and, when updater or
-      About & Updates behavior changed, walk its app-behavior and native
-      handoff sections.
+- [ ] Updater-specific automated + manual acceptance: run the automated
+      updater gates and walk the app-behavior checklist in
+      `docs/updater-security.md`'s acceptance section when updater or
+      About & Updates behavior changed.
 - [ ] Terminal-specific manual acceptance: when PTY/terminal/renderer
       behavior changed, walk the interactive matrix in
       `docs/terminal-acceptance.md`.
@@ -177,6 +177,23 @@ Releases publish via GitHub Actions on tag push only
 - [ ] VoiceOver/screen-reader acceptance is tracked separately (see
       `docs/terminal-acceptance.md`'s AX-1 row and the updater's app
       behavior section) and is not a release-candidate gating step here.
+
+## 7. Release pipeline gates (enforced in CI on tag push)
+
+These gates run in `.github/workflows/release.yml` and cannot be substituted
+by this checklist:
+
+- [ ] The `validate` job accepts the pushed tag only when the tag commit is
+      an ancestor of `origin/main` **and** that exact commit has a green
+      `native-acceptance` run on `main`.
+- [ ] macOS acceptance is label-gated on pull requests: the `native-macos`
+      job in `.github/workflows/native-acceptance.yml` runs only when the PR
+      carries the `native-acceptance-approved` label (it always runs on push
+      to `main`).
+- [ ] There is no unsigned macOS path: the release `build` job fails closed
+      unless the complete Developer ID signing and Apple notary credential
+      sets are present, and every published macOS package is signed (the DMG
+      is additionally notarized and stapled).
 
 ## Result record
 

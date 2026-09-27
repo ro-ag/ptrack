@@ -40,6 +40,15 @@ pub const MAX_HOLD_REASON_BYTES: usize = 1024;
 /// existed still loads, exactly like a payload from an older schema.
 pub const MAX_SUMMARY_BYTES: usize = 1_000;
 
+/// Maximum accepted UTF-8 bytes in one note or issue body.
+///
+/// A body is a working note or a small issue report, not a document store: the
+/// bound is the same 64 KiB the scratchpad grants a single text field, and it
+/// is enforced on write only, so a body written before the limit existed still
+/// loads. Without it the only ceiling on a single body is the codec's payload
+/// bound, which is orders of magnitude past what any reader renders.
+pub const MAX_BODY_BYTES: usize = 64 * 1024;
+
 /// A stable field-level reason a native record cannot be trusted.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidationError {
@@ -142,7 +151,8 @@ fn hold_reason_problem(reason: &str) -> Option<HoldReasonProblem> {
 /// mirror can smuggle a whole second sentence into a reason — all of which can
 /// reorder or hide what a reason really says without showing up as a visible
 /// character.
-pub(crate) fn is_forbidden_control(value: char) -> bool {
+#[must_use]
+pub fn is_forbidden_control(value: char) -> bool {
     value.is_control()
         || matches!(
             value,
@@ -554,6 +564,26 @@ impl Validate for Issue {
 impl Validate for Commit {
     fn validate(&self) -> Result<(), ValidationError> {
         require_id(self.id, "commit.id")?;
+        // A commit record is the one record whose fields are later handed to
+        // git as a revision and printed as one output line, so the store holds
+        // it to the same shape the input boundary demands: an object name git
+        // could have printed, and a subject git could have produced. A record
+        // written before the rule existed with anything else refuses to load,
+        // because nothing downstream can render or resolve it safely.
+        if !(4..=64).contains(&self.sha.len())
+            || !self.sha.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(ValidationError::new(
+                "commit.sha",
+                "must be 4-64 hexadecimal digits",
+            ));
+        }
+        if self.subject.chars().any(is_forbidden_control) {
+            return Err(ValidationError::new(
+                "commit.subject",
+                "must be a single line without control characters",
+            ));
+        }
         validate_identity_option(self.actor.as_ref(), "commit.actor")?;
         validate_identity_option(self.ulid.as_ref(), "commit.ulid")?;
         self.created_at.validate()

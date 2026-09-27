@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{self, BufRead, BufReader, Read, Seek, Write};
+use std::io::{self, Read, Seek, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
@@ -17,12 +17,17 @@ use crate::permissions::{
     create_private_dir, create_private_regular, open_private_regular, prepare_private_dir,
     secure_private_path, validate_private_path,
 };
-use crate::signature::{SIGNATURE_ASSET_NAME, SIGNATURE_BYTES, verify_manifest_signature};
+use crate::signature::{
+    RELEASE_SIGNING_PUBLIC_KEY, SIGNATURE_ASSET_NAME, SIGNATURE_BYTES, verify_manifest_signature,
+};
 
 const MAX_ARCHIVE_ENTRY_BYTES: u64 = 128 << 20;
 const MAX_ARCHIVE_TOTAL_BYTES: u64 = 160 << 20;
 const MAX_CHECKSUM_LINES: usize = 256;
 const MAX_CHECKSUM_LINE_BYTES: usize = 1024;
+/// Largest `checksums.txt` the grammar can accept, CRLF included.
+const MAX_CHECKSUM_MANIFEST_BYTES: u64 =
+    (MAX_CHECKSUM_LINES * (MAX_CHECKSUM_LINE_BYTES + 2)) as u64;
 const MAX_ASSET_DOWNLOAD_TIME: Duration = Duration::from_secs(10 * 60);
 const MAX_MANIFEST_BYTES: u64 = 1 << 20;
 const MAX_ASSET_BYTES: u64 = 512 << 20;
@@ -412,17 +417,46 @@ pub fn validate_stage(
 
 /// Loads and fully validates a Go/Rust-compatible durable stage.
 ///
+/// The `checksums.txt` chain is re-verified against the compiled-in release
+/// key and the package digest is re-checked against the signed manifest
+/// before `state.json` is believed, and the installed payload is re-derived
+/// from the verified package. Rewriting the unsigned record together with
+/// the payload therefore cannot smuggle a binary past installation.
+///
 /// # Errors
-/// Rejects unsafe roots or records and every failed revalidation.
+/// Rejects unsafe roots or records, a missing or invalid manifest signature,
+/// and every failed revalidation.
 pub fn load_stage(
     cancellation: &CancellationToken,
     root: &Path,
+) -> Result<StagedUpdate, UpdateError> {
+    load_stage_with_key(cancellation, root, &RELEASE_SIGNING_PUBLIC_KEY)
+}
+
+/// Loads one durable stage, verifying the manifest against `public_key`.
+///
+/// # Errors
+/// Rejects unsafe roots or records, a missing or invalid manifest signature,
+/// and every failed revalidation.
+pub(crate) fn load_stage_with_key(
+    cancellation: &CancellationToken,
+    root: &Path,
+    public_key: &[u8; 32],
 ) -> Result<StagedUpdate, UpdateError> {
     check_cancel(cancellation)?;
     if !root.is_absolute() {
         return Err(UpdateError::InvalidStage);
     }
     validate_private_path(root, true).map_err(|_| UpdateError::InvalidStage)?;
+    // Nothing in the stage root is trusted until the manifest proves that it
+    // came from the release key; `state.json` is unsigned and proves nothing.
+    let manifest_path = root.join("checksums.txt");
+    let signature_path = root.join(SIGNATURE_ASSET_NAME);
+    let manifest =
+        read_private_file(cancellation, &manifest_path, MAX_MANIFEST_BYTES).map_err(|error| signature_chain(&error))?;
+    let signature =
+        read_private_file(cancellation, &signature_path, SIGNATURE_BYTES).map_err(|error| signature_chain(&error))?;
+    verify_manifest_signature(public_key, &manifest, &signature)?;
     let state_path = root.join("state.json");
     validate_private_path(&state_path, false).map_err(|_| UpdateError::InvalidStage)?;
     let record = decode_stage_record(&read_private_file(cancellation, &state_path, 4096)?)?;
@@ -433,7 +467,9 @@ pub fn load_stage(
         },
         &record.version,
     )?;
-    if asset_name != record.asset_name {
+    if asset_name != record.asset_name
+        || record.sha256 != checksum_for_bytes(&manifest, &record.asset_name)?
+    {
         return Err(UpdateError::InvalidStage);
     }
     let asset_path = root.join(&asset_name);
@@ -457,14 +493,57 @@ pub fn load_stage(
         payload_size_bytes: record.payload_size_bytes,
         kind: record.kind,
     };
+    if payload_digest_from_package(cancellation, &stage)?
+        != (stage.payload_sha256.clone(), stage.payload_size_bytes)
+    {
+        return Err(UpdateError::InvalidStage);
+    }
     validate_stage(cancellation, &stage)?;
     Ok(stage)
 }
 
-/// Removes one validated `.stage-*` directory.
+/// Reports a missing or malformed signature-chain file as an unsigned
+/// release, leaving cancellation intact.
+fn signature_chain(error: &UpdateError) -> UpdateError {
+    match error {
+        UpdateError::Cancelled => UpdateError::Cancelled,
+        _ => UpdateError::InvalidSignature,
+    }
+}
+
+/// Re-derives the installed payload from the verified package, so the
+/// unsigned `state.json` cannot redefine what installation hands over.
+fn payload_digest_from_package(
+    cancellation: &CancellationToken,
+    stage: &StagedUpdate,
+) -> Result<(String, u64), UpdateError> {
+    match stage.kind {
+        StageKind::DarwinDmg => hash_regular_file(cancellation, &stage.asset_path, MAX_ASSET_BYTES),
+        StageKind::LinuxBinary | StageKind::WindowsZip => {
+            let mut random = [0_u8; 16];
+            getrandom::fill(&mut random).map_err(|_| UpdateError::InvalidStage)?;
+            let temporary = stage
+                .root
+                .join(format!(".payload-check-{}", hex_lower(&random)));
+            let extracted = if stage.kind == StageKind::LinuxBinary {
+                extract_tar_payload(cancellation, &stage.asset_path, &temporary)
+            } else {
+                extract_zip_payload(cancellation, &stage.asset_path, &temporary)
+            };
+            let digest = extracted.and_then(|()| {
+                hash_regular_file(cancellation, &temporary, MAX_ARCHIVE_ENTRY_BYTES)
+            });
+            let _ = fs::remove_file(&temporary);
+            digest
+        }
+    }
+}
+
+/// Removes one validated `.stage-*` directory under its private base.
 ///
 /// # Errors
-/// Refuses broad or non-stage paths and reports removal failures.
+/// Refuses broad or non-stage paths, roots outside a private stage base,
+/// and reports removal failures.
 pub fn discard_stage(root: &Path) -> Result<(), UpdateError> {
     let name = root
         .file_name()
@@ -473,6 +552,11 @@ pub fn discard_stage(root: &Path) -> Result<(), UpdateError> {
     if !root.is_absolute() || !name.starts_with(".stage-") || name == ".stage-" {
         return Err(UpdateError::InvalidStage);
     }
+    // A stage root is always the direct child of the private updates base,
+    // so a `.stage-*` directory anywhere else is never ours to delete.
+    let base = root.parent().ok_or(UpdateError::InvalidStage)?;
+    validate_private_path(base, true).map_err(|_| UpdateError::InvalidStage)?;
+    validate_private_path(root, true).map_err(|_| UpdateError::InvalidStage)?;
     fs::remove_dir_all(root).map_err(|_| UpdateError::InvalidStage)
 }
 
@@ -517,12 +601,26 @@ fn decode_stage_record(data: &[u8]) -> Result<StageRecord, UpdateError> {
 
 pub(crate) fn checksum_for(path: &Path, wanted_name: &str) -> Result<String, UpdateError> {
     let file = open_private_regular(path).map_err(|_| UpdateError::InvalidStage)?;
+    let mut data = Vec::new();
+    Read::take(file, MAX_CHECKSUM_MANIFEST_BYTES + 1)
+        .read_to_end(&mut data)
+        .map_err(|_| UpdateError::InvalidStage)?;
+    if u64::try_from(data.len()).unwrap_or(u64::MAX) > MAX_CHECKSUM_MANIFEST_BYTES {
+        return Err(UpdateError::InvalidStage);
+    }
+    checksum_for_bytes(&data, wanted_name)
+}
+
+/// Parses manifest bytes under the same grammar as [`checksum_for`], so a
+/// caller can look up a digest in exactly the bytes it verified.
+pub(crate) fn checksum_for_bytes(data: &[u8], wanted_name: &str) -> Result<String, UpdateError> {
+    let body = data.strip_suffix(b"\n").unwrap_or(data);
     let mut found = None;
-    for (index, line) in BufReader::new(file).split(b'\n').enumerate() {
+    for (index, line) in body.split(|byte| *byte == b'\n').enumerate() {
         if index >= MAX_CHECKSUM_LINES {
             return Err(UpdateError::InvalidStage);
         }
-        let mut line = line.map_err(|_| UpdateError::InvalidStage)?;
+        let mut line = line.to_vec();
         if line.last() == Some(&b'\r') {
             line.pop();
         }

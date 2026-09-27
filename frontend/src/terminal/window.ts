@@ -30,6 +30,7 @@ import type { DiscoveredTerminalProfile } from "./linked-launch";
 import {
   binaryStringToBytes,
   commitClipboardPaste,
+  oversizePasteNotice,
   pasteReviewSummary,
   prepareClipboardPaste,
   splitTerminalInput,
@@ -74,6 +75,7 @@ import {
   applyShellSignal,
   initialShellState,
   parseShellOSC,
+  safeTitle,
   type ShellState,
 } from "./shell-integration";
 import { readModernUnicodeSetting } from "./unicode";
@@ -621,6 +623,10 @@ class DetachedTerminalWindow {
       text,
       { alternateScreen: pane.terminal.buffer.active.type === "alternate" },
     );
+    if (request.oversize) {
+      this.setStatus(oversizePasteNotice);
+      return;
+    }
     await commitClipboardPaste(
       request,
       (pending) => Promise.resolve(window.confirm(
@@ -1073,7 +1079,7 @@ export function createTerminalWindow(ctx: AppContext) {
       }
       if (tab.title) {
         view.heading.textContent = "p-track";
-        document.title = `Terminal — ${tab.title}`;
+        document.title = `Terminal — ${safeTitle(tab.title)}`;
       }
       const profiles = await api().GetTerminalProfiles().catch(() => []);
       const detached = new DetachedTerminalWindow(

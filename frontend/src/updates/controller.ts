@@ -84,7 +84,9 @@ function isUpdateAction(value: unknown): value is UpdateAction {
   return value === "check" || value === "download" || value === "apply";
 }
 
-const projectRepositoryURL = "https://github.com/ro-ag/ptrack";
+const projectRepositoryOrigin = "https://github.com";
+const projectRepositoryPath = "/ro-ag/ptrack";
+const projectRepositoryURL = `${projectRepositoryOrigin}${projectRepositoryPath}`;
 const projectLicenseURL = `${projectRepositoryURL}/blob/main/LICENSE`;
 
 // The build line states the platform this window runs on and whether the
@@ -117,13 +119,36 @@ export function updateReleaseMeta(release: UpdateRelease): string {
   return parts.join(" · ");
 }
 
+/**
+ * The parsed path of a link into this project's own GitHub repository, or
+ * null when the link is not that scope. `new URL` normalizes `..` segments,
+ * so the path prefix comparison is the whole authorization; encoded dots and
+ * separators survive the parse and may be decoded into steps by whatever
+ * serves the link, so they never pass.
+ */
+function projectRepositoryPathname(url: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.origin !== projectRepositoryOrigin) return null;
+  const pathname = parsed.pathname;
+  if (/%(?:2e|2f|5c)/i.test(pathname)) return null;
+  return pathname;
+}
+
 /** Only this project's own repository, and its release pages, open from About. */
 export function projectLinkAllowed(url: string): boolean {
-  return url.startsWith(projectRepositoryURL);
+  const pathname = projectRepositoryPathname(url);
+  return pathname !== null &&
+    (pathname === projectRepositoryPath || pathname.startsWith(`${projectRepositoryPath}/`));
 }
 
 export function releasePageAllowed(url: string): boolean {
-  return url.startsWith(`${projectRepositoryURL}/releases/`);
+  const pathname = projectRepositoryPathname(url);
+  return pathname !== null && pathname.startsWith(`${projectRepositoryPath}/releases/`);
 }
 
 export function createUpdatesController(ctx: AppContext) {

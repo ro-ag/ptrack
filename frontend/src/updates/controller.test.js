@@ -4,9 +4,40 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { bootApp } from "../test-support/app-harness";
 import { journeyResponses, reachReview } from "../test-support/journey";
+import { projectLinkAllowed, releasePageAllowed } from "./controller";
 import { updateActionFailureMessage } from "./presentation";
 
 const idle = { revision: 1, phase: "idle", currentVersion: "1.2.3" };
+
+describe("About link allowlists", () => {
+  it("accepts this project's repository and release pages", () => {
+    expect(projectLinkAllowed("https://github.com/ro-ag/ptrack")).toBe(true);
+    expect(projectLinkAllowed("https://github.com/ro-ag/ptrack/")).toBe(true);
+    expect(projectLinkAllowed("https://github.com/ro-ag/ptrack/blob/main/LICENSE")).toBe(true);
+    expect(releasePageAllowed("https://github.com/ro-ag/ptrack/releases/tag/v0.41.3")).toBe(true);
+  });
+
+  it("rejects a link that escapes the scope through dot segments", () => {
+    expect(releasePageAllowed("https://github.com/ro-ag/ptrack/releases/tag/../../..//evil/x"))
+      .toBe(false);
+    expect(projectLinkAllowed("https://github.com/ro-ag/ptrack/../evil/x")).toBe(false);
+  });
+
+  it("rejects a lookalike repository that only shares the prefix", () => {
+    expect(projectLinkAllowed("https://github.com/ro-ag/ptrack-evil")).toBe(false);
+    expect(releasePageAllowed("https://github.com/ro-ag/ptrack-evil/releases/tag/v1")).toBe(false);
+  });
+
+  it("rejects other origins, encoded separators, and malformed links", () => {
+    expect(projectLinkAllowed("https://evil.example/ro-ag/ptrack")).toBe(false);
+    expect(projectLinkAllowed("http://github.com/ro-ag/ptrack")).toBe(false);
+    expect(projectLinkAllowed("https://github.com/ro-ag/ptrack%2f..%2fevil")).toBe(false);
+    expect(projectLinkAllowed("https://github.com/ro-ag/ptrack/a%2f%2e%2e%2fevil")).toBe(false);
+    expect(releasePageAllowed("https://github.com/ro-ag/ptrack/releases")).toBe(false);
+    expect(projectLinkAllowed("not a url")).toBe(false);
+    expect(releasePageAllowed("")).toBe(false);
+  });
+});
 
 describe("About and updates", () => {
   let harness;

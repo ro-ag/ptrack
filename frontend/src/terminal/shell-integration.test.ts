@@ -6,6 +6,7 @@ import {
   nextShellCWDValidation,
   parseShellOSC,
   safeShellCWD,
+  safeTitle,
   shellStatusLabel,
 } from "./shell-integration";
 
@@ -123,5 +124,29 @@ describe("terminal shell integration", () => {
       request: 6,
       validate: false,
     });
+  });
+});
+
+describe("safeTitle", () => {
+  it("drops control characters from an untrusted OSC title", () => {
+    expect(safeTitle("evil\r\ntitle\u{1b}[31m\u{7f}")).toBe("eviltitle[31m");
+    expect(safeTitle("plain title")).toBe("plain title");
+  });
+
+  it("drops bidi overrides and isolates", () => {
+    expect(safeTitle("gnp\u{202e}txt.exe")).toBe("gnptxt.exe");
+    expect(safeTitle("\u{2066}spoof\u{2069}")).toBe("spoof");
+    expect(safeTitle("ok\u{202a}x")).toBe("okx");
+  });
+
+  it("caps over-length titles at 256 characters", () => {
+    const over = "a".repeat(300);
+    expect(safeTitle(over)).toHaveLength(256);
+    expect(safeTitle(over)).toBe("a".repeat(256));
+  });
+
+  it("caps the kept text after stripping, not before", () => {
+    const padded = `${"\u{202e}".repeat(10)}${"b".repeat(300)}`;
+    expect(safeTitle(padded)).toBe("b".repeat(256));
   });
 });

@@ -14,7 +14,7 @@ use ptrack_terminal::{
 
 use super::terminal_runtime::{
     PreparedTerminalIdentity, TerminalEventSink, TerminalExitV2, TerminalIdentityAuthority,
-    TerminalRuntime, TerminalRuntimeConfig, TerminalStatusV2,
+    TerminalRuntime, TerminalRuntimeConfig, TerminalStatusV2, reap_finished_monitors,
 };
 use crate::{AppResult, ProductionTerminalIdentityAuthority};
 
@@ -660,6 +660,76 @@ async fn runtime_drop_revokes_authority_closes_sessions_and_preserves_join() {
         .await
         .expect("drop-requested shutdown must remain joinable")
         .unwrap();
+}
+
+/// Finished monitor handles are dropped as new monitors arrive, so the list is
+/// bounded by the monitors still running instead of every one ever spawned.
+#[tokio::test]
+async fn finished_monitor_handles_are_reaped_so_the_list_stays_bounded() {
+    let finished = tokio::spawn(async {});
+    while !finished.is_finished() {
+        tokio::task::yield_now().await;
+    }
+    let live = tokio::spawn(async {
+        std::future::pending::<()>().await;
+    });
+    let mut monitors = vec![finished, live];
+    reap_finished_monitors(&mut monitors);
+    assert_eq!(monitors.len(), 1, "only the live monitor is retained");
+    reap_finished_monitors(&mut monitors);
+    assert_eq!(monitors.len(), 1, "reaping is idempotent");
+    monitors[0].abort();
+}
+
+/// The shutdown gate drain waits on a blocking condvar; it must run off the
+/// async caller's thread so the runtime driving `shutdown` keeps making
+/// progress while the drain is still waiting for in-flight operations.
+#[tokio::test]
+async fn shutdown_drains_the_gate_without_blocking_the_async_caller() {
+    let root = TempDirectory::new();
+    let manager = Manager::new(&root.0, vec![profile(&root.0)], Arc::new(TestFactory))
+        .await
+        .unwrap();
+    let runtime = TerminalRuntime::new(TerminalRuntimeConfig {
+        generation: 13,
+        project_root: root.0.clone(),
+        manager,
+        identity: Arc::new(TestIdentity::default()),
+        events: Arc::new(TestEvents::default()),
+        attachment_lease: Duration::from_secs(30),
+    })
+    .unwrap();
+
+    // One in-flight operation holds the gate open until the releaser drops it.
+    let operation = runtime.begin(13).unwrap();
+    let releaser = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(150));
+        drop(operation);
+    });
+
+    // A task on this same runtime must still run while shutdown drains.
+    let progressed = Arc::new(AtomicU64::new(0));
+    let canary_progress = Arc::clone(&progressed);
+    let _canary = tokio::spawn(async move {
+        tokio::task::yield_now().await;
+        canary_progress.store(1, Ordering::SeqCst);
+    });
+    let observer = {
+        let progressed = Arc::clone(&progressed);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(80));
+            progressed.load(Ordering::SeqCst)
+        })
+    };
+
+    runtime.shutdown().await.unwrap();
+
+    assert_eq!(
+        observer.join().unwrap(),
+        1,
+        "the gate drain must not block the async runtime"
+    );
+    releaser.join().unwrap();
 }
 
 #[tokio::test]

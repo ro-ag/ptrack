@@ -1,8 +1,8 @@
 use std::fmt::Write as _;
 
 use crate::report::{
-    ReportError, claim_marker, hold_marker, id_list, inline_text, note_line, notes_markdown,
-    open_plan_deps, open_task_deps, task_line,
+    ReportError, UNTRUSTED_DATA_NOTICE, claim_marker, hold_marker, id_list, inline_text, note_line,
+    notes_markdown, open_plan_deps, open_task_deps, task_line, view_body,
 };
 use crate::{NoteLine, ProjectSnapshot, TaskLine, TaskStatus};
 
@@ -224,11 +224,12 @@ pub fn show_plan(snapshot: &ProjectSnapshot, id: u64) -> Result<PlanShow, Report
 }
 
 impl PlanShow {
-    /// Renders the exact Go-compatible plan Markdown.
+    /// Renders the plan Markdown, opened by the same untrusted-data notice the
+    /// context digest carries.
     #[must_use]
     pub fn markdown(&self) -> String {
         let mut output = format!(
-            "# Plan #{} {} [{}]{}{}\n\n## Tasks\n",
+            "# Plan #{} {} [{}]{}{}\n\n> {UNTRUSTED_DATA_NOTICE}\n\n## Tasks\n",
             self.plan.id,
             inline_text(&self.plan.title),
             self.plan.status,
@@ -295,13 +296,14 @@ pub fn show_task(snapshot: &ProjectSnapshot, id: u64) -> Result<TaskShow, Report
 
 impl TaskShow {
     /// Renders the task Markdown, led by the goal line so every task view
-    /// re-anchors the reader to the north star.
+    /// re-anchors the reader to the north star, then the untrusted-data
+    /// notice the context digest carries.
     #[must_use]
     pub fn markdown(&self) -> String {
         let mut output = goal_line(&self.goal);
         write!(
             &mut output,
-            "# Task #{} {} [{}]{}\n\n",
+            "# Task #{} {} [{}]{}\n\n> {UNTRUSTED_DATA_NOTICE}\n\n",
             self.task.id,
             inline_text(&self.task.title),
             self.task.status,
@@ -469,11 +471,13 @@ pub fn show_issue(snapshot: &ProjectSnapshot, id: u64) -> Result<IssueShow, Repo
 }
 
 impl IssueShow {
-    /// Renders the exact Go-compatible issue Markdown.
+    /// Renders the issue Markdown, opened by the same untrusted-data notice
+    /// the context digest carries; the body runs through the digest's own
+    /// redaction and heading escaping so it cannot forge structure.
     #[must_use]
     pub fn markdown(&self) -> String {
         let mut output = format!(
-            "# Issue #{} {}\n\nStatus: {} · Severity: {}\n",
+            "# Issue #{} {}\n\n> {UNTRUSTED_DATA_NOTICE}\n\nStatus: {} · Severity: {}\n",
             self.id,
             inline_text(&self.title),
             self.status,
@@ -490,7 +494,7 @@ impl IssueShow {
         }
         if !self.body.trim().is_empty() {
             output.push('\n');
-            output.push_str(&self.body);
+            output.push_str(&view_body(&self.body));
             output.push('\n');
         }
         output

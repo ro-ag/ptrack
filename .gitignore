@@ -33,10 +33,21 @@
 src-tauri/target/
 __pycache__/
 
+# Secrets and credentials — never commit these
+.env*
+*.pem
+*.p12
+*.p8
+*.key
+*.keychain-db
+AuthKey*
+id_rsa*
+
+# Node dependencies at any level, including the repository root
+node_modules/
+
 .playwright-mcp/
 .mimosa/
-frontend/
-!/frontend/
 .superpowers/
 MEMENTO.md
 .claude/

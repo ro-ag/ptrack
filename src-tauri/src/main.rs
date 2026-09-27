@@ -78,6 +78,7 @@ async fn gui_invoke(
     // terminal window reaches only its own commands and its own assignment.
     let request =
         scope_request_to_window(window.label(), request).map_err(serde_json::Value::from)?;
+    let window_label = window.label().to_owned();
     let runtime = Arc::clone(runtime.inner());
     let notifications = Arc::clone(app.state::<Arc<NativeNotificationController>>().inner());
     let shell_command = request.method == "InstallShellCommand";
@@ -100,7 +101,9 @@ async fn gui_invoke(
         let request_permission = request.method == "SetPreferences";
         let result = if appearance {
             notifications.with_configuration(|| {
-                let mut result = runtime.invoke(request).map_err(serde_json::Value::from)?;
+                let mut result = runtime
+                    .invoke_from_window(&window_label, request)
+                    .map_err(serde_json::Value::from)?;
                 apply_theme(&app, &result);
                 if notifications.configure(&app, &result, request_permission) {
                     result = runtime
@@ -116,7 +119,9 @@ async fn gui_invoke(
                 Ok::<_, serde_json::Value>(result)
             })?
         } else {
-            runtime.invoke(request).map_err(serde_json::Value::from)?
+            runtime
+                .invoke_from_window(&window_label, request)
+                .map_err(serde_json::Value::from)?
         };
         // Switching projects invalidates their terminal-window assignments.
         close_windows(&app, runtime.expire_terminal_windows());
@@ -291,8 +296,10 @@ fn pop_in_terminal_window<R: Runtime>(app: &AppHandle<R>, label: &str) {
 async fn pick_project_directory(
     runtime: tauri::State<'_, Arc<DesktopRuntime>>,
     app: AppHandle,
+    window: tauri::WebviewWindow,
     purpose: String,
 ) -> Result<String, String> {
+    require_main_window_label(window.label())?;
     let purpose = ProjectPickerPurpose::parse(&purpose)?;
     let lease = runtime
         .inner()
@@ -367,8 +374,10 @@ impl ProjectPickerPurpose {
 fn open_external_url(
     runtime: tauri::State<'_, Arc<DesktopRuntime>>,
     app: AppHandle,
+    window: tauri::WebviewWindow,
     url: String,
 ) -> Result<(), String> {
+    require_main_window_label(window.label())?;
     validate_external_url(&url)?;
     let _lease = runtime
         .inner()
@@ -1021,6 +1030,21 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
     }
 }
 
+/// The exact hosts the app opens externally: the help destinations and the
+/// issue tracker `help_destination` maps to, and nothing else.
+const EXTERNAL_URL_HOSTS: [&str; 2] = ["github.com", "ro-ag.github.io"];
+
+/// The directory picker and the external browser are main-window actions. A
+/// popped-out terminal window renders one tab of sessions and must reach
+/// neither from its script.
+fn require_main_window_label(window_label: &str) -> Result<(), String> {
+    if window_label == MAIN_WINDOW_LABEL {
+        Ok(())
+    } else {
+        Err("this command is only available to the main window".to_owned())
+    }
+}
+
 fn validate_external_url(url: &str) -> Result<(), String> {
     if url.len() > 2_048 {
         return Err("external URL exceeds its byte limit".to_owned());
@@ -1028,6 +1052,12 @@ fn validate_external_url(url: &str) -> Result<(), String> {
     let parsed = tauri::Url::parse(url).map_err(|_| "external URL is invalid".to_owned())?;
     if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
         return Err("external URL scheme is not allowed".to_owned());
+    }
+    if !parsed
+        .host_str()
+        .is_some_and(|host| EXTERNAL_URL_HOSTS.contains(&host))
+    {
+        return Err("external URL host is not allowed".to_owned());
     }
     if !parsed.username().is_empty() || parsed.password().is_some() {
         return Err("external URL credentials are not allowed".to_owned());

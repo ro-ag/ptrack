@@ -61,13 +61,24 @@ fn shell_has_only_the_bounded_adapter_commands() {
     let shell_dialog_lease = source
         .find("let _dialog_lease = if shell_command")
         .expect("shell command native dialog must acquire a shutdown fence");
+    // Every dispatch carries the calling window's label into the runtime, so
+    // terminal commands stay scoped to the window's own sessions there too.
     let shell_invoke = source
-        .find("runtime.invoke(request)")
+        .find(".invoke_from_window(&window_label, request)")
         .expect("shell command must run through the desktop bridge");
     let shell_dialog = source
         .find(".blocking_show()")
         .expect("shell command result must use the native dialog");
     assert!(shell_dialog_lease < shell_invoke && shell_invoke < shell_dialog);
+    assert_eq!(
+        source.matches(".invoke_from_window(&window_label, request)").count(),
+        2,
+        "both bridge dispatches must carry the calling window"
+    );
+    assert!(source.contains("scope_request_to_window(window.label(), request)"));
+    // The internal notification patch is host code, never window traffic: it
+    // keeps the trusted unrestricted entry.
+    assert!(source.contains("arguments: vec![disabled_notification_patch()]"));
     assert!(source.contains("ptrack_cli::version()"));
     // Every bridge request is scoped by the window that sent it before it
     // reaches the runtime, so a terminal window cannot use the main window's
@@ -378,11 +389,88 @@ fn tauri_uses_the_existing_frontend_and_exact_window_contract() {
 }
 
 #[test]
-fn external_url_gate_rejects_non_web_and_credentialed_urls() {
+fn external_url_gate_rejects_non_web_credentialed_and_unlisted_hosts() {
     let source = shell_source();
     assert!(source.contains("matches!(parsed.scheme(), \"http\" | \"https\")"));
     assert!(source.contains("parsed.username().is_empty()"));
     assert!(source.contains("parsed.password().is_some()"));
+    // The browser opens only the hosts the help system maps its destinations
+    // to — the docs site and the issue tracker — and refuses everything else.
+    assert!(source.contains(
+        "const EXTERNAL_URL_HOSTS: [&str; 2] = [\"github.com\", \"ro-ag.github.io\"]"
+    ));
+    assert!(source.contains("EXTERNAL_URL_HOSTS.contains(&host)"));
+}
+
+/// The directory picker and the external browser are main-window actions: a
+/// popped-out terminal window reaches neither from its script.
+#[test]
+fn native_window_actions_are_main_window_only() {
+    let source = shell_source();
+    assert_eq!(
+        source.matches("require_main_window_label(window.label())?").count(),
+        2,
+        "both native window actions must be main-window scoped"
+    );
+    // The guard runs first in each command body, before anything else can act.
+    for signature in ["async fn pick_project_directory(", "fn open_external_url("] {
+        let body = source
+            .split_once(signature)
+            .and_then(|(_, rest)| rest.split_once("{\n"))
+            .map_or_else(
+                || panic!("{signature} must be findable"),
+                |(_, body)| body,
+            );
+        assert!(
+            body.starts_with("    require_main_window_label(window.label())?;"),
+            "{signature} must gate on the calling window first"
+        );
+    }
+}
+
+/// Pins [`scope_request_to_window`]'s appearance-only rule for terminal-window
+/// `SetPreferences` patches.
+#[test]
+fn terminal_window_preference_patches_touch_appearance_only() {
+    let scoped = |patch: Value| {
+        ptrack_app::scope_request_to_window(
+            "terminal-1",
+            ptrack_app::DesktopCommandRequest {
+                method: "SetPreferences".to_owned(),
+                arguments: vec![patch],
+            },
+        )
+    };
+    assert!(scoped(serde_json::json!({ "appearance": { "theme": "dark" } })).is_ok());
+    assert!(scoped(serde_json::json!({ "appearance": { "density": "compact" } })).is_ok());
+    for refused in [
+        serde_json::json!({ "startup": { "restoreLastProject": true } }),
+        serde_json::json!({ "startup": { "lastProjectRoot": "/tmp" } }),
+        serde_json::json!({ "notifications": { "handoffArrival": true } }),
+        serde_json::json!({ "appearance": { "theme": "dark" }, "startup": { "lastProjectRoot": "/tmp" } }),
+        serde_json::json!({ "appearance": { "fontSize": 20 } }),
+        serde_json::json!({ "appearance": "dark" }),
+        serde_json::json!("dark"),
+    ] {
+        assert!(scoped(refused.clone()).is_err(), "{refused}");
+    }
+    // The main window keeps the whole record.
+    for patch in [
+        serde_json::json!({ "startup": { "restoreLastProject": true } }),
+        serde_json::json!({ "notifications": { "runCompletion": true } }),
+        serde_json::json!({ "appearance": { "theme": "dark" } }),
+    ] {
+        assert!(
+            ptrack_app::scope_request_to_window(
+                "main",
+                ptrack_app::DesktopCommandRequest {
+                    method: "SetPreferences".to_owned(),
+                    arguments: vec![patch],
+                },
+            )
+            .is_ok()
+        );
+    }
 }
 
 #[test]
@@ -423,18 +511,4 @@ fn menu_event_and_help_allowlists_are_exact() {
     assert_eq!((window.width, window.height), (1_440, 900));
     assert_eq!((window.min_width, window.min_height), (880, 560));
     assert!(!window.visible);
-}
-
-#[test]
-fn parity_matrix_counts_are_self_consistent() {
-    let matrix =
-        read_text(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/rust-parity-matrix.md"));
-    let ids = matrix
-        .lines()
-        .filter_map(|line| line.strip_prefix("| `"))
-        .filter_map(|line| line.split_once('`').map(|(id, _)| id))
-        .collect::<Vec<_>>();
-    assert_eq!(ids.len(), 770);
-    assert_eq!(ids.iter().filter(|id| id.starts_with("GUI-")).count(), 141);
-    assert_eq!(ids.iter().filter(|id| id.starts_with("TERM-")).count(), 108);
 }

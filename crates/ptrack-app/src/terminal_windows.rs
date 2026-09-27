@@ -19,6 +19,15 @@ use crate::{AppError, AppResult};
 /// Minted labels are `terminal-<n>`; `src-tauri/capabilities/main-window.json`
 /// admits `terminal-*`.
 pub const TERMINAL_WINDOW_PREFIX: &str = "terminal-";
+
+/// Whether `label` names a minted terminal window: the prefix followed by the
+/// monotonic number [`TerminalWindows::open`] mints.
+#[must_use]
+pub fn is_terminal_window_label(label: &str) -> bool {
+    label
+        .strip_prefix(TERMINAL_WINDOW_PREFIX)
+        .is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()))
+}
 /// Bounded so a runaway caller cannot open windows without end.
 const TERMINAL_WINDOW_LIMIT: usize = 16;
 

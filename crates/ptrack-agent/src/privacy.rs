@@ -143,13 +143,13 @@ pub fn normalize_event_observation(
         {
             return message("agent event summaries are not allowed");
         }
+        summary = summary.split_whitespace().collect::<Vec<_>>().join(" ");
         if contains_reasoning_marker(&summary) {
             return message("agent event summary contains disallowed reasoning content");
         }
         if contains_high_risk_secret(&summary) {
             return message("agent event summary contains disallowed credential content");
         }
-        summary = summary.split_whitespace().collect::<Vec<_>>().join(" ");
         summary = redact_summary(&summary);
         if !valid_text(&summary, true) || summary.len() > MAX_SUMMARY_BYTES {
             return message("agent event summary exceeds the privacy boundary");
@@ -331,7 +331,11 @@ fn normalize_paths(
 }
 
 pub(crate) fn contains_reasoning_marker(value: &str) -> bool {
+    // Whitespace is collapsed here as well as at the summary gate, so a marker
+    // split across a line break or doubled spaces cannot evade the literals on
+    // any call site.
     let lower = go_unicode_lower(value);
+    let lower = lower.split_whitespace().collect::<Vec<_>>().join(" ");
     [
         "<thinking",
         "</thinking",

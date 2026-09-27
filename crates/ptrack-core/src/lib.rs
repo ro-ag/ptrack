@@ -44,9 +44,9 @@ pub use secrets::{
 };
 pub use snapshot::ProjectSnapshot;
 pub use validation::{
-    LEGACY_ACTOR, MAX_HOLD_REASON_BYTES, MAX_IDENTITY_NAME_BYTES, MAX_SUMMARY_BYTES, Validate,
-    ValidationError, check_hold_reason, check_identity_name, check_summary, check_title,
-    is_identity_id,
+    LEGACY_ACTOR, MAX_BODY_BYTES, MAX_HOLD_REASON_BYTES, MAX_IDENTITY_NAME_BYTES, MAX_SUMMARY_BYTES,
+    Validate, ValidationError, check_hold_reason, check_identity_name, check_summary, check_title,
+    is_forbidden_control, is_identity_id,
 };
 pub use views::{
     Board, CheckpointView, DepSkip, IssueShow, MilestoneProgress, MilestoneRef, MilestoneShow,

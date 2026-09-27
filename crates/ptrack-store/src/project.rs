@@ -4,10 +4,10 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use ptrack_core::{
-    Capability, CapabilityAudit, Commit, Counts, Digest32, Issue, IssueStatus, MemoryKind,
-    MemoryWritebackRecord, Meta, Milestone, MilestoneStatus, Note, NoteTarget, Plan, PlanStatus,
-    ProjectSnapshot, Scratchpad, Severity, StackProfile, Task, TaskStatus, Timestamp, Validate,
-    check_summary, would_create_cycle,
+    Capability, CapabilityAudit, Commit, Counts, Digest32, Issue, IssueStatus, MAX_BODY_BYTES,
+    MemoryKind, MemoryWritebackRecord, Meta, Milestone, MilestoneStatus, Note, NoteTarget, Plan,
+    PlanStatus, ProjectSnapshot, Scratchpad, Severity, StackProfile, Task, TaskStatus, Timestamp,
+    Validate, check_summary, would_create_cycle,
 };
 
 use crate::typed::{self, StoredRecord};
@@ -1869,6 +1869,7 @@ impl ProjectStore {
     ) -> StoreResult<Issue> {
         let title = title.into();
         let body = body.into();
+        body_over_cap(&body, "issue").map_err(StoreError::InvalidIssue)?;
         let now = self.clock.now_local();
         self.write(|transaction| {
             if task_id != 0 {
@@ -1940,6 +1941,7 @@ impl ProjectStore {
             ));
         }
         let body = body.into();
+        body_over_cap(&body, "issue").map_err(StoreError::InvalidIssue)?;
         let now = self.clock.now_local();
         self.write(|transaction| {
             let mut issue = required_write::<Issue>(transaction, RecordKey::Id(id))?;
@@ -2580,6 +2582,24 @@ fn require_note_target(
     }
 }
 
+/// Refuses a caller-supplied note or issue body larger than
+/// [`MAX_BODY_BYTES`], the per-field cap every new body write shares.
+///
+/// This runs where fresh text enters the store, never on decode, so a body
+/// written before the limit existed still loads and still moves between
+/// projects. Call sites name their own [`StoreError`] variant; the detail is a
+/// printable sentence because the whole error is what a person reads.
+fn body_over_cap(body: &str, what: &str) -> Result<(), String> {
+    if body.len() > MAX_BODY_BYTES {
+        Err(format!(
+            "{what} body is {} bytes; the limit is {MAX_BODY_BYTES}",
+            body.len()
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 fn insert_note(
     transaction: &mut WriteTransaction,
     target: NoteTarget,
@@ -2588,6 +2608,7 @@ fn insert_note(
     now: Timestamp,
     actor: Option<&str>,
 ) -> StoreResult<Note> {
+    body_over_cap(&body, "note").map_err(StoreError::InvalidMemoryWriteback)?;
     let id = transaction.next_id(Collection::Notes)?;
     let note = Note {
         id,
@@ -2853,6 +2874,10 @@ fn validate_memory_request(request: &MemoryWriteRequest) -> StoreResult<()> {
     }
     if request.kind == MemoryKind::Summary {
         check_summary(&request.body).map_err(StoreError::InvalidMemoryWriteback)?;
+    } else {
+        // A typed write-back body becomes a note, so it carries the same
+        // per-field cap as every other note body.
+        body_over_cap(&request.body, "note").map_err(StoreError::InvalidMemoryWriteback)?;
     }
     if !matches!(
         request.kind,

@@ -38,8 +38,13 @@ export const initialShellState: ShellState = {
 
 const maximumOSCPayload = 4096;
 const maximumCWDLength = 4096;
+const maximumTitleLength = 256;
 const signedDecimal = /^-?(?:0|[1-9][0-9]*)$/;
 const windowsAbsolutePath = /^[A-Za-z]:[\\/]/;
+// Untrusted terminal text (a shell CWD, an OSC title) never carries control
+// characters or the bidi overrides that reorder what the text displays as.
+const controlCharacters = /[\x00-\x1f\x7f]/;
+const bidiOverrideCharacters = /[\u202a-\u202e\u2066-\u2069]/;
 
 function nonceMatches(received: string, expected: string): boolean {
   if (received.length !== expected.length || expected.length === 0) return false;
@@ -81,15 +86,30 @@ function decodedFileURI(value: string): string | null {
 }
 
 export function safeShellCWD(value: string): string | null {
-  if (value.length === 0 || value.length > maximumCWDLength || /[\x00-\x1f\x7f]/.test(value)) {
+  if (value.length === 0 || value.length > maximumCWDLength || controlCharacters.test(value)) {
     return null;
   }
   const path = value.startsWith("file://") ? decodedFileURI(value) : value;
-  if (!path || path.length > maximumCWDLength || /[\x00-\x1f\x7f]/.test(path)) return null;
+  if (!path || path.length > maximumCWDLength || controlCharacters.test(path)) return null;
   if (!path.startsWith("/") && !windowsAbsolutePath.test(path) && !path.startsWith("\\\\")) {
     return null;
   }
   return path;
+}
+
+/**
+ * An OSC 0/2 title is untrusted terminal text: control characters and bidi
+ * overrides are dropped so the title cannot forge or reorder what it shows,
+ * and the length is capped before it reaches any chrome.
+ */
+export function safeTitle(value: string): string {
+  let title = "";
+  for (const character of value) {
+    if (controlCharacters.test(character) || bidiOverrideCharacters.test(character)) continue;
+    title += character;
+    if (title.length >= maximumTitleLength) break;
+  }
+  return title;
 }
 
 function standardSignal(parts: string[]): ShellSignal | null {

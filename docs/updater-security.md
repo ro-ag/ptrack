@@ -132,3 +132,54 @@ The Rust implementation keeps this authority in `ptrack-updater` and the
 app-owned `UpdateRuntime`. The native Tauri shell receives only the existing
 six typed desktop commands and the one-way `update:state-changed` event; it is
 not granted an updater, HTTP, filesystem, process, or shell plugin.
+
+## Acceptance checks
+
+Run these when changing update discovery, staging, installation, recovery, or
+the About & Updates experience. They complement automated tests; they are not
+a release procedure and never publish, tag, or upload anything.
+
+Automated gates:
+
+```sh
+cargo fmt --all -- --check
+cargo test -p ptrack-updater --all-targets
+cargo test -p ptrack-app --lib
+cargo clippy -p ptrack-updater -p ptrack-app --all-targets -- -D warnings
+RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps
+
+cd frontend
+npm ci
+npm test
+npm run build
+```
+
+Compile the updater for every release target, then execute the OS-specific
+Rust tests on native macOS, Windows, and Linux hosts. Live GitHub release and
+macOS trust-chain checks are deliberate native acceptance steps, never an
+unannounced default test side effect.
+
+App behavior criteria (exercise the native Tauri app with no project open and
+with an open project):
+
+- Default startup makes no update request. About & Updates opens from both
+  the version trigger and the native Check for Updates… item (the p-track app
+  menu on macOS, the Help menu elsewhere) on the Projects screen.
+- A manual check contacts only the p-track GitHub Release endpoint. An opt-in
+  survives restart; opting out during an admitted automatic check cancels it.
+- Check, download, and install are separate actions. Cancel leaves the UI in
+  an actionless canceling state until the worker exits.
+- Progress stays bounded and does not repeatedly announce the whole dialog.
+  Release notes are plain text and the release-page action opens only the
+  validated p-track GitHub URL.
+- Unknown, stale, malformed, tampered, unsigned, unsupported, development,
+  downgrade, and recovery-required states expose no new update authority. A
+  release whose `checksums.txt.sig` is missing or does not verify against the
+  pinned release key is refused before its package downloads.
+- Tab and Shift+Tab remain inside the dialog without focusing the backdrop;
+  Escape and the backdrop close it; focus returns to the invoker. VoiceOver,
+  NVDA, or Orca announces phase changes without reading asset paths or URLs.
+
+Native handoff acceptance is the platform handoff contract above: record the
+exact native OS and architecture exercised in the pull request. A cross
+compile is useful but does not count as execution of OS-tagged tests.
