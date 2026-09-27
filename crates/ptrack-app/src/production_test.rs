@@ -11,6 +11,8 @@ use ptrack_store::{
     acquire_cutover_lock, load_active_generation, protect_private_directory, protect_private_file,
 };
 
+#[cfg(unix)]
+use crate::ProjectGuideFileActionV1;
 use crate::{
     ActiveRuntime, ApplicationPort, DesktopCommandRequest, DesktopInitializationService,
     DesktopRuntime, DesktopRuntimeConfig, DesktopWorkspaceFactory, InitRequest,
@@ -18,10 +20,10 @@ use crate::{
     InitializeProjectRequestV1, Mutation, MutationResult, NoRecentProjectsProvider,
     PlanLifecycleOutcome, PlanLifecycleRequest, ProductionDesktopAuthority,
     ProductionDesktopWorkspaceFactory, ProductionRecentProjects, ProjectGuideChoiceV1,
-    ProjectGuideFileActionV1, ProjectGuidePreviewRequestV1, ProjectTargetKindV1,
-    RecentProjectAvailabilityV1, RecentProjectResolutionV1, RecentProjectsProvider,
-    RelocateRequest, RoutedApplication, StartupProjectV1, UnavailableUpdateService,
-    WorkspaceStatus, production_desktop_runtime, resolved_startup_project, startup_project,
+    ProjectGuidePreviewRequestV1, ProjectTargetKindV1, RecentProjectAvailabilityV1,
+    RecentProjectResolutionV1, RecentProjectsProvider, RelocateRequest, RoutedApplication,
+    StartupProjectV1, UnavailableUpdateService, WorkspaceStatus, production_desktop_runtime,
+    resolved_startup_project, startup_project,
 };
 
 static NEXT: AtomicU64 = AtomicU64::new(1);
