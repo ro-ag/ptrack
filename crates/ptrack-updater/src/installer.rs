@@ -381,7 +381,12 @@ mod platform {
             return Err(UpdateError::InstallRefused);
         }
         let mut buffer = vec![0_u16; 32_768].into_boxed_slice();
-        let length = unsafe { GetWindowsDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) };
+        let length = unsafe {
+            GetWindowsDirectoryW(
+                buffer.as_mut_ptr(),
+                u32::try_from(buffer.len()).unwrap_or(u32::MAX),
+            )
+        };
         if length == 0 || usize::try_from(length).unwrap_or(usize::MAX) >= buffer.len() {
             return Err(UpdateError::InstallRefused);
         }
@@ -401,6 +406,9 @@ mod platform {
         })
     }
 
+    // Matches the Linux `recover` signature: the platform module presents one
+    // interface to its caller even though only Linux recovery can do work.
+    #[allow(clippy::unnecessary_wraps)]
     pub(super) fn recover(
         _cancellation: &CancellationToken,
         _stage_root: &Path,
