@@ -1743,7 +1743,11 @@ fn projects(
             let seen = seen.get(..19).unwrap_or(&seen).replace('T', " ");
             output::line(
                 io.stdout,
-                format_args!("{}\t{}\t{seen}", project.name, project.path),
+                format_args!(
+                    "{}\t{}\t{seen}",
+                    project.name,
+                    output::path(std::path::Path::new(&project.path))
+                ),
             )?;
         }
     }

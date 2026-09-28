@@ -15,7 +15,7 @@ import {
   type ProjectGuideFileAction,
   type ProjectGuidePreviewFile,
 } from "./first-run";
-import { messageFrom } from "./format";
+import { displayPath, messageFrom } from "./format";
 import {
   durableProjectGuideReviewCopy,
   firstRunRecoveryActions,
@@ -377,7 +377,7 @@ export function createFirstRunView(ctx: AppContext) {
 
   function showTarget(run: FirstRunState): void {
     elements.setupTargetSummary.hidden = false;
-    elements.setupTarget.textContent = run.canonicalRoot;
+    elements.setupTarget.textContent = displayPath(run.canonicalRoot);
   }
 
   function showCommittedGuideRecoveryActions(run: FirstRunState): void {
@@ -437,14 +437,14 @@ export function createFirstRunView(ctx: AppContext) {
   function renderReviewStep(run: FirstRunState): void {
     setFirstRunSectionVisible(elements.setupReview, true);
     showCommittedGuideRecoveryActions(run);
-    const storagePath = firstRunStoragePath(run.canonicalRoot);
+    const storagePath = firstRunStoragePath(displayPath(run.canonicalRoot));
     elements.setupStorageSummary.textContent = run.storageAlreadyCreated
       ? `${storagePath} is already durable for this operation.`
       : resumingOperation(run)
       ? `Resume this operation and create ${storagePath}.`
       : `Create ${storagePath}.`;
     elements.setupUntouchedRoot.textContent =
-      `No files inside ${run.canonicalRoot} beyond this complete list will change.`;
+      `No files inside ${displayPath(run.canonicalRoot)} beyond this complete list will change.`;
     elements.setupReviewGoal.textContent = run.goal;
     const guideCopy = resumingOperation(run) && run.guideFiles.length === 0
       ? durableProjectGuideReviewCopy(run.guideChoice)

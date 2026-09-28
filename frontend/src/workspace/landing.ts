@@ -7,7 +7,7 @@ import {
 import type { RecentProjectEntry } from "./recent-projects";
 import type { Overview, Summary } from "./overview";
 import { filterRecentProjects } from "./overview";
-import { messageFrom, relativeTime } from "./format";
+import { displayPath, messageFrom, relativeTime } from "./format";
 import type { AppContext } from "./app-context";
 import { element } from "./dom";
 import { overviewActivity, overviewRefreshMessage } from "./overview";
@@ -103,8 +103,10 @@ export function coverSummary(summary?: Summary, now = Date.now()) {
 }
 /** "/Users/ana/dev/app" → "~/dev/app"; paths outside a home folder stay whole. */
 export function shortenHomePath(path: string): string {
-  const match = /^(?:\/Users|\/home)\/[^/]+(?=\/|$)/.exec(path);
-  return match ? `~${path.slice(match[0].length)}` : path;
+  const shown = displayPath(path);
+  const match = /^(?:\/Users|\/home)\/[^/]+(?=\/|$)/.exec(shown) ??
+    /^[A-Za-z]:\\Users\\[^\\]+(?=\\|$)/i.exec(shown);
+  return match ? `~${shown.slice(match[0].length)}` : shown;
 }
 /** The facts a list row shows beside the project name. */
 export function landingRowDetails(project: RecentProjectEntry, summary?: Summary, now = Date.now()) {
@@ -595,7 +597,7 @@ export function createLandingController(ctx: AppContext) {
     status.textContent = update.status;
     const context = document.createElement("span");
     context.textContent = `${entry?.name || update.root.split(/[\\/]/).filter(Boolean).pop() || update.root} · ${update.kind} #${update.id}`;
-    context.title = update.root;
+    context.title = displayPath(update.root);
     const time = document.createElement("time");
     time.dateTime = new Date(update.updatedAt * 1000).toISOString();
     time.textContent = relativeTime(time.dateTime, "long");

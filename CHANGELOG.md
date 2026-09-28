@@ -28,7 +28,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is tightened to your account, as Unix already does with its mode bits.
 - `ptrack init` no longer reports failure on Windows after creating the
   project.
-- Paths print as `C:\…` on Windows instead of `\\?\C:\…`.
+- Paths show as `C:\…` on Windows instead of `\\?\C:\…`, in the CLI and in
+  the desktop workspace, and the project list shortens `C:\Users\<name>` to
+  `~` as it does on macOS.
 - Revealing a verified Windows update archive no longer reports an error after
   Explorer opens.
 - Git commands started by the desktop app no longer flash console windows.

@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { formatBytes, relativeTime } from "./format";
+import { displayPath, formatBytes, relativeTime } from "./format";
+
+describe("displayPath", () => {
+  it("drops only the plain Windows verbatim prefixes", () => {
+    expect(displayPath("\\\\?\\C:\\work\\repo")).toBe("C:\\work\\repo");
+    expect(displayPath("\\\\?\\UNC\\server\\share\\repo")).toBe("\\\\server\\share\\repo");
+    expect(displayPath("\\\\?\\Volume{0e4b}\\repo")).toBe("\\\\?\\Volume{0e4b}\\repo");
+    expect(displayPath("/Users/me/repo")).toBe("/Users/me/repo");
+    expect(displayPath("")).toBe("");
+  });
+});
 
 describe("relative time", () => {
   const now = Date.UTC(2026, 8, 22, 12);

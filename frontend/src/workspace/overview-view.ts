@@ -3,6 +3,7 @@ import { RequestSequence } from "./controller";
 import { element, emptyMemory, intelligenceItem, pill, statElement, svgElement } from "./dom";
 import {
   compactAriaText,
+  displayPath,
   formatBytes,
   languageLabel,
   relativeTime,
@@ -739,7 +740,7 @@ export function createOverviewView(ctx: AppContext) {
   function renderProjectPanel(snapshot: WorkspaceSnapshot): void {
     const project = snapshot.project;
     const tracking = snapshot.tracking;
-    elements.projectRoot.textContent = project.root;
+    elements.projectRoot.textContent = displayPath(project.root);
     const storage = project.storage;
     elements.storageStatus.textContent = storage.exists
       ? `p-track format v${storage.formatVersion} · ${formatBytes(storage.sizeBytes)} · last written by ${storage.lastWriteVersion || "unknown"}`

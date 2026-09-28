@@ -1,6 +1,6 @@
 import type { AppContext } from "./app-context";
 import { element, emptyMemory, intelligenceItem, pill } from "./dom";
-import { shortRelativeTime } from "./format";
+import { displayPath, shortRelativeTime } from "./format";
 import {
   agentActivityAnnouncement,
   agentActivityPresentation,
@@ -196,7 +196,7 @@ export function createAgentActivityView(ctx: AppContext) {
     activity.worktrees.forEach((worktree) => {
       const option = document.createElement("option");
       option.value = worktree.root;
-      option.textContent = `${worktree.branch || "detached"} · ${worktree.head.slice(0, 8)} · ${worktree.root}`;
+      option.textContent = `${worktree.branch || "detached"} · ${worktree.head.slice(0, 8)} · ${displayPath(worktree.root)}`;
       select.append(option);
     });
     select.value = worktreeSelectionForRerender(
