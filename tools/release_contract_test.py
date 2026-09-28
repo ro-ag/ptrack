@@ -53,6 +53,38 @@ def write_zip(path: Path, arch: str) -> None:
         archive.writestr("LICENSE", b"license")
 
 
+def write_portable(
+    path: Path, arch: str, *, launcher_arch: str | None = None, omit: str = ""
+) -> None:
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, data in (
+            ("p-track.exe", executable_header("windows", launcher_arch or arch)),
+            ("ptrack.exe", executable_header("windows", arch)),
+            ("README.md", b"readme"),
+            ("LICENSE", b"license"),
+        ):
+            if name != omit:
+                archive.writestr(name, data)
+
+
+def write_msi(path: Path) -> None:
+    path.write_bytes(release_contract.MSI_MAGIC + bytes(504))
+
+
+def write_package(dist: Path, name: str) -> None:
+    if name.endswith(".dmg"):
+        (dist / name).write_bytes(b"dmg")
+    elif name.endswith(".msi"):
+        write_msi(dist / name)
+    elif name.endswith("_portable.zip"):
+        write_portable(dist / name, name.split("_")[3])
+    elif name.endswith(".zip"):
+        write_zip(dist / name, name.rsplit("_", 1)[1].removesuffix(".zip"))
+    else:
+        os_name, arch = name.removesuffix(".tar.gz").split("_")[2:]
+        write_tar(dist / name, os_name, arch)
+
+
 class ReleaseArtifactTests(unittest.TestCase):
     def test_exact_five_target_package_set_layout_machines_and_checksums(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -63,10 +95,12 @@ class ReleaseArtifactTests(unittest.TestCase):
             for arch in release_contract.ARCHES:
                 write_tar(dist / f"ptrack_1.2.3_linux_{arch}.tar.gz", "linux", arch)
                 write_zip(dist / f"ptrack_1.2.3_windows_{arch}.zip", arch)
+                write_msi(dist / f"p-track_1.2.3_windows_{arch}.msi")
+                write_portable(dist / f"p-track_1.2.3_windows_{arch}_portable.zip", arch)
             release_contract.validate_dist(dist, "1.2.3")
             checksum_path = release_contract.write_checksums(dist, "1.2.3")
             lines = checksum_path.read_text(encoding="ascii").splitlines()
-            self.assertEqual(len(lines), 6)
+            self.assertEqual(len(lines), 10)
             self.assertEqual(
                 [line.split("  ", 1)[1] for line in lines],
                 list(release_contract.package_names("1.2.3")),
@@ -79,16 +113,39 @@ class ReleaseArtifactTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             dist = Path(temporary)
             for name in release_contract.package_names("1.2.3"):
-                if name.endswith(".dmg"):
-                    (dist / name).write_bytes(b"dmg")
-                elif name.endswith(".zip"):
-                    write_zip(dist / name, name.rsplit("_", 1)[1].removesuffix(".zip"))
-                else:
-                    os_name, arch = name.removesuffix(".tar.gz").split("_")[2:]
-                    write_tar(dist / name, os_name, arch)
+                write_package(dist, name)
             (dist / "checksums.txt.sig").write_bytes(b"s" * 64)
             with self.assertRaisesRegex(release_contract.ContractError, "release assets differ"):
                 release_contract.validate_dist(dist, "1.2.3")
+
+    def test_windows_installer_and_portable_packages_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            msi = root / "p-track_1.2.3_windows_arm64.msi"
+            msi.write_bytes(b"PK\x03\x04 not an installer")
+            with self.assertRaisesRegex(release_contract.ContractError, "not a Windows Installer"):
+                release_contract.validate_msi(msi)
+            write_msi(msi)
+            release_contract.validate_msi(msi)
+
+            portable = root / "p-track_1.2.3_windows_arm64_portable.zip"
+            write_portable(portable, "arm64")
+            release_contract.validate_portable(portable)
+            write_portable(portable, "arm64", omit="p-track.exe")
+            with self.assertRaisesRegex(release_contract.ContractError, "portable entries differ"):
+                release_contract.validate_portable(portable)
+            write_portable(portable, "arm64", launcher_arch="amd64")
+            with self.assertRaisesRegex(release_contract.ContractError, "p-track.exe machine"):
+                release_contract.validate_portable(portable)
+
+    def test_the_frozen_windows_archive_keeps_exactly_three_entries(self) -> None:
+        # Installed updaters refuse any other entry set, so the launcher only
+        # ever ships in the portable archive and the installer.
+        with tempfile.TemporaryDirectory() as temporary:
+            archive = Path(temporary) / "ptrack_1.2.3_windows_amd64.zip"
+            write_portable(archive, "amd64")
+            with self.assertRaisesRegex(release_contract.ContractError, "entries differ"):
+                release_contract.validate_archive(archive)
 
     def test_pinned_public_key_matches_the_updater_and_encodes_as_ed25519_spki(self) -> None:
         source = (
@@ -151,7 +208,11 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(workflow.count("--no-bundle"), 2)
         self.assertEqual(workflow.count("--bundles app"), 1)
         self.assertEqual(workflow.count("-- --locked"), 3)
-        self.assertNotIn("cargo build --locked --release", workflow)
+        # Release binaries come from `tauri build`; the only direct cargo
+        # build is the console-free Windows launcher, which is not a Tauri app.
+        self.assertEqual(workflow.count("cargo build --locked --release"), 1)
+        self.assertIn("cargo build --locked --release --package ptrack-launcher", workflow)
+        self.assertEqual(workflow.count("./build/windows/package.ps1"), 1)
         self.assertIn("tools/release_contract.py validate-dist", workflow)
         self.assertNotIn("actions/setup-go", workflow)
         self.assertNotIn("ptrack-db-export", workflow)
@@ -214,6 +275,11 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("native desktop smoke home must start absent", workflow)
         self.assertNotIn("icacls $env:PTRACK_HOME", workflow)
         self.assertIn("permissions:\n  contents: read", workflow)
+        # The per-user installer is installed, checked, and removed again on
+        # both Windows hosts, and must never need elevation.
+        self.assertEqual(workflow.count("./build/windows/package.ps1"), 1)
+        self.assertIn("'no elevation required'", workflow)
+        self.assertIn("@('/x', ", workflow)
         self.assertNotIn("gh release", workflow)
         self.assertNotIn("actions/upload-artifact", workflow)
         self.assertNotIn("secrets.", workflow)

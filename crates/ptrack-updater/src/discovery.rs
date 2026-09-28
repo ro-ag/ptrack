@@ -52,10 +52,22 @@ impl fmt::Display for UpdateError {
 
 impl std::error::Error for UpdateError {}
 
+/// How the running copy was installed, which decides the package an update
+/// downloads and how it is handed over.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Installation {
+    /// Unpacked from a release archive or disk image: the platform package.
+    Archive,
+    /// Installed by the per-user Windows installer, so updates arrive as the
+    /// next MSI and Windows Installer replaces the files it owns.
+    WindowsInstaller,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Target {
     pub os: String,
     pub arch: String,
+    pub installation: Installation,
 }
 
 impl Target {
@@ -73,8 +85,23 @@ impl Target {
                 other => other,
             }
             .to_owned(),
+            installation: host_installation(),
         }
     }
+}
+
+#[cfg(windows)]
+fn host_installation() -> Installation {
+    if crate::windows_install::running_from_installed_copy() {
+        Installation::WindowsInstaller
+    } else {
+        Installation::Archive
+    }
+}
+
+#[cfg(not(windows))]
+const fn host_installation() -> Installation {
+    Installation::Archive
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -268,15 +295,25 @@ pub fn compare_versions(left: &str, right: &str) -> Result<std::cmp::Ordering, U
 /// Returns the exact packaged release filename for one supported target.
 ///
 /// # Errors
-/// Rejects every target outside darwin/linux/windows × amd64/arm64.
+/// Rejects every target outside darwin/linux/windows × amd64/arm64, and an
+/// installer-managed copy anywhere but Windows.
 pub fn package_name(target: &Target, version: &str) -> Result<String, UpdateError> {
     if !matches!(target.arch.as_str(), "amd64" | "arm64") {
         return Err(UpdateError::UnsupportedTarget);
     }
-    match target.os.as_str() {
-        "darwin" => Ok(format!("p-track_{version}_darwin_{}.dmg", target.arch)),
-        "linux" => Ok(format!("ptrack_{version}_linux_{}.tar.gz", target.arch)),
-        "windows" => Ok(format!("ptrack_{version}_windows_{}.zip", target.arch)),
+    match (target.os.as_str(), target.installation) {
+        ("darwin", Installation::Archive) => {
+            Ok(format!("p-track_{version}_darwin_{}.dmg", target.arch))
+        }
+        ("linux", Installation::Archive) => {
+            Ok(format!("ptrack_{version}_linux_{}.tar.gz", target.arch))
+        }
+        ("windows", Installation::Archive) => {
+            Ok(format!("ptrack_{version}_windows_{}.zip", target.arch))
+        }
+        ("windows", Installation::WindowsInstaller) => {
+            Ok(format!("p-track_{version}_windows_{}.msi", target.arch))
+        }
         _ => Err(UpdateError::UnsupportedTarget),
     }
 }

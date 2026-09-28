@@ -66,6 +66,24 @@ notarized, and stapled by the tag workflow. The same executable inside the
 bundle doubles as the CLI; symlink it onto your `PATH` with
 `ln -s /Applications/p-track.app/Contents/MacOS/ptrack /usr/local/bin/ptrack`.
 
+On Windows, pick one of:
+
+- **Installer** — `p-track_<version>_windows_<arch>.msi`. A per-user install
+  that never asks for administrator rights: it goes to
+  `%LOCALAPPDATA%\Programs\p-track`, adds that folder to your user `PATH` so
+  `ptrack` works in any new terminal, and adds **p-track** to the Start menu.
+  Later updates from **About & Updates** arrive as the next installer.
+  Uninstall it from **Settings → Apps**.
+- **Portable** — `p-track_<version>_windows_<arch>_portable.zip`. Unzip it
+  anywhere and open `p-track.exe` for the desktop workspace; `ptrack.exe` in
+  the same folder is the CLI and terminal dashboard. Nothing is registered.
+- **CLI archive** — `ptrack_<version>_windows_<arch>.zip`, the bare
+  `ptrack.exe` for scripts and servers.
+
+`p-track.exe` opens the workspace without a console window; `ptrack gui` from
+a terminal does the same. The desktop workspace uses the Microsoft Edge
+WebView2 runtime, which ships with Windows 11 and current Windows 10.
+
 Building from source requires Rust 1.89, Node 24, and the
 [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your
 platform. No Go runtime or toolchain is required.
@@ -435,8 +453,9 @@ you opt in; they never download or install anything. Every download and
 installation step requires a separate action.
 
 The updater selects only the exact packaged asset for the running OS and CPU,
-plus `checksums.txt` and its signature `checksums.txt.sig`: a DMG on macOS, a
-ZIP on Windows, or a tarball on Linux. GitHub's generated source archives,
+plus `checksums.txt` and its signature `checksums.txt.sig`: a DMG on macOS,
+the MSI for an installed Windows copy or the ZIP for any other Windows copy, or
+a tarball on Linux. GitHub's generated source archives,
 prereleases, development builds, downgrades, arbitrary URLs, and ambiguous
 assets are rejected. The tag-only release job signs `checksums.txt` with the
 p-track Ed25519 release key, and on every platform the updater trusts a digest
@@ -450,8 +469,11 @@ SHA-256, and revalidated before handoff.
   pinned p-track team, and Gatekeeper acceptance before opening it. Complete the
   app installation in Finder; the updater never replaces one file inside the
   signed app bundle.
-- **Windows:** p-track verifies the ZIP and reveals it in Explorer. Close the
-  running app before replacing the executable manually.
+- **Windows:** a copy installed with the MSI opens the verified next MSI, and
+  Windows Installer upgrades it in place without administrator rights, offering
+  to close the running app. Any other copy (portable or CLI archive) gets the
+  verified ZIP revealed in Explorer; close the running app before replacing the
+  executable manually.
 - **Linux:** p-track can atomically replace only the current standalone
   executable when it and its directory are safely owned and writable by the
   current user. It uses a rollback link, durable recovery record, version probe,

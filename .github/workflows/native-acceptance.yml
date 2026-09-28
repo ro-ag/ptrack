@@ -240,6 +240,51 @@ jobs:
             }
           }
 
+      - name: Package and smoke the per-user installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = "0.22.0"
+          $env:PTRACK_BUILD_VERSION = $version
+          cargo build --locked --release --package ptrack-launcher
+          $packages = Join-Path $env:RUNNER_TEMP "packages"
+          ./build/windows/package.ps1 -Version $version -Arch "${{ matrix.arch }}" `
+            -BinDir target/release -OutDir $packages
+          $msi = Join-Path $packages "p-track_${version}_windows_${{ matrix.arch }}.msi"
+          $log = Join-Path $env:RUNNER_TEMP "msi-install.log"
+          $install = Start-Process msiexec.exe -Wait -PassThru `
+            -ArgumentList @('/i', "`"$msi`"", '/qn', '/l*v', "`"$log`"")
+          if ($install.ExitCode -ne 0) {
+            Get-Content -Tail 40 $log
+            throw "per-user install failed with $($install.ExitCode)"
+          }
+          if (-not (Select-String -LiteralPath $log -Pattern 'no elevation required' -Quiet)) {
+            throw "installer did not run as a limited per-user install"
+          }
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\p-track'
+          $reported = & (Join-Path $dir 'ptrack.exe') version
+          if ($reported -ne "ptrack $version") {
+            throw "installed ptrack reports '$reported'"
+          }
+          foreach ($name in 'p-track.exe', 'README.md', 'LICENSE') {
+            if (-not (Test-Path -LiteralPath (Join-Path $dir $name))) {
+              throw "installer did not place $name"
+            }
+          }
+          if ((Get-ItemProperty 'HKCU:\Software\ro-ag\p-track').InstallDir -ne "$dir\") {
+            throw "installer did not record its install folder"
+          }
+          if (-not (([Environment]::GetEnvironmentVariable('PATH', 'User') -split ';') -contains "$dir\")) {
+            throw "installer did not put its folder on the user PATH"
+          }
+          $remove = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @('/x', "`"$msi`"", '/qn')
+          if ($remove.ExitCode -ne 0) {
+            throw "uninstall failed with $($remove.ExitCode)"
+          }
+          if ((Test-Path -LiteralPath $dir) -or (Test-Path 'HKCU:\Software\ro-ag\p-track')) {
+            throw "uninstall left the install folder or its registry key behind"
+          }
+
   native-macos:
     name: native (${{ matrix.archive_os }}/${{ matrix.arch }})
     needs: portable

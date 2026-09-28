@@ -3239,6 +3239,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ptrack-launcher"
+version = "0.1.0"
+dependencies = [
+ "tauri-winres",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "ptrack-store"
 version = "0.1.0"
 dependencies = [

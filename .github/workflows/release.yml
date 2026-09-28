@@ -219,6 +219,16 @@ jobs:
             "target/${{ matrix.rust_target }}/release/ptrack.exe" `
             $version windows "${{ matrix.arch }}"
 
+      # p-track.exe is the console-free Start menu entry point; it is a plain
+      # Rust launcher, not a Tauri app, so it builds straight through cargo.
+      - name: Build Windows desktop launcher
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:PTRACK_BUILD_VERSION = $env:GITHUB_REF_NAME.TrimStart("v")
+          cargo build --locked --release --package ptrack-launcher `
+            --target "${{ matrix.rust_target }}"
+
       - name: Build macOS app bundle
         if: runner.os == 'macOS'
         shell: bash
@@ -357,6 +367,16 @@ jobs:
             -Destination "dist/$archive"
           Compress-Archive -Path "dist/$archive/*" -DestinationPath "dist/$archive.zip"
           Remove-Item -Recurse -Force "dist/$archive"
+
+      # The per-user MSI (no administrator rights) and the portable folder
+      # archive, both carrying the launcher beside ptrack.exe.
+      - name: Package Windows installer and portable archive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart("v")
+          ./build/windows/package.ps1 -Version $version -Arch "${{ matrix.arch }}" `
+            -BinDir "target/${{ matrix.rust_target }}/release" -OutDir dist
 
       - name: Upload exact packaged assets
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

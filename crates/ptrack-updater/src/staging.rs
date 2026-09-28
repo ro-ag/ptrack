@@ -11,7 +11,8 @@ use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
 use crate::discovery::{
-    Asset, Candidate, Client, Target, UpdateError, package_name, parse_version, validate_asset_url,
+    Asset, Candidate, Client, Installation, Target, UpdateError, package_name, parse_version,
+    validate_asset_url,
 };
 use crate::permissions::{
     create_private_dir, create_private_regular, open_private_regular, prepare_private_dir,
@@ -38,6 +39,19 @@ pub enum StageKind {
     DarwinDmg,
     LinuxBinary,
     WindowsZip,
+    /// The per-user MSI for an installer-managed copy. Like the DMG, the
+    /// verified package itself is what gets handed to the platform.
+    WindowsMsi,
+}
+
+impl StageKind {
+    /// The installation a stage of this kind updates.
+    const fn installation(self) -> Installation {
+        match self {
+            Self::WindowsMsi => Installation::WindowsInstaller,
+            Self::DarwinDmg | Self::LinuxBinary | Self::WindowsZip => Installation::Archive,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -158,6 +172,9 @@ impl Client {
                 extract_tar_payload(cancellation, &asset_path, &path)?;
                 (StageKind::LinuxBinary, path)
             }
+            "windows" if target.installation == Installation::WindowsInstaller => {
+                (StageKind::WindowsMsi, asset_path.clone())
+            }
             "windows" => {
                 let path = root.join("ptrack.exe");
                 extract_zip_payload(cancellation, &asset_path, &path)?;
@@ -181,7 +198,7 @@ impl Client {
             kind,
         };
         validate_payload_machine(cancellation, &stage)?;
-        let limit = if kind == StageKind::DarwinDmg {
+        let limit = if matches!(kind, StageKind::DarwinDmg | StageKind::WindowsMsi) {
             MAX_ASSET_BYTES
         } else {
             MAX_ARCHIVE_ENTRY_BYTES
@@ -373,7 +390,7 @@ pub fn validate_stage(
     for path in [&stage.asset_path, &stage.payload_path, &stage.state_path] {
         validate_private_path(path, false).map_err(|_| UpdateError::InvalidStage)?;
     }
-    let payload_limit = if stage.kind == StageKind::DarwinDmg {
+    let payload_limit = if matches!(stage.kind, StageKind::DarwinDmg | StageKind::WindowsMsi) {
         MAX_ASSET_BYTES
     } else {
         MAX_ARCHIVE_ENTRY_BYTES
@@ -382,6 +399,7 @@ pub fn validate_stage(
         &Target {
             os: stage.os.clone(),
             arch: stage.arch.clone(),
+            installation: stage.kind.installation(),
         },
         &stage.version,
     )?;
@@ -464,6 +482,7 @@ pub(crate) fn load_stage_with_key(
         &Target {
             os: record.goos.clone(),
             arch: record.goarch.clone(),
+            installation: record.kind.installation(),
         },
         &record.version,
     )?;
@@ -474,7 +493,7 @@ pub(crate) fn load_stage_with_key(
     }
     let asset_path = root.join(&asset_name);
     let payload_path = match record.kind {
-        StageKind::DarwinDmg => asset_path.clone(),
+        StageKind::DarwinDmg | StageKind::WindowsMsi => asset_path.clone(),
         StageKind::LinuxBinary => root.join("ptrack"),
         StageKind::WindowsZip => root.join("ptrack.exe"),
     };
@@ -518,7 +537,9 @@ fn payload_digest_from_package(
     stage: &StagedUpdate,
 ) -> Result<(String, u64), UpdateError> {
     match stage.kind {
-        StageKind::DarwinDmg => hash_regular_file(cancellation, &stage.asset_path, MAX_ASSET_BYTES),
+        StageKind::DarwinDmg | StageKind::WindowsMsi => {
+            hash_regular_file(cancellation, &stage.asset_path, MAX_ASSET_BYTES)
+        }
         StageKind::LinuxBinary | StageKind::WindowsZip => {
             let mut random = [0_u8; 16];
             getrandom::fill(&mut random).map_err(|_| UpdateError::InvalidStage)?;
@@ -827,6 +848,27 @@ fn validate_payload_machine(
             }
             validate_pe(&stage.payload_path, &stage.arch)?;
         }
+        StageKind::WindowsMsi => {
+            if stage.os != "windows" || stage.payload_path != stage.asset_path {
+                return Err(UpdateError::InvalidStage);
+            }
+            validate_msi(&stage.payload_path)?;
+        }
+    }
+    Ok(())
+}
+
+/// An MSI is an OLE compound file. The signed checksum already proves the
+/// exact bytes; this only refuses a package that is not an installer at all
+/// before it reaches Windows Installer.
+fn validate_msi(path: &Path) -> Result<(), UpdateError> {
+    const COMPOUND_FILE_MAGIC: [u8; 8] = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
+    let mut file = open_private_regular(path).map_err(|_| UpdateError::InvalidStage)?;
+    let mut header = [0_u8; 8];
+    file.read_exact(&mut header)
+        .map_err(|_| UpdateError::InvalidStage)?;
+    if header != COMPOUND_FILE_MAGIC {
+        return Err(UpdateError::InvalidStage);
     }
     Ok(())
 }
@@ -989,7 +1031,7 @@ pub(crate) fn validate_download_url(
 
 fn expected_payload(stage: &StagedUpdate) -> PathBuf {
     match stage.kind {
-        StageKind::DarwinDmg => stage.asset_path.clone(),
+        StageKind::DarwinDmg | StageKind::WindowsMsi => stage.asset_path.clone(),
         StageKind::LinuxBinary => stage.root.join("ptrack"),
         StageKind::WindowsZip => stage.root.join("ptrack.exe"),
     }

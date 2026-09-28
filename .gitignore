@@ -5,6 +5,8 @@
 !/build/appicon.png
 !/build/darwin/
 !/build/darwin/**
+!/build/windows/
+!/build/windows/**
 !/build/README.md
 *.exe
 

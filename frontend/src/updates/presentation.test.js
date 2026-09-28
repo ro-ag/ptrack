@@ -96,6 +96,19 @@ describe("update presentation", () => {
     });
   });
 
+  it("names no single platform for an opened installer", () => {
+    // Both the macOS disk image and the Windows per-user MSI arrive here.
+    const presentation = updatePresentation({
+      phase: "action-required",
+      applyAction: "opened-native-installer",
+    });
+    expect(presentation).toMatchObject({
+      title: "Complete installation manually",
+      detail: expect.stringContaining("The verified installer is open"),
+    });
+    expect(presentation.detail).not.toMatch(/macOS|Windows/);
+  });
+
   it("fences stale revisions and bounds progress", () => {
     expect(updateStateIsNewer({ revision: 3 }, { revision: 2 })).toBe(false);
     expect(updateStateIsNewer({ revision: 3 }, { revision: 3 })).toBe(true);
