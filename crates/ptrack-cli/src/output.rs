@@ -31,6 +31,21 @@ fn sanitize(value: &str) -> Cow<'_, str> {
     }
 }
 
+/// Renders a path the way a person writes it. Windows canonicalization
+/// yields verbatim `\\?\C:\…` and `\\?\UNC\…` forms; they stay exact in
+/// storage, but output shows `C:\…` and `\\server\…`. Other verbatim forms
+/// (volume GUIDs, devices) have no plain spelling and print unchanged.
+pub fn path(value: &std::path::Path) -> String {
+    let rendered = value.display().to_string();
+    if let Some(rest) = rendered.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    match rendered.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest.to_owned(),
+        _ => rendered,
+    }
+}
+
 pub fn text(output: &mut dyn Write, value: &str) -> Result<(), CliError> {
     output.write_all(sanitize(value).as_bytes())?;
     Ok(())

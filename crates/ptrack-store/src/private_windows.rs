@@ -8,11 +8,15 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::path::Path;
 use std::ptr;
 
+use windows_sys::Wdk::Foundation::OBJECT_ATTRIBUTES;
 use windows_sys::Wdk::Storage::FileSystem::{
-    FILE_RENAME_INFORMATION, FileRenameInformation, NtSetInformationFile,
+    FILE_NON_DIRECTORY_FILE, FILE_OPEN_REPARSE_POINT, FILE_RENAME_INFORMATION,
+    FILE_SYNCHRONOUS_IO_NONALERT, FileRenameInformation, NtCreateFile, NtSetInformationFile,
 };
 use windows_sys::Win32::Foundation::RtlNtStatusToDosError;
-use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_ALL, HANDLE, LocalFree};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, GENERIC_ALL, HANDLE, LocalFree, OBJ_CASE_INSENSITIVE, UNICODE_STRING,
+};
 use windows_sys::Win32::Security::Authorization::{
     EXPLICIT_ACCESS_W, GetNamedSecurityInfoW, GetSecurityInfo, SE_FILE_OBJECT, SET_ACCESS,
     SetEntriesInAclW, SetNamedSecurityInfoW, SetSecurityInfo, TRUSTEE_IS_SID, TRUSTEE_IS_USER,
@@ -26,10 +30,11 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, CreateFileW, DELETE, FILE_ALL_ACCESS, FILE_ATTRIBUTE_DIRECTORY,
-    FILE_ATTRIBUTE_REPARSE_POINT, FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS,
-    FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_DELETE,
-    FILE_SHARE_READ, FILE_SHARE_WRITE, FileDispositionInfo, GetFileInformationByHandle,
-    MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW, OPEN_EXISTING,
+    FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_DISPOSITION_INFO,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ,
+    FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    FileDispositionInfo, GetFileInformationByHandle, MOVEFILE_REPLACE_EXISTING,
+    MOVEFILE_WRITE_THROUGH, MoveFileExW, OPEN_EXISTING, READ_CONTROL, SYNCHRONIZE,
     SetFileInformationByHandle, WRITE_DAC, WRITE_OWNER,
 };
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
@@ -102,6 +107,13 @@ pub(crate) fn rename_directory_handle_no_replace(
     root: &File,
     name: &str,
 ) -> io::Result<()> {
+    rename_handle(directory, root, name, false)
+}
+
+/// Renames the object behind `file` (opened with DELETE access) to `name`
+/// directly beneath the `root` directory handle, never resolving a path.
+pub(crate) fn rename_handle(file: &File, root: &File, name: &str, replace: bool) -> io::Result<()> {
+    validate_component(name)?;
     let name = name.encode_utf16().collect::<Vec<_>>();
     let name_bytes = name
         .len()
@@ -116,7 +128,7 @@ pub(crate) fn rename_directory_handle_no_replace(
     // SAFETY: storage is pointer-aligned and sized for FILE_RENAME_INFORMATION plus
     // the exact UTF-16 filename payload consumed synchronously by the kernel.
     unsafe {
-        (*information).Anonymous.ReplaceIfExists = false;
+        (*information).Anonymous.ReplaceIfExists = replace;
         (*information).RootDirectory = root.as_raw_handle().cast();
         (*information).FileNameLength =
             u32::try_from(name_bytes).map_err(|_| io::Error::other("name too long"))?;
@@ -127,7 +139,7 @@ pub(crate) fn rename_directory_handle_no_replace(
         );
         let mut status = IO_STATUS_BLOCK::default();
         let result = NtSetInformationFile(
-            directory.as_raw_handle().cast(),
+            file.as_raw_handle().cast(),
             &mut status,
             information.cast_const().cast(),
             u32::try_from(bytes).map_err(|_| io::Error::other("name too long"))?,
@@ -138,6 +150,90 @@ pub(crate) fn rename_directory_handle_no_replace(
                 RtlNtStatusToDosError(result) as i32
             ));
         }
+    }
+    Ok(())
+}
+
+/// Opens or creates the regular file `name` directly beneath the `directory`
+/// handle through the NT root-relative namespace — the Windows counterpart of
+/// `openat(dirfd, name, O_NOFOLLOW)`. A final component that is a reparse
+/// point or a directory is refused instead of followed.
+pub(crate) fn open_relative(
+    directory: &File,
+    name: &str,
+    access: u32,
+    share: u32,
+    disposition: u32,
+) -> io::Result<File> {
+    validate_component(name)?;
+    let mut wide = name.encode_utf16().collect::<Vec<_>>();
+    let bytes = wide
+        .len()
+        .checked_mul(std::mem::size_of::<u16>())
+        .and_then(|bytes| u16::try_from(bytes).ok())
+        .ok_or_else(|| io::Error::other("name too long"))?;
+    let object_name = UNICODE_STRING {
+        Length: bytes,
+        MaximumLength: bytes,
+        Buffer: wide.as_mut_ptr(),
+    };
+    let attributes = OBJECT_ATTRIBUTES {
+        Length: u32::try_from(std::mem::size_of::<OBJECT_ATTRIBUTES>())
+            .expect("OBJECT_ATTRIBUTES size fits u32"),
+        RootDirectory: directory.as_raw_handle().cast(),
+        ObjectName: &raw const object_name,
+        Attributes: OBJ_CASE_INSENSITIVE,
+        SecurityDescriptor: ptr::null(),
+        SecurityQualityOfService: ptr::null(),
+    };
+    let mut handle: HANDLE = ptr::null_mut();
+    let mut status_block = IO_STATUS_BLOCK::default();
+    // SAFETY: every pointer argument references a live local for the duration
+    // of the synchronous call; on success the returned handle is owned here
+    // and converted exactly once into File.
+    let status = unsafe {
+        NtCreateFile(
+            &mut handle,
+            access | SYNCHRONIZE,
+            &attributes,
+            &mut status_block,
+            ptr::null(),
+            FILE_ATTRIBUTE_NORMAL,
+            share,
+            disposition,
+            FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT,
+            ptr::null(),
+            0,
+        )
+    };
+    if status < 0 {
+        // SAFETY: pure status translation.
+        let code = unsafe { RtlNtStatusToDosError(status) };
+        return Err(io::Error::from_raw_os_error(code as i32));
+    }
+    // SAFETY: handle ownership transfers to File.
+    let file = unsafe { File::from_raw_handle(handle) };
+    let attributes = information(&file)?.dwFileAttributes;
+    if attributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY) != 0 {
+        return Err(io::Error::other(
+            "path is a reparse point or has the wrong type",
+        ));
+    }
+    Ok(file)
+}
+
+/// Accepts only one plain path component: no separators, no parent or
+/// current directory, no alternate data stream, no device-style names.
+fn validate_component(name: &str) -> io::Result<()> {
+    if name.is_empty()
+        || name.len() > 255
+        || matches!(name, "." | "..")
+        || name.contains(['\\', '/', ':', '\0'])
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "name must be one plain path component",
+        ));
     }
     Ok(())
 }
@@ -337,6 +433,90 @@ pub(crate) fn verify_private_handle(file: &File) -> io::Result<()> {
     // SAFETY: descriptor ownership came from GetSecurityInfo.
     let _ = unsafe { LocalFree(descriptor.cast::<c_void>()) };
     result
+}
+
+/// Proves `path` is private to the current user, first tightening its DACL to
+/// the current user alone when it is not.
+///
+/// This is the Windows counterpart of the Unix `chmod 0700`/`0600` healing:
+/// descriptors inherited from the profile, a sandbox group ACE added by
+/// another tool, or a copied tree only ever lose access here, so healing
+/// cannot leak anything, while refusing them locked the whole runtime out.
+/// Like `chmod`, it only acts on an object the current user already owns,
+/// and it works through one no-reparse handle so a swapped junction cannot
+/// redirect the rewrite.
+pub(crate) fn heal_private(path: &Path, directory: bool) -> io::Result<()> {
+    if verify_private(path).is_ok() {
+        return Ok(());
+    }
+    let file = open_no_reparse_with_access(
+        path,
+        directory,
+        READ_CONTROL | WRITE_DAC | FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+    )?;
+    let user = current_user()?;
+    require_handle_owner(&file, user.sid)?;
+    let inheritance = if directory {
+        SUB_CONTAINERS_AND_OBJECTS_INHERIT
+    } else {
+        NO_INHERITANCE
+    };
+    let acl = current_user_acl(user.sid, inheritance)?;
+    // SAFETY: file owns a live handle with WRITE_DAC; the ACL remains valid
+    // for the duration of the synchronous call. The owner is left unchanged
+    // because it was just proven to be the current user.
+    let status = unsafe {
+        SetSecurityInfo(
+            file.as_raw_handle().cast(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            acl,
+            ptr::null_mut(),
+        )
+    };
+    // SAFETY: ACL ownership came from SetEntriesInAclW.
+    let _ = unsafe { LocalFree(acl.cast::<c_void>()) };
+    if status != 0 {
+        return Err(io::Error::from_raw_os_error(status as i32));
+    }
+    verify_private_handle(&file)?;
+    verify_private(path)
+}
+
+fn require_handle_owner(file: &File, user_sid: *mut c_void) -> io::Result<()> {
+    let mut owner = ptr::null_mut();
+    let mut descriptor = ptr::null_mut();
+    // SAFETY: the file owns a live handle with READ_CONTROL and the owner
+    // output stays valid until the returned descriptor is released.
+    let status = unsafe {
+        GetSecurityInfo(
+            file.as_raw_handle().cast(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            &mut owner,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut descriptor,
+        )
+    };
+    if status != 0 || descriptor.is_null() {
+        return Err(io::Error::from_raw_os_error(status as i32));
+    }
+    // SAFETY: both SIDs are valid while the descriptor is retained.
+    let owned = !owner.is_null() && unsafe { EqualSid(owner, user_sid) } != 0;
+    // SAFETY: descriptor ownership came from GetSecurityInfo.
+    let _ = unsafe { LocalFree(descriptor.cast::<c_void>()) };
+    if owned {
+        Ok(())
+    } else {
+        Err(io::Error::other(
+            "private path owner is not the current user",
+        ))
+    }
 }
 
 fn verify_owner_dacl(owner: *mut c_void, dacl: *mut ACL, user_sid: *mut c_void) -> io::Result<()> {

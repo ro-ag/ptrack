@@ -267,7 +267,15 @@ fn heal_project_database_permissions(path: &Path) {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn heal_project_database_permissions(path: &Path) {
+    if let Some(directory) = path.parent() {
+        let _ = crate::private_windows::heal_private(directory, true);
+    }
+    let _ = crate::private_windows::heal_private(path, false);
+}
+
+#[cfg(not(any(unix, windows)))]
 fn heal_project_database_permissions(_: &Path) {}
 
 fn validate_accessible_project_namespace(project: &ActiveGenerationProject) -> StoreResult<()> {

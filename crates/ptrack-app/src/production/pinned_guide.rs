@@ -235,6 +235,176 @@ impl<'a> PinnedGuideRoot<'a> {
     }
 }
 
+/// Windows has no mode bits; every snapshot reports the mode a new guide is
+/// published with, so manifests and bases always agree on it.
+#[cfg(windows)]
+const WINDOWS_GUIDE_MODE: u32 = 0o644;
+
+/// The Windows publisher mirrors the Unix one through handle-relative NT
+/// operations: the retained root handle refuses delete sharing, so the root
+/// cannot be renamed away mid-operation, every entry is opened relative to
+/// that handle without following a reparse point, and publication renames
+/// the staged file's own handle into place.
+#[cfg(windows)]
+impl<'a> PinnedGuideRoot<'a> {
+    pub(super) fn capture(path: &Path, expected: PrivatePathIdentity) -> AppResult<Self> {
+        use ptrack_store::windows_relative;
+
+        let metadata = fs::symlink_metadata(path)?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_dir()
+            || fs::canonicalize(path)? != path
+        {
+            return Err(AppError::Message(GUIDE_PREVIEW_STALE.to_owned()));
+        }
+        let handle = windows_relative::open_directory(path)
+            .map_err(|_| AppError::Message(GUIDE_PREVIEW_STALE.to_owned()))?;
+        let identity = windows_relative::identity(&handle)?;
+        if identity != expected {
+            return Err(AppError::Message(GUIDE_PREVIEW_STALE.to_owned()));
+        }
+        Ok(Self {
+            path: Some(path.to_owned()),
+            pinned: None,
+            identity,
+            handle,
+            staging: None,
+        })
+    }
+
+    pub(super) fn from_pinned(
+        pinned: &'a PinnedProjectDirectory,
+        expected: PrivatePathIdentity,
+    ) -> AppResult<Self> {
+        use ptrack_store::windows_relative;
+
+        pinned.verify().map_err(recovery)?;
+        if pinned.root_identity() != expected {
+            return Err(AppError::Message(GUIDE_PREVIEW_STALE.to_owned()));
+        }
+        let handle = pinned.try_clone_root_directory().map_err(recovery)?;
+        if windows_relative::identity(&handle)? != expected {
+            return Err(AppError::Message(GUIDE_PREVIEW_STALE.to_owned()));
+        }
+        // Guide files stage beside their destination rather than in the
+        // private `.ptrack` directory: a Windows file keeps the descriptor it
+        // was created with across a rename, and the guide must inherit the
+        // project root's, not the owner-only one.
+        let staging = handle.try_clone()?;
+        Ok(Self {
+            path: None,
+            pinned: Some(pinned),
+            identity: expected,
+            handle,
+            staging: Some(staging),
+        })
+    }
+
+    pub(super) fn verify(&self) -> AppResult<()> {
+        use ptrack_store::windows_relative;
+
+        if windows_relative::identity(&self.handle)? != self.identity {
+            return Err(AppError::Message(GUIDE_PREVIEW_STALE.to_owned()));
+        }
+        if let Some(pinned) = self.pinned {
+            pinned.verify().map_err(recovery)?;
+        } else if let Some(path) = &self.path {
+            let metadata = fs::symlink_metadata(path)?;
+            let current = windows_relative::open_directory(path)
+                .and_then(|directory| windows_relative::identity(&directory))
+                .map_err(|_| AppError::Message(GUIDE_PREVIEW_STALE.to_owned()))?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() || current != self.identity {
+                return Err(AppError::Message(GUIDE_PREVIEW_STALE.to_owned()));
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn read(&self, name: &str) -> AppResult<Option<GuideFileSnapshot>> {
+        use ptrack_store::windows_relative;
+
+        // The handle shares reads only, so nothing can write, rename, or
+        // delete the file while it is read: no before/after comparison is
+        // needed to prove the bytes belong to the identity reported.
+        let Some(file) = windows_relative::open_file_at(&self.handle, name)
+            .map_err(|_| AppError::Message(GUIDE_PREVIEW_STALE.to_owned()))?
+        else {
+            return Ok(None);
+        };
+        let identity = windows_relative::identity(&file)?;
+        let length = file.metadata()?.len();
+        let mut bytes =
+            Vec::with_capacity(usize::try_from(length.min(GUIDE_FILE_LIMIT)).unwrap_or_default());
+        file.take(GUIDE_FILE_LIMIT + 1).read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > GUIDE_FILE_LIMIT {
+            return Err(AppError::Message(
+                "project guide file exceeds its byte limit".to_owned(),
+            ));
+        }
+        let content = String::from_utf8(bytes)
+            .map_err(|_| AppError::Message("project guide file is not valid UTF-8".to_owned()))?;
+        Ok(Some(GuideFileSnapshot {
+            identity,
+            digest: content_digest(content.as_bytes()),
+            content,
+            mode: WINDOWS_GUIDE_MODE,
+        }))
+    }
+
+    pub(super) fn publish(
+        &self,
+        manifest: &DesktopGuideFileManifest,
+        content: &str,
+    ) -> AppResult<()> {
+        use ptrack_store::windows_relative;
+
+        let staging = self
+            .staging
+            .as_ref()
+            .ok_or_else(|| recovery("project guide staging authority is unavailable"))?;
+        let temporary = format!(".guide-{}-{}.tmp", manifest.name, random_id()?);
+        let mut file = windows_relative::create_file_at(staging, &temporary)?;
+        let prepared = (|| -> AppResult<()> {
+            file.write_all(content.as_bytes())?;
+            file.sync_all()?;
+            Ok(())
+        })();
+        if let Err(error) = prepared {
+            let _ = windows_relative::delete(&file);
+            return Err(error);
+        }
+        #[cfg(test)]
+        super::test_support::run_guide_before_publish_hook();
+        let publication = (|| -> AppResult<()> {
+            let current = self.read(&manifest.name)?;
+            require_guide_base(current.as_ref(), manifest)?;
+            self.verify()?;
+            // Creating never replaces: an entry that appeared since the
+            // preview makes the rename fail instead of being overwritten.
+            windows_relative::rename_at(
+                &file,
+                &self.handle,
+                &manifest.name,
+                manifest.base_identity.is_some(),
+            )
+            .map_err(|_| AppError::Message(GUIDE_PREVIEW_STALE.to_owned()))
+        })();
+        if let Err(error) = publication {
+            let _ = windows_relative::delete(&file);
+            return Err(error);
+        }
+        drop(file);
+        let applied = self.read(&manifest.name)?;
+        if applied
+            .as_ref()
+            .is_none_or(|snapshot| snapshot.digest != manifest.output_digest)
+        {
+            return Err(AppError::Message(GUIDE_PREVIEW_STALE.to_owned()));
+        }
+        Ok(())
+    }
+}
+
 #[cfg(unix)]
 fn guide_stat_matches(identity: PrivatePathIdentity, stat: &rustix::fs::Stat) -> bool {
     #[cfg(any(target_os = "linux", target_os = "android"))]

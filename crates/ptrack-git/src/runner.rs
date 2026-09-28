@@ -308,6 +308,8 @@ pub(crate) fn kill_process_tree_command(pid: u32) -> Command {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    #[cfg(windows)]
+    hide_console_window(&mut command);
     command
 }
 
@@ -510,7 +512,19 @@ fn hardened_command(program: &OsStr, root: &Path, args: &[OsString]) -> Command 
         use std::os::unix::process::CommandExt as _;
         command.process_group(0);
     }
+    #[cfg(windows)]
+    hide_console_window(&mut command);
     command
+}
+
+/// `CREATE_NO_WINDOW`: a console program started by the desktop app, which
+/// has no console of its own when launched from the Start menu, would
+/// otherwise get a fresh console window flashed up for every call.
+#[cfg(windows)]
+pub(crate) fn hide_console_window(command: &mut Command) {
+    use std::os::windows::process::CommandExt as _;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
 }
 
 pub(crate) fn git_command_args(root: &Path, args: &[OsString]) -> Vec<OsString> {

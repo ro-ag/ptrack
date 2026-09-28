@@ -1,25 +1,25 @@
 //! Project guide manifests: the consent record a preview produces, its
 //! validation, and applying or installing it through the pinned publisher.
 
-// Most of this module is exercised through the unix pinned publisher; on
-// other targets the shared types stay compiled so the desktop manifest
-// surface matches, and the unix-only helpers are simply not called.
-#![cfg_attr(not(unix), allow(dead_code, unused_imports))]
+// Most of this module is exercised through the Unix and Windows pinned
+// publishers; on other targets the shared types stay compiled so the desktop
+// manifest surface matches, and the publisher helpers are simply not called.
+#![cfg_attr(not(any(unix, windows)), allow(dead_code, unused_imports))]
 use std::io::Read;
 use std::path::Path;
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use ptrack_core::upsert_guide;
 use ptrack_store::{PinnedProjectDirectory, PrivatePathIdentity, open_private_path};
 use serde::{Deserialize, Serialize};
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use super::pinned_guide::PinnedGuideRoot;
 use super::{
     GUIDE_DIFF_LIMIT, GUIDE_FILE_LIMIT, GUIDE_FILES, GUIDE_PREVIEW_STALE, path_is_present,
     recovery, validate_operation_id,
 };
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use super::{GUIDE_OUTPUT_LIMIT, GUIDE_PARTIALLY_APPLIED, content_digest};
 use crate::{AppError, AppResult, ProjectGuideChoiceV1, ProjectGuideFileActionV1};
 
@@ -168,12 +168,12 @@ pub(super) fn validate_guide_before_commit(
             Err(AppError::Message(GUIDE_PREVIEW_STALE.to_owned()))
         };
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = home;
         Err(AppError::Message("project-guide-unavailable".to_owned()))
     }
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         let root_identity = manifest
             .root_identity
@@ -203,12 +203,12 @@ pub(super) fn apply_guide_manifest(
             Err(AppError::Message(GUIDE_PREVIEW_STALE.to_owned()))
         };
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (home, pinned);
         Err(AppError::Message("project-guide-unavailable".to_owned()))
     }
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         let root_identity = manifest
             .root_identity
@@ -263,7 +263,7 @@ pub(super) fn apply_guide_manifest(
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(super) fn guide_root_has_applied_output(
     root: &PinnedGuideRoot<'_>,
     files: &[DesktopGuideFileManifest],
@@ -282,18 +282,18 @@ pub(super) fn guide_root_has_applied_output(
 
 // On non-unix targets the body is a constant, but the signature matches the
 // unix publisher so callers stay portable.
-#[cfg_attr(not(unix), allow(clippy::unnecessary_wraps))]
+#[cfg_attr(not(any(unix, windows)), allow(clippy::unnecessary_wraps))]
 pub(super) fn guide_manifest_has_applied_output(
     manifest: &DesktopGuideManifest,
 ) -> AppResult<bool> {
     if manifest.choice != ProjectGuideChoiceV1::Install {
         return Ok(false);
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         Ok(false)
     }
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         let root_identity = manifest
             .root_identity
@@ -312,7 +312,7 @@ pub(super) fn guide_manifest_has_applied_output(
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) fn install_project_guide_pinned(
     pinned: &PinnedProjectDirectory,
     extra: &str,
@@ -355,7 +355,7 @@ pub(crate) fn install_project_guide_pinned(
     Ok(written)
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 // Keeps the unix signature: only the unix publisher can produce written names.
 #[allow(clippy::unnecessary_wraps)]
 pub(crate) fn install_project_guide_pinned(
@@ -365,7 +365,7 @@ pub(crate) fn install_project_guide_pinned(
     Err(AppError::Message("project-guide-unavailable".to_owned()))
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(super) fn validate_guide_file_state(
     root: &PinnedGuideRoot<'_>,
     file: &DesktopGuideFileManifest,
