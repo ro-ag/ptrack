@@ -177,9 +177,10 @@ try {
             '-out', $object
         ) + $extensions + @((Join-Path $PSScriptRoot 'p-track.wxs')))
     # ICE91 only notes that per-user files cannot be redirected per machine,
-    # which is the point of a per-user package.
+    # which is the point of a per-user package. ICE61 flags the deliberate
+    # same-version upgrade, which lets a rebuilt package replace its install.
     Invoke-Tool (Join-Path $wix 'light.exe') (@(
-            '-nologo', '-cultures:en-us', '-spdb', '-sice:ICE91',
+            '-nologo', '-cultures:en-us', '-spdb', '-sice:ICE91', '-sice:ICE61',
             '-out', $msi
         ) + $extensions + @($object))
     Assert-PerUserPackage $msi $(if ($Arch -eq 'amd64') { 'x64' } else { 'Arm64' })

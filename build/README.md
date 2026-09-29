@@ -24,9 +24,13 @@ assets per architecture: the frozen CLI ZIP (exactly `ptrack.exe`,
 `README.md`, `LICENSE`, which installed updaters require), the per-user MSI,
 and the portable ZIP that adds the launcher. To package locally:
 
+`ptrack.exe` must come from `tauri build`: a plain `cargo build` produces a
+development binary whose window loads the Vite dev server (`localhost`)
+instead of the embedded frontend.
+
 ```powershell
-npm --prefix frontend ci; npm --prefix frontend run build
-cargo build --locked --release -p ptrack-desktop --bin ptrack
+npm --prefix frontend ci
+npm --prefix frontend run tauri -- build --no-bundle --ci -- --locked
 cargo build --locked --release -p ptrack-launcher
 ./build/windows/package.ps1 -Version 0.41.3 -Arch amd64 -BinDir target/release -OutDir dist
 ```

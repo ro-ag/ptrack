@@ -928,6 +928,113 @@ button:disabled {
   backdrop-filter: blur(18px) saturate(1.35);
 }
 
+/* Frameless Windows title bar. It exists only when index.html marks a
+   Windows desktop window as drawing its own chrome: macOS keeps its native
+   inset traffic lights and a browser shows none of it. */
+.app-menu-button,
+.window-controls {
+  display: none;
+}
+
+:root[data-window-chrome="custom"] .sidebar-top {
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-100);
+}
+
+/* The menu button sits where the traffic lights sit on macOS; with the
+   sidebar hidden, or on the project landing, the topbar carries it. */
+:root[data-window-chrome="custom"] .sidebar-top .app-menu-button,
+:root[data-window-chrome="custom"] #app:is([data-sidebar-hidden="true"], [data-workspace-open="false"]) .topbar-app-menu {
+  display: grid;
+}
+
+:root[data-window-chrome="custom"] .topbar-app-menu {
+  margin-right: auto;
+}
+
+:root[data-window-chrome="custom"] .window-controls {
+  display: flex;
+  align-self: stretch;
+  align-items: center;
+  gap: 2px;
+  margin-right: calc(-1 * var(--space-050));
+  padding-left: var(--space-100);
+  border-left: 1px solid var(--line-subtle);
+}
+
+.app-menu-button,
+.window-control {
+  min-height: 28px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  box-shadow: none;
+}
+
+.app-menu-button {
+  width: 32px;
+  min-width: 32px;
+}
+
+.window-control {
+  width: 40px;
+  min-width: 40px;
+  display: grid;
+}
+
+.app-menu-button:hover,
+.app-menu-button:focus-visible,
+.window-control:hover,
+.window-control:focus-visible {
+  color: var(--text);
+  background: var(--fill-hover);
+  box-shadow: none;
+  transform: none;
+}
+
+.app-menu-button:active,
+.window-control:active {
+  transform: none;
+}
+
+/* Windows' own close hover: white on red in both themes. */
+.window-control-close:hover,
+.window-control-close:focus-visible {
+  color: #fff;
+  background: #c42b1c;
+}
+
+.app-menu-button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+
+.window-control svg {
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+}
+
+.window-restore-glyph,
+:root[data-window-maximized="true"] .window-maximize-glyph {
+  display: none;
+}
+
+:root[data-window-maximized="true"] .window-restore-glyph {
+  display: block;
+}
+
 .brand,
 .panel-controls,
 .title-row,

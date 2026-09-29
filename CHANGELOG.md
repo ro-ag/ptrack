@@ -16,6 +16,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   that runs from any folder with nothing registered.
 - `p-track.exe`, the Windows desktop entry point: it opens the project
   workspace without a console window, as `p-track.app` does on macOS.
+- On Windows the workspace and terminal windows are frameless and draw their
+  own title bar, matching the integrated macOS look: the app menu opens from a
+  ☰ button at the top of the sidebar (or of the topbar while the sidebar is
+  hidden), minimize, maximize, and close sit at the end of the topbar, and the
+  topbar drags the window and maximizes it on double-click. macOS keeps its
+  native inset traffic lights.
 - Agent guides (`AGENTS.md`, `CLAUDE.md`) and the git `post-commit` hook now
   install on Windows, from `ptrack init`, `ptrack guide`, `ptrack hook`, and
   the desktop project setup.
@@ -34,6 +40,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Revealing a verified Windows update archive no longer reports an error after
   Explorer opens.
 - Git commands started by the desktop app no longer flash console windows.
+- Reinstalling a Windows installer of the same version replaces the installed
+  copy instead of adding a second entry to Apps.
 
 ## [0.41.3] - 2026-09-25
 

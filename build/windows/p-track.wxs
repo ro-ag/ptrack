@@ -36,7 +36,10 @@
              Description="p-track $(var.Version)"
              Comments="Observe agent work, keep the plan, pass the context." />
 
+    <!-- Same-version upgrades replace the installed copy: a rebuilt package of
+         one version must not install beside it as a second product. -->
     <MajorUpgrade Schedule="afterInstallInitialize"
+                  AllowSameVersionUpgrades="yes"
                   DowngradeErrorMessage="A newer version of p-track is already installed." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 

@@ -21,6 +21,11 @@
         if (/^#terminal-window=terminal-\d+$/.test(location.hash)) {
           document.documentElement.dataset.windowMode = "terminal";
         }
+        // The Windows desktop app is frameless and draws its own title bar;
+        // macOS keeps its inset traffic lights and a browser keeps nothing.
+        if (window.__TAURI_INTERNALS__ && /Win/.test(navigator.platform)) {
+          document.documentElement.dataset.windowChrome = "custom";
+        }
       })();
     </script>
     <link rel="stylesheet" href="/src/style.css" />
@@ -28,7 +33,17 @@
   <body>
     <div id="app" data-workspace-open="false">
       <aside id="sidebar" class="sidebar" aria-label="Workspace navigation">
-        <div class="sidebar-top" aria-hidden="true" data-tauri-drag-region></div>
+        <div class="sidebar-top" data-tauri-drag-region>
+          <button
+            class="app-menu-button"
+            type="button"
+            data-app-menu
+            aria-label="Open the p-track menu"
+            title="Menu"
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h11"></path></svg>
+          </button>
+        </div>
 
         <div class="brand sidebar-brand">
           <span class="brand-mark" aria-hidden="true"></span>
@@ -160,6 +175,15 @@
 
       <div class="canvas">
       <header class="topbar" data-tauri-drag-region="deep">
+        <button
+          class="app-menu-button topbar-app-menu"
+          type="button"
+          data-app-menu
+          aria-label="Open the p-track menu"
+          title="Menu"
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h11"></path></svg>
+        </button>
         <div class="panel-controls" role="group" aria-label="Workspace view controls">
           <button
             id="sidebar-toggle"
@@ -213,6 +237,18 @@
             type="button"
             aria-label="Toggle color theme"
           >☾</button>
+        </div>
+        <div class="window-controls" role="group" aria-label="Window controls">
+          <button class="window-control" type="button" data-window-control="minimize" aria-label="Minimize" title="Minimize">
+            <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M0.5 5h9"></path></svg>
+          </button>
+          <button class="window-control" type="button" data-window-control="toggle-maximize" aria-label="Maximize" title="Maximize">
+            <svg class="window-maximize-glyph" viewBox="0 0 10 10" aria-hidden="true"><rect x="0.5" y="0.5" width="9" height="9" rx="1"></rect></svg>
+            <svg class="window-restore-glyph" viewBox="0 0 10 10" aria-hidden="true"><rect x="0.5" y="2.5" width="7" height="7" rx="1"></rect><path d="M2.5 2.5V1.5a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-1"></path></svg>
+          </button>
+          <button class="window-control window-control-close" type="button" data-window-control="close" aria-label="Close" title="Close">
+            <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M0.8 0.8l8.4 8.4M9.2 0.8L0.8 9.2"></path></svg>
+          </button>
         </div>
       </header>
 
@@ -1233,6 +1269,18 @@
           <div id="terminal-window-controls" class="terminal-tab-actions" role="toolbar" aria-label="Terminal controls">
             <button id="terminal-window-theme-toggle" class="terminal-tab-action" type="button" aria-label="Toggle color theme">☾</button>
           </div>
+        </div>
+        <div class="window-controls" role="group" aria-label="Window controls">
+          <button class="window-control" type="button" data-window-control="minimize" aria-label="Minimize" title="Minimize">
+            <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M0.5 5h9"></path></svg>
+          </button>
+          <button class="window-control" type="button" data-window-control="toggle-maximize" aria-label="Maximize" title="Maximize">
+            <svg class="window-maximize-glyph" viewBox="0 0 10 10" aria-hidden="true"><rect x="0.5" y="0.5" width="9" height="9" rx="1"></rect></svg>
+            <svg class="window-restore-glyph" viewBox="0 0 10 10" aria-hidden="true"><rect x="0.5" y="2.5" width="7" height="7" rx="1"></rect><path d="M2.5 2.5V1.5a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-1"></path></svg>
+          </button>
+          <button class="window-control window-control-close" type="button" data-window-control="close" aria-label="Close" title="Close">
+            <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M0.8 0.8l8.4 8.4M9.2 0.8L0.8 9.2"></path></svg>
+          </button>
         </div>
       </header>
       <p id="terminal-window-status" class="terminal-window-status" role="status" aria-live="polite" aria-atomic="true">Connecting…</p>

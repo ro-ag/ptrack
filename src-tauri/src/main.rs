@@ -243,6 +243,10 @@ fn terminal_window(app: &AppHandle, label: &str) -> Result<(), String> {
             .hidden_title(true)
             .traffic_light_position(tauri::LogicalPosition::new(16.0, 17.0));
     }
+    #[cfg(windows)]
+    {
+        builder = builder.decorations(false).shadow(true);
+    }
     if let Some(placement) = saved_placement(ptrack_cli::version(), label, &monitors, primary) {
         // The builder takes logical units, so the stored logical rect replays
         // without a scale conversion.
@@ -251,10 +255,76 @@ fn terminal_window(app: &AppHandle, label: &str) -> Result<(), String> {
             .position(placement.logical.x, placement.logical.y)
             .maximized(placement.maximized);
     }
-    builder
-        .build()
-        .map(|_| ())
-        .map_err(|error| error.to_string())
+    let window = builder.build().map_err(|error| error.to_string())?;
+    #[cfg(windows)]
+    use_custom_window_chrome(&window);
+    #[cfg(not(windows))]
+    let _ = window;
+    Ok(())
+}
+
+/// Windows windows are frameless and the web layout draws the title bar
+/// (index.html's `data-window-chrome="custom"`), the counterpart of the macOS
+/// Overlay style: no native caption, and no native menu bar. The shared app
+/// menu stays attached, hidden, so the title bar's menu button can open it and
+/// its events keep flowing through `handle_menu_event`. The shadow keeps the
+/// Windows 11 rounded corners and resize border.
+#[cfg(windows)]
+fn use_custom_window_chrome<R: Runtime>(window: &tauri::WebviewWindow<R>) {
+    let _ = window.set_decorations(false);
+    let _ = window.set_shadow(true);
+    let _ = window.hide_menu();
+}
+
+/// The frameless Windows title bar's controls: the app menu under its button
+/// (main window only, like every other native action), minimize,
+/// maximize/restore, and close. Every action answers whether the window is
+/// now maximized, so the web title bar can draw the restore glyph. Other
+/// platforms keep their native chrome and refuse it.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri injects owned command arguments.
+fn window_chrome(
+    window: tauri::WebviewWindow,
+    action: String,
+    x: Option<f64>,
+    y: Option<f64>,
+) -> Result<bool, String> {
+    #[cfg(not(windows))]
+    {
+        let _ = (window, action, x, y);
+        Err("the custom window chrome is Windows-only".to_owned())
+    }
+    #[cfg(windows)]
+    {
+        match action.as_str() {
+            "menu" => {
+                require_main_window_label(window.label())?;
+                let menu = window
+                    .app_handle()
+                    .menu()
+                    .ok_or_else(|| "the app menu is unavailable".to_owned())?;
+                let position = tauri::LogicalPosition::new(x.unwrap_or(0.0), y.unwrap_or(0.0));
+                window
+                    .popup_menu_at(&menu, position)
+                    .map_err(|error| error.to_string())?;
+            }
+            "minimize" => window.minimize().map_err(|error| error.to_string())?,
+            "toggle-maximize" => {
+                if window.is_maximized().map_err(|error| error.to_string())? {
+                    window.unmaximize()
+                } else {
+                    window.maximize()
+                }
+                .map_err(|error| error.to_string())?;
+            }
+            // The same close request the native caption sent: the main window
+            // still runs its bounded teardown, a terminal window its pop-in.
+            "close" => window.close().map_err(|error| error.to_string())?,
+            "state" => {}
+            _ => return Err("unknown window chrome action".to_owned()),
+        }
+        window.is_maximized().map_err(|error| error.to_string())
+    }
 }
 
 /// Destroys the named windows without running their close handler: their
@@ -696,6 +766,8 @@ fn run_desktop(initial_path: Option<PathBuf>, initial_plan: u64) {
             // cannot leave the initially hidden window invisible.
             if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
                 restore_window_state(&window, &capture.version);
+                #[cfg(windows)]
+                use_custom_window_chrome(&window);
                 let _ = window.show();
             }
             let sink: Arc<dyn DesktopEventSink> = Arc::new(TauriEventSink {
@@ -791,7 +863,8 @@ fn run_desktop(initial_path: Option<PathBuf>, initial_plan: u64) {
         .invoke_handler(tauri::generate_handler![
             gui_invoke,
             pick_project_directory,
-            open_external_url
+            open_external_url,
+            window_chrome
         ]);
     let application = match builder.build(tauri::generate_context!()) {
         Ok(application) => application,

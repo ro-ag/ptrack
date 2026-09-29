@@ -43,10 +43,14 @@ fn shell_has_only_the_bounded_adapter_commands() {
     let source = shell_source();
     let manifest = read_text(&manifest_dir.join("Cargo.toml"));
 
-    assert_eq!(source.matches("#[tauri::command]").count(), 3);
+    assert_eq!(source.matches("#[tauri::command]").count(), 4);
     assert!(source.contains("gui_invoke"));
     assert!(source.contains("pick_project_directory"));
     assert!(source.contains("open_external_url"));
+    // The frameless Windows title bar's controls; it grants the webview no
+    // capability permission, and other platforms refuse it.
+    assert!(source.contains("fn window_chrome("));
+    assert!(source.contains("Err(\"the custom window chrome is Windows-only\".to_owned())"));
     assert!(source.contains("tauri::generate_handler!["));
     assert!(source.contains("production_desktop_runtime_for_startup("));
     assert!(source.contains("app.manage(runtime)"));
@@ -415,9 +419,16 @@ fn native_window_actions_are_main_window_only() {
         source
             .matches("require_main_window_label(window.label())?")
             .count(),
-        2,
-        "both native window actions must be main-window scoped"
+        3,
+        "every native window action must be main-window scoped"
     );
+    // The Windows title bar's app menu is the third: it opens only over the
+    // main window, before the menu is even looked up.
+    let menu_arm = source
+        .split_once("\"menu\" => {")
+        .map(|(_, rest)| rest.trim_start())
+        .expect("the window chrome menu action must be findable");
+    assert!(menu_arm.starts_with("require_main_window_label(window.label())?;"));
     // The guard runs first in each command body, before anything else can act.
     for signature in ["async fn pick_project_directory(", "fn open_external_url("] {
         let body = source
