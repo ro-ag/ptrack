@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.41.4] - 2026-09-29
+
 ### Added
 - A per-user Windows installer, `p-track_<version>_windows_<arch>.msi`, that
   never asks for administrator rights. It installs into
