@@ -144,7 +144,7 @@ fn dispatch(
         ["projects"] => projects(leaf, application, io),
         ["backup"] => {
             let path = application.backup()?;
-            output::line(io.stdout, path.display())?;
+            output::line(io.stdout, output::path(&path))?;
             Ok(RunOutcome::ExitSuccess)
         }
         ["mcp"] => {
@@ -177,11 +177,11 @@ fn init(
             io.stdout,
             format_args!(
                 "project already initialized at {}",
-                result.database.display()
+                output::path(&result.database)
             ),
         )?;
     } else {
-        output::line(io.stdout, result.database.display())?;
+        output::line(io.stdout, output::path(&result.database))?;
     }
     if !no_guide {
         write_guide_result(io, &result.guide_files)?;
@@ -199,7 +199,7 @@ fn relocate(
     })?;
     output::line(
         io.stdout,
-        format_args!("project re-registered at {}", result.root.display()),
+        format_args!("project re-registered at {}", output::path(&result.root)),
     )?;
     Ok(RunOutcome::ExitSuccess)
 }
@@ -1473,7 +1473,7 @@ fn hook(
             if changed {
                 output::line(
                     io.stdout,
-                    format_args!("installed post-commit hook at {}", path.display()),
+                    format_args!("installed post-commit hook at {}", output::path(&path)),
                 )?;
             } else {
                 output::line(io.stdout, "post-commit hook already up to date")?;
@@ -1485,7 +1485,10 @@ fn hook(
         HookResult::Removed => output::line(io.stdout, "removed ptrack post-commit hook")?,
         HookResult::Missing => output::line(io.stdout, "no post-commit hook")?,
         HookResult::Status { path, installed } if installed => {
-            output::line(io.stdout, format_args!("installed: {}", path.display()))?;
+            output::line(
+                io.stdout,
+                format_args!("installed: {}", output::path(&path)),
+            )?;
         }
         HookResult::Status { .. } => {
             output::line(io.stdout, "not installed (run 'ptrack hook install')")?;
@@ -1534,7 +1537,7 @@ fn write_guide_result(io: &mut Io<'_>, files: &[PathBuf]) -> Result<(), CliError
         for path in files {
             output::line(
                 io.stdout,
-                format_args!("wrote agent guide to {}", path.display()),
+                format_args!("wrote agent guide to {}", output::path(path)),
             )?;
         }
     }
@@ -1740,7 +1743,11 @@ fn projects(
             let seen = seen.get(..19).unwrap_or(&seen).replace('T', " ");
             output::line(
                 io.stdout,
-                format_args!("{}\t{}\t{seen}", project.name, project.path),
+                format_args!(
+                    "{}\t{}\t{seen}",
+                    project.name,
+                    output::path(std::path::Path::new(&project.path))
+                ),
             )?;
         }
     }

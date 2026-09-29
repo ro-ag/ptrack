@@ -5,6 +5,7 @@ import "./settings-kimi.css";
 import "./landing.css";
 import "./cover-flow.css";
 import "./tauri-bridge";
+import "./window-chrome";
 
 import { createApp } from "./app";
 import { terminalWindowLabel } from "./terminal/pop-out";

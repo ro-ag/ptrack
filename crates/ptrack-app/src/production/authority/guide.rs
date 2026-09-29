@@ -4,13 +4,13 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 use crate::production::GUIDE_UNAVAILABLE;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use ptrack_core::upsert_guide;
 use ptrack_store::{PinnedProjectDirectory, PrivatePathIdentity};
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use super::super::guide::{
     DesktopGuideFileManifest, guide_diff, guide_line_counts, read_guide_template,
 };
@@ -18,29 +18,29 @@ use super::super::guide::{
     DesktopGuideManifest, guide_manifest_has_applied_output, validate_guide_manifest,
 };
 use super::super::journal::stale_guide_skip_allowed;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use super::super::pinned_guide::PinnedGuideRoot;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use super::super::{
     GUIDE_DIFF_LINE_LIMIT, GUIDE_FILES, GUIDE_OUTPUT_LIMIT, GUIDE_PREVIEW_LIMIT, content_digest,
     random_operation_id, validate_operation_id,
 };
 use super::super::{GUIDE_PARTIALLY_APPLIED, GUIDE_PREVIEW_STALE, lock, recovery};
 use super::ProductionDesktopAuthority;
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 use crate::ProjectGuidePreviewV1;
 use crate::{
     AppError, AppResult, InitializationCheckpointV1, InitializationOutcomeV1,
     InitializationStatusV1, InitializeProjectRequestV1, ProjectGuideChoiceV1,
 };
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use crate::{
     ProjectGuideFileActionV1, ProjectGuideFilePreviewV1, ProjectGuidePreviewRequestV1,
     ProjectGuidePreviewV1, ProjectTargetKindV1,
 };
 
 impl ProductionDesktopAuthority {
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     pub(super) fn guide_unavailable() -> ProjectGuidePreviewV1 {
         ProjectGuidePreviewV1 {
             available: false,
@@ -50,7 +50,7 @@ impl ProductionDesktopAuthority {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(super) fn preview_guide_inner(
         &self,
         request: &ProjectGuidePreviewRequestV1,

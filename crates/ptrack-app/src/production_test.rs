@@ -11,7 +11,7 @@ use ptrack_store::{
     acquire_cutover_lock, load_active_generation, protect_private_directory, protect_private_file,
 };
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use crate::ProjectGuideFileActionV1;
 use crate::{
     ActiveRuntime, ApplicationPort, DesktopCommandRequest, DesktopInitializationService,
@@ -1221,7 +1221,7 @@ fn desktop_authority_validation_is_read_only_and_classifies_new_targets() {
     assert!(!project.join(".ptrack").exists());
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn desktop_authority_previews_and_applies_only_the_exact_consented_guides() {
     let temp = Temp::new();
@@ -1380,7 +1380,7 @@ fn pending_initialization_preserves_checkpoint_when_target_vanishes() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn desktop_authority_rejects_skip_after_a_partially_applied_guide() {
     let temp = Temp::new();
@@ -1453,7 +1453,7 @@ fn desktop_authority_rejects_skip_after_a_partially_applied_guide() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn desktop_authority_records_partial_apply_when_a_later_guide_turns_stale() {
     let temp = Temp::new();
@@ -1503,7 +1503,7 @@ fn desktop_authority_records_partial_apply_when_a_later_guide_turns_stale() {
     assert_eq!(status.error_kind, "project-guide-partially-applied");
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 #[allow(clippy::too_many_lines)] // Two authorities prove journal status and consent reconcile together.
 fn desktop_authority_loser_reconciles_the_winning_guide_manifest() {
@@ -1624,7 +1624,7 @@ fn desktop_authority_loser_reconciles_the_winning_guide_manifest() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn desktop_authority_stale_guide_preview_is_no_write_and_can_be_refreshed() {
     let temp = Temp::new();
@@ -1678,7 +1678,7 @@ fn desktop_authority_stale_guide_preview_is_no_write_and_can_be_refreshed() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn desktop_authority_second_validation_stale_can_explicitly_skip_without_guide_writes() {
     let temp = Temp::new();
@@ -1726,7 +1726,7 @@ fn desktop_authority_second_validation_stale_can_explicitly_skip_without_guide_w
     assert!(!project.join("CLAUDE.md").exists());
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn desktop_authority_runtime_committed_stale_restart_can_explicitly_skip() {
     let temp = Temp::new();
@@ -1781,7 +1781,7 @@ fn desktop_authority_runtime_committed_stale_restart_can_explicitly_skip() {
     assert!(!project.join("CLAUDE.md").exists());
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn desktop_authority_guide_applied_restart_ignores_lost_token_and_preserves_later_edits() {
     let temp = Temp::new();
@@ -1846,7 +1846,7 @@ fn desktop_authority_guide_applied_restart_ignores_lost_token_and_preserves_late
     );
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn desktop_authority_rejects_a_guide_preview_over_the_line_bound_without_writes() {
     let temp = Temp::new();
@@ -1870,7 +1870,7 @@ fn desktop_authority_rejects_a_guide_preview_over_the_line_bound_without_writes(
     assert!(!project.join(".ptrack").exists());
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 #[test]
 fn desktop_authority_reports_guide_capability_unavailable_without_writes() {
     let temp = Temp::new();
@@ -1895,6 +1895,8 @@ fn desktop_authority_reports_guide_capability_unavailable_without_writes() {
     assert!(!home.exists());
 }
 
+// Unix only: creating a symbolic link on Windows needs elevation or
+// Developer Mode, which the test hosts do not grant.
 #[cfg(unix)]
 #[test]
 fn desktop_authority_rejects_forged_consent_and_symlink_preview_without_writes() {
@@ -1938,7 +1940,7 @@ fn desktop_authority_rejects_forged_consent_and_symlink_preview_without_writes()
     assert!(!home.exists());
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn desktop_authority_create_race_fails_stale_and_cleans_its_root_temporary() {
     let temp = Temp::new();
@@ -1955,24 +1957,28 @@ fn desktop_authority_create_race_fails_stale_and_cleans_its_root_temporary() {
         .unwrap();
     let raced = project.join("AGENTS.md");
     let raced_for_hook = raced.clone();
-    let project_for_hook = project.clone();
+    // Unix stages in the private `.ptrack` directory; Windows stages beside
+    // the destination so the published guide inherits the root's descriptor.
+    let (staging, elsewhere) = if cfg!(windows) {
+        (project.clone(), project.join(".ptrack"))
+    } else {
+        (project.join(".ptrack"), project.clone())
+    };
     crate::production::set_guide_before_publish_hook(move || {
-        assert!(fs::read_dir(&project_for_hook).unwrap().all(|entry| {
+        assert!(fs::read_dir(&elsewhere).unwrap().all(|entry| {
             !entry
                 .unwrap()
                 .file_name()
                 .to_string_lossy()
                 .contains("guide-AGENTS")
         }));
-        assert!(
-            fs::read_dir(project_for_hook.join(".ptrack"))
+        assert!(fs::read_dir(&staging).unwrap().any(|entry| {
+            entry
                 .unwrap()
-                .any(|entry| entry
-                    .unwrap()
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with(".guide-AGENTS.md-"))
-        );
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".guide-AGENTS.md-")
+        }));
         fs::write(raced_for_hook, "concurrent user file\n").unwrap();
     });
 

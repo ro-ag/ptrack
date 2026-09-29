@@ -6,6 +6,43 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- A per-user Windows installer, `p-track_<version>_windows_<arch>.msi`, that
+  never asks for administrator rights. It installs into
+  `%LOCALAPPDATA%\Programs\p-track`, puts `ptrack` on your user `PATH`, and
+  adds **p-track** to the Start menu; upgrades replace the installed version
+  in place and uninstalling removes everything it added.
+- A portable Windows archive, `p-track_<version>_windows_<arch>_portable.zip`,
+  that runs from any folder with nothing registered.
+- `p-track.exe`, the Windows desktop entry point: it opens the project
+  workspace without a console window, as `p-track.app` does on macOS.
+- On Windows the workspace and terminal windows are frameless and draw their
+  own title bar, matching the integrated macOS look: the app menu opens from a
+  ☰ button at the top of the sidebar (or of the topbar while the sidebar is
+  hidden), minimize, maximize, and close sit at the end of the topbar, and the
+  topbar drags the window and maximizes it on double-click. macOS keeps its
+  native inset traffic lights.
+- Agent guides (`AGENTS.md`, `CLAUDE.md`) and the git `post-commit` hook now
+  install on Windows, from `ptrack init`, `ptrack guide`, `ptrack hook`, and
+  the desktop project setup.
+- An installed Windows copy updates from **About & Updates** by opening the
+  verified next installer.
+
+### Fixed
+- p-track no longer refuses to start on Windows when `~\.ptrack` inherits the
+  profile's permissions or another tool adds its own access entry; the folder
+  is tightened to your account, as Unix already does with its mode bits.
+- `ptrack init` no longer reports failure on Windows after creating the
+  project.
+- Paths show as `C:\…` on Windows instead of `\\?\C:\…`, in the CLI and in
+  the desktop workspace, and the project list shortens `C:\Users\<name>` to
+  `~` as it does on macOS.
+- Revealing a verified Windows update archive no longer reports an error after
+  Explorer opens.
+- Git commands started by the desktop app no longer flash console windows.
+- Reinstalling a Windows installer of the same version replaces the installed
+  copy instead of adding a second entry to Apps.
+
 ## [0.41.3] - 2026-09-25
 
 ### Changed

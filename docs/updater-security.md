@@ -31,7 +31,8 @@ Accepted packages are:
 | Platform | Asset |
 |---|---|
 | macOS | `p-track_<version>_darwin_<arch>.dmg` |
-| Windows | `ptrack_<version>_windows_<arch>.zip` |
+| Windows, installed with the MSI | `p-track_<version>_windows_<arch>.msi` |
+| Windows, any other copy | `ptrack_<version>_windows_<arch>.zip` |
 | Linux | `ptrack_<version>_linux_<arch>.tar.gz` |
 
 GitHub-generated source tarballs and zipballs are not read from the response
@@ -87,10 +88,20 @@ the signed app bundle and is never attempted.
 
 ### Windows
 
-The ZIP and payload are revalidated, then Explorer is opened through the
-absolute Windows directory path with the verified archive selected. The
-running executable is not overwritten. The user closes p-track, replaces the
-binary from the archive, and reopens it.
+A copy counts as installed only when its executable sits in the folder the
+per-user MSI recorded under `HKCU\Software\ro-ag\p-track\InstallDir`. Such a
+copy stages the MSI instead of the ZIP. The staged package must be an OLE
+compound file whose exact bytes match the signed manifest; p-track then starts
+`msiexec.exe /i` from the absolute system directory and does not wait on it.
+Windows Installer performs the per-user major upgrade without elevation and
+offers to close the running app; p-track replaces no file itself.
+
+Any other copy — the portable folder or the CLI archive — revalidates the ZIP
+and payload, then opens Explorer through the absolute Windows directory path
+with the verified archive selected. The running executable is not
+overwritten. The user closes p-track, replaces the binary from the archive,
+and reopens it. Both handoffs are launched rather than awaited, because
+Explorer reports failure even after it opens the folder.
 
 ### Linux
 

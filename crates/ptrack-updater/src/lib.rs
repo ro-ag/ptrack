@@ -5,9 +5,12 @@ mod installer;
 mod permissions;
 mod signature;
 mod staging;
+#[cfg(windows)]
+mod windows_install;
 
 pub use discovery::{
-    Asset, Candidate, Client, Target, UpdateError, compare_versions, package_name, parse_version,
+    Asset, Candidate, Client, Installation, Target, UpdateError, compare_versions, package_name,
+    parse_version,
 };
 pub use installer::{ApplyAction, ApplyResult, Installer, recover_pending_apply};
 pub use signature::{RELEASE_SIGNING_PUBLIC_KEY, SIGNATURE_ASSET_NAME};

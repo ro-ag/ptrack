@@ -20,6 +20,8 @@ mod sha256;
 mod store;
 mod typed;
 mod validation;
+#[cfg(windows)]
+pub mod windows_relative;
 
 pub use activation::{ActivatedStore, ActiveBinding, StagedStore};
 pub use bounded::{

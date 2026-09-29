@@ -19,7 +19,7 @@ use super::staging::{
     hash_regular_file, load_stage, load_stage_with_key, validate_download_url, validate_stage,
     write_stage_record,
 };
-use super::{Asset, Candidate, Client, Target, UpdateError};
+use super::{Asset, Candidate, Client, Installation, Target, UpdateError};
 
 #[tokio::test(flavor = "current_thread")]
 async fn real_http_stage_streams_both_assets_and_publishes_only_after_verification() {
@@ -312,6 +312,62 @@ fn windows_zip_accepts_only_exact_root_files_and_machine() {
     let bad = root.join("bad.zip");
     make_zip(&bad, &fake_pe(0xaa64), true);
     assert!(extract_zip_payload(&cancellation, &bad, &root.join("other.exe")).is_err());
+    cleanup(&root);
+}
+
+#[test]
+fn windows_msi_stage_hands_over_the_verified_package_only_when_it_is_an_installer() {
+    let cancellation = CancellationToken::new();
+    let root = private_temp_dir();
+    let name = "p-track_1.2.3_windows_amd64.msi";
+    let asset = root.join(name);
+    let stage_for = |bytes: &[u8]| {
+        write_private_replace(&asset, bytes);
+        let (digest, size) = hash_regular_file(&cancellation, &asset, 512 << 20).unwrap();
+        let stage = StagedUpdate {
+            root: root.clone(),
+            asset_path: asset.clone(),
+            payload_path: asset.clone(),
+            state_path: root.join("state.json"),
+            version: "1.2.3".to_owned(),
+            asset_name: name.to_owned(),
+            os: "windows".to_owned(),
+            arch: "amd64".to_owned(),
+            sha256: digest.clone(),
+            size_bytes: size,
+            payload_sha256: digest,
+            payload_size_bytes: size,
+            kind: StageKind::WindowsMsi,
+        };
+        let _ = fs::remove_file(&stage.state_path);
+        write_stage_record(&stage).unwrap();
+        stage
+    };
+
+    let mut installer = vec![0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
+    installer.resize(512, 0);
+    let stage = stage_for(&installer);
+    validate_stage(&cancellation, &stage).unwrap();
+    assert!(
+        fs::read_to_string(&stage.state_path)
+            .unwrap()
+            .ends_with("\"kind\":\"windows-msi\"}\n")
+    );
+
+    // The signed digest may name any bytes; only an installer is handed on.
+    let stage = stage_for(&fake_pe(0x8664));
+    assert_eq!(
+        validate_stage(&cancellation, &stage).unwrap_err(),
+        UpdateError::InvalidStage
+    );
+
+    // An MSI stage never stands in for the archive a portable copy expects.
+    let mut archive_named = stage_for(&installer);
+    archive_named.kind = StageKind::WindowsZip;
+    assert_eq!(
+        validate_stage(&cancellation, &archive_named).unwrap_err(),
+        UpdateError::InvalidStage
+    );
     cleanup(&root);
 }
 
@@ -732,6 +788,7 @@ fn linux_amd64() -> Target {
     Target {
         os: "linux".to_owned(),
         arch: "amd64".to_owned(),
+        installation: Installation::Archive,
     }
 }
 

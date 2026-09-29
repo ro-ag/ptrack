@@ -4,8 +4,8 @@ use std::sync::{Arc, Barrier, Mutex};
 
 use ptrack_store::{ActiveBinding, GlobalStore, StoreKind};
 use ptrack_updater::{
-    ApplyAction, ApplyResult, Asset, Candidate, Progress, StageKind, StagedUpdate, Target,
-    UpdateError,
+    ApplyAction, ApplyResult, Asset, Candidate, Installation, Progress, StageKind, StagedUpdate,
+    Target, UpdateError,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -509,6 +509,7 @@ fn target() -> Target {
     Target {
         os: "linux".to_owned(),
         arch: "amd64".to_owned(),
+        installation: Installation::Archive,
     }
 }
 

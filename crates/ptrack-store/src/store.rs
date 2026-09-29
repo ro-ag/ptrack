@@ -1982,7 +1982,7 @@ impl DestinationParent {
             }
             .map_err(|_| StoreError::DestinationParentInvalid { path: path.clone() })?;
             if require_private {
-                crate::private_windows::verify_private(&path)
+                crate::private_windows::heal_private(&path, true)
                     .map_err(|_| StoreError::DestinationParentInvalid { path: path.clone() })?;
             }
             let identity = FileIdentity::from_file(&directory)?;
@@ -2458,7 +2458,9 @@ fn validate_private_permissions(path: &Path, metadata: &fs::Metadata) -> StoreRe
 
 #[cfg(windows)]
 fn validate_private_permissions(path: &Path, _metadata: &fs::Metadata) -> StoreResult<()> {
-    crate::private_windows::verify_private(path).map_err(|_| StoreError::InsecurePermissions {
+    // Healed like the Unix mode bits above: a clone or copy inherits the
+    // parent's descriptor, and tightening it cannot leak anything.
+    crate::private_windows::heal_private(path, false).map_err(|_| StoreError::InsecurePermissions {
         path: path.to_path_buf(),
         mode: 0,
     })

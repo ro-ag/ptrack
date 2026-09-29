@@ -179,22 +179,25 @@ fn windows_force_close_interrupts_wait_and_kills_the_descendant_job() {
         .unwrap();
     wait_thread.join().unwrap();
     process.close().unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while process_exists_windows(descendant_pid) && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    assert!(!process_exists_windows(descendant_pid));
+    assert!(process_exits_windows(
+        descendant_pid,
+        Duration::from_secs(30)
+    ));
     let _ = std::fs::remove_file(pid_file);
 }
 
+/// Waits inside one `PowerShell` for the pid to exit. Polling with a fresh
+/// `PowerShell` per probe spent the whole budget on process start-up when
+/// the full workspace suite loaded the host, so the job looked like it leaked.
 #[cfg(windows)]
-fn process_exists_windows(pid: u32) -> bool {
+fn process_exits_windows(pid: u32, timeout: std::time::Duration) -> bool {
+    let milliseconds = timeout.as_millis();
     std::process::Command::new("powershell.exe")
         .args([
             "-NoProfile",
             "-Command",
             &format!(
-                "if (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{ exit 0 }} else {{ exit 1 }}"
+                "$p = Get-Process -Id {pid} -ErrorAction SilentlyContinue; if (-not $p -or $p.WaitForExit({milliseconds})) {{ exit 0 }} else {{ exit 1 }}"
             ),
         ])
         .status()

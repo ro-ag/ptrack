@@ -928,6 +928,146 @@ button:disabled {
   backdrop-filter: blur(18px) saturate(1.35);
 }
 
+/* Frameless Windows title bar. It exists only when index.html marks a
+   Windows desktop window as drawing its own chrome: macOS keeps its native
+   inset traffic lights and a browser shows none of it. */
+.app-menu-button,
+.window-controls {
+  display: none;
+}
+
+:root[data-window-chrome="custom"] .sidebar-top {
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-100);
+}
+
+/* The menu button sits where the traffic lights sit on macOS; with the
+   sidebar hidden, or on the project landing, the topbar carries it. */
+:root[data-window-chrome="custom"] .sidebar-top .app-menu-button,
+:root[data-window-chrome="custom"] #app:is([data-sidebar-hidden="true"], [data-workspace-open="false"]) .topbar-app-menu {
+  display: grid;
+}
+
+:root[data-window-chrome="custom"] .topbar-app-menu {
+  margin-right: auto;
+}
+
+/* The Windows layout is flat, like a native Windows 11 app: the content runs
+   edge to edge beside the sidebar, split from it by one hairline, instead of
+   the inset rounded card the macOS window floats. */
+:root[data-window-chrome="custom"] .canvas {
+  margin: 0;
+  border: 0;
+  border-left: 1px solid var(--line-subtle);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+:root[data-window-chrome="custom"] #app:is([data-sidebar-hidden="true"], [data-workspace-open="false"]) .canvas {
+  border-left: 0;
+}
+
+:root[data-window-chrome="custom"] .terminal-window .terminal-window-canvas {
+  margin: 0;
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+  border-radius: 0;
+}
+
+:root[data-window-chrome="custom"] .topbar {
+  padding-right: 0;
+  border-bottom-color: transparent;
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* Windows 11 caption buttons: 46px wide, the full bar high, flush with the
+   window's top-right corner, and filled edge to edge on hover. */
+:root[data-window-chrome="custom"] .window-controls {
+  display: flex;
+  align-self: stretch;
+  margin-left: var(--space-050);
+}
+
+.app-menu-button,
+.window-control {
+  place-items: center;
+  border: 0;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  box-shadow: none;
+}
+
+.app-menu-button {
+  width: 32px;
+  min-width: 32px;
+  min-height: 28px;
+  height: 28px;
+  border-radius: 6px;
+}
+
+.window-control {
+  width: 46px;
+  min-width: 46px;
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  border-radius: 0;
+}
+
+.app-menu-button:hover,
+.app-menu-button:focus-visible,
+.window-control:hover,
+.window-control:focus-visible {
+  color: var(--text);
+  background: var(--fill-hover);
+  box-shadow: none;
+  transform: none;
+}
+
+.app-menu-button:active,
+.window-control:active {
+  transform: none;
+}
+
+/* Windows' own close hover: white on red in both themes. */
+.window-control-close:hover,
+.window-control-close:focus-visible {
+  color: #fff;
+  background: #c42b1c;
+}
+
+.app-menu-button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linecap: round;
+}
+
+.window-control svg {
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+  shape-rendering: geometricPrecision;
+}
+
+.window-restore-glyph,
+:root[data-window-maximized="true"] .window-maximize-glyph {
+  display: none;
+}
+
+:root[data-window-maximized="true"] .window-restore-glyph {
+  display: block;
+}
+
 .brand,
 .panel-controls,
 .title-row,

@@ -10,7 +10,7 @@ use crate::{
     AppError, ApplicationPort, INVALID_HOLD_PREFIX, InitRequest, LocalApplication, Mutation,
     MutationResult, PlanLifecycleOutcome, PlanLifecycleRequest, ProjectEndpoint, WorkspaceBindings,
 };
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use crate::{GuideAction, HookAction, HookResult};
 
 struct TestDirectory(PathBuf);
@@ -413,6 +413,99 @@ fn hook_operations_reject_links_and_publish_exact_executable_block() {
     );
 }
 
+#[cfg(windows)]
+#[test]
+fn windows_guide_install_pins_the_root_against_replacement() {
+    let directory = TestDirectory::new("guide-root-pinned");
+    let (mut application, endpoint) = configured(&directory, true);
+    let root = endpoint.root.clone();
+    let moved = directory.0.join("moved-project");
+    let moved_for_hook = moved.clone();
+    // Unix can rename a retained root away and must fail closed; the Windows
+    // root handle denies delete sharing, so the rename itself is refused and
+    // the guide still lands in the exact root that was pinned.
+    crate::production::set_guide_before_publish_hook(move || {
+        assert!(std::fs::rename(&root, &moved_for_hook).is_err());
+    });
+
+    application
+        .guide(GuideAction::Install)
+        .expect("guide install through the pinned root");
+    assert!(endpoint.root.join("AGENTS.md").is_file());
+    assert!(endpoint.root.join("CLAUDE.md").is_file());
+    assert!(!moved.exists());
+    assert!(std::fs::read_dir(&endpoint.root).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".guide-")
+    }));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_hook_install_publishes_and_uninstall_removes_the_exact_block() {
+    let directory = TestDirectory::new("hook-windows");
+    let (mut application, endpoint) = configured(&directory, true);
+    git(&endpoint.root, &["init", "-q"]);
+    let hook = endpoint.root.join(".git/hooks/post-commit");
+
+    let HookResult::Installed { changed, .. } =
+        application.hook(HookAction::Install).expect("install hook")
+    else {
+        panic!("wrong hook result");
+    };
+    assert!(changed);
+    assert_eq!(
+        std::fs::read_to_string(&hook).expect("hook text"),
+        concat!(
+            "#!/bin/sh\n",
+            "# ptrack:begin\n",
+            "command -v ptrack >/dev/null 2>&1 && ptrack commit record --sha=\"$(git rev-parse HEAD)\" --subject=\"$(git log -1 --pretty=%s)\" >/dev/null 2>&1 || true\n",
+            "# ptrack:end\n"
+        )
+    );
+    let HookResult::Installed { changed, .. } = application
+        .hook(HookAction::Install)
+        .expect("reinstall hook")
+    else {
+        panic!("wrong hook result");
+    };
+    assert!(!changed);
+
+    // A user line survives uninstall; only the ptrack block goes.
+    let mut content = std::fs::read_to_string(&hook).unwrap();
+    content.push_str("echo user-step\n");
+    std::fs::write(&hook, &content).unwrap();
+    assert_eq!(
+        application.hook(HookAction::Uninstall).unwrap(),
+        HookResult::Removed
+    );
+    assert_eq!(
+        std::fs::read_to_string(&hook).unwrap(),
+        "#!/bin/sh\necho user-step\n"
+    );
+
+    std::fs::write(&hook, content.replace("echo user-step\n", "")).unwrap();
+    assert_eq!(
+        application.hook(HookAction::Uninstall).unwrap(),
+        HookResult::Removed
+    );
+    assert!(!hook.exists());
+    assert!(
+        std::fs::read_dir(hook.parent().unwrap())
+            .unwrap()
+            .all(|entry| {
+                !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(".ptrack-")
+            })
+    );
+}
+
 #[test]
 fn plan_lifecycle_delete_previews_then_deletes_with_summary() {
     let test = TestDirectory::new("lifecycle-delete");
@@ -658,8 +751,8 @@ fn target_open_failures_are_fail_closed_and_only_stale_schemas_get_the_upgrade_h
     assert!(!busy.contains("upgrade ptrack"), "{busy}");
 }
 
-// Only the unix guide-hook tests drive a real git repository.
-#[cfg_attr(not(unix), allow(dead_code))]
+// Only the Unix and Windows guide-hook tests drive a real git repository.
+#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
 fn git(root: &Path, args: &[&str]) {
     let status = std::process::Command::new("git")
         .arg("-C")
@@ -694,7 +787,7 @@ fn add_plan_and_task(application: &mut LocalApplication) -> (u64, u64) {
     (plan.id, task.id)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn hook_install_follows_core_hooks_path_and_status_reports_it() {
     let directory = TestDirectory::new("hook-hooks-path");
@@ -725,7 +818,7 @@ fn hook_install_follows_core_hooks_path_and_status_reports_it() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn hook_install_refuses_a_hooks_path_outside_the_project() {
     let directory = TestDirectory::new("hook-outside");
@@ -746,7 +839,7 @@ fn hook_install_refuses_a_hooks_path_outside_the_project() {
     assert!(!shared.join("post-commit").exists());
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn hook_install_refuses_a_foreign_interpreter_and_respects_a_final_exec() {
     let directory = TestDirectory::new("hook-shebang");
@@ -781,7 +874,7 @@ fn hook_install_refuses_a_foreign_interpreter_and_respects_a_final_exec() {
     assert!(content.starts_with("#!/bin/bash\nset -e\n"), "{content}");
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn hook_reports_a_directory_that_is_not_a_git_repository() {
     let directory = TestDirectory::new("hook-no-git");

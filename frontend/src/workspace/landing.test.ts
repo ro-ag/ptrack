@@ -215,6 +215,10 @@ describe("landing list rows", () => {
     expect(shortenHomePath("/home/ana/src/app")).toBe("~/src/app");
     expect(shortenHomePath("/Users/rodox")).toBe("~");
     expect(shortenHomePath("/opt/work/app")).toBe("/opt/work/app");
+    // Windows canonical roots arrive verbatim and shorten like the others.
+    expect(shortenHomePath("\\\\?\\C:\\Users\\rodox\\dev\\rs\\ptrack")).toBe("~\\dev\\rs\\ptrack");
+    expect(shortenHomePath("C:\\Users\\Ana")).toBe("~");
+    expect(shortenHomePath("\\\\?\\D:\\work\\app")).toBe("D:\\work\\app");
   });
   it("shows path, open tasks, open issues, and last opened", () => {
     const row = landingRowDetails({ ...a, canonicalPath: "/Users/ana/dev/alpha" }, overview.projects[0], now);

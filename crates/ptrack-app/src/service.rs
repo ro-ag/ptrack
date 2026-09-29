@@ -2008,6 +2008,10 @@ impl PinnedDirectory {
                 path.display()
             )));
         }
+        // Windows opens a directory handle only with backup semantics.
+        #[cfg(windows)]
+        let handle = ptrack_store::windows_relative::open_directory(path)?;
+        #[cfg(not(windows))]
         let handle = fs::File::open(path)?;
         let handle_metadata = handle.metadata()?;
         let identity = EntryIdentity::capture(&metadata);
@@ -2125,7 +2129,7 @@ fn atomic_publish(
     default_mode: u32,
     stem: &str,
 ) -> AppResult<()> {
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (path, content, existing, default_mode, stem);
         Err(AppError::Message(
@@ -2133,10 +2137,123 @@ fn atomic_publish(
                 .to_owned(),
         ))
     }
+    #[cfg(windows)]
+    {
+        // Windows has no mode bits; Git for Windows runs a hook regardless.
+        let _ = default_mode;
+        atomic_publish_windows(path, content, existing, stem)
+    }
     #[cfg(unix)]
     {
         atomic_publish_unix(path, content, existing, default_mode, stem)
     }
+}
+
+/// Splits a destination into its retained parent handle and final name.
+#[cfg(windows)]
+fn windows_parent<'a>(path: &'a Path, stem: &str) -> AppResult<(fs::File, &'a str)> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| AppError::Message(format!("{stem} destination has no parent")))?;
+    let file_name = path
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .ok_or_else(|| AppError::Message(format!("{stem} destination has no filename")))?;
+    let directory = ptrack_store::windows_relative::open_directory(parent).map_err(|error| {
+        AppError::Message(format!(
+            "{stem} parent is not a directory: {}: {error}",
+            parent.display()
+        ))
+    })?;
+    Ok((directory, file_name))
+}
+
+/// Proves the entry `name` beneath `parent` is still exactly the file that
+/// was read, through a handle that shares reads only.
+#[cfg(windows)]
+fn windows_entry_unchanged(
+    file: Option<fs::File>,
+    existing: Option<&RegularFile>,
+    path: &Path,
+    stem: &str,
+) -> AppResult<()> {
+    let unchanged = match (file, existing) {
+        (None, None) => true,
+        (Some(mut file), Some(existing)) => {
+            let mut content = String::new();
+            existing.identity.matches(&file.metadata()?)
+                && file.read_to_string(&mut content).is_ok()
+                && content == existing.content
+        }
+        _ => false,
+    };
+    if unchanged {
+        Ok(())
+    } else {
+        Err(AppError::Message(format!(
+            "{stem} changed before publication: {}",
+            path.display()
+        )))
+    }
+}
+
+/// The Windows counterpart of [`atomic_publish_unix`]: stages beside the
+/// destination through the retained parent handle and renames the staged
+/// handle into place, replacing only the exact file that was read and never
+/// an entry that appeared since.
+#[cfg(windows)]
+fn atomic_publish_windows(
+    path: &Path,
+    content: &str,
+    existing: Option<&RegularFile>,
+    stem: &str,
+) -> AppResult<()> {
+    use ptrack_store::windows_relative;
+    use std::io::Write as _;
+
+    let (parent, file_name) = windows_parent(path, stem)?;
+    let mut temporary = None;
+    for sequence in 0..32_u8 {
+        let candidate = format!(
+            ".{file_name}.ptrack-{stem}-{}-{sequence}.tmp",
+            std::process::id()
+        );
+        match windows_relative::create_file_at(&parent, &candidate) {
+            Ok(mut file) => {
+                if let Err(error) = file
+                    .write_all(content.as_bytes())
+                    .and_then(|()| file.sync_all())
+                {
+                    let _ = windows_relative::delete(&file);
+                    return Err(error.into());
+                }
+                temporary = Some(file);
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let temporary = temporary
+        .ok_or_else(|| AppError::Message(format!("could not allocate a {stem} temporary file")))?;
+    let published = windows_relative::open_file_at(&parent, file_name)
+        .map_err(AppError::from)
+        .and_then(|current| windows_entry_unchanged(current, existing, path, stem))
+        .and_then(|()| {
+            windows_relative::rename_at(&temporary, &parent, file_name, existing.is_some()).map_err(
+                |error| {
+                    AppError::Message(format!(
+                        "{stem} changed before publication: {}: {error}",
+                        path.display()
+                    ))
+                },
+            )
+        });
+    if let Err(error) = published {
+        let _ = windows_relative::delete(&temporary);
+        return Err(error);
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -2231,17 +2348,47 @@ fn atomic_publish_unix(
 }
 
 fn remove_pinned(path: &Path, existing: &RegularFile) -> AppResult<()> {
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (path, existing);
         Err(AppError::Message(
             "descriptor-relative hook removal is unavailable on this platform".to_owned(),
         ))
     }
+    #[cfg(windows)]
+    {
+        remove_pinned_windows(path, existing)
+    }
     #[cfg(unix)]
     {
         remove_pinned_unix(path, existing)
     }
+}
+
+/// Deletes exactly the hook that was read: the verifying handle shares reads
+/// only and carries DELETE access, so the object proven unchanged is the one
+/// removed and nothing can swap in between.
+#[cfg(windows)]
+fn remove_pinned_windows(path: &Path, existing: &RegularFile) -> AppResult<()> {
+    use ptrack_store::windows_relative;
+
+    let (parent, file_name) = windows_parent(path, "hook")?;
+    let Some(mut file) = windows_relative::open_file_for_delete_at(&parent, file_name)? else {
+        return Err(AppError::Message(
+            "post-commit hook changed during removal".to_owned(),
+        ));
+    };
+    let mut content = String::new();
+    if !existing.identity.matches(&file.metadata()?)
+        || file.read_to_string(&mut content).is_err()
+        || content != existing.content
+    {
+        return Err(AppError::Message(
+            "post-commit hook changed during removal".to_owned(),
+        ));
+    }
+    windows_relative::delete(&file)?;
+    Ok(())
 }
 
 #[cfg(unix)]

@@ -93,3 +93,29 @@ fn a_shared_lease_waits_out_a_brief_exclusive_holder_but_not_forever() {
     releaser.join().unwrap();
     assert_eq!(shared.mode(), CutoverLockMode::Shared);
 }
+
+#[cfg(windows)]
+#[test]
+fn windows_bootstrap_heals_an_inherited_and_foreign_home_descriptor() {
+    let home = std::env::temp_dir().join(format!(
+        "ptrack-cutover-heal-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir(&home).unwrap();
+    let cleanup = Temp(home.clone());
+    // What an older p-track or a sandboxing tool leaves behind: the profile's
+    // inherited ACEs plus an explicit read grant for another principal.
+    let granted = std::process::Command::new("icacls")
+        .arg(&home)
+        .args(["/grant", "*S-1-1-0:(OI)(CI)(RX)"])
+        .output()
+        .unwrap();
+    assert!(granted.status.success());
+    assert!(crate::private_windows::verify_private(&home).is_err());
+
+    drop(acquire_bootstrap_lock(&home).unwrap());
+
+    crate::private_windows::verify_private(&home).unwrap();
+    drop(cleanup);
+}

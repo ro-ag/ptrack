@@ -23,15 +23,20 @@ use crate::staging::{StageKind, StagedUpdate, validate_stage};
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) const VERIFY_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 /// Upper bound for handing a verified package to the platform installer.
-#[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) const HANDOFF_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 /// Upper bound for the `ptrack version` smoke test of a replaced binary.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) const SMOKE_TEST_TIMEOUT: Duration = Duration::from_secs(30);
+// The bounded runner below serves the macOS trust chain and the Linux smoke
+// test; both Windows handoffs are launches that are never waited on.
 /// How long pipe readers may run on after the command itself has exited.
+#[cfg_attr(windows, allow(dead_code))]
 const PIPE_DRAIN_GRACE: Duration = Duration::from_secs(2);
+#[cfg_attr(windows, allow(dead_code))]
 const MAX_COMMAND_OUTPUT: usize = 4096;
 /// How much failed-command stderr is kept for diagnostics.
+#[cfg_attr(windows, allow(dead_code))]
 const MAX_ERROR_STDERR: usize = 512;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -52,10 +57,12 @@ pub struct ApplyResult {
     pub cleanup_pending: bool,
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 pub(crate) type CommandFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Vec<u8>, UpdateError>> + Send + 'a>>;
 
 pub(crate) trait CommandRunner: Send + Sync {
+    #[cfg_attr(windows, allow(dead_code))]
     fn run<'a>(
         &'a self,
         cancellation: &'a CancellationToken,
@@ -63,6 +70,16 @@ pub(crate) trait CommandRunner: Send + Sync {
         arguments: &'a [String],
         timeout: Duration,
     ) -> CommandFuture<'a>;
+
+    /// Starts an interactive handoff — a platform installer or a file
+    /// browser — and returns once it is running, never waiting for the person
+    /// to finish with it or trusting its exit status. Only the Windows
+    /// handoffs launch; macOS and Linux run bounded commands.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    fn launch(&self, program: &Path, arguments: &[String]) -> Result<(), UpdateError> {
+        let _ = (program, arguments);
+        Err(UpdateError::InstallRefused)
+    }
 }
 
 struct ProductionCommandRunner;
@@ -81,6 +98,19 @@ impl CommandRunner for ProductionCommandRunner {
             arguments,
             timeout,
         ))
+    }
+
+    fn launch(&self, program: &Path, arguments: &[String]) -> Result<(), UpdateError> {
+        // The child is deliberately not waited on: dropping a std Child
+        // neither kills nor reaps it, and the handoff outlives this call.
+        std::process::Command::new(program)
+            .args(arguments)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map(drop)
+            .map_err(|_| UpdateError::InstallRefused)
     }
 }
 
@@ -173,6 +203,7 @@ impl Installer {
 /// On Unix the command gets its own process group, and a timeout or
 /// cancellation kills the whole group before the leader is reaped, so no
 /// helper it started can outlive the deadline.
+#[cfg_attr(windows, allow(dead_code))]
 pub(crate) async fn run_bounded_command(
     cancellation: &CancellationToken,
     program: &Path,
@@ -240,6 +271,7 @@ pub(crate) async fn run_bounded_command(
 /// Kills a still-running command (its whole process group on Unix) and
 /// reaps it. The leader is unreaped while the group is signalled, so its
 /// process ID cannot have been reused.
+#[cfg_attr(windows, allow(dead_code))]
 async fn terminate(child: &mut tokio::process::Child) {
     #[cfg(unix)]
     if let Some(pid) = child
@@ -253,6 +285,7 @@ async fn terminate(child: &mut tokio::process::Child) {
     let _ = child.wait().await;
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 async fn read_command_pipe(
     mut pipe: impl tokio::io::AsyncRead + Unpin,
 ) -> Result<Vec<u8>, UpdateError> {
@@ -365,24 +398,74 @@ mod platform {
 
     use std::os::windows::ffi::OsStringExt;
 
-    use windows_sys::Win32::System::SystemInformation::GetWindowsDirectoryW;
-
-    use super::{
-        ApplyAction, ApplyResult, CancellationToken, HANDOFF_COMMAND_TIMEOUT, Installer, Path,
-        PathBuf, StageKind, StagedUpdate, UpdateError,
+    use windows_sys::Win32::System::SystemInformation::{
+        GetSystemDirectoryW, GetWindowsDirectoryW,
     };
 
+    use super::{
+        ApplyAction, ApplyResult, CancellationToken, Installer, Path, PathBuf, StageKind,
+        StagedUpdate, UpdateError,
+    };
+    use crate::discovery::{Installation, Target};
+
+    // Kept async to match the other platforms' `apply`; both Windows
+    // handoffs return as soon as their program is running.
+    #[allow(clippy::unused_async)]
     pub(super) async fn apply(
         installer: &Installer,
-        cancellation: &CancellationToken,
+        _cancellation: &CancellationToken,
         stage: &StagedUpdate,
     ) -> Result<ApplyResult, UpdateError> {
-        if stage.kind != StageKind::WindowsZip {
-            return Err(UpdateError::InstallRefused);
+        match stage.kind {
+            // An installed copy is upgraded by the next MSI: Windows
+            // Installer replaces the files it owns (offering to close the
+            // running app) and keeps the installed version current, the
+            // Windows counterpart of opening the verified DMG on macOS.
+            StageKind::WindowsMsi => {
+                if Target::host().installation != Installation::WindowsInstaller {
+                    return Err(UpdateError::InstallRefused);
+                }
+                let msiexec = system_path(GetSystemDirectoryW)?.join("msiexec.exe");
+                let arguments = vec!["/i".to_owned(), stage.asset_path.display().to_string()];
+                installer.runner.launch(&msiexec, &arguments)?;
+                Ok(ApplyResult {
+                    version: stage.version.clone(),
+                    action: ApplyAction::OpenedNativeInstaller,
+                    restart_required: false,
+                    manual_install: true,
+                    cleanup_pending: false,
+                })
+            }
+            // A portable or archive copy lives wherever the person put it, so
+            // the verified archive is revealed for them to replace it. Explorer
+            // reports failure even when it opens the folder, so its status is
+            // never read.
+            StageKind::WindowsZip => {
+                let explorer = system_path(GetWindowsDirectoryW)?.join("explorer.exe");
+                let arguments = vec![format!("/select,{}", stage.asset_path.display())];
+                installer.runner.launch(&explorer, &arguments)?;
+                Ok(ApplyResult {
+                    version: stage.version.clone(),
+                    action: ApplyAction::RevealedVerifiedArchive,
+                    restart_required: false,
+                    manual_install: true,
+                    cleanup_pending: false,
+                })
+            }
+            StageKind::DarwinDmg | StageKind::LinuxBinary => Err(UpdateError::InstallRefused),
         }
+    }
+
+    /// Resolves a fixed system folder so a handoff never runs a same-named
+    /// program found through `PATH` or the working directory.
+    fn system_path(
+        query: unsafe extern "system" fn(*mut u16, u32) -> u32,
+    ) -> Result<PathBuf, UpdateError> {
         let mut buffer = vec![0_u16; 32_768].into_boxed_slice();
+        // SAFETY: the buffer is writable for its full length and the query
+        // writes at most that many UTF-16 units.
         let length = unsafe {
-            GetWindowsDirectoryW(
+            query(
                 buffer.as_mut_ptr(),
                 u32::try_from(buffer.len()).unwrap_or(u32::MAX),
             )
@@ -390,20 +473,9 @@ mod platform {
         if length == 0 || usize::try_from(length).unwrap_or(usize::MAX) >= buffer.len() {
             return Err(UpdateError::InstallRefused);
         }
-        let directory = std::ffi::OsString::from_wide(&buffer[..length as usize]);
-        let explorer = PathBuf::from(directory).join("explorer.exe");
-        let arguments = vec![format!("/select,{}", stage.asset_path.display())];
-        installer
-            .runner
-            .run(cancellation, &explorer, &arguments, HANDOFF_COMMAND_TIMEOUT)
-            .await?;
-        Ok(ApplyResult {
-            version: stage.version.clone(),
-            action: ApplyAction::RevealedVerifiedArchive,
-            restart_required: false,
-            manual_install: true,
-            cleanup_pending: false,
-        })
+        Ok(PathBuf::from(std::ffi::OsString::from_wide(
+            &buffer[..length as usize],
+        )))
     }
 
     // Matches the Linux `recover` signature: the platform module presents one

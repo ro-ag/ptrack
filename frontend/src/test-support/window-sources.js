@@ -2,7 +2,7 @@
 // minus tests and test support — for the few facts only source can show:
 // what the code must never call or write, whichever module it lives in.
 import { readdirSync, readFileSync } from "node:fs";
-import { relative, resolve } from "node:path";
+import { relative, resolve, sep } from "node:path";
 
 const srcRoot = resolve(import.meta.dirname, "..");
 
@@ -16,11 +16,12 @@ function walk(directory) {
   });
 }
 
-/** Source text of each window module, keyed by its path under src/. */
+/** Source text of each window module, keyed by its `/`-separated path under
+ * src/ on every platform (Windows reports `\`). */
 export const windowModules = new Map(
   walk(srcRoot)
     .sort()
-    .map((path) => [relative(srcRoot, path), readFileSync(path, "utf8")]),
+    .map((path) => [relative(srcRoot, path).split(sep).join("/"), readFileSync(path, "utf8")]),
 );
 
 /** Every window module's source, joined. */

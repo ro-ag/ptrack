@@ -2091,3 +2091,21 @@ fn cli_output_neutralizes_legacy_control_characters() {
     assert!(!stdout.contains('\x1b'), "{stdout}");
     assert!(stdout.contains("sub ject"), "{stdout}");
 }
+
+#[test]
+fn printed_paths_drop_only_the_plain_verbatim_prefixes() {
+    use std::path::Path;
+
+    use crate::output::path;
+
+    assert_eq!(path(Path::new(r"\\?\C:\work\repo")), r"C:\work\repo");
+    assert_eq!(
+        path(Path::new(r"\\?\UNC\server\share\repo")),
+        r"\\server\share\repo"
+    );
+    assert_eq!(
+        path(Path::new(r"\\?\Volume{0e4b}\repo")),
+        r"\\?\Volume{0e4b}\repo"
+    );
+    assert_eq!(path(Path::new("/home/me/repo")), "/home/me/repo");
+}

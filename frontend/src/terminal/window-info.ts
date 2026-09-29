@@ -1,3 +1,4 @@
+import { displayPath } from "../workspace/format";
 import type { AssociationPointerV1 } from "../workspace/model";
 import type { StreamState } from "./client";
 import type { TerminalDiagnosticInput, TerminalDiagnosticProcess } from "./diagnostics";
@@ -94,9 +95,9 @@ export class TerminalWindowInfo {
     state.title = label;
     profile.textContent = info.profileName;
     profile.title = info.profileName;
-    cwd.textContent = terminalWorkingDirectoryText(info.cwd);
+    cwd.textContent = terminalWorkingDirectoryText(displayPath(info.cwd));
     // The whole path, however much of it the row has room for.
-    cwd.title = info.cwd || "Project root";
+    cwd.title = displayPath(info.cwd) || "Project root";
     const badge = terminalAssociationBadge(info.association);
     association.hidden = badge === null;
     associationLabel.textContent = badge ?? "";

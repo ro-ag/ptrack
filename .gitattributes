@@ -1,0 +1,5 @@
+# The repository stores LF everywhere, and several checks read source bytes
+# (the Help Center UI-source digest, the frontend source scans, the macOS
+# launcher script), so every checkout uses LF too — including on Windows,
+# whatever core.autocrlf says. Binary files are detected and left untouched.
+* text=auto eol=lf

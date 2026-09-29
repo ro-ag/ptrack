@@ -61,11 +61,11 @@ impl DesktopInitializationService for ProductionDesktopAuthority {
         &self,
         request: &ProjectGuidePreviewRequestV1,
     ) -> AppResult<ProjectGuidePreviewV1> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             self.preview_guide_inner(request)
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = request;
             Ok(Self::guide_unavailable())
@@ -605,7 +605,7 @@ fn validate_guide_request(request: &InitializeProjectRequestV1) -> AppResult<()>
         }
         ProjectGuideChoiceV1::Skip | ProjectGuideChoiceV1::Install => {}
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     if request.guide_choice == ProjectGuideChoiceV1::Install {
         return Err(AppError::Message("project-guide-unavailable".to_owned()));
     }

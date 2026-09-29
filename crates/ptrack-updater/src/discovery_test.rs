@@ -5,8 +5,53 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
 use super::discovery::{
-    Client, Target, UpdateError, compare_versions, package_name, parse_version, select_candidate,
+    Client, Installation, Target, UpdateError, compare_versions, package_name, parse_version,
+    select_candidate,
 };
+
+#[test]
+fn an_installer_managed_windows_copy_updates_from_the_msi_only() {
+    let installed = Target {
+        os: "windows".to_owned(),
+        arch: "amd64".to_owned(),
+        installation: Installation::WindowsInstaller,
+    };
+    assert_eq!(
+        package_name(&installed, "1.2.3").unwrap(),
+        "p-track_1.2.3_windows_amd64.msi"
+    );
+    for os in ["darwin", "linux"] {
+        let target = Target {
+            os: os.to_owned(),
+            arch: "arm64".to_owned(),
+            installation: Installation::WindowsInstaller,
+        };
+        assert_eq!(
+            package_name(&target, "1.2.3").unwrap_err(),
+            UpdateError::UnsupportedTarget
+        );
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn only_the_recorded_install_folder_counts_as_the_installed_copy() {
+    use crate::windows_install::same_directory;
+
+    let root = std::env::temp_dir().join(format!("ptrack-install-probe-{}", std::process::id()));
+    let installed = root.join("p-track");
+    let portable = root.join("portable");
+    std::fs::create_dir_all(&installed).unwrap();
+    std::fs::create_dir_all(&portable).unwrap();
+    // The MSI records the folder with a trailing separator.
+    let recorded = std::path::PathBuf::from(format!("{}\\", installed.display()));
+
+    assert!(same_directory(&recorded, Some(&installed)));
+    assert!(!same_directory(&recorded, Some(&portable)));
+    assert!(!same_directory(&recorded, None));
+    assert!(!same_directory(&root.join("missing"), Some(&installed)));
+    std::fs::remove_dir_all(root).unwrap();
+}
 
 #[test]
 fn strict_versions_and_exact_target_names_are_frozen() {
@@ -20,6 +65,7 @@ fn strict_versions_and_exact_target_names_are_frozen() {
             &Target {
                 os: "windows".to_owned(),
                 arch: "arm64".to_owned(),
+                installation: Installation::Archive,
             },
             "1.2.3",
         )
@@ -31,6 +77,7 @@ fn strict_versions_and_exact_target_names_are_frozen() {
             &Target {
                 os: "freebsd".to_owned(),
                 arch: "amd64".to_owned(),
+                installation: Installation::Archive,
             },
             "1.2.3"
         )
@@ -43,6 +90,7 @@ fn release_notes_accept_exact_thirty_two_kibibyte_boundary_only() {
     let target = Target {
         os: "linux".to_owned(),
         arch: "amd64".to_owned(),
+        installation: Installation::Archive,
     };
     let current = parse_version("1.2.3", true).unwrap();
     assert!(select_candidate(&release_with_notes(32 << 10, &target), current, &target).is_ok());
@@ -62,6 +110,7 @@ fn release_publication_rejects_go_zero_time_but_accepts_unix_epoch() {
     let target = Target {
         os: "linux".to_owned(),
         arch: "amd64".to_owned(),
+        installation: Installation::Archive,
     };
     let current = parse_version("1.2.3", true).unwrap();
     assert_eq!(
@@ -90,6 +139,7 @@ fn discovery_requires_an_exact_manifest_signature_asset() {
         let target = Target {
             os: os.to_owned(),
             arch: "arm64".to_owned(),
+            installation: Installation::Archive,
         };
         for size in [None, Some(0), Some(63), Some(65)] {
             assert_eq!(
@@ -119,6 +169,7 @@ async fn production_check_executes_fixed_headers_and_selects_exact_assets() {
     let target = Target {
         os: "linux".to_owned(),
         arch: "amd64".to_owned(),
+        installation: Installation::Archive,
     };
     let package = package_name(&target, "1.2.4").unwrap();
     let release = serde_json::json!({
@@ -161,6 +212,7 @@ async fn discovery_rejects_metadata_over_one_mebibyte() {
             &Target {
                 os: "linux".to_owned(),
                 arch: "amd64".to_owned(),
+                installation: Installation::Archive,
             },
         )
         .await

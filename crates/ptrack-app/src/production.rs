@@ -18,7 +18,7 @@ mod bootstrap;
 mod factory;
 mod guide;
 mod journal;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod pinned_guide;
 mod recent;
 mod routed;
@@ -49,7 +49,7 @@ pub use recent::ProductionRecentProjects;
 pub use routed::RoutedApplication;
 pub use runtime::{ActiveRuntime, RuntimeBindingState, resolve_global_home};
 pub use startup::{StartupProjectV1, resolved_startup_project, startup_project};
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(unix, windows)))]
 pub(crate) use test_support::{set_guide_before_commit_hook, set_guide_before_publish_hook};
 #[cfg(test)]
 pub(crate) use test_support::{
@@ -68,15 +68,15 @@ const DESKTOP_INITIALIZATION_LOCK: &str = "desktop-initialization.lock";
 const DESKTOP_INITIALIZATION_LIMIT: u64 = 64 * 1024;
 const DESKTOP_INITIALIZATION_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 const GUIDE_FILES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
-#[cfg_attr(not(unix), allow(dead_code))]
+#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
 const GUIDE_FILE_LIMIT: u64 = 32 * 1024;
-#[cfg_attr(not(unix), allow(dead_code))]
+#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
 const GUIDE_OUTPUT_LIMIT: usize = 64 * 1024;
-#[cfg_attr(not(unix), allow(dead_code))]
+#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
 const GUIDE_DIFF_LIMIT: usize = 64 * 1024;
-#[cfg_attr(not(unix), allow(dead_code))]
+#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
 const GUIDE_DIFF_LINE_LIMIT: usize = 4_096;
-#[cfg_attr(not(unix), allow(dead_code))]
+#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
 const GUIDE_PREVIEW_LIMIT: usize = 8;
 const GUIDE_PREVIEW_STALE: &str = "project-guide-preview-stale";
 const GUIDE_PARTIALLY_APPLIED: &str = "project-guide-partially-applied";
@@ -85,7 +85,7 @@ const RECENT_CONFIRMATION_TTL: Duration = Duration::from_secs(120);
 const RECENT_LISTING_TTL: Duration = Duration::from_secs(600);
 const RECENT_ID_BYTES: usize = 43;
 const RECENT_PATH_LIMIT: usize = 16 * 1024;
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 const GUIDE_UNAVAILABLE: &str = "Project guidance is not available on this platform yet";
 
 fn recovery(error: impl std::fmt::Display) -> AppError {
@@ -104,8 +104,8 @@ fn path_is_present(path: &Path) -> AppResult<bool> {
     }
 }
 
-// Used by the unix guide publisher through `guide`'s `super::` import.
-#[cfg_attr(not(unix), allow(dead_code))]
+// Used by the pinned guide publisher through `guide`'s `super::` import.
+#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
 fn content_digest(bytes: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(sha256_digest(bytes))
 }

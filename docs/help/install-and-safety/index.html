@@ -59,6 +59,7 @@
           <h2 id="install">Install an official package</h2>
           <p>Download the native package for your operating system and CPU from the <a href="https://github.com/ro-ag/ptrack/releases">official GitHub Releases page</a>. Release archives contain the CLI, terminal dashboard, and Desktop GUI. Put the executable on your <code>PATH</code>.</p>
           <p>On macOS, you can instead open <code>p-track_&lt;version&gt;_darwin_&lt;arch&gt;.dmg</code> and drag <strong>p-track.app</strong> into <code>/Applications</code>. The executable inside the app bundle also provides the CLI.</p>
+          <p>On Windows, <code>p-track_&lt;version&gt;_windows_&lt;arch&gt;.msi</code> installs p-track for your user only, without administrator rights: it goes to <code>%LOCALAPPDATA%\Programs\p-track</code>, adds that folder to your user <code>PATH</code>, and adds <strong>p-track</strong> to the Start menu. <code>p-track_&lt;version&gt;_windows_&lt;arch&gt;_portable.zip</code> runs from any folder: open <code>p-track.exe</code> for the Desktop GUI, and use <code>ptrack.exe</code> beside it as the CLI.</p>
           <div class="callout warning">
             <p><strong>Use an official package.</strong> Source builds require Rust, Node, the Tauri prerequisites, and the repository's complete validation workflow. No Go runtime or toolchain is required.</p>
           </div>
@@ -82,7 +83,7 @@
           </div>
           <ul>
             <li><strong>macOS:</strong> verifies and opens the complete DMG for installation; it never replaces one executable inside the signed app bundle.</li>
-            <li><strong>Windows:</strong> revalidates the ZIP and reveals it in Explorer; close p-track and replace the executable manually.</li>
+            <li><strong>Windows:</strong> a copy installed with the MSI opens the verified next MSI, and Windows Installer upgrades it in place without administrator rights. Any other copy revalidates the ZIP and reveals it in Explorer; close p-track and replace the executable manually.</li>
             <li><strong>Linux:</strong> updates only a safely owned standalone executable, using a target lock, verified rollback link, durable recovery journal, atomic replacement, version probe, and rollback on failure. Every helper command has a time limit. It never uses <code>sudo</code>.</li>
           </ul>
 

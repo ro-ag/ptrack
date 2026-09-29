@@ -54,6 +54,18 @@ export function formatBytes(value: unknown): string {
   return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
 }
 
+/**
+ * A path as a person writes it. Windows canonical paths arrive in their
+ * verbatim `\\?\C:\…` or `\\?\UNC\server\…` form, exact but unreadable, so
+ * only what is shown drops the prefix; the value sent back never changes.
+ * Verbatim forms with no plain spelling (volume GUIDs, devices) stay as is.
+ */
+export function displayPath(path: string): string {
+  if (path.startsWith("\\\\?\\UNC\\")) return `\\\\${path.slice(8)}`;
+  if (/^\\\\\?\\[A-Za-z]:\\/.test(path)) return path.slice(4);
+  return path;
+}
+
 /** The text an error, a rejected promise, or a bare string carries. */
 export function messageFrom(error: unknown): string {
   if (typeof error === "string") return error;

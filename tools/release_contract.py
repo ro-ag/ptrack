@@ -53,7 +53,10 @@ def package_names(version: str) -> tuple[str, ...]:
         names.extend(
             (
                 f"ptrack_{version}_linux_{arch}.tar.gz",
+                # Frozen: installed updaters accept exactly its three entries.
                 f"ptrack_{version}_windows_{arch}.zip",
+                f"p-track_{version}_windows_{arch}.msi",
+                f"p-track_{version}_windows_{arch}_portable.zip",
             )
         )
     return tuple(sorted(names))
@@ -150,6 +153,51 @@ def validate_archive(path: Path) -> None:
         raise ContractError(f"archive executable machine does not match {os_name}/{arch}")
 
 
+PORTABLE_ENTRIES = frozenset({"p-track.exe", "ptrack.exe", "README.md", "LICENSE"})
+# Every MSI is an OLE compound file; the build verifies its platform and
+# per-user flags through Windows Installer itself (build/windows/package.ps1).
+MSI_MAGIC = bytes.fromhex("d0cf11e0a1b11ae1")
+
+
+def validate_portable(path: Path) -> None:
+    match = re.fullmatch(
+        r"p-track_(?P<version>[^_]+)_windows_(?P<arch>amd64|arm64)_portable\.zip", path.name
+    )
+    if match is None:
+        raise ContractError(f"unexpected portable archive name: {path.name}")
+    arch = match.group("arch")
+    seen: set[str] = set()
+    expanded = 0
+    with zipfile.ZipFile(path) as archive:
+        for entry in archive.infolist():
+            name = _safe_archive_name(entry.filename)
+            unix_type = (entry.external_attr >> 16) & 0o170000
+            if entry.is_dir() or entry.flag_bits & 1 or unix_type == 0o120000 or name in seen:
+                raise ContractError(f"unsafe or duplicate ZIP entry: {entry.filename}")
+            if entry.file_size <= 0 or entry.file_size > MAX_ENTRY_BYTES:
+                raise ContractError(f"invalid ZIP entry size: {entry.filename}")
+            expanded += entry.file_size
+            if expanded > MAX_EXPANDED_BYTES:
+                raise ContractError("ZIP expands beyond the release limit")
+            seen.add(name)
+            if name.endswith(".exe"):
+                with archive.open(entry) as source:
+                    if _machine(source.read(4_096), "windows") != arch:
+                        raise ContractError(f"portable {name} machine does not match windows/{arch}")
+    if seen != PORTABLE_ENTRIES:
+        raise ContractError(
+            f"portable entries differ: expected {sorted(PORTABLE_ENTRIES)}, got {sorted(seen)}"
+        )
+
+
+def validate_msi(path: Path) -> None:
+    if re.fullmatch(r"p-track_[^_]+_windows_(?:amd64|arm64)\.msi", path.name) is None:
+        raise ContractError(f"unexpected installer name: {path.name}")
+    with path.open("rb") as source:
+        if source.read(len(MSI_MAGIC)) != MSI_MAGIC:
+            raise ContractError(f"installer is not a Windows Installer package: {path.name}")
+
+
 def validate_dist(directory: Path, version: str) -> tuple[Path, ...]:
     expected = package_names(version)
     actual = tuple(sorted(path.name for path in directory.iterdir() if path.is_file()))
@@ -166,7 +214,11 @@ def validate_dist(directory: Path, version: str) -> tuple[Path, ...]:
         size = path.stat().st_size
         if size <= 0 or size > MAX_PACKAGE_BYTES:
             raise ContractError(f"release package size is invalid: {path.name}")
-        if path.name.endswith((".tar.gz", ".zip")):
+        if path.name.endswith(".msi"):
+            validate_msi(path)
+        elif path.name.endswith("_portable.zip"):
+            validate_portable(path)
+        elif path.name.endswith((".tar.gz", ".zip")):
             validate_archive(path)
     return packages
 

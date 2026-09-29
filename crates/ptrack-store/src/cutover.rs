@@ -390,12 +390,12 @@ fn require_private_directory(path: &Path, label: &str) -> StoreResult<()> {
 }
 
 #[cfg(windows)]
-fn require_private_directory(path: &Path, _: &str) -> StoreResult<()> {
-    drop(crate::private_windows::open_no_reparse(
-        path, true, false, false,
-    )?);
-    crate::private_windows::verify_private(path)?;
-    Ok(())
+fn require_private_directory(path: &Path, label: &str) -> StoreResult<()> {
+    // Same policy as Unix: an inherited or foreign descriptor is healed by
+    // tightening to the current user, never refused.
+    crate::private_windows::heal_private(path, true).map_err(|error| {
+        StoreError::ActivationBinding(format!("{label} permissions are not private: {error}"))
+    })
 }
 
 #[cfg(not(any(unix, windows)))]

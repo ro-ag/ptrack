@@ -154,7 +154,8 @@ export function updateActionFailureMessage(action, error) {
 
 function manualActionDetail(action) {
   if (action === "opened-native-installer") {
-    return "The verified macOS installer is open. Complete installation there, then restart p-track.";
+    // The macOS disk image or, for an installed Windows copy, the per-user MSI.
+    return "The verified installer is open. Complete installation there, then restart p-track.";
   }
   if (action === "revealed-verified-archive") {
     return "The verified Windows archive is selected. Close p-track before replacing the executable, then reopen it.";
