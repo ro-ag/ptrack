@@ -258,8 +258,19 @@ jobs:
             Get-Content -Tail 40 $log
             throw "per-user install failed with $($install.ExitCode)"
           }
-          if (-not (Select-String -LiteralPath $log -Pattern 'no elevation required' -Quiet)) {
-            throw "installer did not run as a limited per-user install"
+          # The runner is an administrator, so the log's "no elevation
+          # required" note never appears; ask Windows Installer how the
+          # product was assigned instead (0 = per-user, 1 = per-machine).
+          $installer = New-Object -ComObject WindowsInstaller.Installer
+          $products = @($installer.GetType().InvokeMember('RelatedProducts', 'GetProperty', $null, $installer,
+            @('{3E406A5A-2CA5-4274-AA3C-8B3AEE4F8317}')))
+          if ($products.Count -ne 1) {
+            throw "expected one installed p-track product, found $($products.Count)"
+          }
+          $assignment = $installer.GetType().InvokeMember('ProductInfo', 'GetProperty', $null, $installer,
+            @($products[0], 'AssignmentType'))
+          if ($assignment -ne '0') {
+            throw "installer did not install per-user (AssignmentType $assignment)"
           }
           $dir = Join-Path $env:LOCALAPPDATA 'Programs\p-track'
           $reported = & (Join-Path $dir 'ptrack.exe') version

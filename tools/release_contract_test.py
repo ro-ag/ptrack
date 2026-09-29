@@ -278,7 +278,8 @@ class WorkflowTests(unittest.TestCase):
         # The per-user installer is installed, checked, and removed again on
         # both Windows hosts, and must never need elevation.
         self.assertEqual(workflow.count("./build/windows/package.ps1"), 1)
-        self.assertIn("'no elevation required'", workflow)
+        self.assertIn("'AssignmentType'", workflow)
+        self.assertIn("if ($assignment -ne '0') {", workflow)
         self.assertIn("@('/x', ", workflow)
         self.assertNotIn("gh release", workflow)
         self.assertNotIn("actions/upload-artifact", workflow)
