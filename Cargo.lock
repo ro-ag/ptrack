@@ -3198,7 +3198,7 @@ dependencies = [
 
 [[package]]
 name = "ptrack-cli"
-version = "0.42.0"
+version = "0.43.0"
 dependencies = [
  "clap",
  "clap_complete",
@@ -3217,7 +3217,7 @@ dependencies = [
 
 [[package]]
 name = "ptrack-desktop"
-version = "0.42.0"
+version = "0.43.0"
 dependencies = [
  "ptrack-app",
  "ptrack-cli",
@@ -3228,6 +3228,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-notification",
  "tauri-plugin-opener",
+ "x11-dl",
 ]
 
 [[package]]
