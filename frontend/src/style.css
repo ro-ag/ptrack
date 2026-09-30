@@ -928,6 +928,73 @@ button:disabled {
   backdrop-filter: blur(18px) saturate(1.35);
 }
 
+/* Linux uses a compact full-width menu/title bar above the workspace. */
+.desktop-titlebar {
+  display: none;
+}
+
+:root[data-window-chrome="linux"] .desktop-titlebar {
+  display: flex;
+  align-items: stretch;
+  height: 36px;
+  padding-left: 8px;
+  color: var(--text-soft);
+  background: var(--night);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+:root[data-window-chrome="linux"] #app,
+:root[data-window-chrome="linux"] .terminal-window {
+  height: calc(100% - 36px);
+}
+
+:root[data-window-chrome="linux"] .sidebar-top {
+  display: none;
+}
+
+.desktop-menubar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.desktop-menubar button {
+  min-height: 28px;
+  padding: 4px 12px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-soft);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.desktop-menubar button:hover,
+.desktop-menubar button:focus-visible {
+  background: var(--fill-hover);
+  color: var(--text);
+  transform: none;
+}
+
+.desktop-titlebar-drag {
+  flex: 1;
+}
+
+:root[data-window-chrome="linux"] .desktop-titlebar .window-controls {
+  display: flex;
+}
+
+:root[data-window-chrome="linux"] .desktop-titlebar .window-control {
+  width: 40px;
+  min-width: 40px;
+}
+
+:root[data-window-mode="terminal"] .desktop-menubar {
+  display: none;
+}
+
 /* Frameless Windows title bar. It exists only when index.html marks a
    Windows desktop window as drawing its own chrome: macOS keeps its native
    inset traffic lights and a browser shows none of it. */

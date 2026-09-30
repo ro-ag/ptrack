@@ -38,6 +38,7 @@ const MAX_ASSET_BYTES: u64 = 512 << 20;
 pub enum StageKind {
     DarwinDmg,
     LinuxBinary,
+    LinuxAppImage,
     WindowsZip,
     /// The per-user MSI for an installer-managed copy. Like the DMG, the
     /// verified package itself is what gets handed to the platform.
@@ -46,9 +47,11 @@ pub enum StageKind {
 
 impl StageKind {
     /// The installation a stage of this kind updates.
-    const fn installation(self) -> Installation {
+    #[must_use]
+    pub const fn installation(self) -> Installation {
         match self {
             Self::WindowsMsi => Installation::WindowsInstaller,
+            Self::LinuxAppImage => Installation::LinuxAppImage,
             Self::DarwinDmg | Self::LinuxBinary | Self::WindowsZip => Installation::Archive,
         }
     }
@@ -167,6 +170,9 @@ impl Client {
 
         let (kind, payload_path) = match target.os.as_str() {
             "darwin" => (StageKind::DarwinDmg, asset_path.clone()),
+            "linux" if target.installation == Installation::LinuxAppImage => {
+                (StageKind::LinuxAppImage, asset_path.clone())
+            }
             "linux" => {
                 let path = root.join("ptrack");
                 extract_tar_payload(cancellation, &asset_path, &path)?;
@@ -198,7 +204,10 @@ impl Client {
             kind,
         };
         validate_payload_machine(cancellation, &stage)?;
-        let limit = if matches!(kind, StageKind::DarwinDmg | StageKind::WindowsMsi) {
+        let limit = if matches!(
+            kind,
+            StageKind::DarwinDmg | StageKind::WindowsMsi | StageKind::LinuxAppImage
+        ) {
             MAX_ASSET_BYTES
         } else {
             MAX_ARCHIVE_ENTRY_BYTES
@@ -313,6 +322,11 @@ impl Client {
 }
 
 fn validate_candidate(candidate: &Candidate, target: &Target) -> Result<(), UpdateError> {
+    if target.installation == Installation::LinuxPackageManager {
+        return Err(UpdateError::Message(
+            "Use your system package manager to update p-track.".to_owned(),
+        ));
+    }
     let expected = package_name(target, &candidate.version)?;
     if parse_version(&candidate.version, true)?.to_string() != candidate.version
         || candidate.tag != format!("v{}", candidate.version)
@@ -390,7 +404,10 @@ pub fn validate_stage(
     for path in [&stage.asset_path, &stage.payload_path, &stage.state_path] {
         validate_private_path(path, false).map_err(|_| UpdateError::InvalidStage)?;
     }
-    let payload_limit = if matches!(stage.kind, StageKind::DarwinDmg | StageKind::WindowsMsi) {
+    let payload_limit = if matches!(
+        stage.kind,
+        StageKind::DarwinDmg | StageKind::WindowsMsi | StageKind::LinuxAppImage
+    ) {
         MAX_ASSET_BYTES
     } else {
         MAX_ARCHIVE_ENTRY_BYTES
@@ -493,7 +510,9 @@ pub(crate) fn load_stage_with_key(
     }
     let asset_path = root.join(&asset_name);
     let payload_path = match record.kind {
-        StageKind::DarwinDmg | StageKind::WindowsMsi => asset_path.clone(),
+        StageKind::DarwinDmg | StageKind::WindowsMsi | StageKind::LinuxAppImage => {
+            asset_path.clone()
+        }
         StageKind::LinuxBinary => root.join("ptrack"),
         StageKind::WindowsZip => root.join("ptrack.exe"),
     };
@@ -537,7 +556,7 @@ fn payload_digest_from_package(
     stage: &StagedUpdate,
 ) -> Result<(String, u64), UpdateError> {
     match stage.kind {
-        StageKind::DarwinDmg | StageKind::WindowsMsi => {
+        StageKind::DarwinDmg | StageKind::WindowsMsi | StageKind::LinuxAppImage => {
             hash_regular_file(cancellation, &stage.asset_path, MAX_ASSET_BYTES)
         }
         StageKind::LinuxBinary | StageKind::WindowsZip => {
@@ -842,6 +861,20 @@ fn validate_payload_machine(
             }
             validate_elf(&stage.payload_path, &stage.arch)?;
         }
+        StageKind::LinuxAppImage => {
+            if stage.os != "linux" || stage.payload_path != stage.asset_path {
+                return Err(UpdateError::InvalidStage);
+            }
+            validate_elf(&stage.payload_path, &stage.arch)?;
+            let mut file =
+                open_private_regular(&stage.payload_path).map_err(|_| UpdateError::InvalidStage)?;
+            let mut header = [0_u8; 11];
+            file.read_exact(&mut header)
+                .map_err(|_| UpdateError::InvalidStage)?;
+            if &header[8..11] != b"AI\x02" {
+                return Err(UpdateError::InvalidStage);
+            }
+        }
         StageKind::WindowsZip => {
             if stage.os != "windows" {
                 return Err(UpdateError::InvalidStage);
@@ -1031,7 +1064,9 @@ pub(crate) fn validate_download_url(
 
 fn expected_payload(stage: &StagedUpdate) -> PathBuf {
     match stage.kind {
-        StageKind::DarwinDmg | StageKind::WindowsMsi => stage.asset_path.clone(),
+        StageKind::DarwinDmg | StageKind::WindowsMsi | StageKind::LinuxAppImage => {
+            stage.asset_path.clone()
+        }
         StageKind::LinuxBinary => stage.root.join("ptrack"),
         StageKind::WindowsZip => stage.root.join("ptrack.exe"),
     }

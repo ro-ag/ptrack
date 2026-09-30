@@ -1,7 +1,7 @@
 name: native acceptance
 
 # This workflow validates a candidate revision without publishing, signing,
-# tagging, uploading packages, or using update/release credentials.
+# tagging, or using update/release credentials. Candidate packages stay in CI.
 on:
   pull_request:
     paths:
@@ -14,6 +14,9 @@ on:
       - "frontend/**"
       - "tools/help_check.py"
       - "tools/help_check_test.py"
+      - "tools/linux_packages.py"
+      - "tools/linux_appimage.py"
+      - ".github/workflows/linux-packages.yml"
       - "tools/release_contract.py"
       - "tools/release_contract_test.py"
       - "build/**"
@@ -33,6 +36,9 @@ on:
       - "frontend/**"
       - "tools/help_check.py"
       - "tools/help_check_test.py"
+      - "tools/linux_packages.py"
+      - "tools/linux_appimage.py"
+      - ".github/workflows/linux-packages.yml"
       - "tools/release_contract.py"
       - "tools/release_contract_test.py"
       - "build/**"
@@ -50,6 +56,9 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  linux-packages:
+    uses: ./.github/workflows/linux-packages.yml
+
   portable:
     # The release workflow gates on a green run of this workflow for the tag
     # commit, so release commits must NOT be skipped here.

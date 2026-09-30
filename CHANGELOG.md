@@ -6,6 +6,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-09-29
+
+### Added
+- Linux AppImage, Debian and RPM packages for x86-64 and ARM64, with desktop
+  launchers, icons and CLI access. Builds use an Ubuntu 22.04 / glibc 2.35
+  baseline, independent of the developer's distribution.
+- A NixOS wrapper for the release AppImage that installs desktop integration
+  without compiling p-track.
+- A compact Linux title bar with File, Project, View and Help menus, native
+  window controls, dragging and double-click maximization.
+- Package-aware Linux updates: AppImages download a signed, verified complete
+  replacement for manual installation; Debian, RPM and Nix installations keep
+  updates under package-manager control.
+- Native x86-64 and ARM64 package acceptance in CI, covering installation and
+  desktop startup on Ubuntu 22.04, 24.04 and 26.04, Debian 13 and Fedora 44.
+
+### Fixed
+- Blank Linux windows on NVIDIA and hybrid systems caused by WebKitGTK's
+  DMA-BUF renderer; explicit renderer overrides remain respected.
+- AppImage rendering failures with newer Mesa drivers caused by bundling an
+  older Wayland library alongside host graphics drivers.
+- AppImage CLI arguments accidentally opening the GUI instead of executing
+  the requested command.
+- Git subprocess cleanup on NixOS, where `/bin/kill` is not available.
+
 ## [0.41.4] - 2026-09-29
 
 ### Added

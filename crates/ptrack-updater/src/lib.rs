@@ -1,6 +1,8 @@
 #![deny(unsafe_code)]
 
 mod discovery;
+#[cfg(target_os = "linux")]
+mod installation;
 mod installer;
 mod permissions;
 mod signature;

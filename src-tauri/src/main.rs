@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+#[cfg(target_os = "linux")]
+mod linux_graphics;
 mod notification_runtime;
 #[cfg(test)]
 mod notification_runtime_test;
@@ -29,6 +31,10 @@ use tauri_plugin_dialog::DialogExt as _;
 use tauri_plugin_opener::OpenerExt as _;
 
 use notification_runtime::{NativeNotificationController, disabled_notification_patch};
+
+// Keep Linux popup menus alive without attaching a second GTK menubar.
+#[cfg(target_os = "linux")]
+struct LinuxMenu(Menu<tauri::Wry>);
 
 struct TauriEventSink {
     app: AppHandle,
@@ -243,7 +249,7 @@ fn terminal_window(app: &AppHandle, label: &str) -> Result<(), String> {
             .hidden_title(true)
             .traffic_light_position(tauri::LogicalPosition::new(16.0, 17.0));
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     {
         builder = builder.decorations(false).shadow(true);
     }
@@ -256,27 +262,28 @@ fn terminal_window(app: &AppHandle, label: &str) -> Result<(), String> {
             .maximized(placement.maximized);
     }
     let window = builder.build().map_err(|error| error.to_string())?;
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     use_custom_window_chrome(&window);
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     let _ = window;
     Ok(())
 }
 
-/// Windows windows are frameless and the web layout draws the title bar
-/// (index.html's `data-window-chrome="custom"`), the counterpart of the macOS
+/// Windows and Linux windows are frameless and the web layout draws the title bar
+/// (`data-window-chrome="custom"` or `"linux"`), the counterpart of the macOS
 /// Overlay style: no native caption, and no native menu bar. The shared app
-/// menu stays attached, hidden, so the title bar's menu button can open it and
-/// its events keep flowing through `handle_menu_event`. The shadow keeps the
+/// menu remains available through the app handle for title-bar popups and
+/// dispatch through `handle_menu_event`. The shadow keeps the
 /// Windows 11 rounded corners and resize border.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 fn use_custom_window_chrome<R: Runtime>(window: &tauri::WebviewWindow<R>) {
     let _ = window.set_decorations(false);
     let _ = window.set_shadow(true);
+    #[cfg(windows)]
     let _ = window.hide_menu();
 }
 
-/// The frameless Windows title bar's controls: the app menu under its button
+/// The frameless Windows and Linux title bar's controls: the app menu under its button
 /// (main window only, like every other native action), minimize,
 /// maximize/restore, and close. Every action answers whether the window is
 /// now maximized, so the web title bar can draw the restore glyph. Other
@@ -288,25 +295,50 @@ fn window_chrome(
     action: String,
     x: Option<f64>,
     y: Option<f64>,
+    menu_label: Option<String>,
 ) -> Result<bool, String> {
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
-        let _ = (window, action, x, y);
-        Err("the custom window chrome is Windows-only".to_owned())
+        let _ = (window, action, x, y, menu_label);
+        Err("custom window chrome requires Windows or Linux".to_owned())
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     {
         match action.as_str() {
             "menu" => {
                 require_main_window_label(window.label())?;
+                #[cfg(target_os = "linux")]
+                let menu = window
+                    .app_handle()
+                    .try_state::<LinuxMenu>()
+                    .ok_or_else(|| "the app menu is unavailable".to_owned())?
+                    .0
+                    .clone();
+                #[cfg(windows)]
                 let menu = window
                     .app_handle()
                     .menu()
                     .ok_or_else(|| "the app menu is unavailable".to_owned())?;
                 let position = tauri::LogicalPosition::new(x.unwrap_or(0.0), y.unwrap_or(0.0));
-                window
-                    .popup_menu_at(&menu, position)
-                    .map_err(|error| error.to_string())?;
+                if let Some(label) = menu_label {
+                    let submenu = menu
+                        .items()
+                        .map_err(|error| error.to_string())?
+                        .into_iter()
+                        .find_map(|item| match item {
+                            tauri::menu::MenuItemKind::Submenu(submenu)
+                                if submenu.id().as_ref() == label.as_str() =>
+                            {
+                                Some(submenu)
+                            }
+                            _ => None,
+                        })
+                        .ok_or_else(|| "unknown app menu".to_owned())?;
+                    window.popup_menu_at(&submenu, position)
+                } else {
+                    window.popup_menu_at(&menu, position)
+                }
+                .map_err(|error| error.to_string())?;
             }
             "minimize" => window.minimize().map_err(|error| error.to_string())?,
             "toggle-maximize" => {
@@ -476,8 +508,14 @@ fn main() {
     let mut application = RoutedApplication::new(global_home, current_dir, ptrack_cli::version());
     let mut stdout = std::io::stdout();
     let mut stderr = std::io::stderr();
+    let mut arguments: Vec<_> = std::env::args_os().collect();
+    if cfg!(target_os = "linux") && arguments.len() == 1 && ptrack_app::running_from_appimage() {
+        // Double-clicking an AppImage opens the desktop. Explicit arguments
+        // still reach the full CLI, e.g. `p-track.AppImage version`.
+        arguments.push("gui".into());
+    }
     let outcome = ptrack_cli::run(
-        std::env::args_os(),
+        arguments,
         &mut application,
         ptrack_cli::Io {
             stdin: Box::new(std::io::stdin()),
@@ -491,6 +529,11 @@ fn main() {
         Ok(ptrack_cli::RunOutcome::LaunchGui { path, plan_id }) => {
             if let Err(error) = application.require_global_mode() {
                 eprintln!("{error}");
+                std::process::exit(1);
+            }
+            #[cfg(target_os = "linux")]
+            if let Err(error) = linux_graphics::prepare() {
+                eprintln!("could not prepare the desktop renderer: {error}");
                 std::process::exit(1);
             }
             run_desktop(
@@ -766,9 +809,15 @@ fn run_desktop(initial_path: Option<PathBuf>, initial_plan: u64) {
             // cannot leave the initially hidden window invisible.
             if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
                 restore_window_state(&window, &capture.version);
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "linux"))]
                 use_custom_window_chrome(&window);
                 let _ = window.show();
+            }
+            #[cfg(target_os = "linux")]
+            {
+                let menu = build_menu(app.handle())
+                    .unwrap_or_else(|error| fail_startup(app.handle(), &error.to_string()));
+                app.manage(LinuxMenu(menu));
             }
             let sink: Arc<dyn DesktopEventSink> = Arc::new(TauriEventSink {
                 app: app.handle().clone(),
@@ -822,7 +871,6 @@ fn run_desktop(initial_path: Option<PathBuf>, initial_plan: u64) {
             notifications_setup.refresh(app.handle());
             Ok(())
         })
-        .menu(build_menu)
         .on_menu_event(|app, event| handle_menu_event(app, event.id().as_ref()))
         .on_window_event(move |window, event| match event {
             // Every non-terminal capture is coalesced off the event loop: a
@@ -866,6 +914,8 @@ fn run_desktop(initial_path: Option<PathBuf>, initial_plan: u64) {
             open_external_url,
             window_chrome
         ]);
+    #[cfg(not(target_os = "linux"))]
+    let builder = builder.menu(build_menu);
     let application = match builder.build(tauri::generate_context!()) {
         Ok(application) => application,
         Err(error) => {
@@ -1036,7 +1086,7 @@ fn build_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
     let platform = DesktopPlatform::Other;
     let mut menu = MenuBuilder::new(app);
     for submenu_spec in menu_spec(platform) {
-        let mut submenu = SubmenuBuilder::new(app, submenu_spec.label);
+        let mut submenu = SubmenuBuilder::with_id(app, submenu_spec.label, submenu_spec.label);
         for entry in submenu_spec.entries {
             submenu = match entry {
                 MenuEntrySpec::Command {

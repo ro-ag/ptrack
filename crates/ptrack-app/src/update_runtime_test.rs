@@ -15,6 +15,44 @@ use super::update_runtime::{
 };
 
 #[test]
+fn managed_linux_installation_can_check_but_cannot_download_or_apply() {
+    let root = temporary_root();
+    let runtime = UpdateRuntime::with_backend(
+        "1.2.3".to_owned(),
+        Target {
+            installation: Installation::LinuxPackageManager,
+            ..target()
+        },
+        root.clone(),
+        Arc::new(MemoryPreferences::default()),
+        None,
+        Arc::new(FakeBackend::normal(&root)),
+    );
+    runtime.start().unwrap();
+    let available = runtime.check_for_updates().unwrap();
+    assert_eq!(available.installation, Installation::LinuxPackageManager);
+    assert!(
+        serde_json::to_string(&available)
+            .unwrap()
+            .contains("linux-package-manager")
+    );
+    assert!(
+        runtime
+            .download_update("1.2.4")
+            .unwrap_err()
+            .contains("package manager")
+    );
+    assert!(
+        runtime
+            .apply_update("1.2.4")
+            .unwrap_err()
+            .contains("package manager")
+    );
+    runtime.shutdown().unwrap();
+    cleanup(&root);
+}
+
+#[test]
 fn check_download_apply_publish_exact_secret_free_monotonic_state() {
     let root = temporary_root();
     let events = Arc::new(EventLog::default());

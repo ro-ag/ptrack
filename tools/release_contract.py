@@ -53,6 +53,9 @@ def package_names(version: str) -> tuple[str, ...]:
         names.extend(
             (
                 f"ptrack_{version}_linux_{arch}.tar.gz",
+                f"p-track_{version}_linux_{arch}.AppImage",
+                f"p-track_{version}_linux_{arch}.deb",
+                f"p-track_{version}_linux_{arch}.rpm",
                 # Frozen: installed updaters accept exactly its three entries.
                 f"ptrack_{version}_windows_{arch}.zip",
                 f"p-track_{version}_windows_{arch}.msi",
@@ -198,6 +201,22 @@ def validate_msi(path: Path) -> None:
             raise ContractError(f"installer is not a Windows Installer package: {path.name}")
 
 
+def validate_linux_package(path: Path) -> None:
+    match = re.fullmatch(r"p-track_[^_]+_linux_(amd64|arm64)\.(AppImage|deb|rpm)", path.name)
+    if match is None:
+        raise ContractError(f"unexpected Linux package name: {path.name}")
+    with path.open("rb") as source:
+        header = source.read(96)
+    extension = match.group(2)
+    valid = {
+        "deb": header.startswith(b"!<arch>\n"),
+        "rpm": header.startswith(b"\xed\xab\xee\xdb"),
+        "AppImage": header[8:11] == b"AI\x02" and _machine(header, "linux") == match.group(1),
+    }[extension]
+    if not valid:
+        raise ContractError(f"invalid Linux package header or architecture: {path.name}")
+
+
 def validate_dist(directory: Path, version: str) -> tuple[Path, ...]:
     expected = package_names(version)
     actual = tuple(sorted(path.name for path in directory.iterdir() if path.is_file()))
@@ -216,6 +235,8 @@ def validate_dist(directory: Path, version: str) -> tuple[Path, ...]:
             raise ContractError(f"release package size is invalid: {path.name}")
         if path.name.endswith(".msi"):
             validate_msi(path)
+        elif path.name.endswith((".AppImage", ".deb", ".rpm")):
+            validate_linux_package(path)
         elif path.name.endswith("_portable.zip"):
             validate_portable(path)
         elif path.name.endswith((".tar.gz", ".zip")):

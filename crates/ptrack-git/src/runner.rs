@@ -279,21 +279,14 @@ fn kill_and_reap(child: &mut Child) -> std::io::Result<ExitStatus> {
 
 #[cfg(unix)]
 fn kill_process_group(child: &Child) {
-    // The runner forbids unsafe code, so the group is signalled through the
-    // system `kill` utility. The leader is unreaped here, which keeps its PID
-    // (and so the group ID) from being reused.
-    let group = format!("-{}", child.id());
-    for program in ["/bin/kill", "/usr/bin/kill"] {
-        let signalled = Command::new(program)
-            .args(["-KILL", "--", &group])
-            .env_clear()
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        if signalled.is_ok() {
-            return;
-        }
+    // Signal directly: distributions such as NixOS do not provide /bin/kill.
+    // The leader is unreaped here, which keeps its PID (and group ID) from
+    // being reused. rustix provides a safe interface to the native syscall.
+    if let Some(group) = i32::try_from(child.id())
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+    {
+        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
     }
 }
 

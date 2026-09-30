@@ -47,10 +47,10 @@ fn shell_has_only_the_bounded_adapter_commands() {
     assert!(source.contains("gui_invoke"));
     assert!(source.contains("pick_project_directory"));
     assert!(source.contains("open_external_url"));
-    // The frameless Windows title bar's controls; it grants the webview no
+    // The frameless Windows and Linux title bar's controls; it grants the webview no
     // capability permission, and other platforms refuse it.
     assert!(source.contains("fn window_chrome("));
-    assert!(source.contains("Err(\"the custom window chrome is Windows-only\".to_owned())"));
+    assert!(source.contains("Err(\"custom window chrome requires Windows or Linux\".to_owned())"));
     assert!(source.contains("tauri::generate_handler!["));
     assert!(source.contains("production_desktop_runtime_for_startup("));
     assert!(source.contains("app.manage(runtime)"));

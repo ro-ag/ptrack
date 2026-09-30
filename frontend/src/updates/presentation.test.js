@@ -8,6 +8,27 @@ import {
 } from "./presentation";
 
 describe("update presentation", () => {
+  it.each(["available", "ready", "error"])("keeps %s system packages under package-manager ownership", (phase) => {
+    const result = updatePresentation({
+      phase,
+      installation: "linux-package-manager",
+      checksumVerified: true,
+      release: { version: "1.2.4", pageUrl: "https://github.com/a/b/releases/tag/v1.2.4" },
+    });
+    expect(result.primaryAction).toBe("release");
+    expect(result.detail).toContain("package manager");
+  });
+
+  it("offers the complete verified AppImage for manual replacement", () => {
+    const result = updatePresentation({
+      phase: "ready", installation: "linux-app-image", checksumVerified: true,
+      release: { version: "1.2.4" },
+    });
+    expect(result.primaryLabel).toBe("Show verified AppImage…");
+    expect(result.primaryAction).toBe("apply");
+    expect(result.detail).toContain("AppImage");
+  });
+
   it("captures modal focus only for the hidden-to-visible transition", () => {
     const original = { id: "original" };
     const later = { id: "later" };

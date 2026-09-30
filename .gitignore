@@ -7,6 +7,8 @@
 !/build/darwin/**
 !/build/windows/
 !/build/windows/**
+!/build/linux/
+!/build/linux/**
 !/build/README.md
 *.exe
 

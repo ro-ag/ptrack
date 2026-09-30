@@ -54,13 +54,18 @@ impl std::error::Error for UpdateError {}
 
 /// How the running copy was installed, which decides the package an update
 /// downloads and how it is handed over.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum Installation {
     /// Unpacked from a release archive or disk image: the platform package.
     Archive,
     /// Installed by the per-user Windows installer, so updates arrive as the
     /// next MSI and Windows Installer replaces the files it owns.
     WindowsInstaller,
+    /// A mounted or extracted `AppImage`; replace the complete image manually.
+    LinuxAppImage,
+    /// Files owned by dpkg, RPM, or the Nix store must not be overwritten.
+    LinuxPackageManager,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -99,7 +104,12 @@ fn host_installation() -> Installation {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+fn host_installation() -> Installation {
+    crate::installation::linux_host_installation()
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 const fn host_installation() -> Installation {
     Installation::Archive
 }
@@ -296,7 +306,7 @@ pub fn compare_versions(left: &str, right: &str) -> Result<std::cmp::Ordering, U
 ///
 /// # Errors
 /// Rejects every target outside darwin/linux/windows × amd64/arm64, and an
-/// installer-managed copy anywhere but Windows.
+/// installation type used outside its supported platform.
 pub fn package_name(target: &Target, version: &str) -> Result<String, UpdateError> {
     if !matches!(target.arch.as_str(), "amd64" | "arm64") {
         return Err(UpdateError::UnsupportedTarget);
@@ -305,8 +315,11 @@ pub fn package_name(target: &Target, version: &str) -> Result<String, UpdateErro
         ("darwin", Installation::Archive) => {
             Ok(format!("p-track_{version}_darwin_{}.dmg", target.arch))
         }
-        ("linux", Installation::Archive) => {
+        ("linux", Installation::Archive | Installation::LinuxPackageManager) => {
             Ok(format!("ptrack_{version}_linux_{}.tar.gz", target.arch))
+        }
+        ("linux", Installation::LinuxAppImage) => {
+            Ok(format!("p-track_{version}_linux_{}.AppImage", target.arch))
         }
         ("windows", Installation::Archive) => {
             Ok(format!("ptrack_{version}_windows_{}.zip", target.arch))

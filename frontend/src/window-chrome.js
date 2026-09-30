@@ -1,14 +1,12 @@
-// The frameless Windows title bar. macOS keeps its native inset traffic
-// lights and Linux its native frame; only a Windows window marked with
-// `data-window-chrome="custom"` (set before first paint in index.html) draws
-// the app menu button and the minimize, maximize, and close controls itself.
+// Windows and Linux draw their own title bars. macOS keeps its native inset
+// traffic lights; ordinary browsers never invoke native window controls.
 import { invoke } from "@tauri-apps/api/core";
 
 const ACTIONS = new Set(["menu", "minimize", "toggle-maximize", "close", "state"]);
 
 function installWindowChrome(target = globalThis, dependencies = {}) {
   const document = target.document;
-  if (document?.documentElement?.dataset.windowChrome !== "custom") return false;
+  if (!["custom", "linux"].includes(document?.documentElement?.dataset.windowChrome)) return false;
   const invokeCommand = dependencies.invoke || invoke;
   const root = document.documentElement;
 
@@ -17,6 +15,11 @@ function installWindowChrome(target = globalThis, dependencies = {}) {
     try {
       const maximized = await invokeCommand("window_chrome", { action, ...position });
       root.dataset.windowMaximized = String(maximized === true);
+      for (const button of document.querySelectorAll('[data-window-control="toggle-maximize"]')) {
+        const label = maximized === true ? "Restore" : "Maximize";
+        button.setAttribute("aria-label", label);
+        button.setAttribute("title", label);
+      }
     } catch (error) {
       target.console?.error?.(`p-track window control failed: ${error}`);
     }
@@ -30,7 +33,9 @@ function installWindowChrome(target = globalThis, dependencies = {}) {
   for (const button of document.querySelectorAll("[data-app-menu]")) {
     button.addEventListener("click", () => {
       const rect = button.getBoundingClientRect();
-      void run("menu", { x: Math.round(rect.left), y: Math.round(rect.bottom + 4) });
+      const position = { x: Math.round(rect.left), y: Math.round(rect.bottom + 4) };
+      if (button.dataset.appMenu) position.menuLabel = button.dataset.appMenu;
+      void run("menu", position);
     });
   }
   // Maximizing by double-click, Win+Up, or a snap changes the window without
