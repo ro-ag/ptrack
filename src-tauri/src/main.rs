@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 #[cfg(target_os = "linux")]
 mod linux_graphics;
@@ -491,6 +491,13 @@ fn open_external_url(
 }
 
 fn main() {
+    // Xlib threading must be initialized before GTK or any worker can use it.
+    // This does not open a display or select X11 over Wayland.
+    #[cfg(target_os = "linux")]
+    if let Err(error) = linux_graphics::initialize_xlib() {
+        eprintln!("could not initialize desktop graphics: {error}");
+        std::process::exit(1);
+    }
     let global_home = match resolve_global_home() {
         Ok(home) => home,
         Err(error) => {

@@ -8,6 +8,20 @@ use std::process::Command;
 
 const DISABLE_DMABUF: &str = "WEBKIT_DISABLE_DMABUF_RENDERER";
 
+/// Called first in `main`, before GTK initialization or application workers.
+/// Xlib is also used by GTK on `XWayland`; no display connection is opened here.
+#[allow(unsafe_code)] // The only FFI call, before any other Xlib use in this process.
+pub fn initialize_xlib() -> std::io::Result<()> {
+    let xlib = x11_dl::xlib::Xlib::open().map_err(std::io::Error::other)?;
+    // SAFETY: main calls this before any application/thread/GTK initialization.
+    // XInitThreads takes no pointers, and x11-dl retains its library handle
+    // for the process lifetime. A renderer-workaround exec starts main again.
+    if unsafe { (xlib.XInitThreads)() } == 0 {
+        return Err(std::io::Error::other("XInitThreads failed"));
+    }
+    Ok(())
+}
+
 fn restart_command(
     executable: &OsStr,
     arguments: impl IntoIterator<Item = impl AsRef<OsStr>>,

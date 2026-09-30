@@ -6,7 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.42.0] - 2026-09-29
+## [0.43.0] - 2026-09-29
+
+The v0.42.0 tag failed Linux release acceptance and was not published. This
+release includes that candidate's Linux features and the startup correction.
 
 ### Added
 - Linux AppImage, Debian and RPM packages for x86-64 and ARM64, with desktop
@@ -23,6 +26,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   desktop startup on Ubuntu 22.04, 24.04 and 26.04, Debian 13 and Fedora 44.
 
 ### Fixed
+- Intermittent Linux X11/XWayland startup aborts by initializing Xlib threading
+  before GTK and application workers start.
 - Blank Linux windows on NVIDIA and hybrid systems caused by WebKitGTK's
   DMA-BUF renderer; explicit renderer overrides remain respected.
 - AppImage rendering failures with newer Mesa drivers caused by bundling an
