@@ -16,12 +16,22 @@ for binary in /usr/bin/ptrack "$HOME/ptrack.AppImage"; do
     [[ "$PTRACK_SMOKE_BINARY" = *.AppImage ]] && args=()
     "$PTRACK_SMOKE_BINARY" "${args[@]}" > /tmp/ptrack-x11.log 2>&1 &
     app=$!
-    trap "cat /tmp/ptrack-x11.log; kill $app 2>/dev/null || true" EXIT
+    window_pid=""
+    cleanup() {
+      cat /tmp/ptrack-x11.log
+      if [ -n "$window_pid" ]; then kill "$window_pid" 2>/dev/null || true; fi
+      kill "$app" 2>/dev/null || true
+    }
+    trap cleanup EXIT
     for attempt in {1..30}; do
-      kill -0 "$app" || { cat /tmp/ptrack-x11.log; exit 1; }
-      if xdotool search --onlyvisible --name "p-track" >/dev/null 2>&1; then
+      window=$(xdotool search --onlyvisible --name "p-track" | head -1) || true
+      if [ -n "$window" ]; then
+        # AppImage launchers can hand off to another process. Check the
+        # actual GTK window and its owner, not the short-lived launcher PID.
+        window_pid=$(xdotool getwindowpid "$window")
         sleep 3
-        kill -0 "$app"
+        kill -0 "$window_pid"
+        xdotool getwindowname "$window" >/dev/null
         if grep -Ei "Aborting|panicked|Failed to initialize GTK" /tmp/ptrack-x11.log; then exit 1; fi
         exit 0
       fi
@@ -58,6 +68,7 @@ for binary in /usr/bin/ptrack "$HOME/ptrack.AppImage"; do
     set +e
     GDK_BACKEND="$backend" WAYLAND_DISPLAY=ptrack-test timeout 10 "$PTRACK_SMOKE_BINARY" gui > /tmp/ptrack-wayland.log 2>&1
     status=$?
+    set -e
     cat /tmp/ptrack-wayland.log
     test "$status" = 124
     if grep -Ei "Aborting|panicked|Failed to initialize GTK" /tmp/ptrack-wayland.log; then exit 1; fi
