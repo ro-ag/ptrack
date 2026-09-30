@@ -254,6 +254,52 @@ fn asset_redirects_are_exact_https_github_hosts_without_embedded_authority() {
 }
 
 #[test]
+fn appimage_stage_verifies_the_complete_image_and_its_signed_digest() {
+    let cancellation = CancellationToken::new();
+    let root = private_temp_dir();
+    let asset_name = "p-track_1.2.5_linux_amd64.AppImage".to_owned();
+    let asset_path = root.join(&asset_name);
+    let mut image = fake_elf(62);
+    image[8..11].copy_from_slice(b"AI\x02");
+    write_private(&asset_path, &image);
+    let (sha256, size_bytes) = hash_regular_file(&cancellation, &asset_path, 512 << 20).unwrap();
+    let stage = StagedUpdate {
+        root: root.clone(),
+        asset_path: asset_path.clone(),
+        payload_path: asset_path.clone(),
+        state_path: root.join("state.json"),
+        version: "1.2.5".to_owned(),
+        asset_name,
+        os: "linux".to_owned(),
+        arch: "amd64".to_owned(),
+        payload_sha256: sha256.clone(),
+        sha256,
+        size_bytes,
+        payload_size_bytes: size_bytes,
+        kind: StageKind::LinuxAppImage,
+    };
+    assert_eq!(
+        serde_json::to_string(&stage.kind.installation()).unwrap(),
+        "\"linux-app-image\""
+    );
+    write_stage_record(&stage).unwrap();
+    let key_pair = test_key_pair(0x19);
+    write_signed_manifest(&root, &stage.asset_name, &stage.sha256, &key_pair);
+    assert_eq!(
+        load_stage_with_key(&cancellation, &root, &public_key(&key_pair)).unwrap(),
+        stage
+    );
+    let mut wrong_arch = stage.clone();
+    wrong_arch.arch = "arm64".to_owned();
+    assert!(validate_stage(&cancellation, &wrong_arch).is_err());
+    image[8..11].copy_from_slice(b"bad");
+    write_private_replace(&asset_path, &image);
+    assert!(validate_stage(&cancellation, &stage).is_err());
+    assert!(load_stage_with_key(&cancellation, &root, &public_key(&key_pair)).is_err());
+    cleanup(&root);
+}
+
+#[test]
 fn linux_archive_stage_round_trips_and_rejects_payload_tampering() {
     let cancellation = CancellationToken::new();
     let root = private_temp_dir();

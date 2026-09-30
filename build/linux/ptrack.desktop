@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name={{name}}
+Comment=Track project plans, tasks, agents, and terminals
+Exec=ptrack gui
+Icon={{icon}}
+Terminal=false
+Categories=Development;
+StartupNotify=true
+StartupWMClass=ptrack
+Keywords=projects;tasks;terminal;agents;

@@ -27,6 +27,8 @@ export function updatePresentation(state = {}) {
   const release = state.release || null;
   const version = typeof release?.version === "string" ? release.version.trim() : "";
   const verified = Boolean(state.checksumVerified);
+  const packageManaged = state.installation === "linux-package-manager";
+  const appImage = state.installation === "linux-app-image";
   const presentation = {
     busy: busyPhases.has(phase),
     cancel: ["checking", "downloading", "applying"].includes(phase),
@@ -124,6 +126,18 @@ export function updatePresentation(state = {}) {
     default:
       return invalidUpdateState(presentation);
   }
+  if (packageManaged) {
+    if (["download", "apply"].includes(presentation.primaryAction)) {
+      presentation.primaryAction = release?.pageUrl ? "release" : null;
+      presentation.primaryLabel = "View release downloads";
+    }
+    if (!["checking", "recovering", "recovery-required", "unavailable"].includes(phase)) {
+      presentation.detail = "This copy is managed by your system package manager. Update it there, or install the matching new package from Releases. p-track will not replace package-owned files.";
+    }
+  } else if (appImage && phase === "ready" && verified) {
+    presentation.primaryLabel = "Show verified AppImage…";
+    presentation.detail = "Open the verified replacement's folder, then close p-track and replace your previous AppImage. Your project data stays in its existing location.";
+  }
   return presentation;
 }
 
@@ -153,6 +167,9 @@ export function updateActionFailureMessage(action, error) {
 }
 
 function manualActionDetail(action) {
+  if (action === "revealed-verified-app-image") {
+    return "The verified AppImage folder is open. Close p-track, replace your old AppImage with the downloaded file, and reopen it. Keep the same filename if your launcher or CLI wrapper points to it.";
+  }
   if (action === "opened-native-installer") {
     // The macOS disk image or, for an installed Windows copy, the per-user MSI.
     return "The verified installer is open. Complete installation there, then restart p-track.";

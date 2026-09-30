@@ -6,8 +6,8 @@ Observe agent work, keep project state durable, and pass bounded context to
 the next agent—without a hosted service or cloud account.
 
 [![Rust](https://img.shields.io/badge/Rust-1.89%2B-CE6A3D?logo=rust&logoColor=white)](https://www.rust-lang.org/)
-[![Release](https://img.shields.io/badge/release-v0.41.4-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.41.4)
-[![Help Center](https://img.shields.io/badge/help-v0.41.4-3DD6A3)](https://ro-ag.github.io/ptrack/help/)
+[![Release](https://img.shields.io/badge/release-v0.42.0-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.42.0)
+[![Help Center](https://img.shields.io/badge/help-v0.42.0-3DD6A3)](https://ro-ag.github.io/ptrack/help/)
 [![License](https://img.shields.io/badge/License-Apache--2.0-3DD6A3)](LICENSE)
 [![Storage](https://img.shields.io/badge/Storage-local--first-AFA8FF)](#storage-and-safety)
 
@@ -87,6 +87,53 @@ WebView2 runtime, which ships with Windows 11 and current Windows 10.
 Building from source requires Rust 1.89, Node 24, and the
 [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your
 platform. No Go runtime or toolchain is required.
+
+Linux releases provide these downloads for `amd64` (x86-64) and `arm64` (AArch64):
+
+| Download | Installation |
+| --- | --- |
+| `p-track_<version>_linux_<arch>.AppImage` | Portable desktop and CLI; `chmod +x` and run. No arguments open the GUI. |
+| `p-track_<version>_linux_<arch>.deb` | Ubuntu/Debian: `sudo apt install ./p-track_<version>_linux_<arch>.deb` |
+| `p-track_<version>_linux_<arch>.rpm` | Fedora: `sudo dnf install ./p-track_<version>_linux_<arch>.rpm` |
+| `ptrack_<version>_linux_<arch>.tar.gz` | Standalone executable; install GTK 3 and WebKitGTK 4.1, then run `ptrack gui`. |
+
+Debian/RPM packages install the application-menu entry, icons and `ptrack` CLI.
+The portable AppImage bundles the desktop libraries; pass commands such as
+`./p-track.AppImage version` or `./p-track.AppImage status` to use the CLI.
+If FUSE is unavailable, run it with `APPIMAGE_EXTRACT_AND_RUN=1`.
+AppImages use X11/XWayland; Debian/RPM packages support native Wayland and X11.
+
+Linux packages are built in Ubuntu 22.04 containers with a glibc 2.35 baseline,
+independent of the developer's distribution. They target current glibc-based
+Linux desktops; musl-only systems such as Alpine are not supported.
+On NixOS, wrap the downloaded AppImage using the supplied expression, without
+compiling p-track (replace the example version and architecture as needed):
+
+```sh
+nix-build build/linux --arg appimage "$PWD/p-track_0.42.0_linux_amd64.AppImage" \
+  --argstr version 0.42.0
+./result/bin/ptrack gui
+# Optional user-profile installation, including its desktop launcher:
+nix-env -i ./result
+```
+
+Verify release downloads against the signed `checksums.txt` before installing;
+local candidate builds are unsigned and are not published releases.
+With this repository and the release's checksum files in the current directory:
+
+```sh
+python3 tools/release_contract.py public-key release-public.der
+openssl pkeyutl -verify -pubin -inkey release-public.der -keyform DER -rawin \
+  -in checksums.txt -sigfile checksums.txt.sig
+sha256sum --ignore-missing --check checksums.txt
+```
+
+Proceed only when signature verification and the checksum for your downloaded
+package both succeed.
+
+Linux desktop windows use a compact application title bar with File, Project,
+View, and Help menus plus minimize, maximize/restore, and close controls.
+Dragging and double-clicking the empty title-bar area use native window actions.
 
 ## Quick start
 
@@ -455,7 +502,9 @@ installation step requires a separate action.
 The updater selects only the exact packaged asset for the running OS and CPU,
 plus `checksums.txt` and its signature `checksums.txt.sig`: a DMG on macOS,
 the MSI for an installed Windows copy or the ZIP for any other Windows copy, or
-a tarball on Linux. GitHub's generated source archives,
+the complete AppImage for portable Linux installations, or a tarball for a
+standalone Linux executable. Managed Linux copies only check for new releases.
+GitHub's generated source archives,
 prereleases, development builds, downgrades, arbitrary URLs, and ambiguous
 assets are rejected. The tag-only release job signs `checksums.txt` with the
 p-track Ed25519 release key, and on every platform the updater trusts a digest
@@ -474,7 +523,15 @@ SHA-256, and revalidated before handoff.
   to close the running app. Any other copy (portable or CLI archive) gets the
   verified ZIP revealed in Explorer; close the running app before replacing the
   executable manually.
-- **Linux:** p-track can atomically replace only the current standalone
+- **Linux AppImage:** download and verify the complete new image, then choose
+  **Show verified AppImage…**. Close p-track, replace the old image with the
+  verified download, and reopen it. Preserve its filename if a launcher points
+  to it. This is a manual replacement, not an in-place automatic update.
+- **Linux Debian/RPM/Nix:** use the package manager to install the next release.
+  The app offers the release page and refuses downloads or executable replacement.
+  These packages do not configure an apt/dnf repository; download the new package
+  and install it with apt/dnf to upgrade.
+- **Linux standalone archive:** p-track can atomically replace only the current standalone
   executable when it and its directory are safely owned and writable by the
   current user. It uses a rollback link, durable recovery record, version probe,
   and automatic rollback on failure. System-managed installations are refused
@@ -766,7 +823,78 @@ make test
 
 The repository contains no Go runtime or source module.
 
-On macOS, two more targets produce the branded desktop artifacts:
+### Linux development
+
+On Ubuntu 24.04, install the native build dependencies before `make build`:
+
+```sh
+sudo apt-get update
+sudo apt-get install build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev \
+  libayatana-appindicator3-dev librsvg2-dev patchelf
+```
+
+On NixOS (or Linux with Nix), the repository's `shell.nix` supplies Rust,
+Node 24, Python, and the GTK/WebKit development libraries from your `nixpkgs`
+channel:
+
+```sh
+nix-shell
+make build
+make test
+./target/$(rustc -vV | sed -n 's/^host: //p')/release/ptrack gui
+```
+
+Run the locally built executable inside that shell so the desktop runtime
+can find its GSettings schemas and networking modules.
+
+On Linux with the NVIDIA kernel driver loaded (including hybrid Intel/NVIDIA
+systems), desktop startup defaults `WEBKIT_DISABLE_DMABUF_RENDERER=1` to avoid
+blank windows caused by WebKitGTK's DMA-BUF presentation path. Explicit values
+are preserved: launch with `WEBKIT_DISABLE_DMABUF_RENDERER=0` to try the default
+renderer after a driver or WebKit update. This does not force a GPU or disable
+all hardware acceleration. See [Tauri's Linux graphics guidance](https://v2.tauri.app/develop/debug/linux-graphics/).
+
+The desktop uses Tauri's GTK 3 / WebKitGTK 4.1 backend. Vulkan support depends
+on the installed WebKit build; setting a Vulkan environment variable does not
+add it to a build without that support.
+
+Use a Linux filesystem such as ext4 or Btrfs for the checkout. Shared exFAT
+drives cannot create the symbolic links that `npm ci` requires and do not
+provide the Unix permissions used by the private application store.
+
+### Linux packaging
+
+Build portable packages with Docker on the architecture being released:
+
+```sh
+bash build/linux/container-build.sh 0.42.0
+bash build/linux/test-packages.sh 0.42.0
+```
+
+Equivalently, use `make linux-package VERSION=0.42.0` and
+`make linux-package-test VERSION=0.42.0`. Packages land in `dist/`. The container
+uses Rust 1.89 and Node 24, checks the binary version and architecture, rejects
+Nix-store linkage and glibc requirements above 2.35, and preserves the existing
+three-file CLI archive contract in release CI. ARM64 AppImages are built on a
+native ARM64 runner, not through an x86 cross-compilation step.
+
+Native acceptance and release CI install the actual packages in Ubuntu 22.04,
+Ubuntu 24.04, Ubuntu 26.04, Debian 13 and Fedora 44 containers. They check desktop metadata,
+icons, CLI invocation through a PTY, X11 window creation, native-package Wayland
+startup and AppImage XWayland startup using software rendering. These headless tests do not replace
+interactive GPU rendering and terminal-dock checks on physical Intel, AMD and
+NVIDIA desktops. The Nix expression wraps the same release AppImage.
+The AppImage keeps the host's Wayland libraries alongside its Mesa drivers;
+bundling older copies can otherwise abort WebKit on newer distributions.
+
+The tag-only release workflow publishes both architectures after package tests,
+includes all sixteen platform assets in the signed checksum manifest, and verifies
+that signature against the updater's pinned public key before publication.
+Running a local package build does not create a tag or publish a release.
+
+### macOS packaging
+
+On macOS, these targets produce the branded desktop artifacts:
 
 ```sh
 make package   # target/<triple>/release/bundle/macos/p-track.app

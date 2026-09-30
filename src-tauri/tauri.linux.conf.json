@@ -1,0 +1,31 @@
+{
+  "bundle": {
+    "resources": [],
+    "shortDescription": "Local project workspace for plans, tasks, agents, and terminals",
+    "linux": {
+      "deb": {
+        "desktopTemplate": "../build/linux/ptrack.desktop",
+        "depends": ["libgtk-3-0", "libwebkit2gtk-4.1-0", "xdg-utils"],
+        "section": "devel",
+        "files": {
+          "/usr/lib/ptrack/package-manager": "../build/linux/package-manager",
+          "/usr/share/doc/ptrack/LICENSE": "../LICENSE"
+        }
+      },
+      "rpm": {
+        "desktopTemplate": "../build/linux/ptrack.desktop",
+        "depends": ["libgtk-3.so.0()(64bit)", "libwebkit2gtk-4.1.so.0()(64bit)", "xdg-utils"],
+        "files": {
+          "/usr/lib/ptrack/package-manager": "../build/linux/package-manager",
+          "/usr/share/licenses/ptrack/LICENSE": "../LICENSE"
+        }
+      },
+      "appimage": {
+        "bundleMediaFramework": false,
+        "files": {
+          "/usr/share/licenses/ptrack/LICENSE": "../LICENSE"
+        }
+      }
+    }
+  }
+}

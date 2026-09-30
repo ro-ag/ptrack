@@ -74,6 +74,15 @@ def write_msi(path: Path) -> None:
 def write_package(dist: Path, name: str) -> None:
     if name.endswith(".dmg"):
         (dist / name).write_bytes(b"dmg")
+    elif name.endswith(".deb"):
+        (dist / name).write_bytes(b"!<arch>\n" + bytes(100))
+    elif name.endswith(".rpm"):
+        (dist / name).write_bytes(b"\xed\xab\xee\xdb" + bytes(100))
+    elif name.endswith(".AppImage"):
+        arch = name.rsplit("_", 1)[1].removesuffix(".AppImage")
+        data = bytearray(executable_header("linux", arch))
+        data[8:11] = b"AI\x02"
+        (dist / name).write_bytes(data)
     elif name.endswith(".msi"):
         write_msi(dist / name)
     elif name.endswith("_portable.zip"):
@@ -86,6 +95,22 @@ def write_package(dist: Path, name: str) -> None:
 
 
 class ReleaseArtifactTests(unittest.TestCase):
+    def test_linux_packages_reject_wrong_format_and_appimage_architecture(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            dist = Path(temporary)
+            for extension in ("AppImage", "deb", "rpm"):
+                name = f"p-track_1.2.3_linux_amd64.{extension}"
+                path = dist / name
+                path.write_bytes(b"not a package")
+                with self.assertRaises(release_contract.ContractError):
+                    release_contract.validate_linux_package(path)
+                write_package(dist, name)
+                release_contract.validate_linux_package(path)
+            wrong_arch = dist / "p-track_1.2.3_linux_arm64.AppImage"
+            wrong_arch.write_bytes((dist / "p-track_1.2.3_linux_amd64.AppImage").read_bytes())
+            with self.assertRaises(release_contract.ContractError):
+                release_contract.validate_linux_package(wrong_arch)
+
     def test_exact_five_target_package_set_layout_machines_and_checksums(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             dist = Path(temporary)
@@ -93,6 +118,8 @@ class ReleaseArtifactTests(unittest.TestCase):
                 (dist / f"p-track_1.2.3_darwin_{arch}.dmg").write_bytes(b"dmg")
                 write_tar(dist / f"ptrack_1.2.3_darwin_{arch}.tar.gz", "darwin", arch)
             for arch in release_contract.ARCHES:
+                for extension in ("AppImage", "deb", "rpm"):
+                    write_package(dist, f"p-track_1.2.3_linux_{arch}.{extension}")
                 write_tar(dist / f"ptrack_1.2.3_linux_{arch}.tar.gz", "linux", arch)
                 write_zip(dist / f"ptrack_1.2.3_windows_{arch}.zip", arch)
                 write_msi(dist / f"p-track_1.2.3_windows_{arch}.msi")
@@ -100,7 +127,7 @@ class ReleaseArtifactTests(unittest.TestCase):
             release_contract.validate_dist(dist, "1.2.3")
             checksum_path = release_contract.write_checksums(dist, "1.2.3")
             lines = checksum_path.read_text(encoding="ascii").splitlines()
-            self.assertEqual(len(lines), 10)
+            self.assertEqual(len(lines), 16)
             self.assertEqual(
                 [line.split("  ", 1)[1] for line in lines],
                 list(release_contract.package_names("1.2.3")),
@@ -204,10 +231,12 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(workflow.count(f"rust_target: {target}"), 1)
         self.assertNotIn("x86_64-apple-darwin", workflow)
         self.assertIn('tags:\n      - "v*"', workflow)
-        self.assertEqual(workflow.count("npm --prefix frontend run tauri -- build"), 3)
-        self.assertEqual(workflow.count("--no-bundle"), 2)
+        self.assertEqual(workflow.count("npm --prefix frontend run tauri -- build"), 2)
+        self.assertEqual(workflow.count("--no-bundle"), 1)
         self.assertEqual(workflow.count("--bundles app"), 1)
-        self.assertEqual(workflow.count("-- --locked"), 3)
+        self.assertEqual(workflow.count("-- --locked"), 2)
+        self.assertIn('bash build/linux/container-build.sh "${GITHUB_REF_NAME#v}"', workflow)
+        self.assertIn('bash build/linux/test-packages.sh "${GITHUB_REF_NAME#v}"', workflow)
         # Release binaries come from `tauri build`; the only direct cargo
         # build is the console-free Windows launcher, which is not a Tauri app.
         self.assertEqual(workflow.count("cargo build --locked --release"), 1)

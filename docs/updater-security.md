@@ -33,7 +33,14 @@ Accepted packages are:
 | macOS | `p-track_<version>_darwin_<arch>.dmg` |
 | Windows, installed with the MSI | `p-track_<version>_windows_<arch>.msi` |
 | Windows, any other copy | `ptrack_<version>_windows_<arch>.zip` |
-| Linux | `ptrack_<version>_linux_<arch>.tar.gz` |
+| Linux standalone archive | `ptrack_<version>_linux_<arch>.tar.gz` |
+| Linux AppImage | `p-track_<version>_linux_<arch>.AppImage` |
+
+Debian/RPM and Nix-store installations can discover releases but cannot stage
+or apply them. Their package manager owns replacement. A package marker only
+classifies `/usr/bin/ptrack`; it does not capture a separate user-owned archive.
+AppImage classification requires the executable to match the canonical
+`APPDIR/usr/bin/ptrack`, not merely the presence of an environment variable.
 
 GitHub-generated source tarballs and zipballs are not read from the response
 and cannot become candidates. Prereleases, drafts, development versions,
@@ -59,6 +66,12 @@ traversal, links, extra entries, duplicate entries, and the wrong ELF or PE
 machine type are rejected. The durable stage records archive and payload
 digests and sizes. Files are reopened without following links and rehashed
 before use.
+
+AppImage stages hold the entire image as their payload, with a 512 MiB bound,
+an ELF architecture check and a type-2 AppImage header check. They use the same
+signed manifest chain and revalidation as other packages. Installation type is
+checked again during apply and startup recovery so an old standalone-executable
+stage cannot replace a package-owned or mounted executable.
 
 ## Release signing
 
@@ -104,6 +117,13 @@ and reopens it. Both handoffs are launched rather than awaited, because
 Explorer reports failure even after it opens the folder.
 
 ### Linux
+
+For AppImages, the installer makes the verified complete image executable and
+opens its private staging folder. The user closes the running app and replaces
+the original image manually. No executable inside the mount is overwritten,
+and no atomic-replacement journal is created for this handoff. Debian/RPM/Nix
+installations refuse downloads and apply requests in the backend as well as
+presenting package-manager instructions in the UI.
 
 The current executable and parent directory must resolve canonically, be owned
 by the current user, and reject group/world-writable or set-ID modes. p-track

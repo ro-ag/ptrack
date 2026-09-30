@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use ptrack_store::{ActiveBinding, GlobalStore};
 use ptrack_updater::{
-    ApplyResult, Candidate, Client, Installer, Progress, StagedUpdate, Target, UpdateError,
-    compare_versions, discard_stage, load_stage, recover_pending_apply,
+    ApplyResult, Candidate, Client, Installation, Installer, Progress, StagedUpdate, Target,
+    UpdateError, compare_versions, discard_stage, load_stage, recover_pending_apply,
 };
 use serde::Serialize;
 use time::OffsetDateTime;
@@ -17,6 +17,12 @@ use tokio_util::sync::CancellationToken;
 const UPDATE_PROGRESS_QUANTUM: u64 = 256 << 10;
 const UPDATE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const UPDATE_PREFERENCE_KEY: &[u8] = b"updates.auto-check";
+
+/// Whether the running executable belongs to a mounted or extracted `AppImage`.
+#[must_use]
+pub fn running_from_appimage() -> bool {
+    Target::host().installation == Installation::LinuxAppImage
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -57,6 +63,7 @@ pub struct UpdateState {
     pub revision: u64,
     pub phase: UpdatePhase,
     pub current_version: String,
+    pub installation: Installation,
     pub automatic_checks: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub release: Option<UpdateRelease>,
@@ -80,6 +87,7 @@ impl UpdateState {
             revision: 0,
             phase: UpdatePhase::Idle,
             current_version,
+            installation: Installation::Archive,
             automatic_checks: false,
             release: None,
             downloaded_bytes: 0,
@@ -430,6 +438,8 @@ impl UpdateRuntime {
         event_sink: Option<Arc<dyn UpdateEventSink>>,
         backend: Arc<dyn UpdateBackend>,
     ) -> Arc<Self> {
+        let mut public = UpdateState::idle(current_version);
+        public.installation = target.installation;
         Arc::new(Self {
             core: Arc::new(UpdateCore {
                 target,
@@ -439,7 +449,7 @@ impl UpdateRuntime {
                 preference_lock: Mutex::new(()),
                 event_sink,
                 state: Mutex::new(RuntimeState {
-                    public: UpdateState::idle(current_version),
+                    public,
                     candidate: None,
                     stage: None,
                     active: false,
@@ -652,7 +662,10 @@ impl UpdateRuntime {
             let Ok(stage) = self.core.backend.load(cancellation, &root) else {
                 continue;
             };
-            if stage.os != self.core.target.os || stage.arch != self.core.target.arch {
+            if stage.os != self.core.target.os
+                || stage.arch != self.core.target.arch
+                || stage.kind.installation() != self.core.target.installation
+            {
                 continue;
             }
             match self.core.backend.recover(cancellation, &root) {
@@ -746,6 +759,9 @@ impl DesktopUpdateService for UpdateRuntime {
     }
 
     fn download_update(&self, expected_version: &str) -> Result<UpdateState, String> {
+        if self.core.target.installation == Installation::LinuxPackageManager {
+            return Err("Use your system package manager to update p-track.".to_owned());
+        }
         let candidate = {
             let state = lock(&self.core.state);
             state
@@ -816,6 +832,9 @@ impl DesktopUpdateService for UpdateRuntime {
     }
 
     fn apply_update(&self, expected_version: &str) -> Result<UpdateState, String> {
+        if self.core.target.installation == Installation::LinuxPackageManager {
+            return Err("Use your system package manager to update p-track.".to_owned());
+        }
         let stage = {
             let state = lock(&self.core.state);
             state

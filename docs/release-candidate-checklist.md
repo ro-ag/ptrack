@@ -76,7 +76,7 @@ Releases publish via GitHub Actions on tag push only
   Expected: `OK`.
 - [ ] `validate-dist` and `checksums` are **CI-only**, not runnable from
       this checklist's local artifacts: `validate-dist` requires the dist
-      directory to contain exactly all 6 package names across the five
+      directory to contain exactly all 16 package names across the five
       release targets (`tools/release_contract.py`'s `package_names()`),
       and `checksums` calls `validate-dist` first. Section 5 below only
       produces the host machine's own DMG + tar.gz, so both steps fail

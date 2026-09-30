@@ -21,16 +21,39 @@
         if (/^#terminal-window=terminal-\d+$/.test(location.hash)) {
           document.documentElement.dataset.windowMode = "terminal";
         }
-        // The Windows desktop app is frameless and draws its own title bar;
-        // macOS keeps its inset traffic lights and a browser keeps nothing.
+        // Windows and Linux draw their own title bars. macOS keeps its
+        // inset traffic lights; a browser gets no desktop controls.
         if (window.__TAURI_INTERNALS__ && /Win/.test(navigator.platform)) {
           document.documentElement.dataset.windowChrome = "custom";
+        } else if (window.__TAURI_INTERNALS__ && /Linux/.test(navigator.platform)) {
+          document.documentElement.dataset.windowChrome = "linux";
         }
       })();
     </script>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
+    <header class="desktop-titlebar" data-tauri-drag-region aria-label="Application title bar">
+      <nav class="desktop-menubar" aria-label="Application menus">
+        <button type="button" data-app-menu="File" aria-haspopup="menu">File</button>
+        <button type="button" data-app-menu="Project" aria-haspopup="menu">Project</button>
+        <button type="button" data-app-menu="View" aria-haspopup="menu">View</button>
+        <button type="button" data-app-menu="Help" aria-haspopup="menu">Help</button>
+      </nav>
+      <span class="desktop-titlebar-drag" data-tauri-drag-region></span>
+        <div class="window-controls" role="group" aria-label="Window controls">
+          <button class="window-control" type="button" data-window-control="minimize" aria-label="Minimize" title="Minimize">
+            <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M0.5 5h9"></path></svg>
+          </button>
+          <button class="window-control" type="button" data-window-control="toggle-maximize" aria-label="Maximize" title="Maximize">
+            <svg class="window-maximize-glyph" viewBox="0 0 10 10" aria-hidden="true"><rect x="0.5" y="0.5" width="9" height="9" rx="1"></rect></svg>
+            <svg class="window-restore-glyph" viewBox="0 0 10 10" aria-hidden="true"><rect x="0.5" y="2.5" width="7" height="7" rx="1"></rect><path d="M2.5 2.5V1.5a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-1"></path></svg>
+          </button>
+          <button class="window-control window-control-close" type="button" data-window-control="close" aria-label="Close" title="Close">
+            <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M0.8 0.8l8.4 8.4M9.2 0.8L0.8 9.2"></path></svg>
+          </button>
+        </div>
+    </header>
     <div id="app" data-workspace-open="false">
       <aside id="sidebar" class="sidebar" aria-label="Workspace navigation">
         <div class="sidebar-top" data-tauri-drag-region>

@@ -23,6 +23,7 @@ export interface UpdateState {
   revision: number;
   phase: string;
   currentVersion: string;
+  installation?: string;
   automaticChecks?: boolean;
   checksumVerified?: boolean;
   release?: UpdateRelease | null;
@@ -33,7 +34,7 @@ export interface UpdateState {
   applyAction?: string;
 }
 
-type UpdateAction = "check" | "download" | "apply";
+type UpdateAction = "check" | "download" | "apply" | "release";
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
@@ -69,6 +70,7 @@ export function updateStateFrom(value: unknown): UpdateState | null {
     revision: Number(state.revision) || 0,
     phase: state.phase,
     currentVersion: optionalString(state.currentVersion) ?? "",
+    installation: optionalString(state.installation),
     automaticChecks: optionalBoolean(state.automaticChecks),
     checksumVerified: optionalBoolean(state.checksumVerified),
     release: releaseFrom(state.release),
@@ -81,7 +83,7 @@ export function updateStateFrom(value: unknown): UpdateState | null {
 }
 
 function isUpdateAction(value: unknown): value is UpdateAction {
-  return value === "check" || value === "download" || value === "apply";
+  return value === "check" || value === "download" || value === "apply" || value === "release";
 }
 
 const projectRepositoryOrigin = "https://github.com";
@@ -273,6 +275,10 @@ export function createUpdatesController(ctx: AppContext) {
   async function runUpdateAction(action: string | undefined): Promise<void> {
     if (updateActionBusy) return;
     if (!isUpdateAction(action)) return;
+    if (action === "release") {
+      openUpdateReleasePage();
+      return;
+    }
     updateCancelRequested = false;
     const version = updateState.release?.version || "";
     if ((action === "download" || action === "apply") && !version) {

@@ -29,6 +29,13 @@ build: frontend-install frontend-build
 		cargo build --locked --release --package ptrack-desktop --bin ptrack \
 		--target "$(RUST_TARGET)"
 
+.PHONY: linux-package linux-package-test
+linux-package:
+	bash build/linux/container-build.sh "$(VERSION)"
+
+linux-package-test:
+	bash build/linux/test-packages.sh "$(VERSION)"
+
 # Build the unsigned native macOS app, retain the internal CLI, and install the
 # frozen launcher that always selects `ptrack gui` when Finder opens the app.
 package: frontend-install

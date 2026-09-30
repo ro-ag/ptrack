@@ -45,6 +45,7 @@ pub enum ApplyAction {
     InstalledRestartRequired,
     OpenedNativeInstaller,
     RevealedVerifiedArchive,
+    RevealedVerifiedAppImage,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -73,8 +74,8 @@ pub(crate) trait CommandRunner: Send + Sync {
 
     /// Starts an interactive handoff — a platform installer or a file
     /// browser — and returns once it is running, never waiting for the person
-    /// to finish with it or trusting its exit status. Only the Windows
-    /// handoffs launch; macOS and Linux run bounded commands.
+    /// to finish with it or trusting its exit status. Windows handoffs and
+    /// Linux `AppImage` folder reveals launch; other flows run bounded commands.
     #[cfg_attr(not(windows), allow(dead_code))]
     fn launch(&self, program: &Path, arguments: &[String]) -> Result<(), UpdateError> {
         let _ = (program, arguments);
@@ -158,7 +159,10 @@ impl Installer {
         stage: &StagedUpdate,
     ) -> Result<ApplyResult, UpdateError> {
         let host = Target::host();
-        if stage.os != host.os || stage.arch != host.arch {
+        if stage.os != host.os
+            || stage.arch != host.arch
+            || stage.kind.installation() != host.installation
+        {
             return Err(UpdateError::InstallRefused);
         }
         self.require_upgrade(&stage.version)?;
@@ -452,7 +456,9 @@ mod platform {
                     cleanup_pending: false,
                 })
             }
-            StageKind::DarwinDmg | StageKind::LinuxBinary => Err(UpdateError::InstallRefused),
+            StageKind::DarwinDmg | StageKind::LinuxBinary | StageKind::LinuxAppImage => {
+                Err(UpdateError::InstallRefused)
+            }
         }
     }
 
@@ -540,11 +546,44 @@ pub(crate) mod linux {
         payload_size_bytes: u64,
     }
 
+    fn reveal_appimage(
+        installer: &Installer,
+        cancellation: &CancellationToken,
+        stage: &StagedUpdate,
+    ) -> Result<ApplyResult, UpdateError> {
+        // Never replace the executable inside a mounted or extracted
+        // image. Reveal the signed, verified complete replacement instead.
+        if cancellation.is_cancelled() {
+            return Err(UpdateError::Cancelled);
+        }
+        fs::set_permissions(&stage.asset_path, fs::Permissions::from_mode(0o700))
+            .map_err(|_| UpdateError::InstallRefused)?;
+        installer.runner.launch(
+            Path::new("xdg-open"),
+            &[stage.root.to_string_lossy().into_owned()],
+        )?;
+        Ok(ApplyResult {
+            version: stage.version.clone(),
+            action: ApplyAction::RevealedVerifiedAppImage,
+            restart_required: true,
+            manual_install: true,
+            cleanup_pending: false,
+        })
+    }
+
     pub(crate) async fn apply(
         installer: &Installer,
         cancellation: &CancellationToken,
         stage: &StagedUpdate,
     ) -> Result<ApplyResult, UpdateError> {
+        if Target::host().installation == crate::Installation::LinuxPackageManager {
+            return Err(UpdateError::Message(
+                "Use your system package manager to update p-track.".to_owned(),
+            ));
+        }
+        if stage.kind == StageKind::LinuxAppImage {
+            return reveal_appimage(installer, cancellation, stage);
+        }
         if stage.kind != StageKind::LinuxBinary {
             return Err(UpdateError::InstallRefused);
         }
@@ -667,6 +706,10 @@ pub(crate) mod linux {
         public_key: &[u8; 32],
     ) -> Result<bool, UpdateError> {
         let stage = load_stage_with_key(cancellation, stage_root, public_key)?;
+        if stage.kind == StageKind::LinuxAppImage {
+            // AppImage handoff performs no replacement and creates no journal.
+            return Ok(false);
+        }
         if stage.kind != StageKind::LinuxBinary
             || stage.os != "linux"
             || stage.arch != Target::host().arch

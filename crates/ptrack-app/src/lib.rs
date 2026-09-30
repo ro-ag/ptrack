@@ -23,6 +23,7 @@ mod shell_command;
 mod terminal_runtime;
 mod terminal_windows;
 mod update_runtime;
+pub use update_runtime::running_from_appimage;
 pub mod window_state;
 
 pub use agent_runtime::{

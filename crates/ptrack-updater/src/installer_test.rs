@@ -523,6 +523,58 @@ mod linux_installer {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn appimage_handoff_preserves_the_running_binary_and_image() {
+        struct RevealRunner(Mutex<Vec<PathBuf>>);
+        impl CommandRunner for RevealRunner {
+            fn run<'a>(
+                &'a self,
+                _: &'a CancellationToken,
+                _: &'a Path,
+                _: &'a [String],
+                _: Duration,
+            ) -> CommandFuture<'a> {
+                Box::pin(async { panic!("AppImage handoff must not run a replacement command") })
+            }
+            fn launch(&self, program: &Path, arguments: &[String]) -> Result<(), UpdateError> {
+                assert_eq!(program, Path::new("xdg-open"));
+                self.0.lock().unwrap().push(PathBuf::from(&arguments[0]));
+                Ok(())
+            }
+        }
+        let mut fixture = Fixture::with_loadable_stage();
+        fixture.stage.kind = StageKind::LinuxAppImage;
+        let before = fs::read(&fixture.target).unwrap();
+        let image = fs::read(&fixture.stage.asset_path).unwrap();
+        let runner = Arc::new(RevealRunner(Mutex::new(Vec::new())));
+        let installer = fixture.installer(runner.clone());
+        let canceled = CancellationToken::new();
+        canceled.cancel();
+        assert_eq!(
+            linux::apply(&installer, &canceled, &fixture.stage)
+                .await
+                .unwrap_err(),
+            UpdateError::Cancelled
+        );
+        assert!(runner.0.lock().unwrap().is_empty());
+        let result = linux::apply(&installer, &CancellationToken::new(), &fixture.stage)
+            .await
+            .unwrap();
+        assert_eq!(result.action, ApplyAction::RevealedVerifiedAppImage);
+        assert!(result.manual_install);
+        assert_eq!(*runner.0.lock().unwrap(), vec![fixture.stage.root.clone()]);
+        assert_eq!(fs::read(&fixture.target).unwrap(), before);
+        assert_eq!(fs::read(&fixture.stage.asset_path).unwrap(), image);
+        assert_eq!(
+            fs::metadata(&fixture.stage.asset_path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn apply_replaces_the_binary_after_a_passing_smoke_test() {
         let fixture = Fixture::with_script_payload(NEW_SCRIPT);
         let result = linux::apply(

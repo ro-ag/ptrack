@@ -12,20 +12,22 @@ acceptance criteria.
 | OS | Arch | CI runner | Minimum OS / baseline | Webview | Package format | Signing |
 |---|---|---|---|---|---|---|
 | macOS | arm64 | macos-15 | 12.0 (`minimumSystemVersion` in `src-tauri/tauri.conf.json`) | wkwebview | Signed, notarized DMG + signed (not notarized/stapled) CLI tar.gz | Developer ID signing on both packages; notarization + stapling on the DMG only |
-| Windows | amd64 | windows-2025 | Windows as provided by windows-2025 | webview2 | ZIP | None (unsigned) |
-| Windows | arm64 | windows-11-arm | Windows as provided by windows-11-arm | webview2 | ZIP | None (unsigned) |
-| Linux | amd64 | ubuntu-24.04 | glibc/webkit2gtk as provided by ubuntu-24.04 | webkitgtk | tar.gz | None (unsigned) |
-| Linux | arm64 | ubuntu-24.04-arm | glibc/webkit2gtk as provided by ubuntu-24.04-arm | webkitgtk | tar.gz | None (unsigned) |
+| Windows | amd64 | windows-2025 | Windows as provided by windows-2025 | webview2 | MSI + portable ZIP + CLI ZIP | None (unsigned) |
+| Windows | arm64 | windows-11-arm | Windows as provided by windows-11-arm | webview2 | MSI + portable ZIP + CLI ZIP | None (unsigned) |
+| Linux | amd64 | ubuntu-24.04 | Ubuntu 22.04 build container, glibc 2.35 | webkitgtk | AppImage + DEB + RPM + CLI tar.gz | None (unsigned) |
+| Linux | arm64 | ubuntu-24.04-arm | Ubuntu 22.04 build container, glibc 2.35 | webkitgtk | AppImage + DEB + RPM + CLI tar.gz | None (unsigned) |
 
 These five targets are the exact `build` matrix in `.github/workflows/release.yml`.
 `tools/release_contract.py`'s `package_names()` hardcodes the arches via
 `ARCHES = ("amd64", "arm64")` for Linux/Windows and `DARWIN_ARCHES =
-("arm64",)` for macOS, and emits six package names: macOS ships two packages
-(DMG plus the signed but not notarized/stapled CLI archive) while Windows and
-Linux ship one per arch. Intel macOS (darwin/amd64) was retired in v0.32.0 —
-existing Intel installs stay on their last release. There is no distro
-matrix pinned for Linux beyond the ubuntu-24.04 runner images; no other libc,
-webview engine, or distro is validated.
+("arm64",)` for macOS, and emits sixteen package names: two macOS assets,
+three Windows assets per architecture, and four Linux assets per architecture.
+Intel macOS (darwin/amd64) was retired in v0.32.0; existing Intel installs stay
+on their last release. Linux packages are tested in Ubuntu 22.04, 24.04 and
+26.04, Debian 13 and Fedora 44 containers. Native packages exercise X11 and
+Wayland; AppImages exercise X11 and XWayland with software rendering in CI.
+Physical GPU rendering remains a separate acceptance check. NixOS uses the
+release AppImage through `build/linux/default.nix`. Musl systems are unsupported.
 
 Every package ships alongside a `checksums.txt` (SHA-256, one line per
 package, written by `tools/release_contract.py checksums`) and
