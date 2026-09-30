@@ -503,7 +503,21 @@ async fn unattached_session_lease_revokes_authority_and_closes() {
     .unwrap();
     let session = runtime.create(3, "shell-default", None, 24, 80).unwrap();
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // Expiry revokes authority before cleanup finishes on a blocking worker.
+    // Observe completion instead of assuming that worker runs within 50 ms.
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if events.statuses.lock().unwrap().iter().any(|status| {
+                status.session_id == session.session_id
+                    && status.state == ptrack_terminal::SessionState::Closed
+            }) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the unattached session lease must finish closing the session");
 
     assert!(
         identity
