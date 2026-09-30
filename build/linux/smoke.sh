@@ -8,10 +8,10 @@ if command -v apt-get >/dev/null; then
   apt-get update
   apt-get install -y --no-install-recommends \
     "/packages/p-track_${version}_linux_${arch}.deb" \
-    xvfb xauth xdotool dbus-x11 desktop-file-utils weston xwayland util-linux libgl1-mesa-dri
+    xvfb xauth xdotool x11-utils openbox dbus-x11 desktop-file-utils weston xwayland util-linux libgl1-mesa-dri
 else
   dnf install -y "/packages/p-track_${version}_linux_${arch}.rpm" \
-    xorg-x11-server-Xvfb xorg-x11-xauth xdotool dbus-daemon \
+    xorg-x11-server-Xvfb xorg-x11-xauth xdotool xprop openbox dbus-daemon \
     desktop-file-utils weston xorg-x11-server-Xwayland util-linux util-linux-script mesa-dri-drivers
 fi
 test -f /usr/lib/ptrack/package-manager

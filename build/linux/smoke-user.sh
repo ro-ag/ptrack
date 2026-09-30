@@ -14,17 +14,31 @@ for binary in /usr/bin/ptrack "$HOME/ptrack.AppImage"; do
   # Otherwise the last probe disconnecting can reset Xvfb under GTK.
   dbus-run-session -- xvfb-run -a -s "-screen 0 1280x1024x24 -noreset" bash -c '
     set -euo pipefail
+    app=""
+    window_pid=""
+    openbox > /tmp/ptrack-openbox.log 2>&1 &
+    wm=$!
+    cleanup() {
+      cat /tmp/ptrack-openbox.log
+      test ! -f /tmp/ptrack-x11.log || cat /tmp/ptrack-x11.log
+      if [ -n "$window_pid" ]; then kill "$window_pid" 2>/dev/null || true; fi
+      if [ -n "$app" ]; then kill "$app" 2>/dev/null || true; fi
+      kill "$wm" 2>/dev/null || true
+      wait "$wm" 2>/dev/null || true
+    }
+    trap cleanup EXIT
+    # GTK queries EWMH properties while mapping the window. A bare Xvfb
+    # lacks the window manager present in an actual desktop session.
+    for attempt in {1..30}; do
+      xprop -root _NET_SUPPORTING_WM_CHECK | grep -q "window id" && break
+      kill -0 "$wm"
+      sleep 1
+    done
+    xprop -root _NET_SUPPORTING_WM_CHECK | grep -q "window id"
     args=(gui)
     [[ "$PTRACK_SMOKE_BINARY" = *.AppImage ]] && args=()
     "$PTRACK_SMOKE_BINARY" "${args[@]}" > /tmp/ptrack-x11.log 2>&1 &
     app=$!
-    window_pid=""
-    cleanup() {
-      cat /tmp/ptrack-x11.log
-      if [ -n "$window_pid" ]; then kill "$window_pid" 2>/dev/null || true; fi
-      kill "$app" 2>/dev/null || true
-    }
-    trap cleanup EXIT
     for attempt in {1..30}; do
       window=$(xdotool search --onlyvisible --name "p-track" | head -1) || true
       if [ -n "$window" ]; then
