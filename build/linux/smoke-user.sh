@@ -10,7 +10,9 @@ for binary in /usr/bin/ptrack "$HOME/ptrack.AppImage"; do
   echo "Testing $binary"
   # Variables intentionally expand in the child shell.
   # shellcheck disable=SC2016
-  dbus-run-session -- xvfb-run -a bash -c '
+  # Keep the display alive between short-lived xdotool probes during startup.
+  # Otherwise the last probe disconnecting can reset Xvfb under GTK.
+  dbus-run-session -- xvfb-run -a -s "-screen 0 1280x1024x24 -noreset" bash -c '
     set -euo pipefail
     args=(gui)
     [[ "$PTRACK_SMOKE_BINARY" = *.AppImage ]] && args=()
@@ -30,7 +32,12 @@ for binary in /usr/bin/ptrack "$HOME/ptrack.AppImage"; do
         # actual GTK window and its owner, not the short-lived launcher PID.
         window_pid=$(xdotool getwindowpid "$window")
         sleep 3
-        kill -0 "$window_pid"
+        if ! kill -0 "$window_pid" 2>/dev/null; then
+          status=0
+          wait "$app" || status=$?
+          echo "Desktop exited during startup (launcher status $status)" >&2
+          exit 1
+        fi
         xdotool getwindowname "$window" >/dev/null
         if grep -Ei "Aborting|panicked|Failed to initialize GTK" /tmp/ptrack-x11.log; then exit 1; fi
         exit 0
