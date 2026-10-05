@@ -70,6 +70,43 @@ fn windows_pinned_project_directory_protects_a_new_child_from_its_handle() {
 
 #[cfg(windows)]
 #[test]
+fn windows_pinned_project_directory_creates_a_child_without_write_owner_on_the_root() {
+    let temp = Temp::new();
+    let root = temp.0.join("windows-project-modify-only");
+    fs::create_dir(&root).unwrap();
+    let root = root.canonicalize().unwrap();
+    // The descriptor a folder under C:\ (for example C:\dev\repo) inherits from
+    // the drive root: the owner holds Modify through Authenticated Users, which
+    // grants WRITE_DAC to the owner implicitly but never WRITE_OWNER.
+    let restricted = std::process::Command::new("icacls")
+        .arg(&root)
+        .args([
+            "/inheritance:r",
+            "/grant:r",
+            "*S-1-5-18:(OI)(CI)F",
+            "*S-1-5-32-544:(OI)(CI)F",
+            "*S-1-5-32-545:(OI)(CI)RX",
+            "*S-1-5-11:(OI)(CI)M",
+        ])
+        .output()
+        .unwrap();
+    assert!(restricted.status.success());
+
+    let pinned = PinnedProjectDirectory::prepare(&root).unwrap();
+
+    pinned.verify().unwrap();
+    crate::private_windows::verify_private(&root.join(".ptrack")).unwrap();
+    assert!(fs::read_dir(&root).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".ptrack-stage-")
+    }));
+}
+
+#[cfg(windows)]
+#[test]
 fn windows_pinned_project_directory_never_replaces_a_publish_collision() {
     let temp = Temp::new();
     let root = temp.0.join("windows-project-collision");

@@ -109,12 +109,15 @@ compound file whose exact bytes match the signed manifest; p-track then starts
 Windows Installer performs the per-user major upgrade without elevation and
 offers to close the running app; p-track replaces no file itself.
 
-Any other copy — the portable folder or the CLI archive — revalidates the ZIP
-and payload, then opens Explorer through the absolute Windows directory path
-with the verified archive selected. The running executable is not
-overwritten. The user closes p-track, replaces the binary from the archive,
-and reopens it. Both handoffs are launched rather than awaited, because
-Explorer reports failure even after it opens the folder.
+Any other copy — the portable folder, the CLI archive, or the copy the
+single-file portable unpacked — revalidates the ZIP and payload, then opens
+Explorer through the absolute Windows directory path with the verified archive
+selected. The running executable is not overwritten. The user closes p-track,
+replaces the binary from the archive, and reopens it. Both handoffs are
+launched rather than awaited, because Explorer reports failure even after it
+opens the folder. The single-file portable re-verifies the copy it unpacked
+against the SHA-256 built into it and restores that copy on its next start, so
+its users update by downloading the next `_portable.exe` instead.
 
 ### Linux
 

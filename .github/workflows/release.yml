@@ -212,6 +212,18 @@ jobs:
           cargo build --locked --release --package ptrack-launcher `
             --target "${{ matrix.rust_target }}"
 
+      # The single-file portable carries the release ptrack.exe compressed
+      # inside itself, so it builds after that binary; packaging checks that
+      # it carries exactly this build.
+      - name: Build Windows single-file portable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:PTRACK_BUILD_VERSION = $env:GITHUB_REF_NAME.TrimStart("v")
+          $env:PTRACK_PORTABLE_PAYLOAD = (Resolve-Path "target/${{ matrix.rust_target }}/release/ptrack.exe").Path
+          cargo build --locked --release --package ptrack-portable `
+            --target "${{ matrix.rust_target }}"
+
       - name: Build macOS app bundle
         if: runner.os == 'macOS'
         shell: bash
@@ -352,8 +364,9 @@ jobs:
           Remove-Item -Recurse -Force "dist/$archive"
 
       # The per-user MSI (no administrator rights) and the portable folder
-      # archive, both carrying the launcher beside ptrack.exe.
-      - name: Package Windows installer and portable archive
+      # archive, both carrying the launcher beside ptrack.exe, plus the
+      # single-file portable executable.
+      - name: Package Windows installer and portable packages
         if: runner.os == 'Windows'
         shell: pwsh
         run: |

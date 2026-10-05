@@ -71,6 +71,19 @@ def write_msi(path: Path) -> None:
     path.write_bytes(release_contract.MSI_MAGIC + bytes(504))
 
 
+def write_portable_exe(
+    path: Path,
+    arch: str,
+    *,
+    subsystem: int = release_contract.PE_SUBSYSTEM_WINDOWS_GUI,
+    size: int = release_contract.MIN_PORTABLE_EXE_BYTES,
+) -> None:
+    data = bytearray(executable_header("windows", arch))
+    # PE header at 64, then the 4-byte signature and the 20-byte file header.
+    data[64 + 24 + 68 : 64 + 24 + 70] = subsystem.to_bytes(2, "little")
+    path.write_bytes(bytes(data) + bytes(max(0, size - len(data))))
+
+
 def write_package(dist: Path, name: str) -> None:
     if name.endswith(".dmg"):
         (dist / name).write_bytes(b"dmg")
@@ -87,6 +100,8 @@ def write_package(dist: Path, name: str) -> None:
         write_msi(dist / name)
     elif name.endswith("_portable.zip"):
         write_portable(dist / name, name.split("_")[3])
+    elif name.endswith("_portable.exe"):
+        write_portable_exe(dist / name, name.split("_")[3])
     elif name.endswith(".zip"):
         write_zip(dist / name, name.rsplit("_", 1)[1].removesuffix(".zip"))
     else:
@@ -124,10 +139,11 @@ class ReleaseArtifactTests(unittest.TestCase):
                 write_zip(dist / f"ptrack_1.2.3_windows_{arch}.zip", arch)
                 write_msi(dist / f"p-track_1.2.3_windows_{arch}.msi")
                 write_portable(dist / f"p-track_1.2.3_windows_{arch}_portable.zip", arch)
+                write_portable_exe(dist / f"p-track_1.2.3_windows_{arch}_portable.exe", arch)
             release_contract.validate_dist(dist, "1.2.3")
             checksum_path = release_contract.write_checksums(dist, "1.2.3")
             lines = checksum_path.read_text(encoding="ascii").splitlines()
-            self.assertEqual(len(lines), 16)
+            self.assertEqual(len(lines), 18)
             self.assertEqual(
                 [line.split("  ", 1)[1] for line in lines],
                 list(release_contract.package_names("1.2.3")),
@@ -164,6 +180,19 @@ class ReleaseArtifactTests(unittest.TestCase):
             write_portable(portable, "arm64", launcher_arch="amd64")
             with self.assertRaisesRegex(release_contract.ContractError, "p-track.exe machine"):
                 release_contract.validate_portable(portable)
+
+            single = root / "p-track_1.2.3_windows_arm64_portable.exe"
+            write_portable_exe(single, "arm64")
+            release_contract.validate_portable_exe(single)
+            write_portable_exe(single, "arm64", size=512 << 10)
+            with self.assertRaisesRegex(release_contract.ContractError, "carries no ptrack.exe"):
+                release_contract.validate_portable_exe(single)
+            write_portable_exe(single, "amd64")
+            with self.assertRaisesRegex(release_contract.ContractError, "machine does not match"):
+                release_contract.validate_portable_exe(single)
+            write_portable_exe(single, "arm64", subsystem=3)
+            with self.assertRaisesRegex(release_contract.ContractError, "must not open a console"):
+                release_contract.validate_portable_exe(single)
 
     def test_the_frozen_windows_archive_keeps_exactly_three_entries(self) -> None:
         # Installed updaters refuse any other entry set, so the launcher only
@@ -238,9 +267,12 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('bash build/linux/container-build.sh "${GITHUB_REF_NAME#v}"', workflow)
         self.assertIn('bash build/linux/test-packages.sh "${GITHUB_REF_NAME#v}"', workflow)
         # Release binaries come from `tauri build`; the only direct cargo
-        # build is the console-free Windows launcher, which is not a Tauri app.
-        self.assertEqual(workflow.count("cargo build --locked --release"), 1)
+        # builds are the console-free Windows launcher and the single-file
+        # portable, which are not Tauri apps.
+        self.assertEqual(workflow.count("cargo build --locked --release"), 2)
         self.assertIn("cargo build --locked --release --package ptrack-launcher", workflow)
+        self.assertIn("cargo build --locked --release --package ptrack-portable", workflow)
+        self.assertIn("$env:PTRACK_PORTABLE_PAYLOAD = ", workflow)
         self.assertEqual(workflow.count("./build/windows/package.ps1"), 1)
         self.assertIn("tools/release_contract.py validate-dist", workflow)
         self.assertNotIn("actions/setup-go", workflow)
@@ -310,6 +342,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("'AssignmentType'", workflow)
         self.assertIn("if ($assignment -ne '0') {", workflow)
         self.assertIn("@('/x', ", workflow)
+        # The single-file portable is unpacked and started on both hosts too.
+        self.assertIn("cargo build --locked --release --package ptrack-portable", workflow)
+        self.assertIn("- name: Smoke the single-file portable", workflow)
         self.assertNotIn("gh release", workflow)
         self.assertNotIn("actions/upload-artifact", workflow)
         self.assertNotIn("secrets.", workflow)

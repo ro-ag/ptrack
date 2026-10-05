@@ -6,6 +6,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-10-04
+
+### Added
+- A single-file portable Windows build,
+  `p-track_<version>_windows_<arch>_portable.exe`: one executable to
+  double-click, with nothing to unzip and nothing registered. It carries
+  `ptrack.exe` compressed inside it, unpacks it once into
+  `%LOCALAPPDATA%\p-track\portable\<sha256>\`, re-verifies that copy on every
+  start, and opens the desktop workspace without a console window. The release
+  workflow builds it for amd64 and arm64 next to the MSI and the portable ZIP,
+  and native acceptance smokes it on both Windows hosts.
+
+### Fixed
+- Opening or creating a project on Windows under a folder whose access comes
+  from an inherited Modify grant, such as any folder below `C:\`: p-track no
+  longer demands the right to rewrite the owner of its private `.ptrack`
+  directory when the current user already owns it.
+
 ## [0.43.0] - 2026-09-29
 
 The v0.42.0 tag failed Linux release acceptance and was not published. This

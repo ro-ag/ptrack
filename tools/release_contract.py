@@ -60,6 +60,7 @@ def package_names(version: str) -> tuple[str, ...]:
                 f"ptrack_{version}_windows_{arch}.zip",
                 f"p-track_{version}_windows_{arch}.msi",
                 f"p-track_{version}_windows_{arch}_portable.zip",
+                f"p-track_{version}_windows_{arch}_portable.exe",
             )
         )
     return tuple(sorted(names))
@@ -193,6 +194,32 @@ def validate_portable(path: Path) -> None:
         )
 
 
+# The single-file portable is a console-free stub carrying the compressed
+# ptrack.exe; a build without that payload is only a few hundred KiB.
+MIN_PORTABLE_EXE_BYTES = 4 << 20
+PE_SUBSYSTEM_WINDOWS_GUI = 2
+
+
+def validate_portable_exe(path: Path) -> None:
+    match = re.fullmatch(
+        r"p-track_(?P<version>[^_]+)_windows_(?P<arch>amd64|arm64)_portable\.exe", path.name
+    )
+    if match is None:
+        raise ContractError(f"unexpected portable executable name: {path.name}")
+    arch = match.group("arch")
+    if path.stat().st_size < MIN_PORTABLE_EXE_BYTES:
+        raise ContractError(f"portable executable carries no ptrack.exe: {path.name}")
+    with path.open("rb") as source:
+        header = source.read(4_096)
+    if _machine(header, "windows") != arch:
+        raise ContractError(f"portable executable machine does not match windows/{arch}")
+    # The optional header follows the 4-byte signature and 20-byte file
+    # header; Subsystem sits at the same offset in PE32 and PE32+.
+    subsystem_at = int.from_bytes(header[60:64], "little") + 24 + 68
+    if int.from_bytes(header[subsystem_at : subsystem_at + 2], "little") != PE_SUBSYSTEM_WINDOWS_GUI:
+        raise ContractError(f"portable executable must not open a console: {path.name}")
+
+
 def validate_msi(path: Path) -> None:
     if re.fullmatch(r"p-track_[^_]+_windows_(?:amd64|arm64)\.msi", path.name) is None:
         raise ContractError(f"unexpected installer name: {path.name}")
@@ -239,6 +266,8 @@ def validate_dist(directory: Path, version: str) -> tuple[Path, ...]:
             validate_linux_package(path)
         elif path.name.endswith("_portable.zip"):
             validate_portable(path)
+        elif path.name.endswith("_portable.exe"):
+            validate_portable_exe(path)
         elif path.name.endswith((".tar.gz", ".zip")):
             validate_archive(path)
     return packages

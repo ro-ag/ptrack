@@ -1,0 +1,27 @@
+[package]
+name = "ptrack-portable"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Single-file Windows portable p-track: unpacks the ptrack.exe it carries and starts `ptrack gui`"
+
+[[bin]]
+name = "p-track-portable"
+path = "src/main.rs"
+
+[dependencies]
+flate2.workspace = true
+ptrack-launcher = { path = "../ptrack-launcher" }
+sha2.workspace = true
+
+[build-dependencies]
+flate2.workspace = true
+sha2.workspace = true
+tauri-winres = "=0.3.6"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+pedantic = "warn"

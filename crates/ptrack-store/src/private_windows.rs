@@ -75,12 +75,18 @@ pub(crate) fn open_no_reparse_no_delete(
 }
 
 pub(crate) fn open_staging_directory_for_publish(path: &Path) -> io::Result<File> {
-    open_no_reparse_with_access(
-        path,
-        true,
-        FILE_GENERIC_READ | FILE_GENERIC_WRITE | WRITE_DAC | WRITE_OWNER | DELETE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE,
-    )
+    let access = FILE_GENERIC_READ | FILE_GENERIC_WRITE | WRITE_DAC | DELETE;
+    let share = FILE_SHARE_READ | FILE_SHARE_WRITE;
+    // WRITE_OWNER is only needed to take ownership of a directory created with
+    // another default owner. A parent whose access comes from an inherited
+    // Modify grant (any folder under C:\ such as C:\dev) never grants it, yet
+    // its owner keeps WRITE_DAC implicitly, which is all protection needs.
+    match open_no_reparse_with_access(path, true, access | WRITE_OWNER, share) {
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            open_no_reparse_with_access(path, true, access, share)
+        }
+        result => result,
+    }
 }
 
 pub(crate) fn delete_directory_handle(directory: &File) -> io::Result<()> {
@@ -331,17 +337,25 @@ pub(crate) fn protect_directory_handle(file: &File) -> io::Result<()> {
 
 fn protect_handle_with_inheritance(file: &File, inheritance: u32) -> io::Result<()> {
     let user = current_user()?;
+    // Rewriting an owner that is already the current user still demands
+    // WRITE_OWNER, which an inherited Modify grant withholds; only take
+    // ownership when the object was created under another default owner.
+    let take_ownership = !handle_owned_by(file, user.sid)?;
+    let (owner, owner_information) = if take_ownership {
+        (user.sid, OWNER_SECURITY_INFORMATION)
+    } else {
+        (ptr::null_mut(), 0)
+    };
     let acl = current_user_acl(user.sid, inheritance)?;
-    // SAFETY: file owns a live handle with WRITE_DAC and WRITE_OWNER; the SID
-    // and ACL remain valid for the duration of the synchronous call.
+    // SAFETY: file owns a live handle with WRITE_DAC, and with WRITE_OWNER
+    // whenever ownership is taken; the SID and ACL remain valid for the
+    // duration of the synchronous call.
     let status = unsafe {
         SetSecurityInfo(
             file.as_raw_handle().cast(),
             SE_FILE_OBJECT,
-            OWNER_SECURITY_INFORMATION
-                | DACL_SECURITY_INFORMATION
-                | PROTECTED_DACL_SECURITY_INFORMATION,
-            user.sid,
+            owner_information | DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            owner,
             ptr::null_mut(),
             acl,
             ptr::null_mut(),
@@ -487,6 +501,16 @@ pub(crate) fn heal_private(path: &Path, directory: bool) -> io::Result<()> {
 }
 
 fn require_handle_owner(file: &File, user_sid: *mut c_void) -> io::Result<()> {
+    if handle_owned_by(file, user_sid)? {
+        Ok(())
+    } else {
+        Err(io::Error::other(
+            "private path owner is not the current user",
+        ))
+    }
+}
+
+fn handle_owned_by(file: &File, user_sid: *mut c_void) -> io::Result<bool> {
     let mut owner = ptr::null_mut();
     let mut descriptor = ptr::null_mut();
     // SAFETY: the file owns a live handle with READ_CONTROL and the owner
@@ -510,13 +534,7 @@ fn require_handle_owner(file: &File, user_sid: *mut c_void) -> io::Result<()> {
     let owned = !owner.is_null() && unsafe { EqualSid(owner, user_sid) } != 0;
     // SAFETY: descriptor ownership came from GetSecurityInfo.
     let _ = unsafe { LocalFree(descriptor.cast::<c_void>()) };
-    if owned {
-        Ok(())
-    } else {
-        Err(io::Error::other(
-            "private path owner is not the current user",
-        ))
-    }
+    Ok(owned)
 }
 
 fn verify_owner_dacl(owner: *mut c_void, dacl: *mut ACL, user_sid: *mut c_void) -> io::Result<()> {

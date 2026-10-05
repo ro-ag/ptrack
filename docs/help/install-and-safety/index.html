@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="description" content="Install and update p-track safely, understand its local data and privacy boundaries, and back up before consequential database changes.">
-    <meta name="ptrack-version" content="0.43.0">
+    <meta name="ptrack-version" content="0.44.0">
     <title>Install &amp; Safety · p-track Help Center</title>
     <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="../assets/style.css">
@@ -16,7 +16,7 @@
         <a class="brand" href="../" aria-label="p-track Help Center home">
           <span class="brand-mark" aria-hidden="true">p·</span>
           <span>p-track Help</span>
-          <span class="version-badge">v0.43.0</span>
+          <span class="version-badge">v0.44.0</span>
         </a>
         <nav class="primary-nav" aria-label="Primary">
           <ul>
@@ -57,13 +57,145 @@
           <p class="lede">Install an official package for your platform, opt in before p-track contacts GitHub automatically, and keep project backups before opening older data with a newer schema.</p>
 
           <h2 id="install">Install an official package</h2>
-          <p>Download the native package for your operating system and CPU from the <a href="https://github.com/ro-ag/ptrack/releases">official GitHub Releases page</a>. Release archives contain the CLI, terminal dashboard, and Desktop GUI. Put the executable on your <code>PATH</code>.</p>
-          <p>On macOS, you can instead open <code>p-track_&lt;version&gt;_darwin_&lt;arch&gt;.dmg</code> and drag <strong>p-track.app</strong> into <code>/Applications</code>. The executable inside the app bundle also provides the CLI.</p>
-          <p>On Windows, <code>p-track_&lt;version&gt;_windows_&lt;arch&gt;.msi</code> installs p-track for your user only, without administrator rights: it goes to <code>%LOCALAPPDATA%\Programs\p-track</code>, adds that folder to your user <code>PATH</code>, and adds <strong>p-track</strong> to the Start menu. <code>p-track_&lt;version&gt;_windows_&lt;arch&gt;_portable.zip</code> runs from any folder: open <code>p-track.exe</code> for the Desktop GUI, and use <code>ptrack.exe</code> beside it as the CLI.</p>
+          <p>Download the package for your operating system and CPU from the <a href="https://github.com/ro-ag/ptrack/releases">official GitHub Releases page</a>. Every package carries the same <code>ptrack</code> executable: the CLI, the terminal dashboard, and the Desktop GUI. In file names, <code>&lt;arch&gt;</code> is <code>amd64</code> or <code>arm64</code>.</p>
+
+          <h3 id="install-macos">macOS</h3>
+          <div class="package-grid">
+            <section class="package recommended" aria-labelledby="package-dmg">
+              <div class="package-head">
+                <h4 id="package-dmg">Disk image</h4>
+                <span class="package-badge">Recommended</span>
+              </div>
+              <code class="package-file">p-track_&lt;version&gt;_darwin_arm64.dmg</code>
+              <p>Drag <strong>p-track.app</strong> into <code>/Applications</code>. The executable inside the app bundle also provides the CLI.</p>
+              <ul class="package-facts" aria-label="Disk image facts">
+                <li>Apple silicon</li>
+                <li>Signed and notarized</li>
+                <li>Includes the CLI</li>
+              </ul>
+            </section>
+            <section class="package" aria-labelledby="package-darwin-cli">
+              <div class="package-head">
+                <h4 id="package-darwin-cli">CLI archive</h4>
+              </div>
+              <code class="package-file">ptrack_&lt;version&gt;_darwin_arm64.tar.gz</code>
+              <p>The bare <code>ptrack</code> executable. Put it on your <code>PATH</code>; <code>ptrack gui</code> opens the Desktop GUI.</p>
+              <ul class="package-facts" aria-label="macOS CLI archive facts">
+                <li>Apple silicon</li>
+                <li>Scripts and terminals</li>
+              </ul>
+            </section>
+          </div>
+          <p>From the app, <strong>Install 'ptrack' Shell Command…</strong> writes one managed block to <code>~/.zprofile</code>. It appends the running app's binary directory to the end of the existing <code>PATH</code>, leaves an existing managed block alone, and takes effect in a new terminal session.</p>
+
+          <h3 id="install-windows">Windows</h3>
+          <p>No Windows package asks for administrator rights. The Desktop GUI uses the Microsoft Edge WebView2 runtime, which ships with Windows 11 and current Windows 10.</p>
+          <div class="package-grid">
+            <section class="package recommended" aria-labelledby="package-msi">
+              <div class="package-head">
+                <h4 id="package-msi">Installer</h4>
+                <span class="package-badge">Recommended</span>
+              </div>
+              <code class="package-file">p-track_&lt;version&gt;_windows_&lt;arch&gt;.msi</code>
+              <p>Installs for your user only into <code>%LOCALAPPDATA%\Programs\p-track</code>. Uninstall it from <strong>Settings ▸ Apps</strong>.</p>
+              <ul class="package-facts" aria-label="Installer facts">
+                <li>Start menu</li>
+                <li>Adds ptrack to PATH</li>
+                <li>Updates in place</li>
+              </ul>
+            </section>
+            <section class="package" aria-labelledby="package-portable-exe">
+              <div class="package-head">
+                <h4 id="package-portable-exe">Single-file portable</h4>
+              </div>
+              <code class="package-file">p-track_&lt;version&gt;_windows_&lt;arch&gt;_portable.exe</code>
+              <p>Double-click it to open the Desktop GUI. It unpacks <code>ptrack.exe</code> once into <code>%LOCALAPPDATA%\p-track\portable</code> and checks that copy on every start.</p>
+              <ul class="package-facts" aria-label="Single-file portable facts">
+                <li>One file</li>
+                <li>Nothing to unzip</li>
+                <li>Nothing registered</li>
+              </ul>
+            </section>
+            <section class="package" aria-labelledby="package-portable-zip">
+              <div class="package-head">
+                <h4 id="package-portable-zip">Portable folder</h4>
+              </div>
+              <code class="package-file">p-track_&lt;version&gt;_windows_&lt;arch&gt;_portable.zip</code>
+              <p>Unzip it anywhere and open <code>p-track.exe</code> for the Desktop GUI; <code>ptrack.exe</code> beside it is the CLI.</p>
+              <ul class="package-facts" aria-label="Portable folder facts">
+                <li>Any folder</li>
+                <li>Includes the CLI</li>
+                <li>Nothing registered</li>
+              </ul>
+            </section>
+            <section class="package" aria-labelledby="package-windows-cli">
+              <div class="package-head">
+                <h4 id="package-windows-cli">CLI archive</h4>
+              </div>
+              <code class="package-file">ptrack_&lt;version&gt;_windows_&lt;arch&gt;.zip</code>
+              <p>The bare <code>ptrack.exe</code> for scripts and servers; <code>ptrack gui</code> still opens the Desktop GUI.</p>
+              <ul class="package-facts" aria-label="Windows CLI archive facts">
+                <li>Scripts and servers</li>
+              </ul>
+            </section>
+          </div>
+
+          <h3 id="install-linux">Linux</h3>
+          <p>Every Linux package is built for x86-64 and AArch64 on a glibc 2.35 baseline, so it runs on current glibc-based desktops; musl-only systems such as Alpine are not supported.</p>
+          <div class="package-grid">
+            <section class="package" aria-labelledby="package-deb">
+              <div class="package-head">
+                <h4 id="package-deb">Debian package</h4>
+              </div>
+              <code class="package-file">p-track_&lt;version&gt;_linux_&lt;arch&gt;.deb</code>
+              <p>For Ubuntu and Debian: <code>sudo apt install ./p-track_&lt;version&gt;_linux_&lt;arch&gt;.deb</code>. Installs the application-menu entry, icons, and the <code>ptrack</code> CLI.</p>
+              <ul class="package-facts" aria-label="Debian package facts">
+                <li>Wayland and X11</li>
+                <li>Includes the CLI</li>
+                <li>Updates through apt</li>
+              </ul>
+            </section>
+            <section class="package" aria-labelledby="package-rpm">
+              <div class="package-head">
+                <h4 id="package-rpm">RPM package</h4>
+              </div>
+              <code class="package-file">p-track_&lt;version&gt;_linux_&lt;arch&gt;.rpm</code>
+              <p>For Fedora: <code>sudo dnf install ./p-track_&lt;version&gt;_linux_&lt;arch&gt;.rpm</code>. Installs the application-menu entry, icons, and the <code>ptrack</code> CLI.</p>
+              <ul class="package-facts" aria-label="RPM package facts">
+                <li>Wayland and X11</li>
+                <li>Includes the CLI</li>
+                <li>Updates through dnf</li>
+              </ul>
+            </section>
+            <section class="package" aria-labelledby="package-appimage">
+              <div class="package-head">
+                <h4 id="package-appimage">AppImage</h4>
+              </div>
+              <code class="package-file">p-track_&lt;version&gt;_linux_&lt;arch&gt;.AppImage</code>
+              <p>Make it executable with <code>chmod +x</code> and run it: no arguments open the Desktop GUI, and commands such as <code>./p-track.AppImage status</code> use the CLI. Without FUSE, run it with <code>APPIMAGE_EXTRACT_AND_RUN=1</code>.</p>
+              <ul class="package-facts" aria-label="AppImage facts">
+                <li>Portable</li>
+                <li>Bundles desktop libraries</li>
+                <li>X11 and XWayland</li>
+              </ul>
+            </section>
+            <section class="package" aria-labelledby="package-linux-cli">
+              <div class="package-head">
+                <h4 id="package-linux-cli">CLI archive</h4>
+              </div>
+              <code class="package-file">ptrack_&lt;version&gt;_linux_&lt;arch&gt;.tar.gz</code>
+              <p>The standalone <code>ptrack</code> executable. Install GTK 3 and WebKitGTK 4.1 first, since it links them even as a CLI, then run <code>ptrack gui</code> for the Desktop GUI.</p>
+              <ul class="package-facts" aria-label="Linux CLI archive facts">
+                <li>Standalone</li>
+                <li>Updates in place</li>
+              </ul>
+            </section>
+          </div>
+          <p>On NixOS, wrap the downloaded AppImage with the expression in <code>build/linux</code> of the repository instead of compiling p-track.</p>
+
           <div class="callout warning">
             <p><strong>Use an official package.</strong> Source builds require Rust, Node, the Tauri prerequisites, and the repository's complete validation workflow. No Go runtime or toolchain is required.</p>
           </div>
-          <p>On macOS, <strong>Install 'ptrack' Shell Command…</strong> writes one managed block to <code>~/.zprofile</code>. It appends the running app's binary directory to the end of the existing <code>PATH</code>, leaves an existing managed block alone, and takes effect in a new terminal session.</p>
 
           <h2 id="update-consent">Choose when to check, download, and install</h2>
           <p>Manual update checks occur only when you select <strong>Check for updates</strong>. Automatic checks are off by default and persist only after explicit opt-in. They contact the stable releases for the fixed <code>ro-ag/ptrack</code> GitHub repository.</p>
@@ -83,8 +215,10 @@
           </div>
           <ul>
             <li><strong>macOS:</strong> verifies and opens the complete DMG for installation; it never replaces one executable inside the signed app bundle.</li>
-            <li><strong>Windows:</strong> a copy installed with the MSI opens the verified next MSI, and Windows Installer upgrades it in place without administrator rights. Any other copy revalidates the ZIP and reveals it in Explorer; close p-track and replace the executable manually.</li>
-            <li><strong>Linux:</strong> updates only a safely owned standalone executable, using a target lock, verified rollback link, durable recovery journal, atomic replacement, version probe, and rollback on failure. Every helper command has a time limit. It never uses <code>sudo</code>.</li>
+            <li><strong>Windows:</strong> a copy installed with the MSI opens the verified next MSI, and Windows Installer upgrades it in place without administrator rights. Any other copy revalidates the ZIP and reveals it in Explorer; close p-track and replace the executable manually. The single-file portable restores the copy it unpacked on its next start, so update it by downloading the next <code>_portable.exe</code>.</li>
+            <li><strong>Linux AppImage:</strong> downloads and verifies the complete new image, then shows it; close p-track and replace the old image yourself, keeping its filename if a launcher points to it.</li>
+            <li><strong>Linux Debian, RPM, and Nix:</strong> the package manager owns the installation, so p-track offers the release page and refuses downloads or executable replacement. Install the next package with apt or dnf.</li>
+            <li><strong>Linux standalone archive:</strong> updates only a safely owned standalone executable, using a target lock, verified rollback link, durable recovery journal, atomic replacement, version probe, and rollback on failure. Every helper command has a time limit. It never uses <code>sudo</code>.</li>
           </ul>
 
           <h2 id="update-recovery">Preserve update recovery state</h2>
