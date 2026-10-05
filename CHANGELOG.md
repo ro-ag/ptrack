@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-10-05
+
 ### Added
 - Terminal dashboard: `/` searches plans, tasks, milestones, issues and notes
   and opens the selected match; `w` holds (with a reason) or resumes the
