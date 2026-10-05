@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="p-track keeps goals, plans, tasks, and notes in your repository so humans and coding agents can pick up work where the last one left off.">
+    <title>p-track</title>
+    <link rel="icon" href="help/assets/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="help/assets/style.css">
+    <meta property="og:title" content="p-track">
+    <meta property="og:description" content="Local project tracking for humans and coding agents.">
+    <meta property="og:image" content="https://raw.githubusercontent.com/ro-ag/ptrack/main/assets/brand/social.png">
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to main content</a>
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="brand" href="./" aria-label="p-track home">
+          <span class="brand-mark" aria-hidden="true">p·</span>
+          <span>p-track</span>
+        </a>
+        <nav class="primary-nav" aria-label="Primary">
+          <ul>
+            <li><a href="help/">Help Center</a></li>
+            <li><a href="help/start-here/">Start Here</a></li>
+            <li><a href="help/reference/">Reference</a></li>
+            <li><a href="https://github.com/ro-ag/ptrack/releases/latest">Download</a></li>
+            <li><a href="https://github.com/ro-ag/ptrack">GitHub</a></li>
+          </ul>
+        </nav>
+        <button class="theme-toggle" type="button" data-theme-toggle aria-label="Use light theme" title="Use light theme">☀</button>
+      </div>
+    </header>
+
+    <main class="page-shell" id="main">
+      <section class="home-hero" aria-labelledby="hero-title">
+        <div class="hero">
+          <p class="eyebrow">Local project tracking for coding agents</p>
+          <h1 id="hero-title">Keep the plan. Pass the context.</h1>
+          <p class="lede">p-track stores your goal, plans, tasks, issues, and notes in the repository. Any agent—or you—can restore a short resume digest and continue the work. One executable ships the desktop app, a terminal dashboard, and the CLI. No account, no server.</p>
+          <p class="release-note"><a href="https://github.com/ro-ag/ptrack/releases/latest">Download the latest release</a> for macOS, Windows, or Linux.</p>
+        </div>
+        <figure class="home-preview screenshot-pair">
+          <img class="screenshot-dark" src="help/assets/screenshots/board-dark.png" width="1552" height="1012" loading="lazy" decoding="async" alt="p-track Desktop Board in dark mode with Todo, Doing, Blocked, and Done lanes">
+          <img class="screenshot-light" src="help/assets/screenshots/board-light.png" width="1552" height="1012" loading="lazy" decoding="async" alt="p-track Desktop Board in light mode with Todo, Doing, Blocked, and Done lanes">
+          <figcaption>The Desktop Board, with project memory and the terminal dock.</figcaption>
+        </figure>
+      </section>
+
+      <section aria-labelledby="features-title">
+        <h2 class="section-heading" id="features-title">What it does</h2>
+        <ul class="card-grid">
+          <li><a class="card" href="help/start-here/"><span class="card-kicker">Remember</span><h3>Durable project record</h3><p>Goal, rolling summary, milestones, plans, tasks, issues, notes, and linked commits live in <code>.ptrack/</code> inside the repo.</p></a></li>
+          <li><a class="card" href="help/agents-and-capabilities/"><span class="card-kicker">Resume</span><h3>Agent hand-off</h3><p><code>ptrack context</code> prints a bounded digest; <code>ptrack next</code> picks the next task. Also served over MCP.</p></a></li>
+          <li><a class="card" href="help/agents-and-capabilities/"><span class="card-kicker">Gate</span><h3>Honest “done”</h3><p>Closing a task needs a summary and a linked commit. One task in progress at a time; plans end with an integrate-and-verify task.</p></a></li>
+          <li><a class="card" href="help/desktop/"><span class="card-kicker">Observe</span><h3>Desktop workspace</h3><p>Board, issues, Git state, and registered agent runs in one window per project.</p></a></li>
+          <li><a class="card" href="help/terminals/"><span class="card-kicker">Run</span><h3>Terminal dock</h3><p>Tabs, splits, search, profiles, and pop-out windows for shells and agent CLIs at the project root.</p></a></li>
+          <li><a class="card" href="help/reference/"><span class="card-kicker">Remote</span><h3>TUI and CLI</h3><p>Over SSH, <code>ptrack</code> opens a full-screen dashboard on the same database. Every read command has <code>--json</code>.</p></a></li>
+        </ul>
+      </section>
+
+      <section aria-labelledby="quick-title">
+        <h2 class="section-heading" id="quick-title">Quick start</h2>
+        <pre><code>cd your-project
+ptrack init --goal "Ship the widget service"
+ptrack plan add "Build the storage layer"
+ptrack plan use 1
+ptrack task add "Define the storage schema" --plan 1
+ptrack gui        # desktop workspace
+ptrack            # terminal dashboard
+ptrack context    # what an agent reads first</code></pre>
+        <p><a href="help/start-here/">Continue in Start Here →</a></p>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="site-footer-inner">
+        <p>p-track · Apache-2.0</p>
+        <p><a href="https://github.com/ro-ag/ptrack">Source on GitHub</a> · <a href="help/">Help Center</a></p>
+      </div>
+    </footer>
+    <script src="help/assets/help.js" defer></script>
+  </body>
+</html>

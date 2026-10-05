@@ -66,19 +66,10 @@ ptrack context</code></pre>
           <p>If this repository has never been initialized, run <code>ptrack init</code> once at its intended root. Do not initialize a different directory merely to silence the error; see <a href="../start-here/#first-project">Start Here</a>.</p>
 
           <h3>Database busy or read timeout</h3>
-          <p>Project and global databases wait for their file lock for one second. Let an active p-track operation finish, close an unintended duplicate p-track process that has the same database open, and retry. Do not delete <code>.ptrack/ptrack.redb</code>, <code>global.redb</code>, <code>active-generation.json</code>, or a cutover lock. During migration, preserve the complete journal, handoff, receipt, marker, and legacy files.</p>
+          <p>Project and global databases wait for their file lock for one second. Let an active p-track operation finish, close an unintended duplicate p-track process that has the same database open, and retry. Do not delete <code>.ptrack/ptrack.redb</code>, <code>global.redb</code>, <code>active-generation.json</code>, or a cutover lock.</p>
 
           <h3>Database format is newer than this p-track</h3>
-          <p>Install a compatible newer p-track binary and retry. The older binary refuses the database and leaves it untouched. Do not force it open, downgrade it, or attempt a schema edit. Review the documented <a href="../install-and-safety/#migration">migration boundary</a>.</p>
-          <p>This refusal can also read like corruption. A record written by a newer p-track is reported as an invalid manifest, naming the collection and the two schema numbers:</p>
-          <pre><code>invalid database manifest: collection plans requires codec 3 schema 1, found codec 3 schema 2</code></pre>
-          <p>Any <code>requires codec … schema …, found codec … schema …</code> message whose <em>found</em> schema is the higher number means exactly one thing: this database was written by a newer p-track, and this binary is the old one. Nothing is damaged and nothing is lost. Upgrade every installed copy of p-track — including the other one you use on this machine — and retry. Do not delete, recreate, or restore the database, and do not edit it; a project database and the global database are both refused whole, so the fix is the binary, never the data.</p>
-          <p>The same one-way boundary applies to payload schema 3 (introduced with multi-developer identities and claims). The first write from a schema-3 p-track stamps records with schema 3, and a 0.26-or-older binary then refuses the whole database fail-closed:</p>
-          <pre><code>invalid database manifest: collection plans requires codec 3 schema 1..=2, found codec 3 schema 3</code></pre>
-          <p>Nothing is damaged and nothing is lost. Upgrade every installed copy of p-track — the CLI, the desktop app, and any copy on a shared machine — and retry. Databases written by 0.25 or 0.26 open unchanged in the new version and upgrade record by record as they are written; there is no manual migration step and no way to write records an old binary accepts again.</p>
-          <p>The same boundary applies to payload schema 9, which records when the rolling summary was last written. Every record this release writes is stamped with schema 9, so after its first write to a project, a 0.40 or older binary refuses that database with a message such as:</p>
-          <pre><code>invalid database manifest: collection meta requires codec 3 schema 1..=8, found codec 3 schema 9</code></pre>
-          <p>The fix is the same: install this release or a newer one everywhere you use p-track, including the desktop app, the CLI on your <code>PATH</code>, and any shared machine. Never downgrade, recreate, restore, or rewrite the database to satisfy an older binary.</p>
+          <p>An error such as <code>invalid database manifest: collection plans requires codec 3 schema 1..=8, found codec 3 schema 9</code> means a newer p-track has written to this database and this binary is older. Nothing is damaged. Upgrade every copy of p-track you use (the desktop app, the CLI on your <code>PATH</code>, and copies on other machines) and retry. Do not force the database open, downgrade it, or edit its schema.</p>
 
           <h3>One project is unavailable</h3>
           <p>A project whose <code>.ptrack/ptrack.redb</code> is missing, for example after <code>git clean -fdx</code>, is reported as unavailable, and every other registered project keeps working. p-track also tightens a project database whose permissions were loosened (for example to <code>0644</code>) back to owner-only instead of refusing it. A project database that another process holds busy affects only commands for that project. Restore the missing database from a backup or run <code>ptrack init</code> again in that project; if the project folder moved, quit p-track and run <code>ptrack relocate</code> in the new location.</p>
@@ -125,14 +116,12 @@ ptrack context</code></pre>
           <dl>
             <dt>Does selecting a plan in the Desktop sidebar change the CLI active plan?</dt>
             <dd>Yes. Choosing a plan makes it your current plan, exactly as <code>ptrack plan use &lt;id&gt;</code> does, so <code>ptrack next</code> and agents follow it. A plan claimed by someone else, or a done or archived plan, cannot become current.</dd>
-            <dt>Why did <code>ptrack capability</code> stop working?</dt>
-            <dd>Capability brokering moved to pam. The command now prints a pointer to <a href="../agents-and-capabilities/#capability-model">Capability brokering moved to pam</a> and exits with an error.</dd>
             <dt>Does p-track check for updates automatically?</dt>
             <dd>Not by default. Automatic checks remain off until you explicitly opt in from <strong>Settings ▸ Updates</strong> or <strong>About &amp; Updates</strong>; a manual check does not silently download or install.</dd>
             <dt>Why did an OS notification not appear?</dt>
             <dd>Each category is off by default under <strong>Settings ▸ Notifications</strong>, and notifications are suppressed while any p-track window is focused. Check the operating system's notification permission for p-track. Linux also needs a running desktop notification service. Permission denial or an unavailable service does not interrupt agent tracking.</dd>
             <dt>Does <strong>Reset Application State</strong> delete my plans or tasks?</dt>
-            <dd>No. It clears settings, the startup, notification, and update-check opt-ins, window and layout state, and saved terminal workspaces, and revokes any capability grants left in the open project by older releases. Plans, tasks, notes, and Recent projects are not touched.</dd>
+            <dd>No. It clears settings, the startup, notification, and update-check opt-ins, window and layout state, and saved terminal workspaces. Plans, tasks, notes, and Recent projects are not touched.</dd>
             <dt>Does <code>ptrack backup</code> capture everything, and can p-track restore it?</dt>
             <dd>No. It copies the project database, not runtime state or WebView <code>localStorage</code>, and there is no built-in restore command. Follow the documented <a href="../install-and-safety/#backup">backup limits</a>; this page does not prescribe an unverified restore procedure.</dd>
             <dt>Are interactive terminal paths verified on every platform?</dt>

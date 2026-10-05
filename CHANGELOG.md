@@ -26,9 +26,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.43.0] - 2026-09-29
 
-The v0.42.0 tag failed Linux release acceptance and was not published. This
-release includes that candidate's Linux features and the startup correction.
-
 ### Added
 - Linux AppImage, Debian and RPM packages for x86-64 and ARM64, with desktop
   launchers, icons and CLI access. Builds use an Ubuntu 22.04 / glibc 2.35
