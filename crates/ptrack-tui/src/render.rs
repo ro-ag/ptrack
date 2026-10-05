@@ -11,7 +11,8 @@ use ptrack_core::{
 };
 
 use crate::model::{
-    AgentPane, BOARD_STATUSES, BOARD_TITLES, DetailTarget, Model, PaneFocus, TAB_NAMES, Tab,
+    AgentPane, BOARD_STATUSES, BOARD_TITLES, DetailTarget, Model, PaneFocus, SearchResults,
+    TAB_NAMES, Tab,
 };
 
 const ACCENT: Color = Color::Rgb(0x3d, 0xd6, 0xa3);
@@ -31,7 +32,7 @@ const DARK_CYAN: Color = Color::Rgb(0x17, 0x8f, 0x95);
 const BLUE_GREEN: Color = Color::Rgb(0x3c, 0xd1, 0xa5);
 const NIGHT: Color = Color::Rgb(0x0c, 0x10, 0x16);
 
-const MENU: [(&str, &str, &str, &str); 13] = [
+const MENU: [(&str, &str, &str, &str); 14] = [
     ("Navigate", "1", "Overview", "Plans and tasks"),
     ("Navigate", "2", "Board", "Kanban workflow"),
     ("Navigate", "3", "Milestones", "Project checkpoints"),
@@ -65,6 +66,7 @@ const MENU: [(&str, &str, &str, &str); 13] = [
         "Create backup",
         "Copy the project database",
     ),
+    ("Find", "/", "Search", "Plans, tasks, issues, and notes"),
 ];
 
 pub fn draw(frame: &mut Frame<'_>, model: &Model) {
@@ -86,6 +88,8 @@ pub fn draw(frame: &mut Frame<'_>, model: &Model) {
     draw_tabs(frame, chunks[1], model);
     if model.menu {
         draw_menu(frame, chunks[2], model);
+    } else if let Some(search) = &model.search {
+        draw_search(frame, chunks[2], search);
     } else if model.agent_detail.is_some() {
         draw_agent_detail(frame, chunks[2], model);
     } else if model.detail.is_some() {
@@ -380,7 +384,7 @@ fn draw_overview(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         "Tasks",
         Some(model.current_tasks().count()),
         model.focus == PaneFocus::Tasks,
-        "a/e add/edit · s/d/b status · n note · M move · P promote",
+        "a/e add/edit · s/d/b status · w hold · n note · M move · P promote",
         if tasks.is_empty() && model.current_plan().is_some() {
             vec![Line::styled(
                 "press 'a' to add a task",
@@ -422,7 +426,7 @@ fn draw_board(frame: &mut Frame<'_>, area: Rect, model: &Model) {
                 ),
                 Span::styled(plan.title.clone(), Style::default().fg(TEXT)),
             ]),
-            styled_hints("H/L status · a/e add/edit · n note · M plan · P promote"),
+            styled_hints("H/L status · a/e add/edit · w hold · n note · M plan · P promote"),
             usize::from(area.width),
         )),
         header,
@@ -639,7 +643,7 @@ fn draw_issues(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         "Issues",
         Some(model.snapshot.issues.len()),
         true,
-        "enter view · a add · e rename · c close · o reopen",
+        "enter view · a add · e rename · c close · o reopen · v severity · S schedule",
         if rows.is_empty() {
             vec![Line::styled(
                 "press 'a' to add an issue",
@@ -1102,6 +1106,43 @@ fn draw_menu(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     );
 }
 
+fn draw_search(frame: &mut Frame<'_>, area: Rect, search: &SearchResults) {
+    let content_width = panel_content_width(area);
+    let rows = search
+        .hits
+        .iter()
+        .enumerate()
+        .map(|(index, hit)| {
+            selected(
+                &hit.label,
+                index == search.cursor,
+                true,
+                TEXT,
+                content_width,
+            )
+        })
+        .collect::<Vec<_>>();
+    let range = window_range(
+        rows.len(),
+        search.cursor,
+        usize::from(area.height.saturating_sub(2)),
+    );
+    let rows = rows
+        .into_iter()
+        .skip(range.0)
+        .take(range.1.saturating_sub(range.0))
+        .collect();
+    draw_panel(
+        frame,
+        area,
+        &format!("Search · {}", search.term),
+        Some(search.hits.len()),
+        true,
+        "↑/↓ select · enter open · / new search · esc close",
+        rows,
+    );
+}
+
 fn draw_detail(frame: &mut Frame<'_>, area: Rect, model: &Model) {
     let (title, _) = detail_content(model);
     let rows = detail_display_rows(model, panel_content_width(area));
@@ -1507,13 +1548,13 @@ fn draw_footer(frame: &mut Frame<'_>, area: Rect, model: &Model) {
         }
         return;
     }
-    let navigation = if model.menu || model.detail.is_some() {
+    let navigation = if model.menu || model.detail.is_some() || model.search.is_some() {
         ""
     } else {
         " · ←/→ ↑/↓ navigate"
     };
     let global_text = format!(
-        "? menu · tab switch · 1–5 jump{navigation} · g goal · m summary · r reload · B backup · q quit"
+        "? menu · tab switch · 1–6 jump{navigation} · / search · g goal · m summary · r reload · B backup · q quit"
     );
     let global = styled_hints(&global_text);
     let line = if model.status.is_empty() {

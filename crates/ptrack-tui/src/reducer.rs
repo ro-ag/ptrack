@@ -1,12 +1,13 @@
 use ptrack_app::{Mutation, MutationResult};
-use ptrack_core::{IssueStatus, MilestoneStatus, NoteTarget, TaskStatus};
+use ptrack_core::{IssueStatus, MilestoneStatus, NoteTarget, Severity, TaskStatus};
 
 use crate::input::Key;
 use crate::model::{
-    AgentPane, BOARD_STATUSES, Effect, InputPurpose, Model, PaneFocus, Success, Tab, UiClose,
+    AgentPane, BOARD_STATUSES, DetailTarget, Effect, HoldTarget, InputPurpose, Model, PaneFocus,
+    SearchHit, SearchResults, Success, Tab, UiClose,
 };
 
-const MENU_LEN: usize = 13;
+const MENU_LEN: usize = 14;
 
 macro_rules! mutate {
     ($mutation:expr, $success:expr $(,)?) => {
@@ -28,6 +29,9 @@ pub fn update(model: &mut Model, key: &Key) -> Option<Effect> {
     }
     if model.menu {
         return update_menu(model, key);
+    }
+    if model.search.is_some() {
+        return update_search(model, key);
     }
     if model.agent_detail.is_some() {
         return update_agent_detail(model, key);
@@ -150,6 +154,171 @@ fn commit_input(model: &mut Model) -> Option<Effect> {
         InputPurpose::Rename => rename(model, &value),
         InputPurpose::MoveTask => move_task(model, &value),
         InputPurpose::ConvertTask => convert_task(model, &value),
+        InputPurpose::Hold(target) => hold(model, target, &value),
+        InputPurpose::ScheduleIssue(id) => schedule_issue(model, id, &value),
+        InputPurpose::Search => search(model, &value),
+    }
+}
+
+fn hold(model: &mut Model, target: HoldTarget, reason: &str) -> Option<Effect> {
+    if reason.is_empty() {
+        "cancelled".clone_into(&mut model.status);
+        return None;
+    }
+    hold_effect(target, Some(reason.to_owned()))
+}
+
+/// `Some` puts the target on hold with that reason; `None` resumes it.
+fn hold_effect(target: HoldTarget, reason: Option<String>) -> Option<Effect> {
+    let verb = if reason.is_some() {
+        "on hold"
+    } else {
+        "resumed"
+    };
+    match target {
+        HoldTarget::Plan(id) => mutate!(
+            Mutation::SetPlanHold { id, reason },
+            Success::Message(format!("plan #{id} {verb}")),
+        ),
+        HoldTarget::Task(id) => mutate!(
+            Mutation::SetTaskHold { id, reason },
+            Success::Message(format!("task #{id} {verb}")),
+        ),
+    }
+}
+
+fn schedule_issue(model: &mut Model, id: u64, value: &str) -> Option<Effect> {
+    let Some(plan_id) = value.parse::<u64>().ok().filter(|plan_id| *plan_id != 0) else {
+        "enter a valid target plan ID".clone_into(&mut model.status);
+        return None;
+    };
+    let Some(task_title) = model.snapshot.issue(id).map(|issue| issue.title.clone()) else {
+        "issue no longer exists".clone_into(&mut model.status);
+        return None;
+    };
+    mutate!(
+        Mutation::ScheduleIssue {
+            id,
+            plan_id,
+            task_title,
+        },
+        Success::Message(format!("issue #{id} scheduled into plan #{plan_id}")),
+    )
+}
+
+fn search(model: &mut Model, term: &str) -> Option<Effect> {
+    if term.is_empty() {
+        "cancelled".clone_into(&mut model.status);
+        return None;
+    }
+    let view = ptrack_core::search(&model.snapshot, term);
+    let mut hits = Vec::new();
+    hits.extend(view.milestones.iter().map(|value| SearchHit {
+        label: format!("milestone #{}  {}", value.id, value.title),
+        target: Some(DetailTarget::Milestone(value.id)),
+    }));
+    hits.extend(view.plans.iter().map(|value| SearchHit {
+        label: format!("plan #{}  {}", value.id, value.title),
+        target: Some(DetailTarget::Plan(value.id)),
+    }));
+    hits.extend(view.tasks.iter().map(|value| SearchHit {
+        label: format!("task #{}  {}", value.id, value.title),
+        target: Some(DetailTarget::Task(value.id)),
+    }));
+    hits.extend(view.issues.iter().map(|value| SearchHit {
+        label: format!("issue #{}  {}", value.id, value.title),
+        target: Some(DetailTarget::Issue(value.id)),
+    }));
+    hits.extend(view.notes.iter().map(|value| {
+        let target = match value.target.as_str() {
+            "plan" => Some(DetailTarget::Plan(value.target_id)),
+            "task" => Some(DetailTarget::Task(value.target_id)),
+            _ => None,
+        };
+        let on = target.map_or_else(
+            || "project".to_owned(),
+            |_| format!("{} #{}", value.target, value.target_id),
+        );
+        SearchHit {
+            label: format!("note #{} on {on}", value.id),
+            target,
+        }
+    }));
+    if hits.is_empty() {
+        model.status = format!("no matches for “{term}”");
+        return None;
+    }
+    model.status = format!(
+        "{} match{} for “{term}”",
+        hits.len(),
+        if hits.len() == 1 { "" } else { "es" }
+    );
+    model.search = Some(SearchResults {
+        term: term.to_owned(),
+        hits,
+        cursor: 0,
+    });
+    None
+}
+
+fn update_search(model: &mut Model, key: &Key) -> Option<Effect> {
+    let results = model.search.as_mut().expect("search exists");
+    match key {
+        Key::Char('q') | Key::Ctrl('c') => return Some(Effect::Quit),
+        Key::Escape | Key::Backspace => model.search = None,
+        Key::Up | Key::Char('k') => results.cursor = results.cursor.saturating_sub(1),
+        Key::Down | Key::Char('j') => {
+            results.cursor = (results.cursor + 1).min(results.hits.len().saturating_sub(1));
+        }
+        Key::Char('/') => {
+            let term = results.term.clone();
+            model.search = None;
+            model.start_input(InputPurpose::Search, "Search:", &term);
+        }
+        Key::Enter => match results.hits.get(results.cursor).and_then(|hit| hit.target) {
+            Some(target) => {
+                model.search = None;
+                model.detail = Some(target);
+                model.detail_offset = 0;
+            }
+            None => "project notes have no detail view".clone_into(&mut model.status),
+        },
+        _ => {}
+    }
+    None
+}
+
+fn start_search(model: &mut Model) -> Option<Effect> {
+    model.start_input(InputPurpose::Search, "Search:", "");
+    None
+}
+
+/// Resumes the selected plan or task if it is held, otherwise asks why to hold it.
+fn toggle_hold(model: &mut Model) -> Option<Effect> {
+    let selected = match model.selected_task() {
+        Some(task) => Some((HoldTarget::Task(task.id), task.hold_reason.is_some())),
+        None if model.tab == Tab::Overview && model.focus == PaneFocus::Plans => model
+            .current_plan()
+            .map(|plan| (HoldTarget::Plan(plan.id), plan.hold_reason.is_some())),
+        None => None,
+    };
+    let Some((target, held)) = selected else {
+        "nothing to hold".clone_into(&mut model.status);
+        return None;
+    };
+    if held {
+        return hold_effect(target, None);
+    }
+    model.start_input(InputPurpose::Hold(target), "Hold reason:", "");
+    None
+}
+
+fn next_severity(severity: Severity) -> Severity {
+    match severity {
+        Severity::Low => Severity::Medium,
+        Severity::Medium => Severity::High,
+        Severity::High => Severity::Critical,
+        Severity::Critical => Severity::Low,
     }
 }
 
@@ -297,6 +466,7 @@ fn update_menu(model: &mut Model, key: &Key) -> Option<Effect> {
         Key::Char('P') => Some(10),
         Key::Char('r') => Some(11),
         Key::Char('B') => Some(12),
+        Key::Char('/') => Some(13),
         _ => None,
     };
     direct.and_then(|action| menu_action(model, action))
@@ -334,6 +504,10 @@ fn menu_action(model: &mut Model, action: usize) -> Option<Effect> {
             reopen_detail: model.detail.is_some(),
         }),
         12 => Some(Effect::Backup),
+        13 => {
+            model.detail = None;
+            start_search(model)
+        }
         _ => None,
     }
 }
@@ -470,6 +644,7 @@ fn update_normal(model: &mut Model, key: &Key) -> Option<Effect> {
             });
         }
         Key::Char('B') => return Some(Effect::Backup),
+        Key::Char('/') => return start_search(model),
         _ => {}
     }
     match model.tab {
@@ -554,6 +729,7 @@ fn update_overview(model: &mut Model, key: &Key) -> Option<Effect> {
         Key::Char('s') => return set_task(model, TaskStatus::Doing, "task started"),
         Key::Char('d') => return set_task(model, TaskStatus::Done, "task done"),
         Key::Char('b') => return set_task(model, TaskStatus::Blocked, "task blocked"),
+        Key::Char('w') => return toggle_hold(model),
         Key::Char('M') => return start_move(model),
         Key::Char('P') => return start_convert(model),
         _ => {}
@@ -631,6 +807,7 @@ fn update_board(model: &mut Model, key: &Key) -> Option<Effect> {
                 model.start_input(InputPurpose::AddNote, "Note:", "");
             }
         }
+        Key::Char('w') => return toggle_hold(model),
         Key::Char('M') => return start_move(model),
         Key::Char('P') => return start_convert(model),
         _ => {}
@@ -706,6 +883,32 @@ fn update_issues(model: &mut Model, key: &Key) -> Option<Effect> {
                 return mutate!(
                     Mutation::SetIssueStatus { id, status },
                     Success::Message(message.to_owned()),
+                );
+            }
+        }
+        Key::Char('v') => {
+            if let Some((id, severity)) = model
+                .current_issue()
+                .map(|issue| (issue.id, next_severity(issue.severity)))
+            {
+                return mutate!(
+                    Mutation::SetIssueSeverity { id, severity },
+                    Success::Message(format!("issue #{id} severity {severity}")),
+                );
+            }
+        }
+        Key::Char('S') => {
+            if let Some(id) = model.current_issue().map(|issue| issue.id) {
+                let active = model.snapshot.meta.active_plan;
+                let initial = if active == 0 {
+                    String::new()
+                } else {
+                    active.to_string()
+                };
+                model.start_input(
+                    InputPurpose::ScheduleIssue(id),
+                    format!("Schedule issue #{id} into plan ID:"),
+                    &initial,
                 );
             }
         }

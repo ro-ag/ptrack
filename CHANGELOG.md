@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Terminal dashboard: `/` searches plans, tasks, milestones, issues and notes
+  and opens the selected match; `w` holds (with a reason) or resumes the
+  selected plan or task; on Issues, `v` cycles severity and `S` schedules the
+  issue into a plan as a new task.
+
+### Fixed
+- The dashboard footer advertised `1–5` although there are six tabs.
+
 ## [0.44.0] - 2026-10-04
 
 ### Added

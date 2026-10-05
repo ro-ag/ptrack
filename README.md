@@ -295,11 +295,12 @@ database. It works over SSH and inside tmux.
 
 | Scope | Keys |
 |---|---|
-| Everywhere | `?` menu · `tab`/`shift+tab` · `1`–`6` · `enter` details · `g` goal · `m` summary · `e` rename · `r` reload · `B` backup · `q` quit |
-| Overview | `h`/`l` pane · `j`/`k` select · `a` add · `n` note · `u` set current plan · `x` complete plan · `s`/`d`/`b` task status · `M` move · `P` convert to plan |
-| Board | `h`/`l`/`j`/`k` navigate · `H`/`L` move card · `a` add · `n` note · `M` move · `P` convert |
+| Everywhere | `?` menu · `tab`/`shift+tab` · `1`–`6` · `enter` details · `/` search · `g` goal · `m` summary · `e` rename · `r` reload · `B` backup · `q` quit |
+| Overview | `h`/`l` pane · `j`/`k` select · `a` add · `n` note · `u` set current plan · `x` complete plan · `s`/`d`/`b` task status · `w` hold/resume · `M` move · `P` convert to plan |
+| Board | `h`/`l`/`j`/`k` navigate · `H`/`L` move card · `a` add · `n` note · `w` hold/resume · `M` move · `P` convert |
 | Milestones | `a` add · `x` complete · `o` reopen |
-| Issues | `a` add · `c` close · `o` reopen |
+| Issues | `a` add · `c` close · `o` reopen · `v` cycle severity · `S` schedule into a plan |
+| Search results | `j`/`k` select · `enter` open · `/` new search · `esc` close |
 | Agents | `h`/`l` pane · `j`/`k` select · `enter` details |
 
 Arrow keys also work wherever `h`/`j`/`k`/`l` do.

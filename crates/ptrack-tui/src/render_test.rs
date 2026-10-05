@@ -916,3 +916,13 @@ fn welcome_uses_house_gradient_and_accent_selection_surface() {
         Color::Rgb(0x31, 0x32, 0x44)
     );
 }
+
+#[test]
+fn footer_advertises_all_six_tabs_and_search() {
+    let mut value = model();
+    value.welcome = false;
+    let screen = rendered(&value, 160, 30);
+    assert!(screen.contains("1–6 jump"), "{screen}");
+    assert!(screen.contains("/ search"), "{screen}");
+    value.status.clear();
+}
