@@ -357,8 +357,10 @@ jobs:
               Get-Process -Name ptrack -ErrorAction SilentlyContinue |
                 Where-Object { $_.Path -eq $copy.FullName } | Stop-Process -Force
             }
-            if ($null -ne $process -and -not $process.HasExited) {
-              Stop-Process -Id $process.Id -Force
+            # Ending the desktop process lets the stub exit by itself; stop it
+            # only if it is still running afterwards.
+            if ($null -ne $process -and -not $process.WaitForExit(10000)) {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
               $process.WaitForExit()
             }
           }
