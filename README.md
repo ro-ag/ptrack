@@ -5,8 +5,8 @@
 Local project tracking for humans and coding agents.
 
 [![Rust](https://img.shields.io/badge/Rust-1.89%2B-CE6A3D?logo=rust&logoColor=white)](https://www.rust-lang.org/)
-[![Release](https://img.shields.io/badge/release-v0.44.0-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.44.0)
-[![Help Center](https://img.shields.io/badge/help-v0.44.0-3DD6A3)](https://ro-ag.github.io/ptrack/help/)
+[![Release](https://img.shields.io/badge/release-v0.45.0-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.45.0)
+[![Help Center](https://img.shields.io/badge/help-v0.45.0-3DD6A3)](https://ro-ag.github.io/ptrack/help/)
 [![License](https://img.shields.io/badge/License-Apache--2.0-3DD6A3)](LICENSE)
 
 </div>
@@ -67,8 +67,8 @@ AppImage with `APPIMAGE_EXTRACT_AND_RUN=1`.
 On NixOS, wrap the release AppImage without compiling:
 
 ```sh
-nix-build build/linux --arg appimage "$PWD/p-track_0.44.0_linux_amd64.AppImage" \
-  --argstr version 0.44.0
+nix-build build/linux --arg appimage "$PWD/p-track_0.45.0_linux_amd64.AppImage" \
+  --argstr version 0.45.0
 nix-env -i ./result     # optional: install with its desktop launcher
 ```
 
@@ -393,8 +393,8 @@ sudo apt-get install build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-d
 Packaging:
 
 ```sh
-make linux-package VERSION=0.44.0       # AppImage, deb, rpm, tarball into dist/ (Docker)
-make linux-package-test VERSION=0.44.0
+make linux-package VERSION=0.45.0       # AppImage, deb, rpm, tarball into dist/ (Docker)
+make linux-package-test VERSION=0.45.0
 make dmg                                # macOS, unsigned
 make release-dmg                        # macOS: sign, notarize, staple
 pwsh build/windows/package.ps1          # Windows MSI, portable exe and zip
