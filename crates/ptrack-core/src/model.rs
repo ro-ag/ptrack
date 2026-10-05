@@ -56,10 +56,10 @@ impl Digest32 {
     }
 }
 
-/// The persistent subset of Go's `time.Time` needed by ptrack.
+/// A persisted instant: either the zero time or a fixed-offset instant.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Timestamp {
-    /// Go's zero `time.Time` value.
+    /// The zero time, `0001-01-01T00:00:00Z`.
     #[default]
     Zero,
     /// An instant with its original fixed UTC offset.
@@ -74,7 +74,7 @@ pub enum Timestamp {
 }
 
 impl Timestamp {
-    /// Reports whether this is Go's zero time.
+    /// Reports whether this is the zero time.
     #[must_use]
     pub const fn is_zero(self) -> bool {
         matches!(self, Self::Zero)
@@ -187,7 +187,7 @@ macro_rules! persistent_enum {
                 }
             }
 
-            /// Returns the stable Go-compatible string value.
+            /// Returns the stable persisted string value.
             #[must_use]
             pub const fn as_str(self) -> &'static str {
                 match self {
@@ -195,7 +195,7 @@ macro_rules! persistent_enum {
                 }
             }
 
-            /// Parses the exact, case-sensitive Go-compatible string value.
+            /// Parses the exact, case-sensitive persisted string value.
             #[must_use]
             pub fn from_name(value: &str) -> Option<Self> {
                 match value {
@@ -335,7 +335,7 @@ pub struct Milestone {
     pub title: String,
     pub status: MilestoneStatus,
     pub due: Timestamp,
-    /// Persisted Go `int`; native callers convert only after range checks.
+    /// Persisted as a signed 64-bit integer; native callers convert only after range checks.
     pub order: i64,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
@@ -361,7 +361,7 @@ pub struct Plan {
     pub title: String,
     pub status: PlanStatus,
     pub milestone_id: u64,
-    /// Persisted Go `int`; native callers convert only after range checks.
+    /// Persisted as a signed 64-bit integer; native callers convert only after range checks.
     pub order: i64,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
@@ -433,7 +433,7 @@ pub struct Task {
     pub plan_id: u64,
     pub title: String,
     pub status: TaskStatus,
-    /// Persisted Go `int`; native callers convert only after range checks.
+    /// Persisted as a signed 64-bit integer; native callers convert only after range checks.
     pub order: i64,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
@@ -571,7 +571,7 @@ pub struct CapabilityAudit {
     pub duration_millis: i64,
     pub request_bytes: i64,
     pub response_bytes: i64,
-    /// Persisted Go `int`; native callers convert only after range checks.
+    /// Persisted as a signed 64-bit integer; native callers convert only after range checks.
     pub redirects: i64,
     pub created_at: Timestamp,
 }

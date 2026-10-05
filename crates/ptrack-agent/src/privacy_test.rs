@@ -1,4 +1,4 @@
-#![allow(clippy::unicode_not_nfc)] // Intentional Go Unicode-folding canaries.
+#![allow(clippy::unicode_not_nfc)] // Intentional Unicode-folding canaries.
 
 use super::{
     EVENT_MODEL_VERSION, Event, EventKind, EventNotificationKind, EventObservation, EventOutcome,
@@ -112,7 +112,7 @@ fn summaries_are_explicit_redacted_and_reasoning_free() {
 }
 
 #[test]
-fn credential_boundaries_and_case_folding_match_go_regexp_and_strings() {
+fn credential_boundaries_and_case_folding_are_exact() {
     let now = Timestamp::from_unix_nanoseconds(1_800_000_000_000_000_000);
     let mut policy = default_event_privacy_policy();
     policy.allow_summaries = true;
@@ -140,7 +140,7 @@ fn credential_boundaries_and_case_folding_match_go_regexp_and_strings() {
 }
 
 #[test]
-fn url_redaction_preserves_go_empty_path_serialization() {
+fn url_redaction_preserves_empty_path_serialization() {
     let now = Timestamp::from_unix_nanoseconds(1_800_000_000_000_000_000);
     let mut policy = default_event_privacy_policy();
     policy.allow_summaries = true;
@@ -159,7 +159,7 @@ fn url_redaction_preserves_go_empty_path_serialization() {
 }
 
 #[test]
-fn url_redaction_matches_bounded_go_net_url_differentials() {
+fn url_redaction_matches_bounded_url_differentials() {
     let now = Timestamp::from_unix_nanoseconds(1_800_000_000_000_000_000);
     let mut policy = default_event_privacy_policy();
     policy.allow_summaries = true;

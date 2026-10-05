@@ -450,7 +450,7 @@ pub fn validate_stage(
     Ok(())
 }
 
-/// Loads and fully validates a Go/Rust-compatible durable stage.
+/// Loads and fully validates a durable stage.
 ///
 /// The `checksums.txt` chain is re-verified against the compiled-in release
 /// key and the package digest is re-checked against the signed manifest

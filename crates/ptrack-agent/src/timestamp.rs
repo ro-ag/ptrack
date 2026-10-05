@@ -5,9 +5,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-const GO_ZERO_TIME: &str = "0001-01-01T00:00:00Z";
+const ZERO_TIME: &str = "0001-01-01T00:00:00Z";
 
-/// A UTC instant with Go-compatible zero and `RFC3339Nano` JSON behavior.
+/// A UTC instant whose zero value serializes as `0001-01-01T00:00:00Z` and
+/// whose other values serialize as RFC 3339 with nanoseconds.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Timestamp {
     unix_nanoseconds: i128,
@@ -93,13 +94,13 @@ impl Timestamp {
         }
     }
 
-    /// Parses a Go-compatible zero value or RFC 3339 timestamp.
+    /// Parses the `0001-01-01T00:00:00Z` zero value or an RFC 3339 timestamp.
     ///
     /// # Errors
     ///
     /// Returns an error when the timestamp is not valid RFC 3339.
     pub fn parse(value: &str) -> Result<Self, String> {
-        if value == GO_ZERO_TIME {
+        if value == ZERO_TIME {
             return Ok(Self::ZERO);
         }
         let parsed = OffsetDateTime::parse(value, &Rfc3339)
@@ -109,7 +110,7 @@ impl Timestamp {
 
     fn format(self) -> Result<String, String> {
         if self.zero {
-            return Ok(GO_ZERO_TIME.to_owned());
+            return Ok(ZERO_TIME.to_owned());
         }
         OffsetDateTime::from_unix_timestamp_nanos(self.unix_nanoseconds)
             .map_err(|_| "agent timestamp is outside RFC3339 range".to_owned())?

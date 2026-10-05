@@ -27,14 +27,14 @@
       "title": "Agents",
       "summary": "Pass bounded context across supported agent tools while keeping associations, worktrees, drift, and handoffs explicit.",
       "headings": ["Agent runs", "Associations", "Plan transfer", "Handoffs", "Worktrees", "Capability brokering"],
-      "keywords": ["ownership", "workflow", "handoff", "drift", "provider", "multi-agent", "Claude", "Codex", "Cursor Agent", "Gemini", "Kimi Code", "Agy", "OpenCode", "capability", "pam", "untrusted data", "context digest"],
+      "keywords": ["ownership", "workflow", "handoff", "drift", "provider", "multi-agent", "Claude", "Codex", "Cursor Agent", "Gemini", "Kimi Code", "Agy", "OpenCode", "pam", "untrusted data", "context digest"],
       "url": "agents-and-capabilities/"
     },
     {
       "title": "Reference",
       "summary": "Look up CLI commands, TUI keys, desktop shortcuts, and project search behavior.",
       "headings": ["CLI", "TUI", "Desktop shortcuts", "Desktop search"],
-      "keywords": ["command", "keyboard", "palette", "shortcut", "config", "claims", "identity", "steal", "release", "plan delete", "plan move", "plan copy", "cascade", "milestone drop", "dependency", "dep add", "dep list", "waiting on", "skipped", "search", "plan list", "task block", "task hold", "commit sha", "hook", "capability", "override"],
+      "keywords": ["command", "keyboard", "palette", "shortcut", "config", "claims", "identity", "steal", "release", "plan delete", "plan move", "plan copy", "cascade", "milestone drop", "dependency", "dep add", "dep list", "waiting on", "skipped", "search", "plan list", "task block", "task hold", "relocate", "local mode", "sync", "completion", "commit sha", "hook", "capability", "override"],
       "url": "reference/"
     },
     {
@@ -46,7 +46,7 @@
     },
     {
       "title": "Install & Safety",
-      "summary": "Install and update p-track, locate local data, and plan backups or migration.",
+      "summary": "Install and update p-track, locate local data, and plan backups.",
       "headings": ["Install", "Updates", "Security", "Privacy", "Data paths", "Backup", "Migration"],
       "keywords": ["download", "release", "installer", "msi", "portable", "dmg", "windows", "macos", "linux", "storage", "database", "restore", "about", "license", "version", "window state", "layout state", "checksums", "signature", "checksums.txt.sig", "ed25519", "content security policy"],
       "url": "install-and-safety/"
@@ -55,7 +55,7 @@
       "title": "Troubleshooting",
       "summary": "Diagnose project, terminal, agent, and updater problems.",
       "headings": ["Diagnostics", "Recovery", "FAQ"],
-      "keywords": ["error", "stopped", "stale", "failed", "recovery", "schema 9", "newer database", "unavailable project", "capability", "close refused"],
+      "keywords": ["error", "stopped", "stale", "failed", "recovery", "schema 9", "newer database", "unavailable project", "close refused"],
       "url": "troubleshooting/"
     }
   ]

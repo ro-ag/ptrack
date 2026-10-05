@@ -334,7 +334,7 @@ pub(crate) fn contains_reasoning_marker(value: &str) -> bool {
     // Whitespace is collapsed here as well as at the summary gate, so a marker
     // split across a line break or doubled spaces cannot evade the literals on
     // any call site.
-    let lower = go_unicode_lower(value);
+    let lower = simple_unicode_lower(value);
     let lower = lower.split_whitespace().collect::<Vec<_>>().join(" ");
     [
         "<thinking",
@@ -722,7 +722,7 @@ fn contains_ascii_control(value: &str) -> bool {
     value.bytes().any(|byte| byte < b' ' || byte == 0x7f)
 }
 
-fn go_unicode_lower(value: &str) -> String {
+fn simple_unicode_lower(value: &str) -> String {
     value
         .chars()
         .map(|character| character.to_lowercase().next().unwrap_or(character))

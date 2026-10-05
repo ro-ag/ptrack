@@ -539,7 +539,7 @@ pub fn contains_potential_credential(value: &str) -> bool {
 }
 
 fn encode_bounded(document: &mut Document) -> Result<(String, bool), LaunchContextError> {
-    let mut encoded = encode_go_json(document)?;
+    let mut encoded = encode_compact_json(document)?;
     if encoded.len() <= MAX_CONTEXT_BYTES {
         return Ok((encoded, document.truncated));
     }
@@ -548,12 +548,12 @@ fn encode_bounded(document: &mut Document) -> Result<(String, bool), LaunchConte
         if !shrink_document(document) {
             return Err(LaunchContextError::MetadataTooLarge);
         }
-        encoded = encode_go_json(document)?;
+        encoded = encode_compact_json(document)?;
     }
     Ok((encoded, true))
 }
 
-fn encode_go_json(document: &Document) -> Result<String, LaunchContextError> {
+fn encode_compact_json(document: &Document) -> Result<String, LaunchContextError> {
     let encoded = serde_json::to_string_pretty(document)
         .map_err(|error| LaunchContextError::Store(error.to_string()))?;
     let mut compatible = String::with_capacity(encoded.len());

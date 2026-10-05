@@ -1,4 +1,4 @@
-//! Cobra-compatible p-track command parsing and process dispatch.
+//! p-track command parsing and process dispatch.
 
 mod command;
 mod compat_json;

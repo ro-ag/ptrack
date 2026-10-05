@@ -82,7 +82,7 @@ fn store_validation_binds_native_payloads_to_collection_keys() {
 }
 
 #[test]
-fn raw_global_records_match_the_go_api_contract() {
+fn raw_global_records_match_the_api_contract() {
     validation::record(
         Collection::GlobalConfig,
         &OwnedRecordKey::Bytes(vec![0xff]),

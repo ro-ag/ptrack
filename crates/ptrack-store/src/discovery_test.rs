@@ -51,6 +51,12 @@ fn empty_init_root_uses_nearest_git_directory_or_file_boundary() {
 #[test]
 fn empty_init_root_falls_back_to_current_directory_without_git() {
     let temp = Temp::new();
+    if let Some(stray) = temp.0.ancestors().find(|path| path.join(".git").exists()) {
+        panic!(
+            "{} contains a .git marker, so this test cannot run without git above it; remove it",
+            stray.display()
+        );
+    }
     let database = init_project_directory_from(std::path::Path::new(""), &temp.0).unwrap();
     assert_eq!(database, temp.0.join(".ptrack/ptrack.redb"));
 }

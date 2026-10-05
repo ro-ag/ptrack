@@ -6,7 +6,7 @@ use crate::{
 };
 
 #[test]
-fn context_markdown_is_byte_exact_with_the_go_report() {
+fn context_markdown_is_byte_exact() {
     let digest = context(&snapshot());
     assert_eq!(
         digest.markdown(),

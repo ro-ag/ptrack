@@ -722,7 +722,7 @@ fn store_association_adapter_fails_closed_on_generation_and_live_id() {
 }
 
 #[test]
-fn git_mapping_is_bounded_content_free_and_go_compatible() {
+fn git_mapping_is_bounded_content_free_and_stable() {
     let snapshot = Snapshot {
         state: RepositoryState::Ready,
         root: "/project".to_owned(),

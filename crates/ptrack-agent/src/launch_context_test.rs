@@ -1,4 +1,4 @@
-#![allow(clippy::unicode_not_nfc)] // Intentional Go Unicode-folding canaries.
+#![allow(clippy::unicode_not_nfc)] // Intentional Unicode-folding canaries.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -497,7 +497,7 @@ fn hard_ceiling_is_deterministic_utf8_safe_and_marks_truncation() {
 }
 
 #[test]
-fn context_uses_go_json_html_and_line_separator_escaping() {
+fn context_uses_json_html_and_line_separator_escaping() {
     let root = TempDirectory::new("ptrack-agent-launch-json-escaping");
     let canonical = fs::canonicalize(root.path()).unwrap();
     let mut store = Store::new(canonical.clone());

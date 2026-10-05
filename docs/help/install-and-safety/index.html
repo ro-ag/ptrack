@@ -194,7 +194,7 @@
           <p>On NixOS, wrap the downloaded AppImage with the expression in <code>build/linux</code> of the repository instead of compiling p-track.</p>
 
           <div class="callout warning">
-            <p><strong>Use an official package.</strong> Source builds require Rust, Node, the Tauri prerequisites, and the repository's complete validation workflow. No Go runtime or toolchain is required.</p>
+            <p><strong>Use an official package.</strong> Source builds require Rust, Node, the Tauri prerequisites, and the repository's complete validation workflow.</p>
           </div>
 
           <h2 id="update-consent">Choose when to check, download, and install</h2>
@@ -227,7 +227,7 @@
 
           <h2 id="local-security">Local-first security boundary</h2>
           <p>p-track has no cloud service account and does not send project planning data to a p-track-hosted service. Project records remain in local files. Desktop may expose private loopback endpoints for local agent-run integration while a project is active; their descriptors and session material are stored in the private per-project runtime directory.</p>
-          <p>Capability brokering has been retired, so p-track no longer runs a capability broker or hands capability tokens to agent terminals; see <a href="../agents-and-capabilities/#capability-model">Capability brokering moved to pam</a>. The desktop window's content security policy allows scripts only from the app itself, and a detached terminal window can call only the few terminal commands it needs.</p>
+          <p>The desktop window's content security policy allows scripts only from the app itself, and a detached terminal window can call only the few terminal commands it needs.</p>
           <p>The updater does not accept project-supplied update URLs, store credentials, build from source, elevate privileges, or run unattended installation helpers. Update checks contact GitHub only through the manual or opted-in automatic flow.</p>
 
           <h2 id="privacy">Privacy and bounded diagnostics</h2>
@@ -262,9 +262,6 @@
             <p><strong>Do not overstate this backup.</strong> The implementation does not promise encryption, an atomic destination, or a transaction-consistent snapshot of concurrent writers. The copy excludes runtime state and WebView <code>localStorage</code>. Before a consequential manual restore, stop project writers, preserve the current database separately, and verify the chosen copy before replacing anything.</p>
           </div>
 
-          <h2 id="migration">Retired legacy databases</h2>
-          <p>Runtime commands resolve only the stores named by the attested active-generation marker. Retired bbolt-era files such as <code>global.db</code> or <code>.ptrack/ptrack.db</code> are inert evidence: p-track never reads, migrates, or refuses work because of them, and they can be archived or deleted at any time.</p>
-
           <h2 id="safety-checklist">Safety checklist</h2>
           <ol>
             <li>Install only the package for the intended OS and CPU.</li>
@@ -286,7 +283,6 @@
             <li><a href="#privacy">Privacy</a></li>
             <li><a href="#data-paths">Data paths</a></li>
             <li><a href="#backup">Backup</a></li>
-            <li><a href="#migration">Legacy databases</a></li>
             <li><a href="#safety-checklist">Safety checklist</a></li>
           </ul>
         </aside>

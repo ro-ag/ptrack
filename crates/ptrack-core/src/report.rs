@@ -560,8 +560,8 @@ fn context_stack(snapshot: &ProjectSnapshot) -> (Vec<StackProject>, bool) {
 }
 
 impl Digest {
-    /// Renders the context Markdown: the Go report layout, opened by the
-    /// untrusted-data notice every agent-facing digest carries.
+    /// Renders the context Markdown, opened by the untrusted-data notice
+    /// every agent-facing digest carries.
     #[must_use]
     pub fn markdown(&self) -> String {
         let mut output = String::from("# ptrack context\n\n");

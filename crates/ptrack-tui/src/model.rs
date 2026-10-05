@@ -89,6 +89,31 @@ pub(crate) enum InputPurpose {
     Rename,
     MoveTask,
     ConvertTask,
+    Hold(HoldTarget),
+    ScheduleIssue(u64),
+    Search,
+}
+
+/// The plan or task a hold reason is being typed for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HoldTarget {
+    Plan(u64),
+    Task(u64),
+}
+
+/// One search match and the item Enter opens for it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SearchHit {
+    pub label: String,
+    pub target: Option<DetailTarget>,
+}
+
+/// The result list shown after a search, until Enter opens a hit or Esc closes it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SearchResults {
+    pub term: String,
+    pub hits: Vec<SearchHit>,
+    pub cursor: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -167,6 +192,7 @@ pub struct Model {
     pub(crate) pending_task_id: u64,
     pub(crate) detail: Option<DetailTarget>,
     pub(crate) detail_offset: usize,
+    pub(crate) search: Option<SearchResults>,
     pub(crate) welcome: bool,
     pub(crate) menu: bool,
     pub(crate) menu_cursor: usize,
@@ -206,6 +232,7 @@ impl Model {
             pending_task_id: 0,
             detail: None,
             detail_offset: 0,
+            search: None,
             welcome: true,
             menu: false,
             menu_cursor: 0,

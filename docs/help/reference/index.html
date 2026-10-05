@@ -85,7 +85,10 @@
                 <tr><td><code>projects</code></td><td>List known projects.</td><td>Read-only.</td></tr>
                 <tr><td><code>backup</code></td><td>Create a database backup copy.</td><td>No restore subcommand is provided.</td></tr>
                 <tr><td><code>version</code></td><td>Print the installed version.</td><td>No project required.</td></tr>
-                <tr><td><code>capability</code></td><td>Retired.</td><td>Capability brokering moved to pam; the command prints a <a href="../agents-and-capabilities/#capability-model">pointer to pam</a> and exits with an error.</td></tr>
+                <tr><td><code>relocate</code></td><td>Re-register a project whose folder was moved.</td><td><code>--root &lt;dir&gt;</code>; a copied store is refused.</td></tr>
+                <tr><td><code>local</code></td><td><code>enable</code>, <code>disable</code>, <code>status</code></td><td>Project-local mode for sandboxed agents. See <a href="../install-and-safety/">Install &amp; Safety</a>.</td></tr>
+                <tr><td><code>sync</code></td><td>Refresh the project registration, local settings, and summary.</td><td>Run from a shell with global access.</td></tr>
+                <tr><td><code>completion</code></td><td><code>bash</code>, <code>zsh</code>, <code>fish</code>, <code>powershell</code></td><td>Print a shell completion script. <code>--no-descriptions</code> omits help text.</td></tr>
               </tbody>
             </table>
           </div>
@@ -112,14 +115,15 @@
           </ul>
 
           <h2 id="tui-screens">TUI screens</h2>
-          <p>Running <code>ptrack</code> without a subcommand opens the terminal interface when the desktop-enabled build is used inside a project. Its five screens are <strong>1 Overview</strong>, <strong>2 Board</strong>, <strong>3 Milestones</strong>, <strong>4 Issues</strong>, and <strong>5 Maintenance</strong>.</p>
+          <p>Running <code>ptrack</code> without a subcommand opens the terminal interface when the desktop-enabled build is used inside a project. Its six screens are <strong>1 Overview</strong>, <strong>2 Board</strong>, <strong>3 Milestones</strong>, <strong>4 Issues</strong>, <strong>5 Maintenance</strong>, and <strong>6 Agents</strong>.</p>
           <div class="table-wrap">
             <table>
               <thead><tr><th>Context</th><th>Keys</th></tr></thead>
               <tbody>
-                <tr><td>Welcome</td><td><kbd>Enter</kbd>/<kbd>Space</kbd>/<kbd>1</kbd> Overview; <kbd>2</kbd>–<kbd>5</kbd> other screens; <kbd>?</kbd>/<kbd>F1</kbd> menu; <kbd>q</kbd>/<kbd>Ctrl+C</kbd> quit.</td></tr>
-                <tr><td>Global</td><td><kbd>Tab</kbd>/<kbd>Shift+Tab</kbd> cycle; <kbd>1</kbd>–<kbd>5</kbd> jump; <kbd>?</kbd>/<kbd>F1</kbd> menu; <kbd>g</kbd> goal; <kbd>m</kbd> summary; <kbd>e</kbd> rename; <kbd>Enter</kbd> details; <kbd>r</kbd> reload; <kbd>B</kbd> backup; <kbd>q</kbd>/<kbd>Ctrl+C</kbd> quit.</td></tr>
-                <tr><td>Command menu</td><td><kbd>↑</kbd>/<kbd>k</kbd>, <kbd>↓</kbd>/<kbd>j</kbd>, <kbd>Enter</kbd>; direct keys <kbd>1</kbd>–<kbd>5</kbd>, <kbd>g</kbd>, <kbd>m</kbd>, <kbd>e</kbd>, <kbd>M</kbd>, <kbd>P</kbd>, <kbd>r</kbd>, <kbd>B</kbd>; <kbd>?</kbd>/<kbd>F1</kbd>/<kbd>Esc</kbd> close.</td></tr>
+                <tr><td>Welcome</td><td><kbd>Enter</kbd>/<kbd>Space</kbd>/<kbd>1</kbd> Overview; <kbd>2</kbd>–<kbd>6</kbd> other screens; <kbd>?</kbd>/<kbd>F1</kbd> menu; <kbd>q</kbd>/<kbd>Ctrl+C</kbd> quit.</td></tr>
+                <tr><td>Global</td><td><kbd>Tab</kbd>/<kbd>Shift+Tab</kbd> cycle; <kbd>1</kbd>–<kbd>6</kbd> jump; <kbd>?</kbd>/<kbd>F1</kbd> menu; <kbd>g</kbd> goal; <kbd>m</kbd> summary; <kbd>e</kbd> rename; <kbd>Enter</kbd> details; <kbd>/</kbd> search; <kbd>r</kbd> reload; <kbd>B</kbd> backup; <kbd>q</kbd>/<kbd>Ctrl+C</kbd> quit.</td></tr>
+                <tr><td>Command menu</td><td><kbd>↑</kbd>/<kbd>k</kbd>, <kbd>↓</kbd>/<kbd>j</kbd>, <kbd>Enter</kbd>; direct keys <kbd>1</kbd>–<kbd>6</kbd>, <kbd>g</kbd>, <kbd>m</kbd>, <kbd>e</kbd>, <kbd>M</kbd>, <kbd>P</kbd>, <kbd>r</kbd>, <kbd>B</kbd>, <kbd>/</kbd>; <kbd>?</kbd>/<kbd>F1</kbd>/<kbd>Esc</kbd> close.</td></tr>
+                <tr><td>Search results</td><td><kbd>↑</kbd>/<kbd>k</kbd>, <kbd>↓</kbd>/<kbd>j</kbd> select; <kbd>Enter</kbd> open the plan, task, milestone, or issue (a note opens its plan or task); <kbd>/</kbd> new search; <kbd>Esc</kbd> close. Matching is case-insensitive across titles, issue bodies, and note bodies, like <code>ptrack search</code>.</td></tr>
                 <tr><td>Detail</td><td><kbd>↑</kbd>/<kbd>k</kbd>, <kbd>↓</kbd>/<kbd>j</kbd>, <kbd>PgUp</kbd>, <kbd>PgDn</kbd>/<kbd>Space</kbd>; <kbd>Esc</kbd>/<kbd>Enter</kbd>/<kbd>Backspace</kbd> close; <kbd>r</kbd> refresh; <kbd>e</kbd> rename; <kbd>M</kbd> move; <kbd>P</kbd> convert.</td></tr>
                 <tr><td>Text input</td><td><kbd>Enter</kbd> commit; <kbd>Esc</kbd> cancel.</td></tr>
               </tbody>
@@ -128,11 +132,12 @@
           <p>The TUI is a human surface: finishing a task from it does not require a closeout summary or linked commit, and finishing a plan does not require every task to be done. When evidence is missing or tasks remain open, p-track records an override note naming the TUI and what was missing, in the same write as the status change.</p>
           <h3>Screen-specific keys</h3>
           <ul>
-            <li><strong>Overview:</strong> <kbd>←</kbd>/<kbd>h</kbd> and <kbd>→</kbd>/<kbd>l</kbd> switch plan/task pane; <kbd>↑</kbd>/<kbd>k</kbd> and <kbd>↓</kbd>/<kbd>j</kbd> select; <kbd>a</kbd> add; <kbd>n</kbd> note; <kbd>u</kbd> activate plan; <kbd>x</kbd> finish plan; <kbd>s</kbd>/<kbd>d</kbd>/<kbd>b</kbd> start/finish/block task; <kbd>M</kbd> move; <kbd>P</kbd> convert.</li>
-            <li><strong>Board:</strong> <kbd>←</kbd>/<kbd>h</kbd> and <kbd>→</kbd>/<kbd>l</kbd> change lane; <kbd>↑</kbd>/<kbd>k</kbd> and <kbd>↓</kbd>/<kbd>j</kbd> select card; <kbd>H</kbd>/<kbd>&lt;</kbd> and <kbd>L</kbd>/<kbd>&gt;</kbd> move status; <kbd>a</kbd> task; <kbd>n</kbd> note; <kbd>M</kbd> move plan; <kbd>P</kbd> convert.</li>
+            <li><strong>Overview:</strong> <kbd>←</kbd>/<kbd>h</kbd> and <kbd>→</kbd>/<kbd>l</kbd> switch plan/task pane; <kbd>↑</kbd>/<kbd>k</kbd> and <kbd>↓</kbd>/<kbd>j</kbd> select; <kbd>a</kbd> add; <kbd>n</kbd> note; <kbd>u</kbd> activate plan; <kbd>x</kbd> finish plan; <kbd>s</kbd>/<kbd>d</kbd>/<kbd>b</kbd> start/finish/block task; <kbd>w</kbd> hold or resume the selected plan or task (asks for a reason); <kbd>M</kbd> move; <kbd>P</kbd> convert.</li>
+            <li><strong>Board:</strong> <kbd>←</kbd>/<kbd>h</kbd> and <kbd>→</kbd>/<kbd>l</kbd> change lane; <kbd>↑</kbd>/<kbd>k</kbd> and <kbd>↓</kbd>/<kbd>j</kbd> select card; <kbd>H</kbd>/<kbd>&lt;</kbd> and <kbd>L</kbd>/<kbd>&gt;</kbd> move status; <kbd>a</kbd> task; <kbd>n</kbd> note; <kbd>w</kbd> hold or resume; <kbd>M</kbd> move plan; <kbd>P</kbd> convert.</li>
             <li><strong>Milestones:</strong> <kbd>↑</kbd>/<kbd>k</kbd>, <kbd>↓</kbd>/<kbd>j</kbd>, <kbd>a</kbd> add, <kbd>x</kbd> done, <kbd>o</kbd> reopen.</li>
-            <li><strong>Issues:</strong> <kbd>↑</kbd>/<kbd>k</kbd>, <kbd>↓</kbd>/<kbd>j</kbd>, <kbd>a</kbd> add, <kbd>c</kbd> close, <kbd>o</kbd> reopen.</li>
+            <li><strong>Issues:</strong> <kbd>↑</kbd>/<kbd>k</kbd>, <kbd>↓</kbd>/<kbd>j</kbd>, <kbd>a</kbd> add, <kbd>c</kbd> close, <kbd>o</kbd> reopen, <kbd>v</kbd> cycle severity (low → medium → high → critical), <kbd>S</kbd> schedule into a plan (defaults to the active plan; the new task takes the issue title).</li>
             <li><strong>Maintenance:</strong> uses the global navigation, reload, backup, menu, and quit keys.</li>
+            <li><strong>Agents:</strong> <kbd>←</kbd>/<kbd>h</kbd> and <kbd>→</kbd>/<kbd>l</kbd> switch between Runs and Handoffs; <kbd>↑</kbd>/<kbd>k</kbd>, <kbd>↓</kbd>/<kbd>j</kbd> select; <kbd>Enter</kbd> loads run details. Read-only; it shows live runs from an open Desktop project.</li>
           </ul>
 
           <h2 id="command-palette">Desktop search</h2>

@@ -586,7 +586,7 @@ fn milestone_issue_and_maintenance_rows_preserve_source_parity() {
 }
 
 #[test]
-fn palette_and_per_span_styles_match_the_go_dashboard() {
+fn palette_and_per_span_styles_are_stable() {
     const ACCENT: Color = Color::Rgb(0x3d, 0xd6, 0xa3);
     const LAVENDER: Color = Color::Rgb(0xaf, 0xa8, 0xff);
     const BLUE: Color = Color::Rgb(0x5f, 0xaf, 0xff);
@@ -915,4 +915,14 @@ fn welcome_uses_house_gradient_and_accent_selection_surface() {
         cell_with_symbol(action, "▌").bg,
         Color::Rgb(0x31, 0x32, 0x44)
     );
+}
+
+#[test]
+fn footer_advertises_all_six_tabs_and_search() {
+    let mut value = model();
+    value.welcome = false;
+    let screen = rendered(&value, 160, 30);
+    assert!(screen.contains("1–6 jump"), "{screen}");
+    assert!(screen.contains("/ search"), "{screen}");
+    value.status.clear();
 }
