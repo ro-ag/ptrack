@@ -260,6 +260,8 @@ jobs:
           $version = "0.22.0"
           $env:PTRACK_BUILD_VERSION = $version
           cargo build --locked --release --package ptrack-launcher
+          $env:PTRACK_PORTABLE_PAYLOAD = (Resolve-Path target/release/ptrack.exe).Path
+          cargo build --locked --release --package ptrack-portable
           $packages = Join-Path $env:RUNNER_TEMP "packages"
           ./build/windows/package.ps1 -Version $version -Arch "${{ matrix.arch }}" `
             -BinDir target/release -OutDir $packages
@@ -307,6 +309,60 @@ jobs:
           }
           if ((Test-Path -LiteralPath $dir) -or (Test-Path 'HKCU:\Software\ro-ag\p-track')) {
             throw "uninstall left the install folder or its registry key behind"
+          }
+
+      # The single-file portable must unpack the exact ptrack.exe it carries
+      # into its own LOCALAPPDATA folder and keep the desktop process running.
+      - name: Smoke the single-file portable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = "0.22.0"
+          $packages = Join-Path $env:RUNNER_TEMP "packages"
+          $portable = Join-Path $packages "p-track_${version}_windows_${{ matrix.arch }}_portable.exe"
+          $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP "portable-appdata-$([guid]::NewGuid())"
+          $env:PTRACK_HOME = Join-Path $env:RUNNER_TEMP "portable-home-$([guid]::NewGuid())"
+          New-Item -ItemType Directory -Path $env:LOCALAPPDATA | Out-Null
+          $root = Join-Path $env:LOCALAPPDATA 'p-track\portable'
+          $process = $null
+          $unpacked = @()
+          try {
+            $process = Start-Process -FilePath $portable -PassThru
+            Start-Sleep -Seconds 10
+            if ($process.HasExited) {
+              throw "single-file portable exited during startup smoke (code=$($process.ExitCode))"
+            }
+            $unpacked = @(Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue)
+            if ($unpacked.Count -ne 1 -or $unpacked[0].Name -ne 'ptrack.exe') {
+              throw "single-file portable unpacked $($unpacked.Count) files under $root"
+            }
+            $digest = (Get-FileHash -LiteralPath $unpacked[0].FullName -Algorithm SHA256).Hash
+            if ($digest -ne (Get-FileHash -LiteralPath target/release/ptrack.exe -Algorithm SHA256).Hash) {
+              throw "single-file portable unpacked a different ptrack.exe"
+            }
+            if ($unpacked[0].Directory.Name -ne $digest.ToLowerInvariant()) {
+              throw "single-file portable unpacked into $($unpacked[0].Directory.Name), not its digest"
+            }
+            $reported = & $unpacked[0].FullName version
+            if ($reported -ne "ptrack $version") {
+              throw "unpacked ptrack reports '$reported'"
+            }
+            $desktop = @(Get-Process -Name ptrack -ErrorAction SilentlyContinue |
+              Where-Object { $_.Path -eq $unpacked[0].FullName })
+            if ($desktop.Count -lt 1) {
+              throw "single-file portable did not start the desktop process"
+            }
+          } finally {
+            foreach ($copy in $unpacked) {
+              Get-Process -Name ptrack -ErrorAction SilentlyContinue |
+                Where-Object { $_.Path -eq $copy.FullName } | Stop-Process -Force
+            }
+            # Ending the desktop process lets the stub exit by itself; stop it
+            # only if it is still running afterwards.
+            if ($null -ne $process -and -not $process.WaitForExit(10000)) {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+              $process.WaitForExit()
+            }
           }
 
   native-macos:

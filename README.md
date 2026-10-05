@@ -6,8 +6,8 @@ Observe agent work, keep project state durable, and pass bounded context to
 the next agent—without a hosted service or cloud account.
 
 [![Rust](https://img.shields.io/badge/Rust-1.89%2B-CE6A3D?logo=rust&logoColor=white)](https://www.rust-lang.org/)
-[![Release](https://img.shields.io/badge/release-v0.43.0-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.43.0)
-[![Help Center](https://img.shields.io/badge/help-v0.43.0-3DD6A3)](https://ro-ag.github.io/ptrack/help/)
+[![Release](https://img.shields.io/badge/release-v0.44.0-5FAFFF)](https://github.com/ro-ag/ptrack/releases/tag/v0.44.0)
+[![Help Center](https://img.shields.io/badge/help-v0.44.0-3DD6A3)](https://ro-ag.github.io/ptrack/help/)
 [![License](https://img.shields.io/badge/License-Apache--2.0-3DD6A3)](LICENSE)
 [![Storage](https://img.shields.io/badge/Storage-local--first-AFA8FF)](#storage-and-safety)
 
@@ -77,6 +77,13 @@ On Windows, pick one of:
 - **Portable** — `p-track_<version>_windows_<arch>_portable.zip`. Unzip it
   anywhere and open `p-track.exe` for the desktop workspace; `ptrack.exe` in
   the same folder is the CLI and terminal dashboard. Nothing is registered.
+- **Single-file portable** — `p-track_<version>_windows_<arch>_portable.exe`.
+  One executable to double-click, with nothing to unzip. It carries `ptrack.exe`
+  compressed inside it and unpacks it once into
+  `%LOCALAPPDATA%\p-track\portable\<sha256>\`. Every start checks that copy
+  against the digest built into the file and unpacks it again if it changed,
+  then opens the desktop workspace. Starting a newer version removes the copies
+  older versions unpacked. Nothing is registered.
 - **CLI archive** — `ptrack_<version>_windows_<arch>.zip`, the bare
   `ptrack.exe` for scripts and servers.
 
@@ -110,8 +117,8 @@ On NixOS, wrap the downloaded AppImage using the supplied expression, without
 compiling p-track (replace the example version and architecture as needed):
 
 ```sh
-nix-build build/linux --arg appimage "$PWD/p-track_0.43.0_linux_amd64.AppImage" \
-  --argstr version 0.43.0
+nix-build build/linux --arg appimage "$PWD/p-track_0.44.0_linux_amd64.AppImage" \
+  --argstr version 0.44.0
 ./result/bin/ptrack gui
 # Optional user-profile installation, including its desktop launcher:
 nix-env -i ./result
@@ -522,7 +529,9 @@ SHA-256, and revalidated before handoff.
   Windows Installer upgrades it in place without administrator rights, offering
   to close the running app. Any other copy (portable or CLI archive) gets the
   verified ZIP revealed in Explorer; close the running app before replacing the
-  executable manually.
+  executable manually. The single-file portable restores the copy it unpacked
+  on its next start, so update it by downloading the next
+  `_portable.exe` from the releases page instead.
 - **Linux AppImage:** download and verify the complete new image, then choose
   **Show verified AppImage…**. Close p-track, replace the old image with the
   verified download, and reopen it. Preserve its filename if a launcher points
@@ -871,12 +880,12 @@ provide the Unix permissions used by the private application store.
 Build portable packages with Docker on the architecture being released:
 
 ```sh
-bash build/linux/container-build.sh 0.43.0
-bash build/linux/test-packages.sh 0.43.0
+bash build/linux/container-build.sh 0.44.0
+bash build/linux/test-packages.sh 0.44.0
 ```
 
-Equivalently, use `make linux-package VERSION=0.43.0` and
-`make linux-package-test VERSION=0.43.0`. Packages land in `dist/`. The container
+Equivalently, use `make linux-package VERSION=0.44.0` and
+`make linux-package-test VERSION=0.44.0`. Packages land in `dist/`. The container
 uses Rust 1.89 and Node 24, checks the binary version and architecture, rejects
 Nix-store linkage and glibc requirements above 2.35, and preserves the existing
 three-file CLI archive contract in release CI. ARM64 AppImages are built on a
@@ -892,7 +901,7 @@ The AppImage keeps the host's Wayland libraries alongside its Mesa drivers;
 bundling older copies can otherwise abort WebKit on newer distributions.
 
 The tag-only release workflow publishes both architectures after package tests,
-includes all sixteen platform assets in the signed checksum manifest, and verifies
+includes all eighteen platform assets in the signed checksum manifest, and verifies
 that signature against the updater's pinned public key before publication.
 Running a local package build does not create a tag or publish a release.
 

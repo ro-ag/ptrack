@@ -2243,8 +2243,20 @@ impl DestinationParent {
                     )
                 })?;
                 let staging =
-                    crate::private_windows::open_staging_directory_for_publish(&staging_path)?;
-                crate::private_windows::protect_directory_handle(&staging)?;
+                    match crate::private_windows::open_staging_directory_for_publish(&staging_path)
+                    {
+                        Ok(staging) => staging,
+                        Err(error) => {
+                            // Never leave the empty directory behind: every
+                            // retry would otherwise strand another one.
+                            let _ = fs::remove_dir(&staging_path);
+                            return Err(error.into());
+                        }
+                    };
+                if let Err(error) = crate::private_windows::protect_directory_handle(&staging) {
+                    let _ = crate::private_windows::delete_directory_handle(&staging);
+                    return Err(error.into());
+                }
                 let staging_identity = FileIdentity::from_file(&staging)?;
 
                 if let Err(error) = before_open.take().expect("hook is called once")() {

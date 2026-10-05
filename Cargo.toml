@@ -6,6 +6,7 @@ members = [
     "crates/ptrack-core",
     "crates/ptrack-git",
     "crates/ptrack-launcher",
+    "crates/ptrack-portable",
     "crates/ptrack-store",
     "crates/ptrack-terminal",
     "crates/ptrack-tui",

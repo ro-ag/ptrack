@@ -1,11 +1,17 @@
 <#
 .SYNOPSIS
-  Packages the Windows per-user MSI installer and the portable ZIP.
+  Packages the Windows per-user MSI installer, the portable ZIP, and the
+  single-file portable executable.
 
 .DESCRIPTION
-  Reads ptrack.exe and p-track.exe from -BinDir and writes, into -OutDir:
+  Reads ptrack.exe, p-track.exe, and p-track-portable.exe from -BinDir and
+  writes, into -OutDir:
     p-track_<version>_windows_<arch>.msi           per-user installer, no admin
     p-track_<version>_windows_<arch>_portable.zip  run from any folder
+    p-track_<version>_windows_<arch>_portable.exe  the same, as a single file
+
+  p-track-portable.exe must be built with PTRACK_PORTABLE_PAYLOAD naming the
+  ptrack.exe in -BinDir; the script refuses one that carries any other build.
 
   The frozen CLI archive ptrack_<version>_windows_<arch>.zip is packaged by
   the release workflow itself; installed updaters validate its exact entries.
@@ -34,7 +40,7 @@ if ($Version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
 }
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $BinDir = (Resolve-Path $BinDir).Path
-foreach ($name in 'ptrack.exe', 'p-track.exe') {
+foreach ($name in 'ptrack.exe', 'p-track.exe', 'p-track-portable.exe') {
     if (-not (Test-Path -LiteralPath (Join-Path $BinDir $name) -PathType Leaf)) {
         throw "missing $name in $BinDir"
     }
@@ -145,6 +151,22 @@ function Assert-PerUserPackage([string]$Path, [string]$Platform) {
     }
 }
 
+# The single-file portable keeps a record of the ptrack.exe it carries — the
+# marker from crates/ptrack-portable/build.rs, then that binary's SHA-256 — so
+# a stale build from an earlier binary, or one with no payload, is refused.
+function Assert-PortableCarries([string]$Path, [string]$Program) {
+    $digest = (Get-FileHash -LiteralPath $Program -Algorithm SHA256).Hash
+    $record = [Text.Encoding]::ASCII.GetBytes('ptrack-portable-sha256:') + [byte[]](
+        0..31 | ForEach-Object { [Convert]::ToByte($digest.Substring($_ * 2, 2), 16) })
+    # Code page 28591 maps every byte to one char, so a string search is a
+    # byte search.
+    $latin1 = [Text.Encoding]::GetEncoding(28591)
+    $haystack = $latin1.GetString([IO.File]::ReadAllBytes($Path))
+    if ($haystack.IndexOf($latin1.GetString($record), [StringComparison]::Ordinal) -lt 0) {
+        throw "p-track-portable.exe does not carry $Program; rebuild it with PTRACK_PORTABLE_PAYLOAD set to that file"
+    }
+}
+
 function Invoke-Tool([string]$Program, [string[]]$Arguments) {
     & $Program @Arguments
     if ($LASTEXITCODE -ne 0) {
@@ -194,7 +216,11 @@ try {
         Remove-Item -LiteralPath $zip
     }
     Compress-Archive -Path (Join-Path $portable '*') -DestinationPath $zip
-    Get-Item -LiteralPath $msi, $zip | ForEach-Object { "{0}  {1:N0} bytes" -f $_.Name, $_.Length }
+
+    $single = Join-Path $OutDir "p-track_${Version}_windows_${Arch}_portable.exe"
+    Assert-PortableCarries (Join-Path $BinDir 'p-track-portable.exe') (Join-Path $BinDir 'ptrack.exe')
+    Copy-Item -LiteralPath (Join-Path $BinDir 'p-track-portable.exe') -Destination $single -Force
+    Get-Item -LiteralPath $msi, $zip, $single | ForEach-Object { "{0}  {1:N0} bytes" -f $_.Name, $_.Length }
 } finally {
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
