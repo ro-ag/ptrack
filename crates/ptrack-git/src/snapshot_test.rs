@@ -256,7 +256,7 @@ fn snapshot_and_nested_dto_json_names_match_the_frontend_contract() {
     assert!(status.contains_key("changedPathBounds"));
     assert!(status.contains_key("untrackedPaths"));
     for key in ["changedPaths", "untrackedPaths"] {
-        assert!(status[key].is_null(), "zero Go slice {key} must be null");
+        assert!(status[key].is_null(), "unset slice {key} must be null");
     }
     for key in [
         "remotes",
@@ -266,7 +266,7 @@ fn snapshot_and_nested_dto_json_names_match_the_frontend_contract() {
         "unpushedCommits",
         "worktrees",
     ] {
-        assert!(object[key].is_null(), "zero Go slice {key} must be null");
+        assert!(object[key].is_null(), "unset slice {key} must be null");
     }
 }
 

@@ -1,7 +1,7 @@
 use super::Timestamp;
 
 #[test]
-fn timestamp_matches_go_zero_and_rfc3339_nano_json() {
+fn timestamp_matches_zero_and_rfc3339_nano_json() {
     assert_eq!(
         serde_json::to_string(&Timestamp::ZERO).unwrap(),
         r#""0001-01-01T00:00:00Z""#

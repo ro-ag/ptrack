@@ -235,7 +235,7 @@ pub fn association_generation(host: Option<&AssociationHost<'_>>) -> u64 {
     host.map_or(0, AssociationHost::generation)
 }
 
-/// Binds through an optional host so absence fails closed like a nil Go host.
+/// Binds through an optional host so an absent host fails closed.
 ///
 /// # Errors
 ///

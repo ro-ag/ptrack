@@ -9,7 +9,7 @@ struct Escaped<'a> {
 }
 
 #[test]
-fn json_matches_go_html_and_separator_escaping() {
+fn json_escapes_html_and_line_separators() {
     let mut output = Vec::new();
     crate::output::json(
         &mut output,
@@ -25,7 +25,7 @@ fn json_matches_go_html_and_separator_escaping() {
 }
 
 #[test]
-fn timestamp_uses_go_rfc3339_nano_shape() {
+fn timestamp_uses_rfc3339_nano_shape() {
     assert_eq!(
         timestamp(ptrack_core::Timestamp::Zero),
         "0001-01-01T00:00:00Z"
@@ -41,7 +41,7 @@ fn timestamp_uses_go_rfc3339_nano_shape() {
 }
 
 #[test]
-fn empty_go_nil_slices_encode_as_null_while_derived_rows_can_remain_arrays() {
+fn unset_slices_encode_as_null_while_derived_rows_can_remain_arrays() {
     let snapshot = ptrack_core::ProjectSnapshot::new(
         ptrack_core::Meta {
             goal: String::new(),

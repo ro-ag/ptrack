@@ -205,8 +205,8 @@ pub fn preflight(mut argv: Vec<String>) -> Result<Preflight, CliError> {
             argv[1] = child.to_owned();
         }
         if !children.contains(&child) {
-            // Cobra groups without Run/Args render their help successfully for
-            // a stray token. goal/summary instead invoke their default show.
+            // Groups without their own action render their help successfully
+            // for a stray token. goal/summary instead invoke their default show.
             return if matches!(root.as_str(), "goal" | "summary") {
                 Ok(Preflight::GroupDefault(path))
             } else {

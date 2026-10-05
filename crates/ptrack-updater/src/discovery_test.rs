@@ -106,7 +106,7 @@ fn release_notes_accept_exact_thirty_two_kibibyte_boundary_only() {
 }
 
 #[test]
-fn release_publication_rejects_go_zero_time_but_accepts_unix_epoch() {
+fn release_publication_rejects_zero_time_but_accepts_unix_epoch() {
     let target = Target {
         os: "linux".to_owned(),
         arch: "amd64".to_owned(),

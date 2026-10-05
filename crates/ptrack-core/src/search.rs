@@ -22,8 +22,8 @@ pub struct SearchView {
     pub notes: Vec<NoteLine>,
 }
 
-/// Matches a case-insensitive substring against the Go report service's exact
-/// set of searchable fields. An empty term intentionally matches every item.
+/// Matches a case-insensitive substring against a fixed set of searchable
+/// fields. An empty term intentionally matches every item.
 #[must_use]
 pub fn search(snapshot: &ProjectSnapshot, term: &str) -> SearchView {
     let needle = simple_lowercase(term);
@@ -85,7 +85,7 @@ impl SearchView {
         {
             return String::new();
         }
-        let mut output = format!("# Search: {}\n\n", go_quote(&self.term));
+        let mut output = format!("# Search: {}\n\n", quote_term(&self.term));
         if !self.milestones.is_empty() {
             output.push_str("## Milestones\n");
             for milestone in &self.milestones {
@@ -189,7 +189,7 @@ fn snippet(body: &str, term: &str) -> String {
     inline_text(&window).into_owned()
 }
 
-fn go_quote(value: &str) -> String {
+fn quote_term(value: &str) -> String {
     let mut output = String::from("\"");
     for character in value.chars() {
         match character {
@@ -202,15 +202,15 @@ fn go_quote(value: &str) -> String {
             '\u{000B}' => output.push_str("\\v"),
             '"' => output.push_str("\\\""),
             '\\' => output.push_str("\\\\"),
-            value if !go_is_print(value) && u32::from(value) < 0x80 => {
+            value if !is_printable(value) && u32::from(value) < 0x80 => {
                 write!(&mut output, "\\x{:02x}", u32::from(value))
                     .expect("writing to String cannot fail");
             }
-            value if !go_is_print(value) && u32::from(value) <= 0xffff => {
+            value if !is_printable(value) && u32::from(value) <= 0xffff => {
                 write!(&mut output, "\\u{:04x}", u32::from(value))
                     .expect("writing to String cannot fail");
             }
-            value if !go_is_print(value) => {
+            value if !is_printable(value) => {
                 write!(&mut output, "\\U{:08x}", u32::from(value))
                     .expect("writing to String cannot fail");
             }
@@ -225,7 +225,7 @@ fn simple_lowercase(value: &str) -> String {
     value
         .chars()
         .map(|character| {
-            // Go's strings.ToLower applies unicode.ToLower rune by rune. Rust
+            // Lowercasing applies the simple per-character mapping. Rust
             // exposes full lowercase mappings; the only unconditional
             // multi-rune lowercase special case is U+0130 (İ), whose Unicode
             // simple mapping is the first rune, `i`.
@@ -237,7 +237,7 @@ fn simple_lowercase(value: &str) -> String {
         .collect()
 }
 
-fn go_is_print(character: char) -> bool {
+fn is_printable(character: char) -> bool {
     if matches!(character, '"' | '\'' | '\\') {
         return true;
     }

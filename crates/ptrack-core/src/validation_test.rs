@@ -132,17 +132,17 @@ fn legacy_zero_format_meta_is_preserved_but_newer_formats_fail() {
     meta.format_version = 6;
     assert_eq!(
         meta.validate()
-            .expect_err("future Go format must fail")
+            .expect_err("future format must fail")
             .field(),
         "meta.format_version"
     );
 }
 
 #[test]
-fn successful_audit_uses_go_none_error_class() {
+fn successful_audit_uses_none_error_class() {
     valid_audit()
         .validate()
-        .expect("Go success class is canonical");
+        .expect("success class is canonical");
 }
 
 fn valid_audit() -> CapabilityAudit {

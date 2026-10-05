@@ -306,7 +306,7 @@ fn draw_overview(frame: &mut Frame<'_>, area: Rect, model: &Model) {
                     Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
                 ));
             } else if index != model.plan_cursor || model.focus != PaneFocus::Plans {
-                // Go reserves the active-star column for every unselected row.
+                // Reserve the active-star column for every unselected row.
                 spans.push(Span::raw("  "));
             }
             spans.push(hold_span(plan.hold_reason.as_deref()));

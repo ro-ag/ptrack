@@ -60,8 +60,9 @@ pub fn line(output: &mut dyn Write, value: impl std::fmt::Display) -> Result<(),
 pub fn json<T: Serialize>(output: &mut dyn Write, value: &T) -> Result<(), CliError> {
     let mut encoded = serde_json::to_string_pretty(value)
         .map_err(|error| CliError::message(error.to_string()))?;
-    // Go encoding/json escapes HTML delimiters plus the JavaScript line and
-    // paragraph separators even when they are otherwise valid UTF-8.
+    // JSON output escapes HTML delimiters plus the JavaScript line and
+    // paragraph separators even when they are otherwise valid UTF-8, so
+    // existing consumers see identical bytes.
     encoded = encoded
         .replace('&', "\\u0026")
         .replace('<', "\\u003c")

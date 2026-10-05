@@ -72,7 +72,7 @@ fn observation(source_id: &str, sequence: u64) -> EventObservation {
 }
 
 #[test]
-fn defaults_registration_json_and_opaque_values_match_go_contract() {
+fn defaults_registration_json_and_opaque_values_match_contract() {
     let root = TempDirectory::new("ptrack-agent-registry-defaults");
     let now = Arc::new(AtomicI64::new(100));
     let registry = Registry::new(config(root.path(), now));

@@ -32,7 +32,7 @@ fn issue_workflow_leaves_accept_their_owned_flags() {
 }
 
 #[test]
-fn cobra_argument_errors_are_owned_and_stable() {
+fn argument_errors_are_owned_and_stable() {
     let error =
         preflight(vec!["ptrack".into(), "context".into(), "extra".into()]).expect_err("extra arg");
     assert_eq!(
@@ -50,7 +50,7 @@ fn cobra_argument_errors_are_owned_and_stable() {
 }
 
 #[test]
-fn aliases_and_cobra_group_fallbacks_are_preserved() {
+fn aliases_and_group_fallbacks_are_preserved() {
     let result = preflight(vec![
         "ptrack".into(),
         "ms".into(),

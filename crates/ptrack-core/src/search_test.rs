@@ -89,7 +89,7 @@ fn search_matches_exact_fields_case_insensitively_in_snapshot_order() {
 }
 
 #[test]
-fn search_uses_go_simple_rune_lowercase_for_dotted_capital_i() {
+fn search_uses_simple_rune_lowercase_for_dotted_capital_i() {
     let mut snapshot = snapshot();
     snapshot.tasks[0].title = "İSTANBUL".to_owned();
 
@@ -110,7 +110,7 @@ fn empty_search_matches_every_item_without_a_result_cap() {
 }
 
 #[test]
-fn search_heading_uses_go_quoted_string_syntax() {
+fn search_heading_uses_escaped_quoted_string_syntax() {
     let mut data = snapshot();
     data.tasks[0].title = "a\"\n\u{0007}".to_owned();
     let view = search(&data, "a\"\n\u{0007}");

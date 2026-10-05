@@ -32,7 +32,7 @@ impl From<std::io::Error> for CliError {
 
 impl From<ptrack_core::ReportError> for CliError {
     fn from(_error: ptrack_core::ReportError) -> Self {
-        // Go's report commands surface store.ErrNotFound without adding the
+        // Report commands surface a bare "not found" without adding the
         // requested entity kind or id.
         Self("not found".to_owned())
     }

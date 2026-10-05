@@ -381,7 +381,7 @@ fn list_count_is_bounded_before_writer_iteration() {
 }
 
 #[test]
-fn go_encoder_golden_payloads_decode_and_reencode_exactly() {
+fn schema_one_golden_payloads_decode_and_reencode_exactly() {
     let fixtures = [
         (
             RecordKind::Meta,
@@ -434,14 +434,13 @@ fn go_encoder_golden_payloads_decode_and_reencode_exactly() {
 
     for (kind, golden) in fixtures {
         let payload = decode_hex(golden);
-        // The Go encoder wrote payload schema 1. Decoding at that schema also
+        // The golden payloads are payload schema 1. Decoding at that schema also
         // proves the schema-1 canonical round trip, because the decoder
         // re-encodes at the schema it was given.
         let record = decode_record_at_schema(kind, MIN_NATIVE_PAYLOAD_SCHEMA, &payload)
-            .expect("decode Go golden payload");
+            .expect("decode golden payload");
         assert_eq!(
-            encode_record_at_schema(&record, MIN_NATIVE_PAYLOAD_SCHEMA)
-                .expect("re-encode Go golden"),
+            encode_record_at_schema(&record, MIN_NATIVE_PAYLOAD_SCHEMA).expect("re-encode golden"),
             payload
         );
         // Every field added since schema 1 is a trailing tail, so upgrading a

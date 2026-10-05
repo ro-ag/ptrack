@@ -586,7 +586,7 @@ fn milestone_issue_and_maintenance_rows_preserve_source_parity() {
 }
 
 #[test]
-fn palette_and_per_span_styles_match_the_go_dashboard() {
+fn palette_and_per_span_styles_are_stable() {
     const ACCENT: Color = Color::Rgb(0x3d, 0xd6, 0xa3);
     const LAVENDER: Color = Color::Rgb(0xaf, 0xa8, 0xff);
     const BLUE: Color = Color::Rgb(0x5f, 0xaf, 0xff);

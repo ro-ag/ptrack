@@ -100,8 +100,7 @@ impl ProjectSnapshot {
             .filter(move |note| note.target == NoteTarget::Task && note.target_id == task_id)
     }
 
-    /// Returns the newest notes first. A zero limit preserves the Go service's
-    /// convention of returning all notes.
+    /// Returns the newest notes first. A zero limit returns all notes.
     #[must_use]
     pub fn recent_notes(&self, limit: usize) -> Vec<&Note> {
         let take = if limit == 0 {

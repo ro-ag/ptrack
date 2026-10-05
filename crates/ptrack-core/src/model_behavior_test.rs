@@ -5,7 +5,7 @@ use crate::{
 };
 
 #[test]
-fn persistent_enums_expose_and_parse_exact_go_names() {
+fn persistent_enums_expose_and_parse_exact_names() {
     assert_eq!(PlanStatus::Archived.as_str(), "archived");
     assert_eq!(TaskStatus::from_name("doing"), Some(TaskStatus::Doing));
     assert_eq!("task".parse(), Ok(NoteTarget::Task));
@@ -26,7 +26,7 @@ fn persistent_enums_expose_and_parse_exact_go_names() {
 }
 
 #[test]
-fn open_status_and_order_helpers_match_the_go_model() {
+fn open_status_and_order_helpers_are_stable() {
     assert!(TaskStatus::Todo.is_open());
     assert!(TaskStatus::Doing.is_open());
     assert!(TaskStatus::Blocked.is_open());

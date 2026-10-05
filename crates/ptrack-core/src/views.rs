@@ -157,7 +157,7 @@ pub fn next(snapshot: &ProjectSnapshot) -> Result<NextView, ReportError> {
 }
 
 impl NextView {
-    /// Renders the exact Go-compatible next-task Markdown, plus one
+    /// Renders the exact next-task Markdown, plus one
     /// `skipped:` line per dep-blocked candidate.
     #[must_use]
     pub fn markdown(&self) -> String {
@@ -274,8 +274,8 @@ pub struct TaskShow {
 
 /// Assembles a full view of one task.
 ///
-/// A missing parent plan is tolerated and represented as `None`, matching the
-/// Go report service's best-effort reference resolution.
+/// A missing parent plan is tolerated and represented as `None`: references
+/// are resolved best-effort.
 ///
 /// # Errors
 ///
@@ -392,7 +392,7 @@ pub fn show_milestone(snapshot: &ProjectSnapshot, id: u64) -> Result<MilestoneSh
 }
 
 impl MilestoneShow {
-    /// Renders the exact Go-compatible milestone Markdown.
+    /// Renders the exact milestone Markdown.
     #[must_use]
     pub fn markdown(&self) -> String {
         let due = if self.due.is_empty() {
@@ -542,7 +542,7 @@ pub fn board_for(snapshot: &ProjectSnapshot, plan_id: u64) -> Result<Board, Repo
 }
 
 impl Board {
-    /// Renders the exact Go-compatible board Markdown.
+    /// Renders the exact board Markdown.
     #[must_use]
     pub fn markdown(&self) -> String {
         let mut output = format!(

@@ -81,8 +81,8 @@ fn update_input(model: &mut Model, key: &Key) -> Option<Effect> {
             model.input = None;
             "cancelled".clone_into(&mut model.status);
         }
-        // Bubble Tea's textinput owns this key before global dispatch. Preserve
-        // the observed source behavior: it is consumed and does not quit.
+        // The text input owns this key before global dispatch: it is consumed
+        // and does not quit.
         Key::Ctrl('c') => {}
         _ => model
             .input

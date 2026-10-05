@@ -2,7 +2,7 @@ use crate::{GUIDE_BEGIN, GUIDE_END};
 use crate::{guide_block, guide_body, render_guide, upsert_guide};
 
 #[test]
-fn guide_body_matches_the_go_contract_shape() {
+fn guide_body_matches_the_contract_shape() {
     assert!(guide_body().starts_with("## ptrack — session context\n\n"));
     assert!(guide_body().ends_with("`ptrack init --goal \"...\"`.\n"));
     assert_eq!(render_guide("  "), guide_body());

@@ -1337,7 +1337,7 @@ fn process_routing_and_stream_ownership_are_explicit() {
 }
 
 #[test]
-fn help_and_unknown_command_match_the_go_process_contract() {
+fn help_and_unknown_command_match_the_process_contract() {
     let (result, stdout, stderr) = invoke(&["ptrack", "--help"]);
     assert_eq!(result.expect("help"), RunOutcome::ExitSuccess);
     assert!(stdout.starts_with("p-track keeps project plans alive"));
@@ -1391,7 +1391,7 @@ fn agent_commands_render_safe_text_json_and_complete_help() {
 }
 
 #[test]
-fn status_json_uses_go_key_order_and_html_escaping() {
+fn status_json_uses_stable_key_order_and_html_escaping() {
     let (result, stdout, stderr) = invoke(&["ptrack", "status", "--json"]);
     assert_eq!(result.expect("status"), RunOutcome::ExitSuccess);
     assert!(stderr.is_empty());
@@ -1402,7 +1402,7 @@ fn status_json_uses_go_key_order_and_html_escaping() {
 }
 
 #[test]
-fn missing_report_roots_use_the_go_not_found_error() {
+fn missing_report_roots_use_the_bare_not_found_error() {
     for args in [
         ["ptrack", "milestone", "show", "99"].as_slice(),
         ["ptrack", "plan", "show", "99"].as_slice(),
@@ -1418,7 +1418,7 @@ fn missing_report_roots_use_the_go_not_found_error() {
 }
 
 #[test]
-fn due_parse_errors_wrap_the_exact_go_time_parse_error() {
+fn due_parse_errors_wrap_the_exact_time_parse_error() {
     for (args, expected) in [
         (
             ["ptrack", "milestone", "add", "x", "--due", "2024-1-2"].as_slice(),
