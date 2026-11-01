@@ -18,7 +18,7 @@ sha2.workspace = true
 [build-dependencies]
 flate2.workspace = true
 sha2.workspace = true
-tauri-winres = "=0.3.6"
+tauri-winres = "=0.3.7"
 
 [lints.rust]
 unsafe_code = "deny"
